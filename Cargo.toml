@@ -31,6 +31,8 @@ ulid            = "1"
 objc2           = "0.6"
 objc2-app-kit   = { version = "0.3", features = ["NSPasteboard"] }
 objc2-foundation = { version = "0.3", features = ["NSString", "NSArray"] }
+webrtc-vad      = "0.4"
+regex           = "1"
 
 [profile.release]
 opt-level = "z"

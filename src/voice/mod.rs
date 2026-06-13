@@ -8,3 +8,4 @@
 pub mod dispatch;
 pub mod finish;
 pub mod recorder;
+pub mod vad;

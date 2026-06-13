@@ -374,7 +374,7 @@ WebRTC VAD 工作方式：
 为了避免多消费者并发问题，PCM 数据流只有一个消费者任务：
 
 ```
-cpal callback ──► SPSC ring buffer (rtrb) ──► PcmConsumer task
+cpal callback ──► tokio mpsc unbounded ──► PcmConsumer task
                                                   │
                                                   ├─► 维护 500ms VecDeque<i16> 历史（滑窗）
                                                   ├─► WebRTC VAD 判定每帧 voiced/unvoiced
@@ -382,7 +382,8 @@ cpal callback ──► SPSC ring buffer (rtrb) ──► PcmConsumer task
 ```
 
 关键点：
-- **cpal callback** 唯一写入端，直接送 ring buffer（lock-free SPSC，`rtrb`）。callback 内不做任何阻塞工作（不分配、不日志）。
+- **cpal callback** 唯一写入端，`pcm_tx.send(Vec<i16>)` 推给 tokio mpsc unbounded。
+- **为什么不是 rtrb SPSC ring buffer**：原本设计选 rtrb 是按"callback 内零分配 + 零锁"教科书 RT audio 标准。实测发现：(1) Go 版（just-talk-go）在 audio callback 里直接做 `pthread_mutex_lock + write() syscall` 都稳定跑过线，比 mpsc 重得多；(2) M2 当前用 mpsc 实机验过中英混合识别，没有观测到丢帧或 jitter；(3) 真要拿 rtrb 收益还得连带消掉 callback 内 `Vec<i16>` 分配（否则只是换皮）。结论：v1 用 mpsc，未来若实测出 audio jitter 影响识别再切。recorder.rs 是隔离层，切换不污染上层。
 - **PcmConsumer** 是唯一读取端：取 20ms 帧 → 跑 VAD → 推入 `VecDeque<i16>`（容量 = 500ms = 8000 samples），超出从头 pop。
 - **Idle → Active 触发**（VAD 检测到 voiced + 当前无 ASR session）：
   1. 异步 spawn 开新 ASR session 的 task（用 `tokio::sync::oneshot` 通知 PcmConsumer "session ready"）
@@ -703,7 +704,7 @@ language = "auto"        # auto | zh-CN | en-US
 | Core Graphics / CGEventTap | `core-graphics`, `core-foundation` | CGEventTap pipe 桥的基础 |
 | 录音 | `cpal`（首选）/ `coreaudio-rs`（备选） | cpal 简单，coreaudio-rs 控制更细。先用 cpal |
 | VAD | `webrtc-vad`（libfvad 绑定） | 业界 workhorse，<0.1% CPU；失败降级到 RMS |
-| PCM ring buffer | `rtrb` | SPSC，cpal 回调到 PcmConsumer |
+| PCM 通道（callback→consumer） | `tokio::sync::mpsc::unbounded` | M2 已验稳定；Go 版用更重的 syscall pipe 都没问题，mpsc 路径更轻；rtrb 留待真出 jitter 再切 |
 | 唯一 ID | `ulid` | history record id；26 字符短于 UUID，含时序信息 |
 | WebSocket | `tokio-tungstenite` + `native-tls` | tokio 生态首选；DoubaoProvider 用。macOS 原生 Security framework 走 native-tls（无 rustls CryptoProvider 配置负担、无 OpenSSL；跨平台时再切 rustls） |
 | TUI | `ratatui` + `crossterm` | Bubble Tea 的事实替代；**唯一前台 UI** |

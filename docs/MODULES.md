@@ -2,7 +2,7 @@
 
 `src/` 只包含已实现的模块。未实现的模块按里程碑列在下方，路径细节看 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)，里程碑定义看 [REQUIREMENTS.md §6](../REQUIREMENTS.md#6-里程碑)。
 
-## 已实现（M2）
+## 已实现（M2 + M2.5 进行中）
 
 ```
 src/
@@ -25,6 +25,7 @@ src/
 └── voice/
     ├── mod.rs
     ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 可选 wav 留存
+    ├── vad.rs                           # WebRTC VAD + 滑窗去抖 + 切换防抖（M2.5.a）
     ├── finish.rs                        # 一次录音的生命周期 + stop_delay drain + dispatch
     └── dispatch.rs                      # 剪贴板 + 可选 Cmd+V
 ```
@@ -35,8 +36,8 @@ src/
 
 | M | 新增路径 | 主要新依赖 |
 |---|---|---|
-| **M2.5** | `voice/vad.rs`, `post/{mod,filler}.rs`, `i18n/mod.rs`, `assets/i18n/*.toml` | webrtc-vad, rtrb, regex |
-| **M3** | `state/{mod,history}.rs`, `overlay/{mod,view,animations}.rs`, `build.rs` 链接 frameworks | objc2-quartz-core, serde_json, ulid, time |
+| **M2.5** | `post/{mod,filler}.rs` | regex |
+| **M3** | `state/{mod,history}.rs`, `overlay/{mod,view,animations}.rs`, `i18n/mod.rs`, `assets/i18n/*.toml`, `build.rs` 链接 frameworks | objc2-quartz-core, serde_json, ulid, time |
 | **M4** | `ipc/{mod,protocol}.rs`, `tui/{mod,panes,keybindings}.rs` | ratatui, crossterm |
 | **M5** | `cli/{mod,doctor,service,smart}.rs`, `doctor.rs` | clap, notify |
 | **M6** | 扩 `hotkey/`（无新路径） | proptest (dev) |

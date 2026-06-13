@@ -5,6 +5,7 @@
 //!
 //! 顶层入口：[`finish::run_recording`]，一次按 F16 起停的完整生命周期。
 
+pub mod consumer;
 pub mod dispatch;
 pub mod finish;
 pub mod recorder;

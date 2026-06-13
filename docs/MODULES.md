@@ -29,6 +29,7 @@ src/
     ├── mod.rs
     ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 可选 wav 留存
     ├── vad.rs                           # WebRTC VAD + 滑窗去抖 + 切换防抖（M2.5.a）
+    ├── consumer.rs                      # PCM 消费端：500ms pre-roll + VAD 旁路（M2.5.d1）
     ├── finish.rs                        # 一次录音的生命周期 + stop_delay drain + dispatch
     └── dispatch.rs                      # 剪贴板 + 可选 Cmd+V
 ```

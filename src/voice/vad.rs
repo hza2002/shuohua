@@ -51,6 +51,12 @@ pub struct VadGate {
     min_switch_interval: Duration,
 }
 
+// SAFETY: webrtc-vad 0.4 不给 Vad 实现 Send（内部裸指针 *mut Fvad 默认 !Send）。
+// libfvad 的 fvad_t 状态只在 fvad_process / fvad_set_mode 等函数内部读写，无 TLS、
+// 无全局可变状态。VadGate 在 PcmConsumer 内由单一 tokio task 独占持有，被 tokio
+// multi-thread runtime 在线程间挪动时不会被并发访问 —— move 需要 Send，运行时不并发。
+unsafe impl Send for VadGate {}
+
 impl VadGate {
     pub fn new() -> Self {
         Self::with_min_switch_interval(DEFAULT_MIN_SWITCH_INTERVAL)

@@ -24,6 +24,8 @@
 use std::time::{Duration, Instant};
 
 use crate::asr::types::{AsrEvent, AsrProvider, AsrSession, LanguageMode, SessionCtx};
+use crate::voice::consumer::PcmConsumer;
+use crate::voice::vad::VadEvent;
 use crate::voice::{dispatch, recorder};
 use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};
@@ -95,6 +97,9 @@ pub async fn run_recording(
     let mut segments: Vec<String> = Vec::new();
     let mut last_partial = String::new();
     let mut stop_requested = false;
+    // M2.5.d1：PCM 走 PcmConsumer（pre-roll + VAD 旁路）。session 仍单开单关，
+    // VAD 决策这一步只打日志，给 d2 多 session 接入前留个观测窗。
+    let mut consumer = PcmConsumer::new();
 
     loop {
         tokio::select! {
@@ -106,6 +111,9 @@ pub async fn run_recording(
             pcm = rec.recv(), if !stop_requested => {
                 match pcm {
                     Some(samples) => {
+                        if let Some(VadEvent::Switched(s)) = consumer.feed(&samples) {
+                            eprintln!("[vad] state → {s:?}");
+                        }
                         if let Err(e) = session.send_pcm(&samples, false).await {
                             eprintln!("[shuo] ❌ ASR send_pcm failed: {e}");
                             break;
@@ -147,6 +155,7 @@ pub async fn run_recording(
                 &mut rec,
                 &mut session,
                 &mut events,
+                &mut consumer,
                 &mut segments,
                 &mut last_partial,
                 params.stop_delay_ms,
@@ -182,6 +191,7 @@ async fn finish(
     rec: &mut recorder::RecordingStream,
     session: &mut Box<dyn AsrSession>,
     events: &mut mpsc::Receiver<AsrEvent>,
+    consumer: &mut PcmConsumer,
     segments: &mut Vec<String>,
     last_partial: &mut String,
     stop_delay_ms: u32,
@@ -200,6 +210,9 @@ async fn finish(
             pcm = rec.recv() => {
                 match pcm {
                     Some(samples) => {
+                        if let Some(VadEvent::Switched(s)) = consumer.feed(&samples) {
+                            eprintln!("[vad] state → {s:?} (drain)");
+                        }
                         let _ = session.send_pcm(&samples, false).await;
                     }
                     None => break,
@@ -214,6 +227,9 @@ async fn finish(
     // 5b. 真停 recorder，吸完剩余帧
     rec.stop();
     while let Some(samples) = rec.try_recv() {
+        if let Some(VadEvent::Switched(s)) = consumer.feed(&samples) {
+            eprintln!("[vad] state → {s:?} (tail)");
+        }
         let _ = session.send_pcm(&samples, false).await;
     }
 

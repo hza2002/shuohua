@@ -1,26 +1,19 @@
-//! 一次录音的完整生命周期：VAD 驱动多段 ASR session + stop drain + dispatch。
+//! 一次录音的完整生命周期：录音 → ASR → pipeline → dispatch。
 //!
-//! M2.5 流程：
+//! 两条路径，由 config `voice.vad_enabled` 控制：
 //!
-//!   1. 生成 recording_id (ULID)
-//!   2. 开 cpal streaming recorder + PcmConsumer（500ms pre-roll + VAD）
-//!   3. 开首个 ASR session，dump pre-roll 入 session（补辅音/弱起）
-//!   4. 主循环：PCM → consumer.feed() → VAD 判定 voiced/unvoiced
-//!        - Voiced + 无 session → 开新 session + dump pre-roll
-//!        - Unvoiced ≥ pause_asr_silence_ms → 关 session（send is_last →
-//!          wait Done → close），段文本追加到 pending_segments
-//!        - Unvoiced ≥ auto_stop_silence_ms → auto stop（防忘按 toggle）
-//!        - PCM 转发到 session（Active/WindingDown 时）
-//!   5. toggle OFF / auto stop → Finishing：
-//!        - 若 Active → send is_last，drain stop_delay_ms 尾音
-//!        - 等 Done → close session → 追加最后一段文本
-//!        - stop recorder
-//!   6. 拼最终文本：pending_segments join segment_separator
-//!   7. 非空时 dispatch（写剪贴板 + 可选 Cmd+V）
+//! **单 session（默认，vad_enabled=false）**：
+//!   跟 M2 行为一样：cpal stream → 单一 Doubao session → toggle OFF →
+//!   drain stop_delay → finalize → filler pipeline → dispatch。简单可靠。
 //!
-//! M2.5 变更（相对 M2）：
-//!   - 不再用 last_partial 兜底（partial 是中间态，最终上屏应只来自 Segment）
-//!   - segments 在录音全周期内跨 session 累积（不是只在 finish 收尾）
+//! **多 session（vad_enabled=true，实验性）**：
+//!   客户端 VAD + 多段 ASR session（"思考不计费"）。DESIGN §2.9 完整实现。
+//!   VAD 代码（vad.rs / consumer.rs）保留，切换开关即可启用。
+//!
+//! M2.5 真正交付的改进（两条路径共用）：
+//!   - RuleBasedFiller 去口语词（嗯/啊/呃/那个/就是）
+//!   - segment_separator 拼接多段 ASR segment
+//!   - 不再用 last_partial 兜底（只信任 Segment）
 
 use std::time::{Duration, Instant};
 
@@ -41,21 +34,31 @@ pub struct SessionParams {
     pub pause_asr_silence_ms: u32,
     pub auto_stop_silence_ms: u32,
     pub segment_separator: String,
+    pub vad_enabled: bool,
 }
 
-/// 跑一次完整录音。`stop_rx` 触发 = 用户 toggle OFF（或 auto stop）。函数返回时
-/// 整次录音已结束。
 pub async fn run_recording(
     provider: &dyn AsrProvider,
     params: SessionParams,
     stop_rx: oneshot::Receiver<()>,
 ) {
-    let recording_id = ulid::Ulid::new().to_string();
-    let pause_dur = Duration::from_millis(params.pause_asr_silence_ms as u64);
-    let auto_stop_dur = Duration::from_millis(params.auto_stop_silence_ms as u64);
-    eprintln!("[shuo] ▶ recording id={recording_id}");
+    if params.vad_enabled {
+        run_multi_session(provider, params, stop_rx).await;
+    } else {
+        run_single_session(provider, params, stop_rx).await;
+    }
+}
 
-    // 1. wav 路径
+// ── single session ────────────────────────────────────────────────────────
+
+async fn run_single_session(
+    provider: &dyn AsrProvider,
+    params: SessionParams,
+    stop_rx: oneshot::Receiver<()>,
+) {
+    let recording_id = ulid::Ulid::new().to_string();
+    eprintln!("[shuo] ▶ recording id={recording_id} (single session)");
+
     let audio_path = if params.record_audio {
         match prepare_audio_path(&recording_id) {
             Ok(p) => Some(p),
@@ -71,7 +74,199 @@ pub async fn run_recording(
         eprintln!("[shuo] 留存 wav → {}", p.display());
     }
 
-    // 2. 开录音
+    let mut rec = match recorder::start(audio_path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[shuo] ❌ 录音启动失败: {e:#}");
+            return;
+        }
+    };
+
+    let ctx = SessionCtx {
+        language: LanguageMode::Multilingual { hint: vec!["zh-CN".into(), "en-US".into()] },
+        hotwords: params.hotwords,
+    };
+    let (mut session, mut events) = match provider.open(ctx).await {
+        Ok(t) => t,
+        Err(err) => {
+            eprintln!("[shuo] ❌ ASR open failed: {err}");
+            rec.stop();
+            return;
+        }
+    };
+
+    let mut stop_rx = stop_rx;
+    let mut pending_segments: Vec<String> = Vec::new();
+    let mut stop_requested = false;
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut stop_rx, if !stop_requested => {
+                stop_requested = true;
+            }
+            pcm = rec.recv(), if !stop_requested => {
+                match pcm {
+                    Some(samples) => {
+                        if let Err(e) = session.send_pcm(&samples, false).await {
+                            eprintln!("[shuo] ❌ ASR send_pcm failed: {e}");
+                            break;
+                        }
+                    }
+                    None => {
+                        eprintln!("[shuo] recorder ended unexpectedly");
+                        stop_requested = true;
+                    }
+                }
+            }
+            ev = events.recv() => {
+                match ev {
+                    None => break,
+                    Some(AsrEvent::Partial { text, seq }) => {
+                        eprintln!("[shuo]   partial#{seq}: {text}");
+                    }
+                    Some(AsrEvent::Segment { text, .. }) => {
+                        eprintln!("[shuo]   segment: {text}");
+                        pending_segments.push(text);
+                    }
+                    Some(AsrEvent::Error { err }) => {
+                        eprintln!("[shuo] ❌ ASR error: {err}");
+                        rec.stop();
+                        let _ = session.close().await;
+                        return;
+                    }
+                    Some(AsrEvent::Done) => break,
+                }
+            }
+        }
+
+        if stop_requested {
+            single_finish(
+                &mut rec,
+                &mut session,
+                &mut events,
+                &mut pending_segments,
+                params.stop_delay_ms,
+            )
+            .await;
+            break;
+        }
+    }
+
+    let _ = session.close().await;
+    dispatch_with_filler(pending_segments, &params.segment_separator, params.auto_paste).await;
+}
+
+async fn single_finish(
+    rec: &mut recorder::RecordingStream,
+    session: &mut Box<dyn AsrSession>,
+    events: &mut mpsc::Receiver<AsrEvent>,
+    pending_segments: &mut Vec<String>,
+    stop_delay_ms: u32,
+) {
+    let drain_until = Instant::now() + Duration::from_millis(stop_delay_ms as u64);
+    loop {
+        let now = Instant::now();
+        if now >= drain_until {
+            break;
+        }
+        let deadline = tokio::time::Instant::from_std(drain_until);
+        tokio::select! {
+            biased;
+            _ = sleep_until(deadline) => break,
+            pcm = rec.recv() => {
+                match pcm {
+                    Some(samples) => {
+                        let _ = session.send_pcm(&samples, false).await;
+                    }
+                    None => break,
+                }
+            }
+            ev = events.recv() => {
+                match ev {
+                    None => break,
+                    Some(AsrEvent::Segment { text, .. }) => {
+                        eprintln!("[shuo]   segment (drain): {text}");
+                        pending_segments.push(text);
+                    }
+                    Some(AsrEvent::Done) => break,
+                    Some(AsrEvent::Partial { text, seq }) => {
+                        eprintln!("[shuo]   partial#{seq} (drain): {text}");
+                    }
+                    Some(AsrEvent::Error { err }) => {
+                        eprintln!("[shuo] ❌ ASR error during drain: {err}");
+                    }
+                }
+            }
+        }
+    }
+
+    rec.stop();
+    while let Some(samples) = rec.try_recv() {
+        let _ = session.send_pcm(&samples, false).await;
+    }
+
+    if let Err(e) = session.send_pcm(&[], true).await {
+        eprintln!("[shuo] ❌ send is_last failed: {e}");
+        return;
+    }
+
+    let timeout = tokio::time::sleep(Duration::from_secs(5));
+    tokio::pin!(timeout);
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut timeout => {
+                eprintln!("[shuo] ⚠ 识别 final 超时 5s");
+                return;
+            }
+            ev = events.recv() => {
+                match ev {
+                    None => return,
+                    Some(AsrEvent::Done) => return,
+                    Some(AsrEvent::Segment { text, .. }) => {
+                        eprintln!("[shuo]   segment (final): {text}");
+                        pending_segments.push(text);
+                    }
+                    Some(AsrEvent::Partial { text, seq }) => {
+                        eprintln!("[shuo]   partial#{seq} (final): {text}");
+                    }
+                    Some(AsrEvent::Error { err }) => {
+                        eprintln!("[shuo] ❌ ASR error during final: {err}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── multi session (VAD, 实验性) ───────────────────────────────────────────
+
+async fn run_multi_session(
+    provider: &dyn AsrProvider,
+    params: SessionParams,
+    stop_rx: oneshot::Receiver<()>,
+) {
+    let recording_id = ulid::Ulid::new().to_string();
+    let pause_dur = Duration::from_millis(params.pause_asr_silence_ms as u64);
+    let auto_stop_dur = Duration::from_millis(params.auto_stop_silence_ms as u64);
+    eprintln!("[shuo] ▶ recording id={recording_id} (VAD multi-session)");
+
+    let audio_path = if params.record_audio {
+        match prepare_audio_path(&recording_id) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                eprintln!("[shuo] record_audio 开启但准备路径失败: {e:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(p) = &audio_path {
+        eprintln!("[shuo] 留存 wav → {}", p.display());
+    }
+
     let mut rec = match recorder::start(audio_path) {
         Ok(r) => r,
         Err(e) => {
@@ -85,7 +280,6 @@ pub async fn run_recording(
         hotwords: params.hotwords,
     };
 
-    // 3. 开首个 ASR session
     let (session0, events0) = match open_session(provider, &ctx, &mut PcmConsumer::new()).await {
         Ok(t) => t,
         Err(err) => {
@@ -97,7 +291,6 @@ pub async fn run_recording(
     let mut session: Option<Box<dyn AsrSession>> = Some(session0);
     let mut events: Option<mpsc::Receiver<AsrEvent>> = Some(events0);
 
-    // 4. 主循环
     let mut stop_rx = stop_rx;
     let mut consumer = PcmConsumer::new();
     let mut pending_segments: Vec<String> = Vec::new();
@@ -106,23 +299,17 @@ pub async fn run_recording(
     let mut winding_down = false;
     let mut stop_requested = false;
     let mut session_active = true;
-    // 当前 session 期间收集到的 Segment 数。关 session 时用来决定下次 VAD
-    // 确认期：零产出 = 噪音 session → 下次开门槛更高（2s），避免噪音反复开关。
     let mut sess_segment_count: usize = 0;
-    // 下次 VAD voiced 确认所需的连续时长。噪音 session 之后提到 2s。
     let mut voiced_confirm_ms: u64 = 500;
-    // 噪音关闭后的 VAD 确认期——比正常的长，因为上次已经证明该环境 VAD 容易误判。
     const NOISE_VOICED_CONFIRM_MS: u64 = 2000;
 
     loop {
         tokio::select! {
             biased;
-            // 用户 toggle OFF / auto stop
             _ = &mut stop_rx, if !stop_requested => {
                 stop_requested = true;
             }
 
-            // PCM 帧
             pcm = rec.recv(), if !stop_requested => {
                 let samples = match pcm {
                     Some(s) => s,
@@ -142,8 +329,6 @@ pub async fn run_recording(
                     Some(VadEvent::Switched(VadState::Unvoiced)) => {
                         eprintln!("[vad] state → Unvoiced");
                         voiced_since = None;
-                        // 只记第一次静默起点；后续 VAD 振荡不重置。只有
-                        // confirmed Voiced（见下）才清空这个 timestamp。
                         if unvoiced_since.is_none() {
                             unvoiced_since = Some(Instant::now());
                         }
@@ -151,9 +336,6 @@ pub async fn run_recording(
                     None => {}
                 }
 
-                // Voiced 确认期：持续 Voiced≥voiced_confirm_ms 才开新 session。
-                // 不重置 silence timer——那是 ASR 输出（Partial/Segment）的职责。
-                // 噪音 session 之后门槛提至 2s，避免反复开关。
                 if let Some(vs) = voiced_since {
                     if vs.elapsed() >= Duration::from_millis(voiced_confirm_ms) {
                         voiced_since = None;
@@ -175,7 +357,6 @@ pub async fn run_recording(
                     }
                 }
 
-                // Forward PCM 到 session（Active 或 WindingDown）
                 if let Some(ref mut s) = session {
                     if let Err(e) = s.send_pcm(&samples, false).await {
                         eprintln!("[shuo] ❌ ASR send_pcm failed: {e}");
@@ -187,11 +368,8 @@ pub async fn run_recording(
                     }
                 }
 
-                // Deadline checks
                 if let Some(since) = unvoiced_since {
-                    if since.elapsed() >= pause_dur
-                        && session.is_some() && !winding_down
-                    {
+                    if since.elapsed() >= pause_dur && session.is_some() && !winding_down {
                         eprintln!("[session] unvoiced ≥ {}ms, closing session", params.pause_asr_silence_ms);
                         if let Some(ref mut s) = session {
                             let _ = s.send_pcm(&[], true).await;
@@ -206,7 +384,6 @@ pub async fn run_recording(
                 }
             }
 
-            // ASR 事件
             ev = async {
                 match events.as_mut() {
                     Some(e) => e.recv().await,
@@ -223,7 +400,6 @@ pub async fn run_recording(
                     }
                     Some(AsrEvent::Partial { text, seq }) => {
                         eprintln!("[shuo]   partial#{seq}: {text}");
-                        // ASR 产出 = 真实语音。只有它能重置 silence timer。
                         unvoiced_since = None;
                     }
                     Some(AsrEvent::Segment { text, .. }) => {
@@ -251,8 +427,6 @@ pub async fn run_recording(
                         winding_down = false;
                         session_active = false;
                         unvoiced_since = None;
-                        // 噪音 session（零 Segment）→ 下次 VAD 确认期更长。
-                        // 正常 session（有产出）→ 用默认 500ms。
                         voiced_confirm_ms = if produced == 0 {
                             eprintln!("[session] noise session, next confirm → 2s");
                             NOISE_VOICED_CONFIRM_MS
@@ -266,41 +440,17 @@ pub async fn run_recording(
         }
 
         if stop_requested {
-            // 进 Finishing：drain + 关 session + dispatch
             let has_active = session_active || winding_down;
             let to_close = if has_active { session.take() } else { None };
             let mut to_events = if has_active { events.take() } else { None };
-            finish_stop(
-                &mut rec,
-                to_close,
-                &mut to_events,
-                &mut pending_segments,
-                params.stop_delay_ms,
-            )
-            .await;
+            multi_finish(&mut rec, to_close, &mut to_events, &mut pending_segments, params.stop_delay_ms).await;
             break;
         }
     }
 
-    // 5. 拼原始文本 + 跑 post pipeline
-    let raw_text = pending_segments.join(&params.segment_separator);
-
-    if !raw_text.is_empty() {
-        let chain: Vec<Box<dyn post::PostProcessor>> =
-            vec![Box::new(RuleBasedFiller::default_patterns())];
-        let initial = PipelineText::new(raw_text, std::mem::take(&mut pending_segments));
-        let out =
-            post::run_chain(&chain, initial, &post::AppContext, Duration::from_secs(2)).await;
-        eprintln!("[shuo] ✓ 最终: {}", out.text);
-        if let Err(e) = dispatch::dispatch(&out.text, params.auto_paste) {
-            eprintln!("[shuo] ❌ 剪贴板写入失败: {e:#}");
-        }
-    } else {
-        eprintln!("[shuo] (空识别结果，跳过 dispatch)");
-    }
+    dispatch_with_filler(pending_segments, &params.segment_separator, params.auto_paste).await;
 }
 
-/// 开新 ASR session + 把 pre-roll 历史 dump 进去（避免辅音/弱起被丢，DESIGN §2.9）。
 async fn open_session(
     provider: &dyn AsrProvider,
     ctx: &SessionCtx,
@@ -318,9 +468,7 @@ async fn open_session(
     Ok((session, events))
 }
 
-/// Finishing：drain + 关当前 session → 追加末段。session / events 传入时
-/// 取 ownership（caller 已 take），函数内 close + drop。
-async fn finish_stop(
+async fn multi_finish(
     rec: &mut recorder::RecordingStream,
     mut session: Option<Box<dyn AsrSession>>,
     events: &mut Option<mpsc::Receiver<AsrEvent>>,
@@ -334,7 +482,6 @@ async fn finish_stop(
 
     let _ = sess.send_pcm(&[], true).await;
 
-    // a. drain stop_delay_ms 内继续读 cpal 帧、推 ASR（防尾字丢）
     let drain_until = Instant::now() + Duration::from_millis(stop_delay_ms as u64);
     loop {
         let now = Instant::now();
@@ -347,9 +494,7 @@ async fn finish_stop(
             _ = sleep_until(deadline) => break,
             pcm = rec.recv() => {
                 match pcm {
-                    Some(samples) => {
-                        let _ = sess.send_pcm(&samples, false).await;
-                    }
+                    Some(samples) => { let _ = sess.send_pcm(&samples, false).await; }
                     None => break,
                 }
             }
@@ -372,13 +517,11 @@ async fn finish_stop(
         }
     }
 
-    // b. 真停 recorder，吸完剩余帧
     rec.stop();
     while let Some(samples) = rec.try_recv() {
         let _ = sess.send_pcm(&samples, false).await;
     }
 
-    // c. 等 Done 或 5s 超时，然后 close session
     let timeout = tokio::time::sleep(Duration::from_secs(5));
     tokio::pin!(timeout);
     loop {
@@ -391,14 +534,8 @@ async fn finish_stop(
             }
             ev = evts.recv() => {
                 match ev {
-                    None => {
-                        let _ = sess.close().await;
-                        return;
-                    }
-                    Some(AsrEvent::Done) => {
-                        let _ = sess.close().await;
-                        return;
-                    }
+                    None => { let _ = sess.close().await; return; }
+                    Some(AsrEvent::Done) => { let _ = sess.close().await; return; }
                     Some(AsrEvent::Segment { text, .. }) => {
                         eprintln!("[shuo]   segment (final): {text}");
                         pending_segments.push(text);
@@ -412,6 +549,24 @@ async fn finish_stop(
                 }
             }
         }
+    }
+}
+
+// ── shared ────────────────────────────────────────────────────────────────
+
+async fn dispatch_with_filler(mut segments: Vec<String>, sep: &str, auto_paste: bool) {
+    let raw_text = segments.join(sep);
+    if raw_text.is_empty() {
+        eprintln!("[shuo] (空识别结果，跳过 dispatch)");
+        return;
+    }
+    let chain: Vec<Box<dyn post::PostProcessor>> =
+        vec![Box::new(RuleBasedFiller::default_patterns())];
+    let initial = PipelineText::new(raw_text, std::mem::take(&mut segments));
+    let out = post::run_chain(&chain, initial, &post::AppContext, Duration::from_secs(2)).await;
+    eprintln!("[shuo] ✓ 最终: {}", out.text);
+    if let Err(e) = dispatch::dispatch(&out.text, auto_paste) {
+        eprintln!("[shuo] ❌ 剪贴板写入失败: {e:#}");
     }
 }
 

@@ -101,6 +101,7 @@ async fn main() -> Result<()> {
                     pause_asr_silence_ms: cfg.voice.pause_asr_silence_ms,
                     auto_stop_silence_ms: cfg.voice.auto_stop_silence_ms,
                     segment_separator: cfg.voice.segment_separator.clone(),
+                    vad_enabled: cfg.voice.vad_enabled,
                 };
                 let provider = provider.clone();
                 tokio::spawn(async move {

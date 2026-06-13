@@ -11,6 +11,7 @@ record_audio         = false      # true → 落 ~/.local/state/shuohua/audio/<i
 pause_asr_silence_ms = 3000       # 静音多久后关 ASR session（"思考不计费"，DESIGN §2.9）。≥ 1800
 auto_stop_silence_ms = 600000     # 静音多久后完全停止录音（防忘按 toggle OFF）
 segment_separator    = " "        # 多段识别拼接分隔符
+vad_enabled          = false      # 客户端 VAD 多 session（实验性，默认关）
 
 [asr]
 provider = "doubao"       # 加载 ~/.config/shuohua/asr/doubao.toml

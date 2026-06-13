@@ -42,6 +42,11 @@ pub struct VoiceCfg {
     /// 多段 ASR session 拼接时的分隔符。默认空格。
     #[serde(default = "default_segment_separator")]
     pub segment_separator: String,
+    /// 客户端 VAD 多 session（"思考不计费"）。实验性，默认关。
+    /// 开启后：静音≥pause_asr_silence_ms 关 ASR、有声重开。
+    /// 对安静环境效果好；嘈杂环境可能误判。
+    #[serde(default)]
+    pub vad_enabled: bool,
 }
 
 impl Default for VoiceCfg {
@@ -53,6 +58,7 @@ impl Default for VoiceCfg {
             pause_asr_silence_ms: default_pause_asr_silence_ms(),
             auto_stop_silence_ms: default_auto_stop_silence_ms(),
             segment_separator: default_segment_separator(),
+            vad_enabled: false,
         }
     }
 }
@@ -212,6 +218,7 @@ provider = "doubao"
         assert_eq!(cfg.voice.pause_asr_silence_ms, 3000);
         assert_eq!(cfg.voice.auto_stop_silence_ms, 600_000);
         assert_eq!(cfg.voice.segment_separator, " ");
+        assert!(!cfg.voice.vad_enabled);
         cfg.validate().expect("default config should validate");
     }
 

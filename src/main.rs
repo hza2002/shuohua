@@ -17,6 +17,8 @@
 //!   M2.f: streaming recorder + voice::finish + end-to-end toggle
 
 mod asr;
+mod autotype_darwin;
+mod clipboard_darwin;
 mod config;
 mod hotkey;
 mod voice;

@@ -1,9 +1,9 @@
-//! Voice: cpal capture → resample to canonical 16k mono s16le → WAV.
+//! Voice: cpal capture → resample to canonical 16k mono s16le → (M1: WAV / M2.f: streaming).
 //!
-//! M1 scope: one-shot 3-second recording per trigger. No streaming ASR, no
-//! VAD, no async runtime. The 16k s16le canonical format defined here is
-//! the same one M2+ ASR providers will consume (see docs/DESIGN.md §2.9).
+//! Canonical PCM 格式 16kHz s16le mono 由 recorder 模块归一化。所有下游
+//! （ASR provider、留存 wav、VAD）都直接消费这份格式，docs/DESIGN.md §2.9。
 
+pub mod dispatch;
 mod recorder;
 
 use anyhow::Result;

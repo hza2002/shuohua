@@ -27,6 +27,9 @@ toml            = "0.8"
 async-trait     = "0.1"
 thiserror       = "2"
 uuid            = { version = "1", features = ["v4"] }
+objc2           = "0.6"
+objc2-app-kit   = { version = "0.3", features = ["NSPasteboard"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray"] }
 
 [profile.release]
 opt-level = "z"

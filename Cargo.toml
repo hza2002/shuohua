@@ -18,6 +18,8 @@ os_pipe         = "1"
 core-graphics   = "0.24"
 core-foundation = "0.10"
 tokio           = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+serde           = { version = "1", features = ["derive"] }
+toml            = "0.8"
 
 [profile.release]
 opt-level = "z"

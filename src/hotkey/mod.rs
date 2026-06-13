@@ -1,13 +1,13 @@
 //! Hotkey: CGEventTap → pipe → Tracker → HotkeyEvent.
 //!
-//! At M1 the trigger keycode is supplied as a `u16` to `Tracker::new` and
-//! lives as a constant in `main.rs`. At M2 the value will be parsed from
-//! `config.toml` (`[hotkey] trigger = "F16"`) via a string→keycode table,
-//! and `Combo` (keycode + modifier mask) will replace the bare `u16` here.
+//! M2.b: trigger keycode parsed from `[hotkey] trigger = "f16"` via `parse`.
+//! M6 will introduce `Combo` (keycode + modifier mask) + `registry` for
+//! multi-binding + real suppress; M2 only ships single-key F1–F20.
 //!
 //! macOS virtual keycodes are physical-position-based (same across all
 //! keyboard layouts) and defined in HIToolbox/Events.h: F16 = 0x6A, etc.
 
+pub mod parse;
 pub mod provider_darwin;
 pub mod tracker;
 

@@ -318,113 +318,50 @@ provider 之间**完全不共享 schema**。每个 provider impl 自己 deserial
 
 ### 2.9 客户端 VAD + 多段 session（"思考不计费"机制）
 
+> **状态**：设计保留，v1 不实现。M2.5 试过 webrtc-vad，在真实声学环境里误判率高（风扇/空调嗡鸣谐波会过频域检测、RMS 门无法同时满足灵敏度与稳定性），不适合生产。
+> 后续等更好的本地语音检测模型（如 Silero VAD ONNX、M9）或用户切换信号（如二次 F16）再启用多 session。
+
 #### Doubao 计费模型（核实后的事实）
 
 Resource ID `volc.bigasr.sauc.duration` 的 `duration` 是关键：**按音频时长计费**（约 3.5 元/小时，0–300h 阶梯）。默认免费 10 路并发，单用户单连接不会触发限额。
 
-**省的不是"会话数"，而是这段静默时间不被作为音频喂给 Doubao**。10 分钟"在想"如果一直喂静音 PCM，扣 10 分钟时长费（≈0.58 元）；client VAD 检测到静音不喂，就 0 费。
-
-详细：[计费说明](https://www.volcengine.com/docs/6561/1359370?lang=zh) / [大模型流式 API](https://www.volcengine.com/docs/6561/1354869?lang=zh)。
+**省的不是"会话数"，而是静默时间不喂音频给 Doubao**。10 分钟沉默一直喂静音 PCM 扣 10 分钟时长费；client VAD 检测到静音不喂 = 0 费。
 
 #### 两种实现方案
 
 | 方案 | 做法 | 优点 | 缺点 |
 |---|---|---|---|
-| **A. 关 session**（v1 选） | 静音 ≥3s → close → 静音期不连 → 恢复说话开新 session | 简单，不需要心跳，Doubao 行为完全确定 | 重连首字延迟 ~300–500ms |
-| **B. 保 session 暂停喂** | 静音 ≥3s → 不发 PCM（连接保持）→ 恢复说话直接喂 | 首字延迟 ~200ms | 需心跳防 server 端超时；Doubao 文档没说静音保持上限，需实测 |
+| **A. 关 session**（v1 选） | 静音 ≥3s → close → 静音期不连 → 恢复说话开新 session | 简单，Doubao 行为确定 | 重连首字延迟 ~300–500ms |
+| **B. 保 session 暂停喂** | 静音后不发 PCM（连接保持）→ 恢复直接喂 | 首字延迟 ~200ms | 需心跳防超时 |
 
 **v1 = A**。M3 之后实测首字延迟刺眼再切 B。
 
-#### 两个独立的静音阈值
-
-```toml
-[voice]
-pause_asr_silence_ms = 3000      # 静音 3s → 关 ASR session，仍保持 Recording 状态
-auto_stop_silence_ms = 600000    # 静音 10min → 完全 stop（防忘按）
-segment_separator    = " "       # 段间用什么拼
-```
-
-约束：`pause_asr_silence_ms ≥ end_window_size + 1000`，确保客户端先于服务端 VAD 触发。
-
-#### 子状态机转移
+#### Voice 状态机支持（§2.1 Recording 含 Active/Idle 子状态）
 
 | 当前 | 事件 | 下一个 |
 |---|---|---|
-| `Recording.Active` | unvoiced 持续 ≥ pause_asr_silence_ms | `Recording.Idle`（关 ASR，把 final 追加到 pending_output） |
-| `Recording.Idle` | VAD 检测到 voiced | `Recording.Active`（开新 ASR session；先 dump VecDeque 再喂当前帧） |
-| `Recording.*` | unvoiced 持续 ≥ auto_stop_silence_ms | `Stopping` |
+| `Recording.Active` | VAD 判定静音 ≥ pause_asr_silence_ms | `Recording.Idle`（关 ASR，把 final 追加到 pending_output） |
+| `Recording.Idle` | VAD 判定有声 | `Recording.Active`（开新 session；dump pre-roll 再喂当前帧） |
+| `Recording.*` | 静音 ≥ auto_stop_silence_ms | `Stopping`（防忘按 toggle） |
 | `Recording.*` | toggle OFF / cancel / 错误 | `Stopping` |
 
-#### VAD 实现
+v1 不实现此子状态机（Recording 始终 Active），Voice enum 也不在代码中显式存在（M3 再抽）。
 
-| 候选 | 准确度 | CPU | 选 |
-|---|---|---|---|
-| **WebRTC VAD**（`webrtc-vad` crate / libfvad） | 中等，业界 workhorse | <0.1% | **v1 默认** |
-| RMS 阈值 | 低，键盘/风扇容易误触 | 几乎 0 | 降级路径 |
-| Silero VAD（ONNX） | 高 | ~5% (M1) | M9 备选 |
+#### 未来配置文件占位
 
-WebRTC VAD 工作方式：
-- 16kHz mono PCM 切 **20ms 帧**（每帧 320 samples）
-- 每帧返回 speech / not-speech bit
-- **滑动窗口去抖**：最近 5 帧（100ms）至少 3 帧 speech 才算 voiced，反之类似
-- **切换最小间隔 ≥ 1s**：防打字声触发 ON/OFF 抖动
+以下字段已在 `config.toml` 设计里预留但 v1 不加载（serde `#[serde(default)]` 无对应字段 → 无需配置）：
 
-#### PCM 数据流（单消费者 + 滑窗历史）
-
-为了避免多消费者并发问题，PCM 数据流只有一个消费者任务：
-
+```toml
+[voice]
+pause_asr_silence_ms = 3000      # 静音多久后关 ASR session（未来）
+auto_stop_silence_ms = 600000    # 静音多久后完全停止录音（未来）
 ```
-cpal callback ──► tokio mpsc unbounded ──► PcmConsumer task
-                                                  │
-                                                  ├─► 维护 3s VecDeque<i16> 历史（滑窗，覆盖最坏情况 2s VAD 确认期 + 1s 辅音保护）
-                                                  ├─► WebRTC VAD 判定每帧 voiced/unvoiced
-                                                  └─► 当 ASR session active 时喂 PCM
-```
-
-关键点：
-- **cpal callback** 唯一写入端，`pcm_tx.send(Vec<i16>)` 推给 tokio mpsc unbounded。
-- **为什么不是 rtrb SPSC ring buffer**：原本设计选 rtrb 是按"callback 内零分配 + 零锁"教科书 RT audio 标准。实测发现：(1) Go 版（just-talk-go）在 audio callback 里直接做 `pthread_mutex_lock + write() syscall` 都稳定跑过线，比 mpsc 重得多；(2) M2 当前用 mpsc 实机验过中英混合识别，没有观测到丢帧或 jitter；(3) 真要拿 rtrb 收益还得连带消掉 callback 内 `Vec<i16>` 分配（否则只是换皮）。结论：v1 用 mpsc，未来若实测出 audio jitter 影响识别再切。recorder.rs 是隔离层，切换不污染上层。
-- **PcmConsumer** 是唯一读取端：取 20ms 帧 → 跑 VAD → 推入 `VecDeque<i16>`（容量 = 3s = 48000 samples），超出从头 pop。足够覆盖噪音 session 后的 2s VAD 确认期。
-- **Idle → Active 触发**（VAD 检测到 voiced + 当前无 ASR session）：
-  1. 异步 spawn 开新 ASR session 的 task（用 `tokio::sync::oneshot` 通知 PcmConsumer "session ready"）
-  2. PcmConsumer 把 VecDeque 全部历史一次性喂给新 session
-  3. 继续把当前帧及后续帧喂给 session
-- **VecDeque 始终维护**，不因 ASR 状态变化重置 —— 这样下一次 Idle→Active 仍然有 pre-roll 可用。
-
-为什么 3s：
-- 正常模式 VAD 确认 500ms → 预滚 > 确认期 即够。噪音 session 后确认提至
-  2s → 预滚必须 ≥ 2.5s，取整 3s。内存成本 96KB 可忽略
-- 喂给新 ASR session 的只是"最近 3s 中未被 silence timer 覆盖的末尾"，
-  正常说话时 pre-roll 内容几乎全是语音，不会增加无效计费
-
-**对计费的真实影响**：每段开头多喂一段 pre-roll。一次录音 3 段 = 多约 1.5s = 0.0015 元。可忽略。
-
-#### cpal / VAD 生命周期（跟随 Voice 状态机）
-
-为了满足空闲 CPU <0.5% + 隐私目标，**cpal 和 PcmConsumer 不是常驻**：
-
-| Voice 状态 | cpal | PcmConsumer | VecDeque 历史 |
-|---|---|---|---|
-| `Idle`（没按 F9） | **关** | **关** | — |
-| `Connecting` → `Recording.*` | 开 | 开 | 滑窗维护 |
-| `Stopping` → `Finishing` | drain 后关 | 收尾后关 | 丢弃 |
-
-**F9 触发流程**（Idle → Connecting）：
-1. 主 voice 任务收到 toggle ON 事件
-2. 启动 cpal stream（macOS 上 ~50ms 初始化）
-3. 启动 PcmConsumer task
-4. 进入 Connecting 状态等 ASR 连接
-
-**这意味着第一次 F9 按下后的最初 ~50ms PCM 可能不可用**——但用户从按 F9 到开口说话的反应时间通常 200ms+，所以听感上无损失。pre-roll 的真正价值在 Recording 内的 Idle→Active 切换（思考停顿后恢复说话），那时 cpal 已经在跑、VecDeque 已经满。
-
-**Stopping**：cpal 收到 stop 信号后继续 drain `stop_delay_ms`（800ms，见 §5 不变量）确保尾字不丢，然后才真正关流。
 
 #### 关键不变量
 
 1. **VAD 独立于 provider**：任何 provider 不需要关心 VAD。
-2. **段间分隔符**默认空格，可配。
-3. **PcmConsumer 不阻塞**：开/关 ASR session 是异步任务（spawn 到 tokio runtime），PcmConsumer 继续读下一帧。session 没 ready 时帧累积在 VecDeque + ring buffer 里。
-4. **cpal 跟随 Voice 状态机**：Voice::Idle 时绝不持有 cpal stream（防 always-recording 隐私问题 + 满足 <0.5% 空闲 CPU）。
+2. **段间分隔符**默认空格，已配置化（`voice.segment_separator`）。
+3. **cpal 跟随 Voice 状态机**：Voice::Idle 时绝不持有 cpal stream。
 
 ### 2.10 PostProcessor 抽象
 
@@ -704,8 +641,8 @@ language = "auto"        # auto | zh-CN | en-US
 | Objective-C 互操作 | `objc2` 0.6 + `objc2-app-kit` 0.3 + `objc2-foundation` 0.3 | 现役标准，活跃维护 |
 | Core Graphics / CGEventTap | `core-graphics`, `core-foundation` | CGEventTap pipe 桥的基础 |
 | 录音 | `cpal`（首选）/ `coreaudio-rs`（备选） | cpal 简单，coreaudio-rs 控制更细。先用 cpal |
-| VAD | `webrtc-vad`（libfvad 绑定） | 业界 workhorse，<0.1% CPU；失败降级到 RMS |
-| PCM 通道（callback→consumer） | `tokio::sync::mpsc::unbounded` | M2 已验稳定；Go 版用更重的 syscall pipe 都没问题，mpsc 路径更轻；rtrb 留待真出 jitter 再切 |
+| VAD（未来） | `webrtc-vad`（libfvad）- 试过，误判率高，不推荐 | 后续用 Silero VAD ONNX（M9）或更好的模型 |
+| PCM 通道（callback→consumer） | `tokio::sync::mpsc::unbounded` | M2 已验稳定；Go 版 syscall pipe 都稳跑，mpsc 更轻 |
 | 唯一 ID | `ulid` | history record id；26 字符短于 UUID，含时序信息 |
 | WebSocket | `tokio-tungstenite` + `native-tls` | tokio 生态首选；DoubaoProvider 用。macOS 原生 Security framework 走 native-tls（无 rustls CryptoProvider 配置负担、无 OpenSSL；跨平台时再切 rustls） |
 | TUI | `ratatui` + `crossterm` | Bubble Tea 的事实替代；**唯一前台 UI** |
@@ -748,10 +685,9 @@ shuohua/
 │   │   ├── registry.rs         # combo→handler 映射
 │   │   └── provider_darwin.rs  # CGEventTap + pipe 桥
 │   ├── voice/
-│   │   ├── mod.rs              # 状态机 enum + main loop
-│   │   ├── recorder.rs         # cpal 16kHz s16le mono + PcmConsumer
-│   │   ├── vad.rs              # 客户端 VAD（WebRTC 包装 + 滑动窗口 + 切换防抖）
-│   │   ├── finish.rs           # 收尾链
+│   │   ├── mod.rs              # 子模块声明
+│   │   ├── recorder.rs         # cpal 16kHz s16le mono → mpsc
+│   │   ├── finish.rs           # 录音生命周期 + filler pipeline + dispatch
 │   │   └── dispatch.rs         # 剪贴板 + Cmd+V
 │   ├── asr/
 │   │   ├── mod.rs              # AsrProvider / AsrSession trait
@@ -761,10 +697,10 @@ shuohua/
 │   │       ├── whisper_cpp.rs  # M8 离线
 │   │       └── apple_speech.rs # M9 评估
 │   ├── post/
-│   │   ├── mod.rs              # PostProcessor trait + run_chain
-│   │   ├── filler.rs           # M2.5 规则去口语词
+│   │   ├── mod.rs              # PostProcessor trait + PipelineText + run_chain（M2.5）
+│   │   ├── filler.rs           # RuleBasedFiller（M2.5）
 │   │   ├── llm.rs              # M7 LLM 清洗
-│   │   └── app_context.rs      # NSWorkspace.frontmostApplication
+│   │   └── app_context.rs      # NSWorkspace.frontmostApplication（M7）
 │   ├── state/
 │   │   ├── mod.rs              # 内存状态机 + tokio::sync::broadcast 给订阅者
 │   │   └── history.rs          # append-only history.jsonl + 派生统计
@@ -827,7 +763,6 @@ shuohua/
 | `config` parse / validate | ✓ | — | — |
 | `hotkey::tracker` 状态机 | ✓ | ✓（key down/up 配对、suppress 不变量） | — |
 | `voice` 状态机 | ✓（fake AsrProvider + fake recorder） | — | — |
-| `vad`（WebRTC 包装 + 抖动滤波） | ✓（golden PCM 文件） | — | — |
 | `post::chain` | ✓（fake processors，验证失败/超时/skipped） | — | — |
 | `asr::providers::doubao` | — | — | ✓（命中真实 ASR，CI 跑要钥匙） |
 | `ipc` UDS protocol | ✓（serde round-trip） | — | ✓（spawn daemon + 假 TUI） |

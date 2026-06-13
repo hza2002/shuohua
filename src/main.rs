@@ -11,7 +11,7 @@
 //!     finalize 在 background 跑)
 //!
 //! Next:
-//!   M2.5: VAD + 多 session + RuleBased filler 去口语词
+//!   M2.5: RuleBased filler 去口语词（已完成）
 //!   M3:   StateStore + history.jsonl + AppKit overlay
 
 mod asr;
@@ -98,10 +98,7 @@ async fn main() -> Result<()> {
                     record_audio: cfg.voice.record_audio,
                     stop_delay_ms: cfg.voice.stop_delay_ms,
                     hotwords: cfg.asr.hotwords.clone(),
-                    pause_asr_silence_ms: cfg.voice.pause_asr_silence_ms,
-                    auto_stop_silence_ms: cfg.voice.auto_stop_silence_ms,
                     segment_separator: cfg.voice.segment_separator.clone(),
-                    vad_enabled: cfg.voice.vad_enabled,
                 };
                 let provider = provider.clone();
                 tokio::spawn(async move {

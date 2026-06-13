@@ -2,7 +2,7 @@
 
 `src/` 只包含已实现的模块。未实现的模块按里程碑列在下方，路径细节看 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)，里程碑定义看 [REQUIREMENTS.md §6](../REQUIREMENTS.md#6-里程碑)。
 
-## 已实现（M2 + M2.5 进行中）
+## 已实现（M2.5）
 
 ```
 src/
@@ -28,19 +28,17 @@ src/
 └── voice/
     ├── mod.rs
     ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 可选 wav 留存
-    ├── vad.rs                           # WebRTC VAD + 滑窗去抖 + 切换防抖（M2.5.a）
-    ├── consumer.rs                      # PCM 消费端：500ms pre-roll + VAD 旁路（M2.5.d1）
-    ├── finish.rs                        # 一次录音的生命周期 + stop_delay drain + dispatch
+    ├── finish.rs                        # 一次录音的生命周期 + stop_delay drain + filler pipeline + dispatch
     └── dispatch.rs                      # 剪贴板 + 可选 Cmd+V
 ```
 
-数据流：F16 → CGEventTap → pipe → mpsc → `Tracker` → tokio main loop。第一次按 = spawn `finish::run_recording` 任务：cpal stream → `DoubaoSession.send_pcm` 流式推、`AsrEvent::Partial/Segment` 累积。第二次 F16 = oneshot 通知 task 收尾：drain `stop_delay_ms` 尾音 → send `is_last` → 等 Done（5s 超时）→ 拼最终文本 → 剪贴板 + Cmd+V。32 单测。
+数据流：F16 → CGEventTap → pipe → mpsc → `Tracker` → tokio main loop。第一次按 = spawn `finish::run_recording` 任务：cpal stream → `DoubaoSession.send_pcm` 流式推、`AsrEvent::Segment` 累积。第二次 F16 = oneshot 通知 task 收尾：drain `stop_delay_ms` 尾音 → send `is_last` → 等 Done（5s 超时）→ segments join `segment_separator` → filler pipeline → 剪贴板 + Cmd+V。
 
 ## 未实现（按里程碑）
 
 | M | 新增路径 | 主要新依赖 |
 |---|---|---|
-| **M2.5** | （骨架已落；剩 voice/finish.rs 重写接 VAD/多 session/pipeline） | — |
+| **M2.5** | — | — |
 | **M3** | `state/{mod,history}.rs`, `overlay/{mod,view,animations}.rs`, `i18n/mod.rs`, `assets/i18n/*.toml`, `build.rs` 链接 frameworks | objc2-quartz-core, serde_json, ulid, time |
 | **M4** | `ipc/{mod,protocol}.rs`, `tui/{mod,panes,keybindings}.rs` | ratatui, crossterm |
 | **M5** | `cli/{mod,doctor,service,smart}.rs`, `doctor.rs` | clap, notify |

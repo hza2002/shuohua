@@ -1237,7 +1237,6 @@ dependencies = [
  "toml",
  "ulid",
  "uuid",
- "webrtc-vad",
 ]
 
 [[package]]
@@ -1670,15 +1669,6 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "webrtc-vad"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39a1e40fd6ca90be95459152a2537f2ba4286ee1b13073f7ebcaa74fc94e3008"
-dependencies = [
- "cc",
 ]
 
 [[package]]

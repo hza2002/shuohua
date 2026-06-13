@@ -1,5 +1,8 @@
 use tokio::sync::mpsc;
 
+pub mod animations;
+pub mod view;
+
 #[derive(Debug, Clone)]
 pub enum OverlayCmd {
     SetState { state: OverlayState },

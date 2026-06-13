@@ -64,7 +64,7 @@ mod tests {
 
     async fn run(filler: &RuleBasedFiller, input: &str) -> String {
         let pt = PipelineText::new(input.into(), vec![input.into()]);
-        filler.process(pt, &AppContext).await.unwrap().text
+        filler.process(pt, &AppContext::default()).await.unwrap().text
     }
 
     #[tokio::test]
@@ -118,7 +118,7 @@ mod tests {
     async fn raw_field_unchanged() {
         let f = RuleBasedFiller::default_patterns();
         let pt = PipelineText::new("嗯你好".into(), vec!["嗯你好".into()]);
-        let out = f.process(pt, &AppContext).await.unwrap();
+        let out = f.process(pt, &AppContext::default()).await.unwrap();
         assert_eq!(out.text, "你好");
         assert_eq!(out.raw, "嗯你好"); // raw 不变
     }

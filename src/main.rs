@@ -15,6 +15,7 @@
 //!   M3:   StateStore + history.jsonl + AppKit overlay
 
 mod asr;
+mod app_context_darwin;
 mod autotype_darwin;
 mod clipboard_darwin;
 mod config;
@@ -35,8 +36,7 @@ use overlay::OverlayHandle;
 use state::StateStore;
 use voice::finish::SessionParams;
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cfg_path = config::default_path();
     let cfg = config::load_from(&cfg_path).context("load config")?;
     i18n::init(&cfg.ui.language);
@@ -70,6 +70,41 @@ async fn main() -> Result<()> {
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let state_store = StateStore::new();
 
+    let provider_for_daemon = provider.clone();
+    let cfg_for_daemon = cfg.clone();
+    let overlay_for_daemon = overlay.clone();
+    let state_for_daemon = state_store.clone();
+    thread::Builder::new()
+        .name("tokio-daemon".into())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("create tokio runtime");
+            if let Err(e) = rt.block_on(run_daemon(
+                cfg_for_daemon,
+                trigger_code,
+                provider_for_daemon,
+                overlay_for_daemon,
+                state_for_daemon,
+            )) {
+                eprintln!("[shuo] daemon exited: {e:#}");
+                std::process::exit(2);
+            }
+        })
+        .context("spawn tokio daemon thread")?;
+
+    overlay::view::run(_overlay_rx);
+    Ok(())
+}
+
+async fn run_daemon(
+    cfg: config::Config,
+    trigger_code: u16,
+    provider: Arc<dyn asr::AsrProvider>,
+    overlay: OverlayHandle,
+    state_store: StateStore,
+) -> Result<()> {
     let (pipe_reader, pipe_writer) = os_pipe::pipe().context("create hotkey pipe")?;
 
     thread::Builder::new()

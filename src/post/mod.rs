@@ -37,10 +37,12 @@ impl PipelineText {
     }
 }
 
-/// 前台 App 上下文。M2.5 不取，留空结构占位；M3 接 NSWorkspace.frontmostApplication
-/// 后扩 bundle_id / app_name 字段，processor 实现签名不变。
+/// 前台 App 上下文。daemon 在 toggle OFF 时取一次，整条 pipeline 共享。
 #[derive(Debug, Default, Clone)]
-pub struct AppContext;
+pub struct AppContext {
+    pub bundle_id: Option<String>,
+    pub app_name: Option<String>,
+}
 
 #[derive(Error, Debug)]
 pub enum PostError {
@@ -196,7 +198,7 @@ mod tests {
     async fn empty_chain_returns_initial_unchanged() {
         let initial = PipelineText::new("hello".into(), vec!["hello".into()]);
         let (out, steps) =
-            run_chain(&[], initial.clone(), &AppContext, Duration::from_secs(1)).await;
+            run_chain(&[], initial.clone(), &AppContext::default(), Duration::from_secs(1)).await;
         assert_eq!(out.text, "hello");
         assert_eq!(out.raw, "hello");
         assert!(steps.is_empty());
@@ -208,7 +210,7 @@ mod tests {
         let (out, steps) = run_chain(
             &chain,
             PipelineText::new("hi".into(), vec!["hi".into()]),
-            &AppContext,
+            &AppContext::default(),
             Duration::from_secs(1),
         )
         .await;
@@ -228,7 +230,7 @@ mod tests {
         let (out, steps) = run_chain(
             &chain,
             PipelineText::new("hi".into(), vec!["hi".into()]),
-            &AppContext,
+            &AppContext::default(),
             Duration::from_secs(1),
         )
         .await;
@@ -246,7 +248,7 @@ mod tests {
         let (out, steps) = run_chain(
             &chain,
             PipelineText::new("hi".into(), vec!["hi".into()]),
-            &AppContext,
+            &AppContext::default(),
             Duration::from_millis(50),
         )
         .await;
@@ -261,7 +263,7 @@ mod tests {
         let (out, steps) = run_chain(
             &chain,
             PipelineText::new("raw text".into(), vec!["raw text".into()]),
-            &AppContext,
+            &AppContext::default(),
             Duration::from_secs(1),
         )
         .await;

@@ -1,2 +1,4 @@
-// TODO M3: link AppKit / AudioToolbox / ApplicationServices for Overlay; embed assets/i18n/*.toml
-fn main() {}
+fn main() {
+    println!("cargo:rustc-link-lib=framework=AppKit");
+    println!("cargo:rustc-link-lib=framework=QuartzCore");
+}

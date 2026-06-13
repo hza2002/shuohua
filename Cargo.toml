@@ -30,8 +30,32 @@ thiserror       = "2"
 uuid            = { version = "1", features = ["v4"] }
 ulid            = "1"
 objc2           = "0.6"
-objc2-app-kit   = { version = "0.3", features = ["NSPasteboard"] }
-objc2-foundation = { version = "0.3", features = ["NSString", "NSArray"] }
+objc2-app-kit   = { version = "0.3", features = [
+    "NSApplication",
+    "NSColor",
+    "NSControl",
+    "NSFont",
+    "NSGraphics",
+    "NSPanel",
+    "NSPasteboard",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSTextField",
+    "NSView",
+    "NSVisualEffectView",
+    "NSWorkspace",
+    "NSWindow",
+] }
+objc2-foundation = { version = "0.3", features = [
+    "NSArray",
+    "NSDate",
+    "NSGeometry",
+    "NSNotification",
+    "NSObject",
+    "NSString",
+    "NSTimer",
+] }
+objc2-quartz-core = { version = "0.3", features = ["CAAnimation", "CALayer", "CAMediaTiming"] }
 regex           = "1"
 
 [profile.release]

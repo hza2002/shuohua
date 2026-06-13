@@ -19,6 +19,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::app_context_darwin;
 use crate::asr::types::{AsrEvent, AsrProvider, AsrSession, LanguageMode, SessionCtx};
 use crate::overlay::{OverlayCmd, OverlayHandle, OverlayState, TextKind, ToastLevel};
 use crate::post::{self, PipelineStepStatus, PipelineText, RuleBasedFiller};
@@ -52,12 +53,13 @@ pub async fn run_recording(
     let recording_started_instant = Instant::now();
     eprintln!("[shuo] ▶ recording id={recording_id}");
     params.state.set_recording(recording_id.clone());
+    let mut app_context = app_context_darwin::frontmost_app();
     overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Connecting });
     overlay_send(
         &params,
         OverlayCmd::SetApp {
-            bundle_id: None,
-            app_name: None,
+            bundle_id: app_context.bundle_id.clone(),
+            app_name: app_context.app_name.clone(),
             chain_summary: "filler".to_string(),
         },
     );
@@ -192,6 +194,7 @@ pub async fn run_recording(
                             segments: pending_segments,
                             pipeline: Vec::new(),
                             audio_ms: samples_to_ms(audio_samples_sent),
+                            app: app_context.bundle_id.clone(),
                             status: HistoryStatus::Error,
                             error: Some(HistoryError {
                                 kind: "asr_error".to_string(),
@@ -208,6 +211,15 @@ pub async fn run_recording(
         }
 
         if stop_requested {
+            app_context = app_context_darwin::frontmost_app();
+            overlay_send(
+                &params,
+                OverlayCmd::SetApp {
+                    bundle_id: app_context.bundle_id.clone(),
+                    app_name: app_context.app_name.clone(),
+                    chain_summary: "filler".to_string(),
+                },
+            );
             overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Stopping });
             params.state.set_stopping(recording_id.clone());
             finish(
@@ -232,7 +244,12 @@ pub async fn run_recording(
         .collect::<Vec<_>>()
         .join(&params.segment_separator);
     let (pipeline, status, error) =
-        dispatch_with_filler(&pending_segments, &params.segment_separator, params.auto_paste)
+        dispatch_with_filler(
+            &pending_segments,
+            &params.segment_separator,
+            params.auto_paste,
+            &app_context,
+        )
             .await
             .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)));
     if let Some(last_text) = pipeline.iter().rev().find_map(|step| step.text.clone()) {
@@ -264,6 +281,7 @@ pub async fn run_recording(
         segments: pending_segments,
         pipeline,
         audio_ms: samples_to_ms(audio_samples_sent),
+        app: app_context.bundle_id,
         status: terminal_error
             .as_ref()
             .map(|_| HistoryStatus::Error)
@@ -381,6 +399,7 @@ async fn dispatch_with_filler(
     segments: &[SegmentCapture],
     sep: &str,
     auto_paste: bool,
+    app_context: &post::AppContext,
 ) -> Result<(Vec<PipelineStepHistory>, HistoryStatus, Option<HistoryError>), HistoryError> {
     let segment_texts: Vec<String> = segments.iter().map(|s| s.text.clone()).collect();
     let raw_text = segment_texts.join(sep);
@@ -392,7 +411,7 @@ async fn dispatch_with_filler(
         vec![Box::new(RuleBasedFiller::default_patterns())];
     let initial = PipelineText::new(raw_text, segment_texts);
     let (out, steps) =
-        post::run_chain(&chain, initial, &post::AppContext, Duration::from_secs(2)).await;
+        post::run_chain(&chain, initial, app_context, Duration::from_secs(2)).await;
     eprintln!("[shuo] ✓ 最终: {}", out.text);
     let pipeline = steps.into_iter().map(PipelineStepHistory::from).collect();
     if let Err(e) = dispatch::dispatch(&out.text, auto_paste) {
@@ -440,6 +459,7 @@ struct HistoryInput {
     segments: Vec<SegmentCapture>,
     pipeline: Vec<PipelineStepHistory>,
     audio_ms: u64,
+    app: Option<String>,
     status: HistoryStatus,
     error: Option<HistoryError>,
 }
@@ -452,7 +472,7 @@ fn append_history(input: HistoryInput) -> Option<HistoryRecord> {
         ended_at: input.ended_at,
         duration_ms: (input.ended_at - input.started_at).whole_milliseconds().max(0) as u64,
         status: input.status,
-        app: None,
+        app: input.app,
         asr: AsrHistory {
             provider: input.provider,
             raw: input.raw_text,

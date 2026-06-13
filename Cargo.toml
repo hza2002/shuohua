@@ -17,9 +17,11 @@ hound           = "3"
 os_pipe         = "1"
 core-graphics   = "0.24"
 core-foundation = "0.10"
-tokio           = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio           = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 serde           = { version = "1", features = ["derive"] }
 toml            = "0.8"
+async-trait     = "0.1"
+thiserror       = "2"
 
 [profile.release]
 opt-level = "z"

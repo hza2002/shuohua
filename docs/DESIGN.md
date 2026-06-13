@@ -705,7 +705,7 @@ language = "auto"        # auto | zh-CN | en-US
 | VAD | `webrtc-vad`（libfvad 绑定） | 业界 workhorse，<0.1% CPU；失败降级到 RMS |
 | PCM ring buffer | `rtrb` | SPSC，cpal 回调到 PcmConsumer |
 | 唯一 ID | `ulid` | history record id；26 字符短于 UUID，含时序信息 |
-| WebSocket | `tokio-tungstenite` | tokio 生态首选；DoubaoProvider 用 |
+| WebSocket | `tokio-tungstenite` + `native-tls` | tokio 生态首选；DoubaoProvider 用。macOS 原生 Security framework 走 native-tls（无 rustls CryptoProvider 配置负担、无 OpenSSL；跨平台时再切 rustls） |
 | TUI | `ratatui` + `crossterm` | Bubble Tea 的事实替代；**唯一前台 UI** |
 | TOML | `toml` + `serde` | 标准 |
 | 文件监听 | `notify` | 监听**目录**而非文件（避免 inode 替换） |

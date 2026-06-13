@@ -1,20 +1,18 @@
 //! shuohua daemon entry.
 //!
-//! M2.b status:
-//!   * tokio multi-thread runtime in place (M2.a)
-//!   * hotkey thread (CGEventTap CFRunLoop) writes RawKey frames into an
-//!     os_pipe; a bridge std thread forwards them through a tokio mpsc to the
-//!     async main loop (M2.a)
-//!   * trigger keycode + ASR provider selection now loaded from
-//!     ~/.config/shuohua/config.toml (M2.b)
-//!   * recording is still the blocking M1 path wrapped in spawn_blocking;
-//!     streaming recorder lands in M2.f
+//! M2.f status: F16 toggle → record → DoubaoProvider 流式 → 剪贴板 → Cmd+V。
+//!
+//!   * tokio multi-thread runtime
+//!   * hotkey CGEventTap CFRunLoop 专用 OS 线程 → os_pipe → 桥到 tokio mpsc
+//!   * Tracker (M1 纯函数状态机) 消化 RawKey → HotkeyEvent
+//!   * F16 第一次按 = 起录音 (spawn voice::finish::run_recording)；
+//!     第二次按 = 发 stop oneshot 让 task 收尾
+//!   * 录音 task 跟主循环解耦：第二次 F16 之后用户立刻能开新录音 (前一次
+//!     finalize 在 background 跑)
 //!
 //! Next:
-//!   M2.c: asr trait skeleton (asr/{mod,types})
-//!   M2.d: DoubaoProvider (asr/providers/doubao)
-//!   M2.e: clipboard_darwin, autotype_darwin, voice/dispatch
-//!   M2.f: streaming recorder + voice::finish + end-to-end toggle
+//!   M2.5: VAD + 多 session + RuleBased filler 去口语词
+//!   M3:   StateStore + history.jsonl + AppKit overlay
 
 mod asr;
 mod autotype_darwin;
@@ -25,10 +23,11 @@ mod voice;
 
 use anyhow::{Context, Result};
 use std::io::Read;
-use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread;
 
 use hotkey::{HotkeyEvent, RawKey, Tracker};
+use voice::finish::SessionParams;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
@@ -36,13 +35,30 @@ async fn main() -> Result<()> {
     let cfg = config::load_from(&cfg_path).context("load config")?;
     let trigger_code = hotkey::parse::parse(&cfg.hotkey.trigger)
         .with_context(|| format!("parse [hotkey] trigger = {:?}", cfg.hotkey.trigger))?;
+
+    let provider: Arc<dyn asr::AsrProvider> = match cfg.asr.provider.as_str() {
+        "doubao" => Arc::new(
+            asr::providers::doubao::DoubaoProvider::new().context("init doubao provider")?,
+        ),
+        other => anyhow::bail!(
+            "未知 ASR provider {other:?}。M2 仅支持 \"doubao\""
+        ),
+    };
+
     eprintln!(
-        "[shuo] config {} loaded: trigger={} (code=0x{:02X}) asr.provider={}",
+        "[shuo] config {} loaded:\n         trigger={} (code=0x{:02X})\n         \
+         asr.provider={} (caps multilingual={})\n         voice.auto_paste={}  \
+         voice.record_audio={}  voice.stop_delay_ms={}",
         cfg_path.display(),
         cfg.hotkey.trigger,
         trigger_code,
-        cfg.asr.provider
+        provider.name(),
+        provider.caps().multilingual,
+        cfg.voice.auto_paste,
+        cfg.voice.record_audio,
+        cfg.voice.stop_delay_ms,
     );
+    eprintln!("[shuo] {} hotwords loaded", cfg.asr.hotwords.len());
 
     let (pipe_reader, pipe_writer) = os_pipe::pipe().context("create hotkey pipe")?;
 
@@ -62,25 +78,36 @@ async fn main() -> Result<()> {
         .spawn(move || pipe_to_mpsc(pipe_reader, tx))
         .context("spawn hotkey bridge thread")?;
 
-    eprintln!("[shuo] M2.b ready. Press {} to record 3 seconds.", cfg.hotkey.trigger);
-    eprintln!("[shuo] WAV will be written to ./tmp/m1-<n>.wav");
+    eprintln!("[shuo] M2.f ready. Press {} to toggle recording.", cfg.hotkey.trigger);
 
     let mut tracker = Tracker::new(trigger_code);
-    let mut counter: u32 = 0;
+    // toggle 状态：Some = 当前在录，stop sender 等着；None = 空闲
+    let mut active_stop: Option<tokio::sync::oneshot::Sender<()>> = None;
 
     while let Some(raw) = rx.recv().await {
-        if let Some(HotkeyEvent::TriggerRecord) = tracker.on_raw(raw) {
-            counter += 1;
-            let out = PathBuf::from(format!("tmp/m1-{counter}.wav"));
-            eprintln!("[shuo] recording 3s → {}", out.display());
-            let out_for_task = out.clone();
-            let result =
-                tokio::task::spawn_blocking(move || voice::record_three_seconds(&out_for_task))
-                    .await
-                    .context("recorder task join")?;
-            match result {
-                Ok(()) => eprintln!("[shuo] wrote {}", out.display()),
-                Err(e) => eprintln!("[shuo] record failed: {e:#}"),
+        if !matches!(tracker.on_raw(raw), Some(HotkeyEvent::TriggerRecord)) {
+            continue;
+        }
+        match active_stop.take() {
+            None => {
+                // 起新录音
+                let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+                let params = SessionParams {
+                    auto_paste: cfg.voice.auto_paste,
+                    record_audio: cfg.voice.record_audio,
+                    stop_delay_ms: cfg.voice.stop_delay_ms,
+                    hotwords: cfg.asr.hotwords.clone(),
+                };
+                let provider = provider.clone();
+                tokio::spawn(async move {
+                    voice::finish::run_recording(provider.as_ref(), params, stop_rx).await;
+                });
+                active_stop = Some(stop_tx);
+            }
+            Some(stop_tx) => {
+                // 通知正在录的 task 收尾。它 background 跑完 finalize + dispatch。
+                let _ = stop_tx.send(());
+                // 不 await：主循环继续接受下一次 F16（用户可立刻开始新一段）。
             }
         }
     }

@@ -28,16 +28,27 @@ pub struct VoiceCfg {
     pub stop_delay_ms: u32,
     #[serde(default)]
     pub record_audio: bool,
+    /// true (默认) = 识别完成后立刻 Cmd+V 上屏；false = 只进剪贴板。
+    /// REQUIREMENTS §3.1 描述里"可选自动 Cmd+V 上屏"对应这个开关。
+    #[serde(default = "default_auto_paste")]
+    pub auto_paste: bool,
 }
 
 impl Default for VoiceCfg {
     fn default() -> Self {
-        Self { stop_delay_ms: default_stop_delay_ms(), record_audio: false }
+        Self {
+            stop_delay_ms: default_stop_delay_ms(),
+            record_audio: false,
+            auto_paste: default_auto_paste(),
+        }
     }
 }
 
 fn default_stop_delay_ms() -> u32 {
     800
+}
+fn default_auto_paste() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -101,6 +112,7 @@ trigger = "f16"
 [voice]
 stop_delay_ms = 1200
 record_audio  = true
+auto_paste    = false
 
 [asr]
 provider = "doubao"
@@ -109,7 +121,21 @@ hotwords = ["Rust", "tokio"]
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.voice.stop_delay_ms, 1200);
         assert!(cfg.voice.record_audio);
+        assert!(!cfg.voice.auto_paste);
         assert_eq!(cfg.asr.hotwords, vec!["Rust", "tokio"]);
+    }
+
+    #[test]
+    fn auto_paste_defaults_to_true() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+
+[asr]
+provider = "doubao"
+"#;
+        let cfg = parse(body).unwrap();
+        assert!(cfg.voice.auto_paste, "auto_paste 默认应为 true (REQUIREMENTS §3.1)");
     }
 
     #[test]

@@ -1,70 +1,114 @@
-//! M1 recorder: cpal default input → linear resample to 16k mono → hound WAV.
+//! 流式 cpal 录音：default input → linear resample → 16k mono s16le 帧 → mpsc。
 //!
-//! Canonical internal PCM format is 16kHz s16le mono (docs/DESIGN.md §2.9).
-//! Conversion lives here in one place; ASR providers see canonical input.
+//! 一次录音一个 [`RecordingStream`]，背后是一个专用 std 线程跑 cpal stream
+//! (cpal::Stream 是 !Send，不能跨线程移动)。callback 把 PCM 帧 push 到 tokio
+//! unbounded mpsc，async 端按需 recv。可选 wav 留存在同一线程里写。
 //!
-//! Intentional M1 limitations (will revisit at M2):
-//!   * Linear interpolation with no anti-alias prefilter. Aliased highs are
-//!     audible but harmless for QuickTime playback and likely fine for ASR;
-//!     swap in a windowed-sinc / `rubato` if recognition quality suffers.
-//!   * F32 input only — bail loudly on rare devices that return I16/U16.
-//!     Apple Silicon + Intel macs deliver F32 from the default mic on
-//!     current macOS, so no real-world coverage gap.
+//! Stop 协议：voice 端调 stop()（drop oneshot sender 等价语义），cpal 线程收到
+//! 信号后 drop stream 并 finalize wav。drop stream 时 cpal 自动 drain
+//! callback in-flight 的 buffer。
+//!
+//! 故意保留 M1 的 linear resample：质量对识别足够好，DESIGN §2.9 的 rubato
+//! 升级留给"识别质量真出问题"那天。
 
 use anyhow::{anyhow, bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, StreamConfig};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use tokio::sync::mpsc;
 
 const DST_RATE_HZ: u32 = 16_000;
 
-pub fn record_to_wav(out_path: &Path, secs: f64) -> Result<()> {
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| anyhow!("no default input device"))?;
-    let device_name = device
-        .description()
-        .ok()
-        .map(|d| d.name().to_owned())
-        .unwrap_or_else(|| "<unknown>".into());
+pub struct RecordingStream {
+    pcm_rx: mpsc::UnboundedReceiver<Vec<i16>>,
+    /// drop 这边就告诉 cpal 线程退出。
+    stop: Option<std::sync::mpsc::Sender<()>>,
+}
 
-    let supported = device
-        .default_input_config()
-        .context("query default input config")?;
+impl RecordingStream {
+    pub async fn recv(&mut self) -> Option<Vec<i16>> {
+        self.pcm_rx.recv().await
+    }
+
+    /// 立刻收 cpal 线程；之后 recv() 会很快变成 None (取决于 cpal drain)。
+    pub fn stop(&mut self) {
+        let _ = self.stop.take();
+    }
+
+    /// 非 await 的 try_recv（finishing 阶段一次性吸干残余帧用）。
+    pub fn try_recv(&mut self) -> Option<Vec<i16>> {
+        match self.pcm_rx.try_recv() {
+            Ok(v) => Some(v),
+            Err(_) => None,
+        }
+    }
+}
+
+impl Drop for RecordingStream {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// 启动一路录音。`audio_wav_path = Some(path)` 时把同一份 PCM 留存到 wav；
+/// path 父目录必须已存在（caller 负责 mkdir）。
+pub fn start(audio_wav_path: Option<PathBuf>) -> Result<RecordingStream> {
+    let (pcm_tx, pcm_rx) = mpsc::unbounded_channel::<Vec<i16>>();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+
+    std::thread::Builder::new()
+        .name("cpal-recorder".into())
+        .spawn(move || {
+            if let Err(e) = run_recorder(pcm_tx, stop_rx, audio_wav_path) {
+                eprintln!("[recorder] {e:#}");
+            }
+        })
+        .context("spawn recorder thread")?;
+
+    Ok(RecordingStream { pcm_rx, stop: Some(stop_tx) })
+}
+
+fn run_recorder(
+    pcm_tx: mpsc::UnboundedSender<Vec<i16>>,
+    stop_rx: std::sync::mpsc::Receiver<()>,
+    audio_wav_path: Option<PathBuf>,
+) -> Result<()> {
+    let host = cpal::default_host();
+    let device =
+        host.default_input_device().ok_or_else(|| anyhow!("no default input device"))?;
+    let supported = device.default_input_config().context("query default input config")?;
     let src_rate = supported.sample_rate();
     let channels = supported.channels() as usize;
     let sample_format = supported.sample_format();
-
-    eprintln!(
-        "[recorder] device={device_name} rate={src_rate}Hz ch={channels} fmt={sample_format:?}"
-    );
-
     if sample_format != SampleFormat::F32 {
-        bail!(
-            "M1 recorder only handles F32 input, got {:?}. Add I16/U16 branches \
-             in voice/recorder.rs when needed.",
-            sample_format
-        );
+        bail!("recorder requires F32 input, got {sample_format:?}");
     }
+    eprintln!("[recorder] {src_rate}Hz × {channels}ch F32 → 16k mono s16le");
+
+    let wav: Arc<Mutex<Option<hound::WavWriter<std::io::BufWriter<std::fs::File>>>>> =
+        Arc::new(Mutex::new(open_wav(audio_wav_path.as_deref())?));
+    let wav_cb = wav.clone();
 
     let config: StreamConfig = supported.into();
-    let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::with_capacity(
-        (src_rate as f64 * secs * channels as f64) as usize,
-    )));
-    let samples_cb = samples.clone();
-
     let stream = device
         .build_input_stream(
             config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let mut buf = samples_cb.lock().unwrap();
-                // mono = first channel; multi-channel summing is overkill at M1
-                for frame in data.chunks_exact(channels) {
-                    buf.push(frame[0]);
+                let pcm = resample_to_16k_mono_i16(data, channels, src_rate);
+                if pcm.is_empty() {
+                    return;
                 }
+                if let Ok(mut guard) = wav_cb.lock() {
+                    if let Some(w) = guard.as_mut() {
+                        for &s in &pcm {
+                            let _ = w.write_sample(s);
+                        }
+                    }
+                }
+                // unbounded send 不会阻塞 cpal callback。voice 消费滞后只是
+                // 增加内存占用，不会丢帧。
+                let _ = pcm_tx.send(pcm);
             },
             |err| eprintln!("[recorder] stream error: {err}"),
             None,
@@ -72,49 +116,99 @@ pub fn record_to_wav(out_path: &Path, secs: f64) -> Result<()> {
         .context("build input stream")?;
 
     stream.play().context("start input stream")?;
-    std::thread::sleep(Duration::from_secs_f64(secs));
-    drop(stream);
+    // 阻塞等 stop_tx 发信号或被 drop。cpal callback 同时在另一个 cpal 内部线程跑。
+    let _ = stop_rx.recv();
+    drop(stream); // cpal drain & close
 
-    let mono = std::mem::take(&mut *samples.lock().unwrap());
-    let resampled = linear_resample(&mono, src_rate, DST_RATE_HZ);
-    write_wav_s16le(out_path, &resampled, DST_RATE_HZ)?;
+    if let Ok(mut guard) = wav.lock() {
+        if let Some(w) = guard.take() {
+            w.finalize().context("finalize wav")?;
+        }
+    }
     Ok(())
 }
 
-fn linear_resample(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
-    if src_rate == dst_rate || input.is_empty() {
-        return input.to_vec();
+fn open_wav(
+    path: Option<&Path>,
+) -> Result<Option<hound::WavWriter<std::io::BufWriter<std::fs::File>>>> {
+    let Some(path) = path else { return Ok(None) };
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: DST_RATE_HZ,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let writer = hound::WavWriter::create(path, spec)
+        .with_context(|| format!("create wav {}", path.display()))?;
+    Ok(Some(writer))
+}
+
+fn resample_to_16k_mono_i16(data: &[f32], channels: usize, src_rate: u32) -> Vec<i16> {
+    if channels == 0 || data.is_empty() {
+        return Vec::new();
     }
-    let ratio = src_rate as f64 / dst_rate as f64;
-    let out_len = (input.len() as f64 / ratio).floor() as usize;
+    // 单声道：取第一通道（多通道求平均纯属感官清晰度提升，对识别无收益）
+    let mono: Vec<f32> = data.chunks_exact(channels).map(|f| f[0]).collect();
+    if mono.is_empty() {
+        return Vec::new();
+    }
+    if src_rate == DST_RATE_HZ {
+        return mono.iter().map(|&s| (s.clamp(-1.0, 1.0) * 32767.0).round() as i16).collect();
+    }
+    // 线性插值。每 cpal callback 内重置位置，相邻 callback 间有可忽略相位跳动。
+    let ratio = src_rate as f64 / DST_RATE_HZ as f64;
+    let out_len = (mono.len() as f64 / ratio).floor() as usize;
     let mut out = Vec::with_capacity(out_len);
     for i in 0..out_len {
         let src_pos = i as f64 * ratio;
         let idx = src_pos as usize;
         let frac = (src_pos - idx as f64) as f32;
-        let s = if idx + 1 < input.len() {
-            input[idx] * (1.0 - frac) + input[idx + 1] * frac
+        let s = if idx + 1 < mono.len() {
+            mono[idx] * (1.0 - frac) + mono[idx + 1] * frac
         } else {
-            input[idx]
+            mono[idx]
         };
-        out.push(s);
+        out.push((s.clamp(-1.0, 1.0) * 32767.0).round() as i16);
     }
     out
 }
 
-fn write_wav_s16le(path: &Path, samples: &[f32], rate: u32) -> Result<()> {
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: rate,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut wav = hound::WavWriter::create(path, spec).context("create wav")?;
-    for &s in samples {
-        let clipped = s.clamp(-1.0, 1.0);
-        let q = (clipped * 32767.0).round() as i16;
-        wav.write_sample(q)?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resample_passthrough_when_rates_match() {
+        let data = vec![0.5f32, -0.5, 0.25, -0.25];
+        let out = resample_to_16k_mono_i16(&data, 1, 16_000);
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[0], (0.5_f32 * 32767.0).round() as i16);
+        assert_eq!(out[1], (-0.5_f32 * 32767.0).round() as i16);
     }
-    wav.finalize().context("finalize wav")?;
-    Ok(())
+
+    #[test]
+    fn resample_downsamples_48k_to_16k() {
+        // 48k → 16k 比率 3；输出应约为输入 1/3
+        let data: Vec<f32> = (0..480).map(|i| (i as f32 / 480.0) - 0.5).collect();
+        let out = resample_to_16k_mono_i16(&data, 1, 48_000);
+        assert!(out.len() >= 158 && out.len() <= 162, "got {}", out.len());
+    }
+
+    #[test]
+    fn resample_takes_first_channel_for_stereo() {
+        // 2ch interleaved；左声道 = 0.5，右声道 = -0.5
+        let data = vec![0.5, -0.5, 0.5, -0.5];
+        let out = resample_to_16k_mono_i16(&data, 2, 16_000);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], out[1]);
+        assert!(out[0] > 0); // 左声道是正值
+    }
+
+    #[test]
+    fn resample_clamps_overshoot() {
+        let data = vec![2.0f32, -2.0]; // 超出 [-1, 1]
+        let out = resample_to_16k_mono_i16(&data, 1, 16_000);
+        assert_eq!(out[0], 32767);
+        assert_eq!(out[1], -32767);
+    }
 }

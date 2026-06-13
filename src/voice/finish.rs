@@ -25,6 +25,7 @@
 use std::time::{Duration, Instant};
 
 use crate::asr::types::{AsrEvent, AsrProvider, AsrSession, LanguageMode, SessionCtx};
+use crate::post::{self, PipelineText, RuleBasedFiller};
 use crate::voice::consumer::PcmConsumer;
 use crate::voice::vad::{VadEvent, VadState};
 use crate::voice::{dispatch, recorder};
@@ -268,17 +269,21 @@ pub async fn run_recording(
         }
     }
 
-    // 5. 拼最终文本
-    let final_text = pending_segments.join(&params.segment_separator);
+    // 5. 拼原始文本 + 跑 post pipeline
+    let raw_text = pending_segments.join(&params.segment_separator);
 
-    // 6. dispatch
-    if final_text.is_empty() {
-        eprintln!("[shuo] (空识别结果，跳过 dispatch)");
-    } else {
-        eprintln!("[shuo] ✓ 最终: {final_text}");
-        if let Err(e) = dispatch::dispatch(&final_text, params.auto_paste) {
+    if !raw_text.is_empty() {
+        let chain: Vec<Box<dyn post::PostProcessor>> =
+            vec![Box::new(RuleBasedFiller::default_patterns())];
+        let initial = PipelineText::new(raw_text, std::mem::take(&mut pending_segments));
+        let out =
+            post::run_chain(&chain, initial, &post::AppContext, Duration::from_secs(2)).await;
+        eprintln!("[shuo] ✓ 最终: {}", out.text);
+        if let Err(e) = dispatch::dispatch(&out.text, params.auto_paste) {
             eprintln!("[shuo] ❌ 剪贴板写入失败: {e:#}");
         }
+    } else {
+        eprintln!("[shuo] (空识别结果，跳过 dispatch)");
     }
 }
 

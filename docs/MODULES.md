@@ -22,6 +22,9 @@ src/
 │   └── providers/
 │       ├── mod.rs
 │       └── doubao.rs                    # bigmodel_async WS + 二进制帧 + Partial/Segment 映射
+├── post/
+│   ├── mod.rs                           # PostProcessor trait + PipelineText + run_chain（M2.5.c）
+│   └── filler.rs                        # RuleBasedFiller（M2.5.c）
 └── voice/
     ├── mod.rs
     ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 可选 wav 留存
@@ -36,7 +39,7 @@ src/
 
 | M | 新增路径 | 主要新依赖 |
 |---|---|---|
-| **M2.5** | `post/{mod,filler}.rs` | regex |
+| **M2.5** | （骨架已落；剩 voice/finish.rs 重写接 VAD/多 session/pipeline） | — |
 | **M3** | `state/{mod,history}.rs`, `overlay/{mod,view,animations}.rs`, `i18n/mod.rs`, `assets/i18n/*.toml`, `build.rs` 链接 frameworks | objc2-quartz-core, serde_json, ulid, time |
 | **M4** | `ipc/{mod,protocol}.rs`, `tui/{mod,panes,keybindings}.rs` | ratatui, crossterm |
 | **M5** | `cli/{mod,doctor,service,smart}.rs`, `doctor.rs` | clap, notify |

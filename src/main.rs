@@ -19,6 +19,7 @@ mod autotype_darwin;
 mod clipboard_darwin;
 mod config;
 mod hotkey;
+mod post;
 mod voice;
 
 use anyhow::{Context, Result};

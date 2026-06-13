@@ -62,6 +62,12 @@ impl PcmConsumer {
     pub fn preroll_len(&self) -> usize {
         self.preroll.len()
     }
+
+    /// 一次性取出所有 pre-roll samples，清空 buffer。M2.5.d2 开新 ASR session
+    /// 时调用，把最近 500ms 历史喂给新 session（避免辅音/弱起被丢，DESIGN §2.9）。
+    pub fn drain_preroll(&mut self) -> Vec<i16> {
+        self.preroll.drain(..).collect()
+    }
 }
 
 impl Default for PcmConsumer {
@@ -118,6 +124,19 @@ mod tests {
         // 尾部 8000 个：从 big[4000] 开始；front() 应等 4000
         assert_eq!(*c.preroll.front().unwrap(), 4_000);
         assert_eq!(*c.preroll.back().unwrap(), 11_999);
+    }
+
+    #[test]
+    fn drain_preroll_returns_and_clears() {
+        let mut c = PcmConsumer::new();
+        c.feed(&vec![7i16; 1000]);
+        let out = c.drain_preroll();
+        assert_eq!(out.len(), 1000);
+        assert!(out.iter().all(|&v| v == 7));
+        assert_eq!(c.preroll_len(), 0);
+        // 再喂应从 0 开始攒
+        c.feed(&vec![9i16; 50]);
+        assert_eq!(c.preroll_len(), 50);
     }
 
     #[test]

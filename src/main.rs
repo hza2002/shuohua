@@ -98,6 +98,9 @@ async fn main() -> Result<()> {
                     record_audio: cfg.voice.record_audio,
                     stop_delay_ms: cfg.voice.stop_delay_ms,
                     hotwords: cfg.asr.hotwords.clone(),
+                    pause_asr_silence_ms: cfg.voice.pause_asr_silence_ms,
+                    auto_stop_silence_ms: cfg.voice.auto_stop_silence_ms,
+                    segment_separator: cfg.voice.segment_separator.clone(),
                 };
                 let provider = provider.clone();
                 tokio::spawn(async move {

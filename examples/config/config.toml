@@ -10,6 +10,11 @@ auto_paste        = true       # true = 识别完成后立刻 Cmd+V 上屏；fal
 record_audio      = false      # true → 落 ~/.local/state/shuohua/audio/<id>.wav，文件名 = recording ULID
 segment_separator = " "        # 多段识别拼接分隔符
 
+[overlay]
+position          = "bottom"   # focused window 内部垂直位置：top / middle / bottom，水平方向居中
+glass_variant     = 19         # 文档默认 19；可手动试 11 或其它私有 variant
+thinking_delay_ms = 1200       # Recording 中超过该时间没有新 ASR 文本则显示 Thinking
+
 [asr]
 provider = "doubao"       # 加载 ~/.config/shuohua/asr/doubao.toml
 # 共享 hotwords，所有 provider 自由解释（不支持的静默忽略）

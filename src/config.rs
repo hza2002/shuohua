@@ -16,6 +16,8 @@ pub struct Config {
     pub voice: VoiceCfg,
     #[serde(default)]
     pub ui: UiCfg,
+    #[serde(default)]
+    pub overlay: OverlayCfg,
     pub asr: AsrCfg,
 }
 
@@ -76,12 +78,56 @@ pub struct UiCfg {
 
 impl Default for UiCfg {
     fn default() -> Self {
-        Self { language: default_language() }
+        Self {
+            language: default_language(),
+        }
     }
 }
 
 fn default_language() -> String {
     "auto".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OverlayCfg {
+    #[serde(default)]
+    pub position: OverlayPosition,
+    #[serde(default = "default_glass_variant")]
+    pub glass_variant: i64,
+    #[serde(default = "default_thinking_delay_ms")]
+    pub thinking_delay_ms: u64,
+}
+
+impl Default for OverlayCfg {
+    fn default() -> Self {
+        Self {
+            position: OverlayPosition::default(),
+            glass_variant: default_glass_variant(),
+            thinking_delay_ms: default_thinking_delay_ms(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OverlayPosition {
+    Top,
+    Middle,
+    Bottom,
+}
+
+impl Default for OverlayPosition {
+    fn default() -> Self {
+        Self::Bottom
+    }
+}
+
+fn default_glass_variant() -> i64 {
+    19
+}
+
+fn default_thinking_delay_ms() -> u64 {
+    1200
 }
 
 /// `$XDG_CONFIG_HOME/shuohua/config.toml` or `~/.config/shuohua/config.toml`.
@@ -130,6 +176,9 @@ provider = "doubao"
         assert!(cfg.voice.auto_paste);
         assert_eq!(cfg.voice.segment_separator, " ");
         assert_eq!(cfg.ui.language, "auto");
+        assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
+        assert_eq!(cfg.overlay.glass_variant, 19);
+        assert_eq!(cfg.overlay.thinking_delay_ms, 1200);
     }
 
     #[test]
@@ -164,7 +213,10 @@ trigger = "f16"
 provider = "doubao"
 "#;
         let cfg = parse(body).unwrap();
-        assert!(cfg.voice.auto_paste, "auto_paste 默认应为 true (REQUIREMENTS §3.1)");
+        assert!(
+            cfg.voice.auto_paste,
+            "auto_paste 默认应为 true (REQUIREMENTS §3.1)"
+        );
     }
 
     #[test]
@@ -206,5 +258,25 @@ provider = "doubao"
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.ui.language, "zh-CN");
+    }
+
+    #[test]
+    fn overlay_is_configurable() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+
+[overlay]
+position = "top"
+glass_variant = 13
+thinking_delay_ms = 900
+
+[asr]
+provider = "doubao"
+"#;
+        let cfg = parse(body).unwrap();
+        assert_eq!(cfg.overlay.position, OverlayPosition::Top);
+        assert_eq!(cfg.overlay.glass_variant, 13);
+        assert_eq!(cfg.overlay.thinking_delay_ms, 900);
     }
 }

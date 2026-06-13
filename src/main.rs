@@ -19,6 +19,7 @@ mod app_context_darwin;
 mod autotype_darwin;
 mod clipboard_darwin;
 mod config;
+mod focused_window_darwin;
 mod hotkey;
 mod i18n;
 mod overlay;
@@ -94,7 +95,7 @@ fn main() -> Result<()> {
         })
         .context("spawn tokio daemon thread")?;
 
-    overlay::view::run(_overlay_rx);
+    overlay::view::run(_overlay_rx, cfg.overlay);
     Ok(())
 }
 

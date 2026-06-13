@@ -27,7 +27,8 @@
 - 顶层 `NSPanel`（borderless / 透明 / 无阴影 / level=NSStatusWindowLevel）
 - 视图结构：`NSPanel → root NSView (圆角 mask) → NSGlassEffectView + 内容子视图 siblings`
 - **内容作 glass 的兄弟节点**，**不**用 `glass.contentView = ...`（会触发 AppKit 二次磨砂，材质回退到 vibrancy）
-- 显示位置可配置（top-left / top-center / top-right / center / bottom-* / cursor-screen 跟随）
+- 显示位置默认锚定 focused window 内部；配置只控制垂直位置
+  `top | middle | bottom`，水平方向始终居中。
 - macOS 26 不可用时静默回退到 `NSVisualEffectMaterialHUDWindow`（不弹错误）
 
 #### 两排布局（v1）
@@ -535,6 +536,7 @@ assets/i18n/
 state_idle       = "空闲"
 state_recording  = "录音中"
 state_connecting = "连接中"
+state_thinking   = "思考中"
 state_stopping   = "收尾"
 state_error      = "错误"
 
@@ -553,6 +555,7 @@ llm_failed       = "{name} 失败，已跳过"   # 支持 {var} 占位符
 state_idle       = "Idle"
 state_recording  = "Recording"
 state_connecting = "Connecting"
+state_thinking   = "Thinking"
 state_stopping   = "Stopping"
 state_error      = "Error"
 

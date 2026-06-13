@@ -19,6 +19,10 @@ use webrtc_vad::{SampleRate, Vad, VadMode};
 
 /// 16kHz 下 20ms 一帧 = 320 samples（WebRTC VAD 支持的合法帧长之一）。
 const FRAME_SAMPLES: usize = 320;
+/// RMS 幅度门：低于此值的帧即使 VAD 判 voiced 也强制改 unvoiced。
+/// 100 在 i16 量值下约等于满量程的 0.3%，远低于正常说话（500–5000），
+/// 专门干掉风扇/空调/环境嗡鸣这类有谐波结构但能量低的噪声。
+const RMS_MIN: f64 = 100.0;
 /// 100ms 滑动窗口。
 const HISTORY_LEN: usize = 5;
 /// 进入 Voiced 所需的窗口内 voiced 帧数。
@@ -92,7 +96,10 @@ impl VadGate {
         while self.pending.len() >= FRAME_SAMPLES {
             // drain 出一帧。drain 把头部 320 个搬走，剩下的留作下次。
             let frame: Vec<i16> = self.pending.drain(..FRAME_SAMPLES).collect();
-            let voiced = self.vad.is_voice_segment(&frame).unwrap_or(false);
+            let voiced_raw = self.vad.is_voice_segment(&frame).unwrap_or(false);
+            // RMS 幅度门：VAD 是纯频域算法，不知道声音大小。背景噪音（风扇、
+            // 空调嗡鸣）的谐波结构可能被误判为 voiced。能量太低 → 强制 unvoiced。
+            let voiced = voiced_raw && rms(&frame) >= RMS_MIN;
             if self.history.len() == HISTORY_LEN {
                 self.history.pop_front();
             }
@@ -129,6 +136,12 @@ impl Default for VadGate {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// 帧平均 RMS。i16 量值，阈值见 [`RMS_MIN`]。
+fn rms(samples: &[i16]) -> f64 {
+    let sum_sq: f64 = samples.iter().map(|&s| (s as f64) * (s as f64)).sum();
+    (sum_sq / samples.len() as f64).sqrt()
 }
 
 #[cfg(test)]

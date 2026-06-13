@@ -1,0 +1,24 @@
+[package]
+name = "shuohua"
+version = "0.1.0"
+edition = "2021"
+description = "macOS voice input assistant (M1: hotkey + recorder skeleton)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "shuo"
+path = "src/main.rs"
+
+[dependencies]
+anyhow          = "1"
+cpal            = "0.18"
+hound           = "3"
+os_pipe         = "1"
+core-graphics   = "0.24"
+core-foundation = "0.10"
+
+[profile.release]
+opt-level = "z"
+lto       = true
+strip     = true

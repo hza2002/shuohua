@@ -15,6 +15,7 @@
 | [docs/DESIGN.md](docs/DESIGN.md) | 技术设计：外观、状态机、ASR trait、VAD、PostProcessor、目录结构、不变量、测试、安全 |
 | [docs/SCHEMA.md](docs/SCHEMA.md) | UDS 协议 + history.jsonl 字段定义 |
 | [docs/CLI.md](docs/CLI.md) | CLI 命令 + launchd plist 模板 |
+| [docs/MODULES.md](docs/MODULES.md) | 模块实现状态：M1 已实现的源码树 + 各里程碑规划的新增路径 |
 
 ---
 

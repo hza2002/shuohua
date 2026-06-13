@@ -10,6 +10,7 @@
 //!
 //! M2.c 只放 trait + 类型定义（无 impl）；M2.d 接 DoubaoProvider。
 
+pub mod providers;
 pub mod types;
 
 #[cfg(test)]

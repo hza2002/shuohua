@@ -376,7 +376,7 @@ WebRTC VAD 工作方式：
 ```
 cpal callback ──► tokio mpsc unbounded ──► PcmConsumer task
                                                   │
-                                                  ├─► 维护 500ms VecDeque<i16> 历史（滑窗）
+                                                  ├─► 维护 3s VecDeque<i16> 历史（滑窗，覆盖最坏情况 2s VAD 确认期 + 1s 辅音保护）
                                                   ├─► WebRTC VAD 判定每帧 voiced/unvoiced
                                                   └─► 当 ASR session active 时喂 PCM
 ```
@@ -384,19 +384,20 @@ cpal callback ──► tokio mpsc unbounded ──► PcmConsumer task
 关键点：
 - **cpal callback** 唯一写入端，`pcm_tx.send(Vec<i16>)` 推给 tokio mpsc unbounded。
 - **为什么不是 rtrb SPSC ring buffer**：原本设计选 rtrb 是按"callback 内零分配 + 零锁"教科书 RT audio 标准。实测发现：(1) Go 版（just-talk-go）在 audio callback 里直接做 `pthread_mutex_lock + write() syscall` 都稳定跑过线，比 mpsc 重得多；(2) M2 当前用 mpsc 实机验过中英混合识别，没有观测到丢帧或 jitter；(3) 真要拿 rtrb 收益还得连带消掉 callback 内 `Vec<i16>` 分配（否则只是换皮）。结论：v1 用 mpsc，未来若实测出 audio jitter 影响识别再切。recorder.rs 是隔离层，切换不污染上层。
-- **PcmConsumer** 是唯一读取端：取 20ms 帧 → 跑 VAD → 推入 `VecDeque<i16>`（容量 = 500ms = 8000 samples），超出从头 pop。
+- **PcmConsumer** 是唯一读取端：取 20ms 帧 → 跑 VAD → 推入 `VecDeque<i16>`（容量 = 3s = 48000 samples），超出从头 pop。足够覆盖噪音 session 后的 2s VAD 确认期。
 - **Idle → Active 触发**（VAD 检测到 voiced + 当前无 ASR session）：
   1. 异步 spawn 开新 ASR session 的 task（用 `tokio::sync::oneshot` 通知 PcmConsumer "session ready"）
-  2. PcmConsumer 把 VecDeque 全部历史（500ms）一次性喂给新 session
+  2. PcmConsumer 把 VecDeque 全部历史一次性喂给新 session
   3. 继续把当前帧及后续帧喂给 session
 - **VecDeque 始终维护**，不因 ASR 状态变化重置 —— 这样下一次 Idle→Active 仍然有 pre-roll 可用。
 
-为什么 500ms：
-- <200ms：辅音/弱起会丢（"今天" → "天"）
-- >800ms：增加无效计费且无收益
-- 500ms 在中英文都验证过
+为什么 3s：
+- 正常模式 VAD 确认 500ms → 预滚 > 确认期 即够。噪音 session 后确认提至
+  2s → 预滚必须 ≥ 2.5s，取整 3s。内存成本 96KB 可忽略
+- 喂给新 ASR session 的只是"最近 3s 中未被 silence timer 覆盖的末尾"，
+  正常说话时 pre-roll 内容几乎全是语音，不会增加无效计费
 
-**对计费的真实影响**：每段开头多喂 500ms。一次录音 3 段 = 多 1.5s = 0.0015 元。可忽略。
+**对计费的真实影响**：每段开头多喂一段 pre-roll。一次录音 3 段 = 多约 1.5s = 0.0015 元。可忽略。
 
 #### cpal / VAD 生命周期（跟随 Voice 状态机）
 

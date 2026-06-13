@@ -10,8 +10,11 @@ use std::time::Instant;
 
 use crate::voice::vad::{VadEvent, VadGate, VadState};
 
-/// 500ms @ 16kHz = 8000 samples。DESIGN §2.9：足够覆盖辅音/弱起，再大无收益。
-pub const PREROLL_CAP_SAMPLES: usize = 8_000;
+/// 预滚缓冲容量：3s @ 16kHz = 48000 samples。
+///
+/// 足够覆盖最坏情况（噪音 session 后的 2s VAD 确认期 + 500ms 辅音保护）。
+/// 正常模式下 500ms 确认期更远低于此值。成本：96KB 内存。
+pub const PREROLL_CAP_SAMPLES: usize = 48_000;
 
 pub struct PcmConsumer {
     vad: VadGate,
@@ -106,24 +109,26 @@ mod tests {
     }
 
     #[test]
-    fn preroll_caps_at_500ms() {
+    fn preroll_caps_at_limit() {
         let mut c = PcmConsumer::new();
-        // 喂总计 12000 samples（750ms），超出 8000 cap
-        for _ in 0..15 {
-            c.feed(&vec![0i16; 800]);
+        // 喂 100 批 × 500 samples = 50000，超出 48000 cap
+        for _ in 0..100 {
+            c.feed(&vec![0i16; 500]);
         }
-        assert_eq!(c.preroll_len(), PREROLL_CAP_SAMPLES);
+        assert!(c.preroll_len() <= PREROLL_CAP_SAMPLES);
+        assert!(c.preroll_len() > 47000); // 接近 cap，没丢太多
     }
 
     #[test]
     fn single_oversized_chunk_keeps_tail_only() {
         let mut c = PcmConsumer::new();
-        let big: Vec<i16> = (0..12_000).map(|i| i as i16).collect();
+        // 一次性喂 50000 samples（每个值对 32767 取模拟合 i16），应只保留尾部 48000
+        let big: Vec<i16> = (0..50_000).map(|i| (i % 32767) as i16).collect();
         c.feed(&big);
         assert_eq!(c.preroll_len(), PREROLL_CAP_SAMPLES);
-        // 尾部 8000 个：从 big[4000] 开始；front() 应等 4000
-        assert_eq!(*c.preroll.front().unwrap(), 4_000);
-        assert_eq!(*c.preroll.back().unwrap(), 11_999);
+        // 尾部 48000 个：从 big[2000] 开始
+        assert_eq!(*c.preroll.front().unwrap(), (2_000 % 32767) as i16);
+        assert_eq!(*c.preroll.back().unwrap(), (49_999 % 32767) as i16);
     }
 
     #[test]

@@ -102,13 +102,12 @@ pub async fn run_recording(
     let mut consumer = PcmConsumer::new();
     let mut pending_segments: Vec<String> = Vec::new();
     let mut unvoiced_since: Option<Instant> = None;
+    let mut voiced_since: Option<Instant> = None;
     let mut winding_down = false;
     let mut stop_requested = false;
-    let mut session_active = true; // true if session is Some + not winding_down
+    let mut session_active = true;
 
-    // Start assumed voiced — first few seconds of silence won't close session
-    // because user needs time to start speaking
-    let first_voiced_reset = Instant::now();
+    const VOICED_CONFIRM_MS: u64 = 500;
 
     loop {
         tokio::select! {
@@ -130,13 +129,34 @@ pub async fn run_recording(
                 };
                 let vad_ev = consumer.feed(&samples);
 
-                // VAD 去抖后的状态切换
                 match vad_ev {
                     Some(VadEvent::Switched(VadState::Voiced)) => {
                         eprintln!("[vad] state → Voiced");
+                        voiced_since = Some(Instant::now());
+                    }
+                    Some(VadEvent::Switched(VadState::Unvoiced)) => {
+                        eprintln!("[vad] state → Unvoiced");
+                        voiced_since = None;
+                        // 只记第一次静默起点；后续 VAD 振荡不重置。只有
+                        // confirmed Voiced（见下）才清空这个 timestamp。
+                        if unvoiced_since.is_none() {
+                            unvoiced_since = Some(Instant::now());
+                        }
+                    }
+                    None => {}
+                }
+
+                // Voiced 确认期：持续 Voiced ≥500ms 才认为是真实说话。
+                // 短暂 blip（环境噪声/呼吸/键盘）在这期间会被当作 false positive
+                // 丢弃，不重置 silence timer、不误开新 session。
+                if let Some(vs) = voiced_since {
+                    if vs.elapsed() >= Duration::from_millis(VOICED_CONFIRM_MS) {
+                        if unvoiced_since.is_some() {
+                            eprintln!("[vad] voiced confirmed (≥{VOICED_CONFIRM_MS}ms), clearing silence");
+                        }
                         unvoiced_since = None;
+                        voiced_since = None; // consumed
                         if !session_active && !winding_down {
-                            // Idle → Active：开新 session + dump pre-roll
                             match open_session(provider, &ctx, &mut consumer).await {
                                 Ok((s, e)) => {
                                     session = Some(s);
@@ -149,19 +169,12 @@ pub async fn run_recording(
                             }
                         }
                     }
-                    Some(VadEvent::Switched(VadState::Unvoiced)) => {
-                        eprintln!("[vad] state → Unvoiced");
-                        unvoiced_since = Some(Instant::now());
-                    }
-                    None => {}
                 }
 
                 // Forward PCM 到 session（Active 或 WindingDown）
                 if let Some(ref mut s) = session {
                     if let Err(e) = s.send_pcm(&samples, false).await {
                         eprintln!("[shuo] ❌ ASR send_pcm failed: {e}");
-                        // 罕见但可能：session 还在但连接断开。回 idle 让下次
-                        // VAD voiced 触发重开。
                         let _ = session.take().unwrap().close().await;
                         session = None;
                         events = None;
@@ -172,14 +185,11 @@ pub async fn run_recording(
 
                 // Deadline checks
                 if let Some(since) = unvoiced_since {
-                    // 给一个 guard：录音开始后前 1s 不关 session（用户可能还没来得及开口）。
-                    // 这是针对 pause_asr_silence_ms 设得很短（<3s）的边缘保护。
-                    if since >= first_voiced_reset && since.elapsed() >= pause_dur
+                    if since.elapsed() >= pause_dur
                         && session.is_some() && !winding_down
                     {
                         eprintln!("[session] unvoiced ≥ {}ms, closing session", params.pause_asr_silence_ms);
                         if let Some(ref mut s) = session {
-                            // is_last 通知 ASR 这段说完了。等 events 臂收 Segment+Done。
                             let _ = s.send_pcm(&[], true).await;
                         }
                         winding_down = true;

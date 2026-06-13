@@ -36,6 +36,8 @@ objc2-app-kit   = { version = "0.3", features = [
     "NSControl",
     "NSFont",
     "NSGraphics",
+    "NSImage",
+    "NSImageView",
     "NSPanel",
     "NSParagraphStyle",
     "NSPasteboard",
@@ -47,6 +49,7 @@ objc2-app-kit   = { version = "0.3", features = [
     "NSVisualEffectView",
     "NSWorkspace",
     "NSWindow",
+    "objc2-core-graphics",
 ] }
 objc2-foundation = { version = "0.3", features = [
     "NSArray",
@@ -57,7 +60,7 @@ objc2-foundation = { version = "0.3", features = [
     "NSString",
     "NSTimer",
 ] }
-objc2-quartz-core = { version = "0.3", features = ["CAAnimation", "CALayer", "CAMediaTiming"] }
+objc2-quartz-core = { version = "0.3", features = ["CAAnimation", "CALayer", "CAMediaTiming", "objc2-core-graphics"] }
 regex           = "1"
 
 [profile.release]

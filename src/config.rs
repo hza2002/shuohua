@@ -94,6 +94,12 @@ pub struct OverlayCfg {
     pub position: OverlayPosition,
     #[serde(default = "default_glass_variant")]
     pub glass_variant: i64,
+    #[serde(default = "default_background_rgb")]
+    pub background_rgb: u32,
+    #[serde(default = "default_background_alpha")]
+    pub background_alpha: f64,
+    #[serde(default = "default_max_text_lines")]
+    pub max_text_lines: usize,
     #[serde(default = "default_thinking_delay_ms")]
     pub thinking_delay_ms: u64,
 }
@@ -103,6 +109,9 @@ impl Default for OverlayCfg {
         Self {
             position: OverlayPosition::default(),
             glass_variant: default_glass_variant(),
+            background_rgb: default_background_rgb(),
+            background_alpha: default_background_alpha(),
+            max_text_lines: default_max_text_lines(),
             thinking_delay_ms: default_thinking_delay_ms(),
         }
     }
@@ -124,6 +133,18 @@ impl Default for OverlayPosition {
 
 fn default_glass_variant() -> i64 {
     19
+}
+
+fn default_background_rgb() -> u32 {
+    0x1C1C1E
+}
+
+fn default_background_alpha() -> f64 {
+    0.22
+}
+
+fn default_max_text_lines() -> usize {
+    5
 }
 
 fn default_thinking_delay_ms() -> u64 {
@@ -178,6 +199,9 @@ provider = "doubao"
         assert_eq!(cfg.ui.language, "auto");
         assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
         assert_eq!(cfg.overlay.glass_variant, 19);
+        assert_eq!(cfg.overlay.background_rgb, 0x1C1C1E);
+        assert_eq!(cfg.overlay.background_alpha, 0.22);
+        assert_eq!(cfg.overlay.max_text_lines, 5);
         assert_eq!(cfg.overlay.thinking_delay_ms, 1200);
     }
 
@@ -269,6 +293,9 @@ trigger = "f16"
 [overlay]
 position = "top"
 glass_variant = 13
+background_rgb = 0x202124
+background_alpha = 0.32
+max_text_lines = 6
 thinking_delay_ms = 900
 
 [asr]
@@ -277,6 +304,9 @@ provider = "doubao"
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.overlay.position, OverlayPosition::Top);
         assert_eq!(cfg.overlay.glass_variant, 13);
+        assert_eq!(cfg.overlay.background_rgb, 0x202124);
+        assert_eq!(cfg.overlay.background_alpha, 0.32);
+        assert_eq!(cfg.overlay.max_text_lines, 6);
         assert_eq!(cfg.overlay.thinking_delay_ms, 900);
     }
 }

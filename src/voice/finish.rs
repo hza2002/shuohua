@@ -146,22 +146,20 @@ pub async fn run_recording(
                     None => {}
                 }
 
-                // Voiced 确认期：持续 Voiced ≥500ms 才认为是真实说话。
-                // 短暂 blip（环境噪声/呼吸/键盘）在这期间会被当作 false positive
-                // 丢弃，不重置 silence timer、不误开新 session。
+                // Voiced 确认期：持续 Voiced ≥500ms 才开新 session。
+                // 但不重置 silence timer——那是 ASR 输出（Partial/Segment）
+                // 的职责。VAD 只能告诉"像人声"，ASR 产出才是真说话。
                 if let Some(vs) = voiced_since {
                     if vs.elapsed() >= Duration::from_millis(VOICED_CONFIRM_MS) {
-                        if unvoiced_since.is_some() {
-                            eprintln!("[vad] voiced confirmed (≥{VOICED_CONFIRM_MS}ms), clearing silence");
-                        }
-                        unvoiced_since = None;
                         voiced_since = None; // consumed
                         if !session_active && !winding_down {
                             match open_session(provider, &ctx, &mut consumer).await {
                                 Ok((s, e)) => {
+                                    eprintln!("[vad] voiced confirmed, session opened");
                                     session = Some(s);
                                     events = Some(e);
                                     session_active = true;
+                                    unvoiced_since = None;
                                 }
                                 Err(err) => {
                                     eprintln!("[shuo] ❌ session open failed (idle→active): {err}");
@@ -219,10 +217,13 @@ pub async fn run_recording(
                     }
                     Some(AsrEvent::Partial { text, seq }) => {
                         eprintln!("[shuo]   partial#{seq}: {text}");
+                        // ASR 产出 = 真实语音。只有它能重置 silence timer。
+                        unvoiced_since = None;
                     }
                     Some(AsrEvent::Segment { text, .. }) => {
                         eprintln!("[shuo]   segment: {text}");
                         pending_segments.push(text);
+                        unvoiced_since = None;
                     }
                     Some(AsrEvent::Error { err }) => {
                         eprintln!("[shuo] ❌ ASR error: {err}");
@@ -231,19 +232,18 @@ pub async fn run_recording(
                         events = None;
                         session_active = false;
                         winding_down = false;
-                        // Error → return early，不 dispatch
                         return;
                     }
                     Some(AsrEvent::Done) => {
                         eprintln!("[shuo]   done");
                         if let Some(s) = session.take() {
-                            let _ = session.take().unwrap().close().await;
+                            let _ = s.close().await;
                         }
                         events = None;
                         winding_down = false;
                         session_active = false;
+                        unvoiced_since = None;
                         eprintln!("[session] session closed → idle");
-                        // VAD 当前是 Voiced 的话立刻重开（用户在关闭期间恢复了说话）
                         if consumer.vad_state() == VadState::Voiced {
                             match open_session(provider, &ctx, &mut consumer).await {
                                 Ok((s, e)) => {
@@ -251,6 +251,7 @@ pub async fn run_recording(
                                     session = Some(s);
                                     events = Some(e);
                                     session_active = true;
+                                    unvoiced_since = None;
                                 }
                                 Err(err) => {
                                     eprintln!("[shuo] ❌ reopen failed: {err}");

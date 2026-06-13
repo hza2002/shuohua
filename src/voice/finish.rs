@@ -20,7 +20,9 @@
 use std::time::{Duration, Instant};
 
 use crate::asr::types::{AsrEvent, AsrProvider, AsrSession, LanguageMode, SessionCtx};
+use crate::overlay::{OverlayCmd, OverlayHandle, OverlayState, TextKind, ToastLevel};
 use crate::post::{self, PipelineStepStatus, PipelineText, RuleBasedFiller};
+use crate::state::StateStore;
 use crate::state::history::{
     self, AsrHistory, AsrSessionHistory, HistoryError, HistoryRecord, HistoryStatus,
     PipelineStepHistory, PipelineStepStatus as HistoryPipelineStepStatus,
@@ -36,6 +38,8 @@ pub struct SessionParams {
     pub stop_delay_ms: u32,
     pub hotwords: Vec<String>,
     pub segment_separator: String,
+    pub overlay: Option<OverlayHandle>,
+    pub state: StateStore,
 }
 
 pub async fn run_recording(
@@ -47,6 +51,16 @@ pub async fn run_recording(
     let recording_started_at = time::OffsetDateTime::now_utc();
     let recording_started_instant = Instant::now();
     eprintln!("[shuo] ▶ recording id={recording_id}");
+    params.state.set_recording(recording_id.clone());
+    overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Connecting });
+    overlay_send(
+        &params,
+        OverlayCmd::SetApp {
+            bundle_id: None,
+            app_name: None,
+            chain_summary: "filler".to_string(),
+        },
+    );
 
     let audio_path = if params.record_audio {
         match prepare_audio_path(&recording_id) {
@@ -73,16 +87,27 @@ pub async fn run_recording(
 
     let ctx = SessionCtx {
         language: LanguageMode::Multilingual { hint: vec!["zh-CN".into(), "en-US".into()] },
-        hotwords: params.hotwords,
+        hotwords: params.hotwords.clone(),
     };
     let (mut session, mut events) = match provider.open(ctx).await {
         Ok(t) => t,
         Err(err) => {
             eprintln!("[shuo] ❌ ASR open failed: {err}");
             rec.stop();
+            params.state.set_error(Some(recording_id));
+            overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Error });
+            overlay_send(
+                &params,
+                OverlayCmd::Toast {
+                    text: err.to_string(),
+                    level: ToastLevel::Error,
+                    ttl_ms: 1500,
+                },
+            );
             return;
         }
     };
+    overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Recording });
 
     let mut stop_rx = stop_rx;
     let mut pending_segments: Vec<SegmentCapture> = Vec::new();
@@ -120,17 +145,40 @@ pub async fn run_recording(
                     None => break,
                     Some(AsrEvent::Partial { text, seq }) => {
                         eprintln!("[shuo]   partial#{seq}: {text}");
+                        params.state.partial(recording_id.clone(), text.clone());
+                        overlay_send(
+                            &params,
+                            OverlayCmd::SetStats {
+                                dur_ms: recording_started_instant.elapsed().as_millis() as u64,
+                                chars: text.chars().count() as u32,
+                            },
+                        );
+                        overlay_send(
+                            &params,
+                            OverlayCmd::SetText { text, kind: TextKind::Partial },
+                        );
                     }
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                         eprintln!("[shuo]   segment: {text}");
+                        overlay_send(&params, OverlayCmd::AppendSegment { text: text.clone() });
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Error { err }) => {
                         eprintln!("[shuo] ❌ ASR error: {err}");
+                        params.state.set_error(Some(recording_id.clone()));
+                        overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Error });
+                        overlay_send(
+                            &params,
+                            OverlayCmd::Toast {
+                                text: err.to_string(),
+                                level: ToastLevel::Error,
+                                ttl_ms: 1500,
+                            },
+                        );
                         rec.stop();
                         let _ = session.close().await;
                         let ended_at = time::OffsetDateTime::now_utc();
-                        append_history(HistoryInput {
+                        if let Some(record) = append_history(HistoryInput {
                             id: recording_id,
                             provider: provider.name().to_string(),
                             started_at: recording_started_at,
@@ -149,7 +197,9 @@ pub async fn run_recording(
                                 kind: "asr_error".to_string(),
                                 msg: err.to_string(),
                             }),
-                        });
+                        }) {
+                            params.state.history_appended(record);
+                        }
                         return;
                     }
                     Some(AsrEvent::Done) => break,
@@ -158,6 +208,8 @@ pub async fn run_recording(
         }
 
         if stop_requested {
+            overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Stopping });
+            params.state.set_stopping(recording_id.clone());
             finish(
                 &mut rec,
                 &mut session,
@@ -183,8 +235,26 @@ pub async fn run_recording(
         dispatch_with_filler(&pending_segments, &params.segment_separator, params.auto_paste)
             .await
             .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)));
+    if let Some(last_text) = pipeline.iter().rev().find_map(|step| step.text.clone()) {
+        overlay_send(&params, OverlayCmd::SetText { text: last_text, kind: TextKind::Final });
+    }
+    for step in &pipeline {
+        params.state.pipeline_step(recording_id.clone(), step.clone());
+    }
+    if let Some(err) = terminal_error.as_ref().or(error.as_ref()) {
+        params.state.set_error(Some(recording_id.clone()));
+        overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Error });
+        overlay_send(
+            &params,
+            OverlayCmd::Toast { text: err.msg.clone(), level: ToastLevel::Error, ttl_ms: 1500 },
+        );
+    } else {
+        params.state.set_idle();
+        overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Idle });
+        overlay_send(&params, OverlayCmd::Hide);
+    }
     let ended_at = time::OffsetDateTime::now_utc();
-    append_history(HistoryInput {
+    if let Some(record) = append_history(HistoryInput {
         id: recording_id,
         provider: provider_name,
         started_at: recording_started_at,
@@ -199,7 +269,9 @@ pub async fn run_recording(
             .map(|_| HistoryStatus::Error)
             .unwrap_or(status),
         error: terminal_error.or(error),
-    });
+    }) {
+        params.state.history_appended(record);
+    }
 }
 
 async fn finish(
@@ -345,6 +417,12 @@ fn prepare_audio_path(recording_id: &str) -> anyhow::Result<PathBuf> {
     Ok(base.join(format!("{recording_id}.wav")))
 }
 
+fn overlay_send(params: &SessionParams, cmd: OverlayCmd) {
+    if let Some(overlay) = &params.overlay {
+        overlay.send(cmd);
+    }
+}
+
 #[derive(Debug, Clone)]
 struct SegmentCapture {
     text: String,
@@ -366,7 +444,7 @@ struct HistoryInput {
     error: Option<HistoryError>,
 }
 
-fn append_history(input: HistoryInput) {
+fn append_history(input: HistoryInput) -> Option<HistoryRecord> {
     let record = HistoryRecord {
         version: 1,
         id: input.id,
@@ -402,7 +480,9 @@ fn append_history(input: HistoryInput) {
     };
     if let Err(e) = history::append_default(&record) {
         eprintln!("[shuo] ❌ history append failed: {e:#}");
+        return None;
     }
+    Some(record)
 }
 
 fn instant_to_datetime(

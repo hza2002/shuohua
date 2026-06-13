@@ -2,6 +2,7 @@
 state_idle = "Idle"
 state_recording = "Recording"
 state_connecting = "Connecting"
+state_thinking = "Thinking"
 state_stopping = "Stopping"
 state_error = "Error"
 

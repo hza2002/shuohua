@@ -20,6 +20,7 @@ mod clipboard_darwin;
 mod config;
 mod hotkey;
 mod i18n;
+mod overlay;
 mod post;
 mod state;
 mod voice;
@@ -30,6 +31,8 @@ use std::sync::Arc;
 use std::thread;
 
 use hotkey::{HotkeyEvent, RawKey, Tracker};
+use overlay::OverlayHandle;
+use state::StateStore;
 use voice::finish::SessionParams;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -64,6 +67,8 @@ async fn main() -> Result<()> {
         cfg.ui.language,
     );
     eprintln!("[shuo] {} hotwords loaded", cfg.asr.hotwords.len());
+    let (overlay, _overlay_rx) = OverlayHandle::channel();
+    let state_store = StateStore::new();
 
     let (pipe_reader, pipe_writer) = os_pipe::pipe().context("create hotkey pipe")?;
 
@@ -103,6 +108,8 @@ async fn main() -> Result<()> {
                     stop_delay_ms: cfg.voice.stop_delay_ms,
                     hotwords: cfg.asr.hotwords.clone(),
                     segment_separator: cfg.voice.segment_separator.clone(),
+                    overlay: Some(overlay.clone()),
+                    state: state_store.clone(),
                 };
                 let provider = provider.clone();
                 tokio::spawn(async move {

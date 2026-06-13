@@ -2,6 +2,7 @@
 state_idle = "空闲"
 state_recording = "录音中"
 state_connecting = "连接中"
+state_thinking = "思考中"
 state_stopping = "收尾"
 state_error = "错误"
 

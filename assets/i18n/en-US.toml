@@ -1,0 +1,10 @@
+[overlay]
+state_idle = "Idle"
+state_recording = "Recording"
+state_connecting = "Connecting"
+state_stopping = "Stopping"
+state_error = "Error"
+
+[toast]
+asr_timeout = "ASR timeout, skipped"
+llm_failed = "{name} failed, skipped"

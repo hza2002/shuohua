@@ -14,6 +14,8 @@ pub struct Config {
     pub hotkey: HotkeyCfg,
     #[serde(default)]
     pub voice: VoiceCfg,
+    #[serde(default)]
+    pub ui: UiCfg,
     pub asr: AsrCfg,
 }
 
@@ -66,6 +68,22 @@ pub struct AsrCfg {
     pub hotwords: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct UiCfg {
+    #[serde(default = "default_language")]
+    pub language: String,
+}
+
+impl Default for UiCfg {
+    fn default() -> Self {
+        Self { language: default_language() }
+    }
+}
+
+fn default_language() -> String {
+    "auto".to_string()
+}
+
 /// `$XDG_CONFIG_HOME/shuohua/config.toml` or `~/.config/shuohua/config.toml`.
 pub fn default_path() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
@@ -111,6 +129,7 @@ provider = "doubao"
         assert!(!cfg.voice.record_audio);
         assert!(cfg.voice.auto_paste);
         assert_eq!(cfg.voice.segment_separator, " ");
+        assert_eq!(cfg.ui.language, "auto");
     }
 
     #[test]
@@ -171,5 +190,21 @@ provider = "doubao"
 trigger = "f16"
 "#;
         assert!(parse(body).is_err());
+    }
+
+    #[test]
+    fn ui_language_is_configurable() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+
+[ui]
+language = "zh-CN"
+
+[asr]
+provider = "doubao"
+"#;
+        let cfg = parse(body).unwrap();
+        assert_eq!(cfg.ui.language, "zh-CN");
     }
 }

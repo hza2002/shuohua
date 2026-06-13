@@ -19,6 +19,7 @@ mod autotype_darwin;
 mod clipboard_darwin;
 mod config;
 mod hotkey;
+mod i18n;
 mod post;
 mod state;
 mod voice;
@@ -35,6 +36,7 @@ use voice::finish::SessionParams;
 async fn main() -> Result<()> {
     let cfg_path = config::default_path();
     let cfg = config::load_from(&cfg_path).context("load config")?;
+    i18n::init(&cfg.ui.language);
     let trigger_code = hotkey::parse::parse(&cfg.hotkey.trigger)
         .with_context(|| format!("parse [hotkey] trigger = {:?}", cfg.hotkey.trigger))?;
 
@@ -50,7 +52,7 @@ async fn main() -> Result<()> {
     eprintln!(
         "[shuo] config {} loaded:\n         trigger={} (code=0x{:02X})\n         \
          asr.provider={} (caps multilingual={})\n         voice.auto_paste={}  \
-         voice.record_audio={}  voice.stop_delay_ms={}",
+         voice.record_audio={}  voice.stop_delay_ms={}  ui.language={}",
         cfg_path.display(),
         cfg.hotkey.trigger,
         trigger_code,
@@ -59,6 +61,7 @@ async fn main() -> Result<()> {
         cfg.voice.auto_paste,
         cfg.voice.record_audio,
         cfg.voice.stop_delay_ms,
+        cfg.ui.language,
     );
     eprintln!("[shuo] {} hotwords loaded", cfg.asr.hotwords.len());
 

@@ -20,6 +20,7 @@ mod clipboard_darwin;
 mod config;
 mod hotkey;
 mod post;
+mod state;
 mod voice;
 
 use anyhow::{Context, Result};

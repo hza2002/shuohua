@@ -48,6 +48,55 @@ pub enum PostError {
     Failed(String),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct PipelineStep {
+    pub name: String,
+    pub status: PipelineStepStatus,
+    pub duration_ms: f64,
+    pub text: Option<String>,
+    pub error: Option<String>,
+}
+
+impl PipelineStep {
+    fn ok(name: &str, elapsed: Duration, text: String) -> Self {
+        Self {
+            name: name.to_string(),
+            status: PipelineStepStatus::Ok,
+            duration_ms: elapsed.as_secs_f64() * 1000.0,
+            text: Some(text),
+            error: None,
+        }
+    }
+
+    fn error(name: &str, elapsed: Duration, err: String) -> Self {
+        Self {
+            name: name.to_string(),
+            status: PipelineStepStatus::Error,
+            duration_ms: elapsed.as_secs_f64() * 1000.0,
+            text: None,
+            error: Some(err),
+        }
+    }
+
+    fn timeout(name: &str, elapsed: Duration) -> Self {
+        Self {
+            name: name.to_string(),
+            status: PipelineStepStatus::Timeout,
+            duration_ms: elapsed.as_secs_f64() * 1000.0,
+            text: None,
+            error: Some("timeout".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipelineStepStatus {
+    Ok,
+    Error,
+    Timeout,
+    Skipped,
+}
+
 #[async_trait]
 pub trait PostProcessor: Send + Sync {
     fn name(&self) -> &str;
@@ -64,28 +113,33 @@ pub async fn run_chain(
     initial: PipelineText,
     ctx: &AppContext,
     timeout: Duration,
-) -> PipelineText {
+) -> (PipelineText, Vec<PipelineStep>) {
     let mut current = initial;
+    let mut steps = Vec::with_capacity(chain.len());
     for p in chain {
         let started = Instant::now();
         match tokio::time::timeout(timeout, p.process(current.clone(), ctx)).await {
             Ok(Ok(out)) => {
+                let step = PipelineStep::ok(p.name(), started.elapsed(), out.text.clone());
                 eprintln!(
                     "[post] {} ok in {:.1}ms",
                     p.name(),
-                    started.elapsed().as_secs_f64() * 1000.0
+                    step.duration_ms
                 );
                 current = out;
+                steps.push(step);
             }
             Ok(Err(e)) => {
                 eprintln!("[post] ⚠ {} failed, skipped: {e}", p.name());
+                steps.push(PipelineStep::error(p.name(), started.elapsed(), e.to_string()));
             }
             Err(_) => {
                 eprintln!("[post] ⚠ {} timed out (>{:?}), skipped", p.name(), timeout);
+                steps.push(PipelineStep::timeout(p.name(), started.elapsed()));
             }
         }
     }
-    current
+    (current, steps)
 }
 
 #[cfg(test)]
@@ -141,15 +195,17 @@ mod tests {
     #[tokio::test]
     async fn empty_chain_returns_initial_unchanged() {
         let initial = PipelineText::new("hello".into(), vec!["hello".into()]);
-        let out = run_chain(&[], initial.clone(), &AppContext, Duration::from_secs(1)).await;
+        let (out, steps) =
+            run_chain(&[], initial.clone(), &AppContext, Duration::from_secs(1)).await;
         assert_eq!(out.text, "hello");
         assert_eq!(out.raw, "hello");
+        assert!(steps.is_empty());
     }
 
     #[tokio::test]
     async fn single_processor_transforms_text() {
         let chain: Vec<Box<dyn PostProcessor>> = vec![Box::new(UpcaseProcessor)];
-        let out = run_chain(
+        let (out, steps) = run_chain(
             &chain,
             PipelineText::new("hi".into(), vec!["hi".into()]),
             &AppContext,
@@ -157,6 +213,10 @@ mod tests {
         )
         .await;
         assert_eq!(out.text, "HI");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].name, "upcase");
+        assert_eq!(steps[0].status, PipelineStepStatus::Ok);
+        assert_eq!(steps[0].text.as_deref(), Some("HI"));
         // raw 永远不变
         assert_eq!(out.raw, "hi");
     }
@@ -165,7 +225,7 @@ mod tests {
     async fn failed_processor_is_skipped_chain_continues() {
         let chain: Vec<Box<dyn PostProcessor>> =
             vec![Box::new(FailProcessor), Box::new(UpcaseProcessor)];
-        let out = run_chain(
+        let (out, steps) = run_chain(
             &chain,
             PipelineText::new("hi".into(), vec!["hi".into()]),
             &AppContext,
@@ -174,6 +234,8 @@ mod tests {
         .await;
         // FailProcessor 失败 → text 留作 upstream "hi"；UpcaseProcessor 接它 → "HI"
         assert_eq!(out.text, "HI");
+        assert_eq!(steps[0].status, PipelineStepStatus::Error);
+        assert_eq!(steps[1].status, PipelineStepStatus::Ok);
     }
 
     #[tokio::test]
@@ -181,7 +243,7 @@ mod tests {
         let chain: Vec<Box<dyn PostProcessor>> =
             vec![Box::new(StallProcessor), Box::new(UpcaseProcessor)];
         // 真实 50ms timeout（StallProcessor 60s sleep > 50ms）→ skip → Upcase 接 "hi"
-        let out = run_chain(
+        let (out, steps) = run_chain(
             &chain,
             PipelineText::new("hi".into(), vec!["hi".into()]),
             &AppContext,
@@ -189,13 +251,14 @@ mod tests {
         )
         .await;
         assert_eq!(out.text, "HI");
+        assert_eq!(steps[0].status, PipelineStepStatus::Timeout);
     }
 
     #[tokio::test]
     async fn all_processors_failing_returns_raw() {
         let chain: Vec<Box<dyn PostProcessor>> =
             vec![Box::new(FailProcessor), Box::new(FailProcessor)];
-        let out = run_chain(
+        let (out, steps) = run_chain(
             &chain,
             PipelineText::new("raw text".into(), vec!["raw text".into()]),
             &AppContext,
@@ -205,5 +268,6 @@ mod tests {
         // 全失败 → text 留作 raw
         assert_eq!(out.text, "raw text");
         assert_eq!(out.raw, "raw text");
+        assert_eq!(steps.len(), 2);
     }
 }

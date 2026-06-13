@@ -20,7 +20,11 @@
 use std::time::{Duration, Instant};
 
 use crate::asr::types::{AsrEvent, AsrProvider, AsrSession, LanguageMode, SessionCtx};
-use crate::post::{self, PipelineText, RuleBasedFiller};
+use crate::post::{self, PipelineStepStatus, PipelineText, RuleBasedFiller};
+use crate::state::history::{
+    self, AsrHistory, AsrSessionHistory, HistoryError, HistoryRecord, HistoryStatus,
+    PipelineStepHistory, PipelineStepStatus as HistoryPipelineStepStatus,
+};
 use crate::voice::{dispatch, recorder};
 use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};
@@ -40,6 +44,8 @@ pub async fn run_recording(
     stop_rx: oneshot::Receiver<()>,
 ) {
     let recording_id = ulid::Ulid::new().to_string();
+    let recording_started_at = time::OffsetDateTime::now_utc();
+    let recording_started_instant = Instant::now();
     eprintln!("[shuo] ▶ recording id={recording_id}");
 
     let audio_path = if params.record_audio {
@@ -79,8 +85,10 @@ pub async fn run_recording(
     };
 
     let mut stop_rx = stop_rx;
-    let mut pending_segments: Vec<String> = Vec::new();
+    let mut pending_segments: Vec<SegmentCapture> = Vec::new();
+    let mut audio_samples_sent: u64 = 0;
     let mut stop_requested = false;
+    let mut terminal_error: Option<HistoryError> = None;
 
     loop {
         tokio::select! {
@@ -93,8 +101,13 @@ pub async fn run_recording(
                     Some(samples) => {
                         if let Err(e) = session.send_pcm(&samples, false).await {
                             eprintln!("[shuo] ❌ ASR send_pcm failed: {e}");
+                            terminal_error = Some(HistoryError {
+                                kind: "asr_send".to_string(),
+                                msg: e.to_string(),
+                            });
                             break;
                         }
+                        audio_samples_sent += samples.len() as u64;
                     }
                     None => {
                         eprintln!("[shuo] recorder ended unexpectedly");
@@ -108,14 +121,35 @@ pub async fn run_recording(
                     Some(AsrEvent::Partial { text, seq }) => {
                         eprintln!("[shuo]   partial#{seq}: {text}");
                     }
-                    Some(AsrEvent::Segment { text, .. }) => {
+                    Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                         eprintln!("[shuo]   segment: {text}");
-                        pending_segments.push(text);
+                        pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Error { err }) => {
                         eprintln!("[shuo] ❌ ASR error: {err}");
                         rec.stop();
                         let _ = session.close().await;
+                        let ended_at = time::OffsetDateTime::now_utc();
+                        append_history(HistoryInput {
+                            id: recording_id,
+                            provider: provider.name().to_string(),
+                            started_at: recording_started_at,
+                            ended_at,
+                            started_instant: recording_started_instant,
+                            raw_text: pending_segments
+                                .iter()
+                                .map(|s| s.text.as_str())
+                                .collect::<Vec<_>>()
+                                .join(&params.segment_separator),
+                            segments: pending_segments,
+                            pipeline: Vec::new(),
+                            audio_ms: samples_to_ms(audio_samples_sent),
+                            status: HistoryStatus::Error,
+                            error: Some(HistoryError {
+                                kind: "asr_error".to_string(),
+                                msg: err.to_string(),
+                            }),
+                        });
                         return;
                     }
                     Some(AsrEvent::Done) => break,
@@ -130,6 +164,8 @@ pub async fn run_recording(
                 &mut events,
                 &mut pending_segments,
                 params.stop_delay_ms,
+                &mut audio_samples_sent,
+                &mut terminal_error,
             )
             .await;
             break;
@@ -137,15 +173,43 @@ pub async fn run_recording(
     }
 
     let _ = session.close().await;
-    dispatch_with_filler(pending_segments, &params.segment_separator, params.auto_paste).await;
+    let provider_name = provider.name().to_string();
+    let raw_text = pending_segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(&params.segment_separator);
+    let (pipeline, status, error) =
+        dispatch_with_filler(&pending_segments, &params.segment_separator, params.auto_paste)
+            .await
+            .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)));
+    let ended_at = time::OffsetDateTime::now_utc();
+    append_history(HistoryInput {
+        id: recording_id,
+        provider: provider_name,
+        started_at: recording_started_at,
+        ended_at,
+        started_instant: recording_started_instant,
+        raw_text,
+        segments: pending_segments,
+        pipeline,
+        audio_ms: samples_to_ms(audio_samples_sent),
+        status: terminal_error
+            .as_ref()
+            .map(|_| HistoryStatus::Error)
+            .unwrap_or(status),
+        error: terminal_error.or(error),
+    });
 }
 
 async fn finish(
     rec: &mut recorder::RecordingStream,
     session: &mut Box<dyn AsrSession>,
     events: &mut mpsc::Receiver<AsrEvent>,
-    pending_segments: &mut Vec<String>,
+    pending_segments: &mut Vec<SegmentCapture>,
     stop_delay_ms: u32,
+    audio_samples_sent: &mut u64,
+    terminal_error: &mut Option<HistoryError>,
 ) {
     let drain_until = Instant::now() + Duration::from_millis(stop_delay_ms as u64);
     loop {
@@ -161,6 +225,7 @@ async fn finish(
                 match pcm {
                     Some(samples) => {
                         let _ = session.send_pcm(&samples, false).await;
+                        *audio_samples_sent += samples.len() as u64;
                     }
                     None => break,
                 }
@@ -168,9 +233,9 @@ async fn finish(
             ev = events.recv() => {
                 match ev {
                     None => break,
-                    Some(AsrEvent::Segment { text, .. }) => {
+                    Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                         eprintln!("[shuo]   segment (drain): {text}");
-                        pending_segments.push(text);
+                        pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Done) => break,
                     Some(AsrEvent::Partial { text, seq }) => {
@@ -178,6 +243,10 @@ async fn finish(
                     }
                     Some(AsrEvent::Error { err }) => {
                         eprintln!("[shuo] ❌ ASR error during drain: {err}");
+                        *terminal_error = Some(HistoryError {
+                            kind: "asr_error".to_string(),
+                            msg: err.to_string(),
+                        });
                     }
                 }
             }
@@ -187,10 +256,15 @@ async fn finish(
     rec.stop();
     while let Some(samples) = rec.try_recv() {
         let _ = session.send_pcm(&samples, false).await;
+        *audio_samples_sent += samples.len() as u64;
     }
 
     if let Err(e) = session.send_pcm(&[], true).await {
         eprintln!("[shuo] ❌ send is_last failed: {e}");
+        *terminal_error = Some(HistoryError {
+            kind: "asr_send_last".to_string(),
+            msg: e.to_string(),
+        });
         return;
     }
 
@@ -201,21 +275,29 @@ async fn finish(
             biased;
             _ = &mut timeout => {
                 eprintln!("[shuo] ⚠ 识别 final 超时 5s");
+                *terminal_error = Some(HistoryError {
+                    kind: "asr_timeout".to_string(),
+                    msg: "timeout waiting final".to_string(),
+                });
                 return;
             }
             ev = events.recv() => {
                 match ev {
                     None => return,
                     Some(AsrEvent::Done) => return,
-                    Some(AsrEvent::Segment { text, .. }) => {
+                    Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                         eprintln!("[shuo]   segment (final): {text}");
-                        pending_segments.push(text);
+                        pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Partial { text, seq }) => {
                         eprintln!("[shuo]   partial#{seq} (final): {text}");
                     }
                     Some(AsrEvent::Error { err }) => {
                         eprintln!("[shuo] ❌ ASR error during final: {err}");
+                        *terminal_error = Some(HistoryError {
+                            kind: "asr_error".to_string(),
+                            msg: err.to_string(),
+                        });
                     }
                 }
             }
@@ -223,20 +305,33 @@ async fn finish(
     }
 }
 
-async fn dispatch_with_filler(mut segments: Vec<String>, sep: &str, auto_paste: bool) {
-    let raw_text = segments.join(sep);
+async fn dispatch_with_filler(
+    segments: &[SegmentCapture],
+    sep: &str,
+    auto_paste: bool,
+) -> Result<(Vec<PipelineStepHistory>, HistoryStatus, Option<HistoryError>), HistoryError> {
+    let segment_texts: Vec<String> = segments.iter().map(|s| s.text.clone()).collect();
+    let raw_text = segment_texts.join(sep);
     if raw_text.is_empty() {
         eprintln!("[shuo] (空识别结果，跳过 dispatch)");
-        return;
+        return Ok((Vec::new(), HistoryStatus::Canceled, None));
     }
     let chain: Vec<Box<dyn post::PostProcessor>> =
         vec![Box::new(RuleBasedFiller::default_patterns())];
-    let initial = PipelineText::new(raw_text, std::mem::take(&mut segments));
-    let out = post::run_chain(&chain, initial, &post::AppContext, Duration::from_secs(2)).await;
+    let initial = PipelineText::new(raw_text, segment_texts);
+    let (out, steps) =
+        post::run_chain(&chain, initial, &post::AppContext, Duration::from_secs(2)).await;
     eprintln!("[shuo] ✓ 最终: {}", out.text);
+    let pipeline = steps.into_iter().map(PipelineStepHistory::from).collect();
     if let Err(e) = dispatch::dispatch(&out.text, auto_paste) {
         eprintln!("[shuo] ❌ 剪贴板写入失败: {e:#}");
+        return Ok((
+            pipeline,
+            HistoryStatus::Error,
+            Some(HistoryError { kind: "dispatch".to_string(), msg: format!("{e:#}") }),
+        ));
     }
+    Ok((pipeline, HistoryStatus::Submitted, None))
 }
 
 fn prepare_audio_path(recording_id: &str) -> anyhow::Result<PathBuf> {
@@ -248,4 +343,94 @@ fn prepare_audio_path(recording_id: &str) -> anyhow::Result<PathBuf> {
     };
     std::fs::create_dir_all(&base)?;
     Ok(base.join(format!("{recording_id}.wav")))
+}
+
+#[derive(Debug, Clone)]
+struct SegmentCapture {
+    text: String,
+    started_at: Instant,
+    ended_at: Instant,
+}
+
+struct HistoryInput {
+    id: String,
+    provider: String,
+    started_at: time::OffsetDateTime,
+    ended_at: time::OffsetDateTime,
+    started_instant: Instant,
+    raw_text: String,
+    segments: Vec<SegmentCapture>,
+    pipeline: Vec<PipelineStepHistory>,
+    audio_ms: u64,
+    status: HistoryStatus,
+    error: Option<HistoryError>,
+}
+
+fn append_history(input: HistoryInput) {
+    let record = HistoryRecord {
+        version: 1,
+        id: input.id,
+        started_at: input.started_at,
+        ended_at: input.ended_at,
+        duration_ms: (input.ended_at - input.started_at).whole_milliseconds().max(0) as u64,
+        status: input.status,
+        app: None,
+        asr: AsrHistory {
+            provider: input.provider,
+            raw: input.raw_text,
+            audio_ms: input.audio_ms,
+            sessions: input
+                .segments
+                .into_iter()
+                .map(|s| AsrSessionHistory {
+                    text: s.text,
+                    started_at: instant_to_datetime(
+                        input.started_at,
+                        input.started_instant,
+                        s.started_at,
+                    ),
+                    ended_at: instant_to_datetime(
+                        input.started_at,
+                        input.started_instant,
+                        s.ended_at,
+                    ),
+                })
+                .collect(),
+        },
+        pipeline: input.pipeline,
+        error: input.error,
+    };
+    if let Err(e) = history::append_default(&record) {
+        eprintln!("[shuo] ❌ history append failed: {e:#}");
+    }
+}
+
+fn instant_to_datetime(
+    recording_started_at: time::OffsetDateTime,
+    recording_started_instant: Instant,
+    instant: Instant,
+) -> time::OffsetDateTime {
+    let delta = instant.saturating_duration_since(recording_started_instant);
+    recording_started_at + time::Duration::milliseconds(delta.as_millis() as i64)
+}
+
+fn samples_to_ms(samples: u64) -> u64 {
+    samples.saturating_mul(1000) / 16_000
+}
+
+impl From<post::PipelineStep> for PipelineStepHistory {
+    fn from(step: post::PipelineStep) -> Self {
+        Self {
+            name: step.name,
+            status: match step.status {
+                PipelineStepStatus::Ok => HistoryPipelineStepStatus::Ok,
+                PipelineStepStatus::Error => HistoryPipelineStepStatus::Error,
+                PipelineStepStatus::Timeout => HistoryPipelineStepStatus::Timeout,
+                PipelineStepStatus::Skipped => HistoryPipelineStepStatus::Skipped,
+            },
+            duration_ms: step.duration_ms,
+            text: step.text,
+            error: step.error,
+        }
+    }
 }

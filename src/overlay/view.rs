@@ -6,10 +6,10 @@ use objc2::runtime::{AnyClass, AnyObject, NSObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSAutoresizingMaskOptions,
-    NSBackingStoreType, NSColor, NSFont, NSImage, NSImageView, NSLineBreakMode, NSPanel, NSScreen,
-    NSTextAlignment, NSTextField, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView, NSWindowCollectionBehavior, NSWindowStyleMask,
-    NSStatusWindowLevel,
+    NSBackingStoreType, NSColor, NSFont, NSImage, NSImageSymbolConfiguration, NSImageSymbolScale,
+    NSImageView, NSLineBreakMode, NSPanel, NSScreen, NSTextAlignment, NSTextField, NSView,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSWindowCollectionBehavior, NSWindowStyleMask, NSStatusWindowLevel,
 };
 use objc2_foundation::{
     ns_string, MainThreadMarker, NSNotification, NSObjectProtocol, NSPoint, NSRect, NSSize,
@@ -115,8 +115,7 @@ struct OverlayView {
     root: Retained<NSView>,
     glass: Retained<NSView>,
     scrim: Retained<NSView>,
-    wave: Retained<NSImageView>,
-    dot: Retained<NSTextField>,
+    state_icon: Retained<NSImageView>,
     status: Retained<NSTextField>,
     meta: Retained<NSTextField>,
     text: Retained<NSTextField>,
@@ -128,6 +127,7 @@ struct OverlayView {
     last_visible_text: String,
     last_status_text: String,
     last_meta_text: String,
+    peak_text_lines: usize,
 }
 
 impl OverlayView {
@@ -177,10 +177,12 @@ impl OverlayView {
         }
         root.addSubview(&scrim);
 
-        let wave = make_wave_icon(mtm, 0.35);
-        wave.setHidden(true);
-        let dot = label(mtm, 18.0, 48.0, 14.0, 22.0, 13.0, true);
-        let status = label(mtm, 38.0, 48.0, 280.0, 22.0, 13.0, true);
+        let state_icon = make_state_icon(mtm);
+        state_icon.setFrame(NSRect::new(
+            NSPoint::new(16.0, 44.0),
+            NSSize::new(20.0, 20.0),
+        ));
+        let status = label(mtm, 44.0, 48.0, 274.0, 22.0, 13.0, true);
         let meta = label(mtm, 320.0, 48.0, 190.0, 22.0, 12.0, false);
         let text = label(mtm, 18.0, 18.0, TEXT_WIDTH, 24.0, 15.0, false);
         text.setUsesSingleLineMode(false);
@@ -188,8 +190,7 @@ impl OverlayView {
         let toast = label(mtm, 150.0, -30.0, 240.0, 24.0, 12.0, false);
         toast.setHidden(true);
 
-        root.addSubview(&wave);
-        root.addSubview(&dot);
+        root.addSubview(&state_icon);
         root.addSubview(&status);
         root.addSubview(&meta);
         root.addSubview(&text);
@@ -205,8 +206,7 @@ impl OverlayView {
             root,
             glass,
             scrim,
-            wave,
-            dot,
+            state_icon,
             status,
             meta,
             text,
@@ -218,6 +218,7 @@ impl OverlayView {
             last_visible_text: String::new(),
             last_status_text: String::new(),
             last_meta_text: String::new(),
+            peak_text_lines: 1,
         }
     }
 
@@ -231,6 +232,7 @@ impl OverlayView {
                 OverlayState::Idle | OverlayState::Error => {
                     self.recording_started = None;
                     self.last_text_update = None;
+                    self.peak_text_lines = 1;
                 }
                 _ => {}
             },
@@ -247,6 +249,7 @@ impl OverlayView {
                 self.recording_started = None;
                 self.last_text_update = None;
                 self.toast_until = None;
+                self.peak_text_lines = 1;
             }
             _ => {}
         }
@@ -267,11 +270,15 @@ impl OverlayView {
 
     fn render(&mut self) {
         if self.model.visible {
-            let (_, lines) = display_text_plan(
-                &self.model.display_text(),
-                self.cfg.max_text_lines,
-                CHARS_PER_LINE,
-            );
+            let full_text = self.model.display_text();
+            let (_, current_lines) =
+                display_text_plan(&full_text, self.cfg.max_text_lines, CHARS_PER_LINE);
+            let lines = if self.model.state == OverlayState::Recording {
+                self.peak_text_lines = self.peak_text_lines.max(current_lines);
+                self.peak_text_lines
+            } else {
+                current_lines
+            };
             let height = HEIGHT + (lines.saturating_sub(1) as f64 * TEXT_LINE_HEIGHT);
             self.layout(height, lines);
             self.place(height);
@@ -288,9 +295,7 @@ impl OverlayView {
         let (state, label, color_rgb) = self.effective_state();
         let dur = format_duration(self.model.dur_ms);
         let status = format!("{label} · {dur} · {}字", full_text.chars().count());
-        self.render_wave(state, color_rgb);
-        self.dot.setStringValue(ns_string!("●"));
-        self.dot.setTextColor(Some(&color_from_rgb(color_rgb)));
+        self.render_state_icon(state, color_rgb);
         if self.last_status_text != status {
             fade_view(&self.status, 0.16);
             self.status.setStringValue(&NSString::from_str(&status));
@@ -359,24 +364,34 @@ impl OverlayView {
         )
     }
 
-    fn render_wave(&self, state: OverlayState, color_rgb: u32) {
-        let is_recording = state == OverlayState::Recording;
-        self.wave.setHidden(!is_recording);
-        if !is_recording {
-            return;
+    fn render_state_icon(&self, state: OverlayState, color_rgb: u32) {
+        let symbol = match state {
+            OverlayState::Idle => "circle.fill",
+            OverlayState::Connecting => "dot.radiowaves.left.and.right",
+            OverlayState::Recording => "waveform",
+            OverlayState::Thinking => "brain.head.profile",
+            OverlayState::Stopping => "hourglass",
+            OverlayState::Error => "exclamationmark.triangle.fill",
+        };
+        let phase = if state == OverlayState::Recording {
+            self.recording_started
+                .map(|started| ((started.elapsed().as_millis() / 160) % 6) as usize)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let value = if state == OverlayState::Recording {
+            [0.25, 0.45, 0.75, 1.0, 0.65, 0.35][phase]
+        } else {
+            1.0
+        };
+        if let Some(image) = symbol_image(symbol, value, state == OverlayState::Recording) {
+            self.state_icon.setImage(Some(&image));
         }
-
-        let phase = self
-            .recording_started
-            .map(|started| ((started.elapsed().as_millis() / 160) % 6) as usize)
-            .unwrap_or(0);
-        let values = [0.25, 0.45, 0.75, 1.0, 0.65, 0.35];
-        if let Some(image) = wave_image(values[phase]) {
-            self.wave.setImage(Some(&image));
-        }
-        let alpha = [0.55, 0.68, 0.86, 1.0, 0.78, 0.62][phase];
-        self.wave
-            .setContentTintColor(Some(&color_from_rgb_alpha(color_rgb, alpha)));
+        let config = NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Large);
+        self.state_icon.setSymbolConfiguration(Some(&config));
+        self.state_icon
+            .setContentTintColor(Some(&color_from_rgb_alpha(color_rgb, 1.0)));
     }
 
     fn layout(&mut self, height: f64, lines: usize) {
@@ -393,21 +408,13 @@ impl OverlayView {
             NSPoint::new(0.0, 0.0),
             NSSize::new(WIDTH, height),
         ));
-        let wave_visible = self.effective_state().0 == OverlayState::Recording;
-        self.wave.setFrame(NSRect::new(
-            NSPoint::new(17.0, 48.0 + top_offset),
-            NSSize::new(18.0, 22.0),
-        ));
-        let dot_x = if wave_visible { 40.0 } else { 18.0 };
-        let status_x = if wave_visible { 60.0 } else { 38.0 };
-        let status_w = if wave_visible { 258.0 } else { 280.0 };
-        self.dot.setFrame(NSRect::new(
-            NSPoint::new(dot_x, 48.0 + top_offset),
-            NSSize::new(14.0, 22.0),
+        self.state_icon.setFrame(NSRect::new(
+            NSPoint::new(16.0, 44.0 + top_offset),
+            NSSize::new(20.0, 20.0),
         ));
         self.status.setFrame(NSRect::new(
-            NSPoint::new(status_x, 48.0 + top_offset),
-            NSSize::new(status_w, 22.0),
+            NSPoint::new(44.0, 48.0 + top_offset),
+            NSSize::new(274.0, 22.0),
         ));
         self.meta.setFrame(NSRect::new(
             NSPoint::new(320.0, 48.0 + top_offset),
@@ -515,29 +522,26 @@ fn set_glass_variant(view: &NSView, variant: i64) {
     }
 }
 
-fn make_wave_icon(mtm: MainThreadMarker, value: f64) -> Retained<NSImageView> {
-    let image = wave_image(value).unwrap_or_else(|| {
-        NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            ns_string!("waveform"),
-            Some(ns_string!("Recording")),
-        )
-        .expect("system waveform symbol should exist")
-    });
+fn make_state_icon(mtm: MainThreadMarker) -> Retained<NSImageView> {
+    let image = symbol_image("circle.fill", 1.0, false).expect("system symbol should exist");
     let view = NSImageView::imageViewWithImage(&image, mtm);
+    let config = NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Large);
+    view.setSymbolConfiguration(Some(&config));
     view.setContentTintColor(Some(&NSColor::labelColor()));
     view
 }
 
-fn wave_image(value: f64) -> Option<Retained<NSImage>> {
-    NSImage::imageWithSystemSymbolName_variableValue_accessibilityDescription(
-        ns_string!("waveform"),
-        value.clamp(0.0, 1.0),
-        Some(ns_string!("Recording")),
-    )
-}
-
-fn color_from_rgb(rgb: u32) -> Retained<NSColor> {
-    color_from_rgb_alpha(rgb, 1.0)
+fn symbol_image(name: &str, value: f64, variable: bool) -> Option<Retained<NSImage>> {
+    let name = NSString::from_str(name);
+    let desc = NSString::from_str("state");
+    if variable {
+        return NSImage::imageWithSystemSymbolName_variableValue_accessibilityDescription(
+            &name,
+            value.clamp(0.0, 1.0),
+            Some(&desc),
+        );
+    }
+    NSImage::imageWithSystemSymbolName_accessibilityDescription(&name, Some(&desc))
 }
 
 fn color_from_rgb_alpha(rgb: u32, alpha: f64) -> Retained<NSColor> {

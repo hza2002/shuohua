@@ -91,7 +91,7 @@
 | **删 hold 模式** | 只保留 toggle。dictation 按几十秒不现实；忘按用 `auto_stop_silence_ms` 兜底 |
 | ASR 流式 partial | **硬契约必需**。不支持流式 partial 的 provider 不入选；本地批量推理通过 wrapper 满足契约可入选 |
 | **ASR 单事件流** | `AsrEvent` enum 单 channel，voice 模块只 select 一臂。删除 `server_side_vad` cap，统一行为 |
-| **ASR Hotword Boost enum** | 三档 `Low / Medium / High`，每个 provider 自己映射。删除原浮点归一化 |
+| **ASR Hotwords** | `Vec<String>` inline 写在 `config.toml` 的 `[asr].hotwords`；不分级、无 boost 字段。理由：路线图上无 provider 支持 per-word boost（Doubao 接词列表、Whisper 拼 `initial_prompt`、Apple Speech 用 `contextualStrings`）。provider 自由解释，不支持的 caps 标 `hotwords=false`、doctor 提示 |
 | ASR 多段 session 模型 | 同一次 Recording 内 client VAD 自动开关 ASR；段间文本累积；段间分隔符可配 |
 | **ASR 省钱机制** | A 方案（关 session）v1 选；B 方案（保 session 暂停喂）M3+ 评估 |
 | **VAD 实现** | WebRTC VAD（`webrtc-vad` crate）+ 500ms ring buffer pre-roll；RMS 降级；Silero M9 备选 |
@@ -110,6 +110,13 @@
 | **删 `shuo config` 子命令** | `lazyvim` 类编辑器直接编辑文件即可。`validate` 折进 `shuo doctor` |
 | **i18n** | 双语 zh-CN/en-US，手写 `t!()` 宏，不引第三方 crate |
 | **launchd plist Label** | `com.hza2002.shuohua`（reverse-DNS，参考 yabai `com.koekeishiya.yabai`）|
+| **ASR provider 私有配置** | 每个 provider 一份独立 TOML：`~/.config/shuohua/asr/<provider>.toml`，文件名 == provider 名。voice 模块永远不见 provider 私有字段（app_key / language / 厂商特有 flag）。`config.toml` 只写 `[asr] provider = "doubao"` 指路 |
+| **ASR 音频 codec** | 由 provider 实现写死，**不暴露给用户**。codec 是工程权衡（CPU/带宽/server 兼容性），用户没足够信息做决定。M2 DoubaoProvider 硬编码 raw PCM；未来若 benchmark 出 opus 显著更优则改 impl，不动配置 |
+| **ASR 错误处理** | `AsrError` thiserror enum（`Auth / Network / Quota / Protocol / Timeout / Server / Canceled`），M3+ overlay match enum 分发 toast 样式。**M2 不自动重试**，用户操作可见可重复。Stopping 等 final 超时 5s 后跳过 dispatch + 提示。`Canceled` 静默处理 |
+| **Dispatch 触发条件** | 剪贴板 + Cmd+V 只在 `Final`/最后 `Segment` 拼完之后执行。没收到末段就不上屏（部分识别上屏视作 bug）|
+| **取消令牌** | `tokio_util::sync::CancellationToken`，Recording 根 token + `.child_token()` 派生子树。Stop 时调一次 root.cancel() 全员收。Go 版 `context.WithCancel` 的 Rust 等价物，DESIGN §2.3 不变量 |
+| **音频留存** | `voice.record_audio = false` 默认。开启时落 `~/.local/state/shuohua/audio/<recording_id>.wav`（跟 history.jsonl 同 state dir），文件名 = recording ULID。一次 recording = 一个 wav，多 session 边界从 history.jsonl 时间戳切。不用 `/tmp`/`~/.cache`（语义错位）|
+| **Post 路径扁平化** | `~/.config/shuohua/post/<bundle_id>.toml`，去掉原 `app/` 子目录。bundle_id 含 `.` 跟 `default.toml` 视觉不冲突 |
 
 ### 仍开放（战术，可在对应里程碑时决定）
 

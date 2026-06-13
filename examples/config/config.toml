@@ -1,0 +1,20 @@
+# shuohua 全局配置。复制到 ~/.config/shuohua/config.toml 后修改。
+# 详见 docs/DESIGN.md §2.8 配置文件布局。
+
+[hotkey]
+trigger = "f16"           # 触发录音的物理键；普通字符键被禁，TUI 会校验
+
+[voice]
+stop_delay_ms = 800       # toggle OFF 后 drain 多少毫秒尾音再关麦克风（防尾字丢）
+record_audio  = false     # true → 落 ~/.local/state/shuohua/audio/<id>.wav，文件名 = recording ULID
+
+[asr]
+provider = "doubao"       # 加载 ~/.config/shuohua/asr/doubao.toml
+# 共享 hotwords，所有 provider 自由解释（不支持的静默忽略）
+hotwords = [
+  "Rust",
+  "tokio",
+  "Kubernetes",
+  "Anthropic",
+  "ratatui",
+]

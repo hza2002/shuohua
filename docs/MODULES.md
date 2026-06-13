@@ -22,7 +22,7 @@ src/
 
 | M | 新增路径 | 主要新依赖 |
 |---|---|---|
-| **M2** | `config.rs`, `hotkey/{registry,parse}.rs`, `asr/{mod,types,providers/doubao}.rs`, `voice/{finish,dispatch}.rs`, `autotype_darwin.rs`, `clipboard_darwin.rs` | tokio, tokio-tungstenite, async-trait, toml, serde, arc-swap, phf |
+| **M2** | `config.rs`, `hotkey/{registry,parse}.rs`, `asr/{mod,types,providers/doubao}.rs`, `voice/{finish,dispatch}.rs`, `autotype_darwin.rs`, `clipboard_darwin.rs` | tokio, tokio-util, tokio-tungstenite (+rustls-tls-webpki-roots), async-trait, toml, serde, serde_json, thiserror, ulid, uuid, objc2-app-kit, objc2-foundation |
 | **M2.5** | `voice/vad.rs`, `post/{mod,filler}.rs`, `i18n/mod.rs`, `assets/i18n/*.toml` | webrtc-vad, rtrb, regex |
 | **M3** | `state/{mod,history}.rs`, `overlay/{mod,view,animations}.rs`, `build.rs` 链接 frameworks | objc2-quartz-core, serde_json, ulid, time |
 | **M4** | `ipc/{mod,protocol}.rs`, `tui/{mod,panes,keybindings}.rs` | ratatui, crossterm |

@@ -165,13 +165,14 @@ pub async fn run_recording(
         last_partial
     };
 
-    // 6. dispatch
+    // 6. dispatch（步骤日志在 dispatch 模块内自报；这里只报最终文本 + 真错）
     if final_text.is_empty() {
         eprintln!("[shuo] (空识别结果，跳过 dispatch)");
     } else {
         eprintln!("[shuo] ✓ 最终: {final_text}");
         if let Err(e) = dispatch::dispatch(&final_text, params.auto_paste) {
-            eprintln!("[shuo] ❌ dispatch failed: {e:#}");
+            // 只有剪贴板写失败才走到这里（Cmd+V 失败已在 dispatch 内部 warn 化）
+            eprintln!("[shuo] ❌ 剪贴板写入失败: {e:#}");
         }
     }
 }

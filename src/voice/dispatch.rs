@@ -1,10 +1,11 @@
 //! 把识别文本送达用户。
 //!
-//! M2: 写剪贴板 + 可选 Cmd+V 上屏。`voice.auto_paste = true`（默认）= 完整
-//! 上屏链路；`= false` = 只进剪贴板，用户自己 Cmd+V。
+//! 两步链路：先写剪贴板（必成功才算 dispatch 成功）→ 再可选 Cmd+V 上屏。
+//! Cmd+V 失败不算 dispatch 失败：文本已进剪贴板，用户手动 Cmd+V 即可恢复。
+//! 这样 Accessibility 权限被撤、目标 App 拒绝注入等罕见路径上，用户体验
+//! 不至于"看着像啥都没干"。
 //!
-//! M3+ 会加 dispatcher trait 让 history.jsonl 也能算作一种"dispatch"（写
-//! 不仅是粘贴）。M2 keep it simple。
+//! 各步骤的日志由本模块自己负责，调用方只看 Result 决定是否记 history.
 
 use crate::autotype_darwin;
 use crate::clipboard_darwin;
@@ -16,8 +17,15 @@ pub fn dispatch(text: &str, auto_paste: bool) -> Result<()> {
         return Ok(());
     }
     clipboard_darwin::write_string(text).context("write clipboard")?;
+    eprintln!("[shuo] ✓ 剪贴板已写入");
+
     if auto_paste {
-        autotype_darwin::paste().context("Cmd+V")?;
+        match autotype_darwin::paste() {
+            Ok(()) => eprintln!("[shuo] ✓ Cmd+V 已上屏"),
+            Err(e) => eprintln!(
+                "[shuo] ⚠ Cmd+V 失败，文本仍在剪贴板，可手动粘贴: {e:#}"
+            ),
+        }
     }
     Ok(())
 }

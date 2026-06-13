@@ -106,8 +106,13 @@ pub async fn run_recording(
     let mut winding_down = false;
     let mut stop_requested = false;
     let mut session_active = true;
-
-    const VOICED_CONFIRM_MS: u64 = 500;
+    // 当前 session 期间收集到的 Segment 数。关 session 时用来决定下次 VAD
+    // 确认期：零产出 = 噪音 session → 下次开门槛更高（2s），避免噪音反复开关。
+    let mut sess_segment_count: usize = 0;
+    // 下次 VAD voiced 确认所需的连续时长。噪音 session 之后提到 2s。
+    let mut voiced_confirm_ms: u64 = 500;
+    // 噪音关闭后的 VAD 确认期——比正常的长，因为上次已经证明该环境 VAD 容易误判。
+    const NOISE_VOICED_CONFIRM_MS: u64 = 2000;
 
     loop {
         tokio::select! {
@@ -146,19 +151,20 @@ pub async fn run_recording(
                     None => {}
                 }
 
-                // Voiced 确认期：持续 Voiced ≥500ms 才开新 session。
-                // 但不重置 silence timer——那是 ASR 输出（Partial/Segment）
-                // 的职责。VAD 只能告诉"像人声"，ASR 产出才是真说话。
+                // Voiced 确认期：持续 Voiced≥voiced_confirm_ms 才开新 session。
+                // 不重置 silence timer——那是 ASR 输出（Partial/Segment）的职责。
+                // 噪音 session 之后门槛提至 2s，避免反复开关。
                 if let Some(vs) = voiced_since {
-                    if vs.elapsed() >= Duration::from_millis(VOICED_CONFIRM_MS) {
-                        voiced_since = None; // consumed
+                    if vs.elapsed() >= Duration::from_millis(voiced_confirm_ms) {
+                        voiced_since = None;
                         if !session_active && !winding_down {
                             match open_session(provider, &ctx, &mut consumer).await {
                                 Ok((s, e)) => {
-                                    eprintln!("[vad] voiced confirmed, session opened");
+                                    eprintln!("[vad] voiced confirmed (≥{voiced_confirm_ms}ms), session opened");
                                     session = Some(s);
                                     events = Some(e);
                                     session_active = true;
+                                    sess_segment_count = 0;
                                     unvoiced_since = None;
                                 }
                                 Err(err) => {
@@ -223,6 +229,7 @@ pub async fn run_recording(
                     Some(AsrEvent::Segment { text, .. }) => {
                         eprintln!("[shuo]   segment: {text}");
                         pending_segments.push(text);
+                        sess_segment_count += 1;
                         unvoiced_since = None;
                     }
                     Some(AsrEvent::Error { err }) => {
@@ -236,6 +243,7 @@ pub async fn run_recording(
                     }
                     Some(AsrEvent::Done) => {
                         eprintln!("[shuo]   done");
+                        let produced = sess_segment_count;
                         if let Some(s) = session.take() {
                             let _ = s.close().await;
                         }
@@ -243,21 +251,15 @@ pub async fn run_recording(
                         winding_down = false;
                         session_active = false;
                         unvoiced_since = None;
-                        eprintln!("[session] session closed → idle");
-                        if consumer.vad_state() == VadState::Voiced {
-                            match open_session(provider, &ctx, &mut consumer).await {
-                                Ok((s, e)) => {
-                                    eprintln!("[session] immediate reopen (VAD still voiced)");
-                                    session = Some(s);
-                                    events = Some(e);
-                                    session_active = true;
-                                    unvoiced_since = None;
-                                }
-                                Err(err) => {
-                                    eprintln!("[shuo] ❌ reopen failed: {err}");
-                                }
-                            }
-                        }
+                        // 噪音 session（零 Segment）→ 下次 VAD 确认期更长。
+                        // 正常 session（有产出）→ 用默认 500ms。
+                        voiced_confirm_ms = if produced == 0 {
+                            eprintln!("[session] noise session, next confirm → 2s");
+                            NOISE_VOICED_CONFIRM_MS
+                        } else {
+                            500
+                        };
+                        eprintln!("[session] session closed → idle (segments={produced})");
                     }
                 }
             }

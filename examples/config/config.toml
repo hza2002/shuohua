@@ -5,9 +5,12 @@
 trigger = "f16"           # 触发录音的物理键；普通字符键被禁，TUI 会校验
 
 [voice]
-stop_delay_ms = 800       # toggle OFF 后 drain 多少毫秒尾音再关麦克风（防尾字丢）
-auto_paste    = true      # true = 识别完成后立刻 Cmd+V 上屏；false = 只进剪贴板
-record_audio  = false     # true → 落 ~/.local/state/shuohua/audio/<id>.wav，文件名 = recording ULID
+stop_delay_ms        = 800        # toggle OFF 后 drain 多少毫秒尾音再关麦克风（防尾字丢）
+auto_paste           = true       # true = 识别完成后立刻 Cmd+V 上屏；false = 只进剪贴板
+record_audio         = false      # true → 落 ~/.local/state/shuohua/audio/<id>.wav，文件名 = recording ULID
+pause_asr_silence_ms = 3000       # 静音多久后关 ASR session（"思考不计费"，DESIGN §2.9）。≥ 1800
+auto_stop_silence_ms = 600000     # 静音多久后完全停止录音（防忘按 toggle OFF）
+segment_separator    = " "        # 多段识别拼接分隔符
 
 [asr]
 provider = "doubao"       # 加载 ~/.config/shuohua/asr/doubao.toml

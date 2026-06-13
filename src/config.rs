@@ -32,6 +32,16 @@ pub struct VoiceCfg {
     /// REQUIREMENTS §3.1 描述里"可选自动 Cmd+V 上屏"对应这个开关。
     #[serde(default = "default_auto_paste")]
     pub auto_paste: bool,
+    /// 客户端 VAD 检测静音持续多少毫秒后关 ASR session（"思考不计费"机制）。
+    /// 见 DESIGN §2.9。约束：≥ 1800（Doubao end_window 默认 800ms + 1000ms 缓冲）。
+    #[serde(default = "default_pause_asr_silence_ms")]
+    pub pause_asr_silence_ms: u32,
+    /// 静音持续多少毫秒后完全停止录音（防忘按 toggle OFF）。默认 10 分钟。
+    #[serde(default = "default_auto_stop_silence_ms")]
+    pub auto_stop_silence_ms: u32,
+    /// 多段 ASR session 拼接时的分隔符。默认空格。
+    #[serde(default = "default_segment_separator")]
+    pub segment_separator: String,
 }
 
 impl Default for VoiceCfg {
@@ -40,6 +50,9 @@ impl Default for VoiceCfg {
             stop_delay_ms: default_stop_delay_ms(),
             record_audio: false,
             auto_paste: default_auto_paste(),
+            pause_asr_silence_ms: default_pause_asr_silence_ms(),
+            auto_stop_silence_ms: default_auto_stop_silence_ms(),
+            segment_separator: default_segment_separator(),
         }
     }
 }
@@ -50,6 +63,19 @@ fn default_stop_delay_ms() -> u32 {
 fn default_auto_paste() -> bool {
     true
 }
+fn default_pause_asr_silence_ms() -> u32 {
+    3000
+}
+fn default_auto_stop_silence_ms() -> u32 {
+    600_000
+}
+fn default_segment_separator() -> String {
+    " ".to_string()
+}
+
+/// VAD 关 ASR session 的下限：必须明确大于 Doubao server VAD 触发窗（默认 800ms）
+/// 加 1000ms 缓冲，确保客户端先于服务端 VAD 触发，避免双重切段。
+const MIN_PAUSE_ASR_SILENCE_MS: u32 = 1800;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AsrCfg {
@@ -75,11 +101,36 @@ pub fn load_from(path: &Path) -> Result<Config> {
             path.display()
         )
     })?;
-    parse(&body).with_context(|| format!("parse {}", path.display()))
+    let cfg = parse(&body).with_context(|| format!("parse {}", path.display()))?;
+    cfg.validate().with_context(|| format!("validate {}", path.display()))?;
+    Ok(cfg)
 }
 
 pub fn parse(body: &str) -> Result<Config> {
     toml::from_str::<Config>(body).map_err(Into::into)
+}
+
+impl Config {
+    pub fn validate(&self) -> Result<()> {
+        if self.voice.pause_asr_silence_ms < MIN_PAUSE_ASR_SILENCE_MS {
+            anyhow::bail!(
+                "[voice] pause_asr_silence_ms = {} 过小（最小 {}）；\
+                 客户端 VAD 必须先于服务端 VAD（默认 800ms 窗口）触发，\
+                 否则会被双重切段。建议 3000。",
+                self.voice.pause_asr_silence_ms,
+                MIN_PAUSE_ASR_SILENCE_MS
+            );
+        }
+        if self.voice.auto_stop_silence_ms <= self.voice.pause_asr_silence_ms {
+            anyhow::bail!(
+                "[voice] auto_stop_silence_ms ({}) 必须严格大于 pause_asr_silence_ms ({})，\
+                 否则 ASR session 还没机会关录音就先整体 stop 了。",
+                self.voice.auto_stop_silence_ms,
+                self.voice.pause_asr_silence_ms
+            );
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -146,5 +197,78 @@ trigger = "f16"
 "#;
         // [asr] is required (no Default impl on AsrCfg) — parse must fail.
         assert!(parse(body).is_err());
+    }
+
+    #[test]
+    fn vad_defaults_are_loaded() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+
+[asr]
+provider = "doubao"
+"#;
+        let cfg = parse(body).unwrap();
+        assert_eq!(cfg.voice.pause_asr_silence_ms, 3000);
+        assert_eq!(cfg.voice.auto_stop_silence_ms, 600_000);
+        assert_eq!(cfg.voice.segment_separator, " ");
+        cfg.validate().expect("default config should validate");
+    }
+
+    #[test]
+    fn vad_overrides_apply() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+
+[voice]
+pause_asr_silence_ms = 4000
+auto_stop_silence_ms = 900000
+segment_separator    = "，"
+
+[asr]
+provider = "doubao"
+"#;
+        let cfg = parse(body).unwrap();
+        assert_eq!(cfg.voice.pause_asr_silence_ms, 4000);
+        assert_eq!(cfg.voice.auto_stop_silence_ms, 900_000);
+        assert_eq!(cfg.voice.segment_separator, "，");
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn pause_below_minimum_rejected() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+
+[voice]
+pause_asr_silence_ms = 500
+
+[asr]
+provider = "doubao"
+"#;
+        let cfg = parse(body).unwrap();
+        let err = cfg.validate().expect_err("500ms 应被拒绝");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("pause_asr_silence_ms"), "msg = {msg}");
+    }
+
+    #[test]
+    fn auto_stop_must_exceed_pause() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+
+[voice]
+pause_asr_silence_ms = 3000
+auto_stop_silence_ms = 3000
+
+[asr]
+provider = "doubao"
+"#;
+        let cfg = parse(body).unwrap();
+        let err = cfg.validate().expect_err("auto_stop == pause 应被拒绝");
+        assert!(format!("{err:#}").contains("auto_stop_silence_ms"));
     }
 }

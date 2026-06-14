@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use serde_json::{Map as JsonMap, Value as JsonValue};
+use toml::value::Table;
 
 use super::llm::{LlmCleanup, LlmCleanupConfig, ProviderFormat};
 use super::{PostProcessor, RuleBasedFiller};
@@ -24,10 +26,14 @@ pub fn default_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/shuohua/post")
 }
 
-pub fn load_components(chain: &[String], dirs: &PostDirs) -> Result<PostChain> {
+pub fn load_components(
+    chain: &[String],
+    dirs: &PostDirs,
+    llm_overrides: &Table,
+) -> Result<PostChain> {
     let mut processors = Vec::with_capacity(chain.len());
     for id in chain {
-        processors.push(load_component(id, dirs)?);
+        processors.push(load_component(id, dirs, llm_overrides)?);
     }
     Ok(PostChain {
         name: chain.join(" → "),
@@ -35,7 +41,11 @@ pub fn load_components(chain: &[String], dirs: &PostDirs) -> Result<PostChain> {
     })
 }
 
-fn load_component(id: &str, dirs: &PostDirs) -> Result<Box<dyn PostProcessor>> {
+fn load_component(
+    id: &str,
+    dirs: &PostDirs,
+    llm_overrides: &Table,
+) -> Result<Box<dyn PostProcessor>> {
     let (kind, name) = id
         .split_once(':')
         .with_context(|| format!("post chain item {id:?} must be kind:name"))?;
@@ -46,9 +56,31 @@ fn load_component(id: &str, dirs: &PostDirs) -> Result<Box<dyn PostProcessor>> {
     };
     let body = std::fs::read_to_string(&path)
         .with_context(|| format!("read post component {}", path.display()))?;
-    let cfg: ProcessorCfg = toml::from_str(&body)
+    let mut value: toml::Value = toml::from_str(&body)
+        .with_context(|| format!("parse post component {}", path.display()))?;
+    if kind == "llm" {
+        if let Some(override_value) = llm_overrides.get(name) {
+            let override_table = override_value.as_table().with_context(|| {
+                format!("post.llm.{name} override for {id:?} must be a TOML table")
+            })?;
+            merge_table(&mut value, override_table)
+                .with_context(|| format!("merge post.llm.{name} override into {id:?}"))?;
+        }
+    }
+    let cfg: ProcessorCfg = value
+        .try_into()
         .with_context(|| format!("parse post component {}", path.display()))?;
     cfg.build(id)
+}
+
+fn merge_table(value: &mut toml::Value, overrides: &Table) -> Result<()> {
+    let table = value
+        .as_table_mut()
+        .context("expected top-level TOML table")?;
+    for (key, value) in overrides {
+        table.insert(key.clone(), value.clone());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,7 +98,7 @@ enum ProcessorCfg {
         api_key: String,
         model: String,
         #[serde(default)]
-        thinking: Option<bool>,
+        extra_body: JsonMap<String, JsonValue>,
         #[serde(default)]
         system_prompt: Option<String>,
         prompt: String,
@@ -97,7 +129,7 @@ impl ProcessorCfg {
                 base_url,
                 api_key,
                 model,
-                thinking,
+                extra_body,
                 system_prompt,
                 prompt,
             } => Ok(Box::new(LlmCleanup::new(LlmCleanupConfig {
@@ -112,11 +144,64 @@ impl ProcessorCfg {
                     .unwrap_or_else(|| default_base_url(*format, name)),
                 api_key: api_key.clone(),
                 model: model.clone(),
-                thinking: *thinking,
+                extra_body: extra_body.clone(),
                 system_prompt: system_prompt.clone(),
                 prompt: prompt.clone(),
             }))),
         }
+    }
+}
+
+#[cfg(test)]
+fn load_llm_config_for_test(
+    id: &str,
+    dirs: &PostDirs,
+    llm_overrides: &Table,
+) -> Result<LlmCleanupConfig> {
+    let (kind, name) = id
+        .split_once(':')
+        .with_context(|| format!("post chain item {id:?} must be kind:name"))?;
+    anyhow::ensure!(kind == "llm", "test helper only supports llm components");
+    let path = dirs.llm.join(format!("{name}.toml"));
+    let body = std::fs::read_to_string(&path)
+        .with_context(|| format!("read post component {}", path.display()))?;
+    let mut value: toml::Value = toml::from_str(&body)
+        .with_context(|| format!("parse post component {}", path.display()))?;
+    if let Some(override_value) = llm_overrides.get(name) {
+        let override_table = override_value
+            .as_table()
+            .with_context(|| format!("post.llm.{name} override for {id:?} must be a TOML table"))?;
+        merge_table(&mut value, override_table)
+            .with_context(|| format!("merge post.llm.{name} override into {id:?}"))?;
+    }
+    let cfg: ProcessorCfg = value
+        .try_into()
+        .with_context(|| format!("parse post component {}", path.display()))?;
+    match cfg {
+        ProcessorCfg::Llm {
+            format,
+            name,
+            base_url,
+            api_key,
+            model,
+            extra_body,
+            system_prompt,
+            prompt,
+        } => Ok(LlmCleanupConfig {
+            name: id.to_string(),
+            format: match format {
+                ProviderFormatCfg::Openai => ProviderFormat::OpenAi,
+                ProviderFormatCfg::Anthropic => ProviderFormat::Anthropic,
+            },
+            provider_name: name.clone(),
+            base_url: base_url.unwrap_or_else(|| default_base_url(format, &name)),
+            api_key,
+            model,
+            extra_body,
+            system_prompt,
+            prompt,
+        }),
+        ProcessorCfg::Rule { .. } => anyhow::bail!("expected llm config"),
     }
 }
 
@@ -160,6 +245,8 @@ api_key = "sk-test"
 model = "deepseek-chat"
 system_prompt = "clean speech"
 prompt = "app={{app_name}} text={{text}}"
+[extra_body]
+thinking = { type = "disabled" }
 "#,
         )
         .unwrap();
@@ -186,6 +273,7 @@ prompt = "{{text}}"
                 "llm:anthropic_cleanup".to_string(),
             ],
             &dirs,
+            &Table::new(),
         )
         .unwrap();
 
@@ -228,6 +316,7 @@ prompt = "{{text}}"
         let chain = load_components(
             &["rule:filler".to_string(), "llm:deepseek".to_string()],
             &dirs,
+            &Table::new(),
         )
         .unwrap();
 
@@ -235,6 +324,51 @@ prompt = "{{text}}"
         assert_eq!(chain.processors.len(), 2);
         assert_eq!(chain.processors[0].name(), "rule:filler");
         assert_eq!(chain.processors[1].name(), "llm:deepseek");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn applies_llm_component_overrides() {
+        let dir = temp_dir();
+        let llm = dir.join("llm");
+        fs::create_dir_all(&llm).unwrap();
+        fs::write(
+            llm.join("deepseek.toml"),
+            r#"
+type = "llm"
+format = "openai"
+name = "deepseek"
+api_key = "sk-test"
+model = "deepseek-chat"
+prompt = "{{text}}"
+"#,
+        )
+        .unwrap();
+        let mut overrides = Table::new();
+        overrides.insert(
+            "deepseek".to_string(),
+            toml::Value::Table(toml::toml! {
+                model = "deepseek-v4-flash"
+                system_prompt = "terminal"
+                extra_body = { thinking = { type = "disabled" } }
+            }),
+        );
+        let dirs = PostDirs {
+            rules: dir.join("rules"),
+            llm,
+        };
+
+        let cfg = load_llm_config_for_test("llm:deepseek", &dirs, &overrides).unwrap();
+        let chain = load_components(&["llm:deepseek".to_string()], &dirs, &overrides).unwrap();
+
+        assert_eq!(cfg.model, "deepseek-v4-flash");
+        assert_eq!(cfg.system_prompt.as_deref(), Some("terminal"));
+        assert_eq!(
+            cfg.extra_body.get("thinking"),
+            Some(&serde_json::json!({ "type": "disabled" }))
+        );
+        assert_eq!(chain.name, "llm:deepseek");
+        assert_eq!(chain.processors[0].name(), "llm:deepseek");
         let _ = fs::remove_dir_all(dir);
     }
 }

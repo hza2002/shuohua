@@ -77,13 +77,18 @@ fn check_asr_provider() {
             return;
         }
     };
-    match profile.asr.as_str() {
-        "doubao" => match crate::asr::providers::doubao::DoubaoProvider::new() {
+    match profile.asr.provider.as_str() {
+        "doubao" => match crate::asr::providers::doubao::DoubaoProvider::new_with_overrides(Some(
+            &profile.asr.overrides,
+        )) {
             Ok(provider) => {
                 let caps = provider.caps();
                 println!(
-                    "asr.doubao: OK config readable (profile={:?}, hotwords={}, multilingual={})",
-                    profile.name, caps.hotwords, caps.multilingual
+                    "asr.doubao: OK config readable (profile={:?}, hotwords={}, overrides={}, multilingual={})",
+                    profile.name,
+                    caps.hotwords,
+                    profile.asr.overrides.len(),
+                    caps.multilingual
                 );
                 println!("asr.doubao: network/auth handshake not run; no PCM sent");
             }
@@ -97,7 +102,7 @@ fn check_asr_provider() {
         },
         other => {
             println!("asr: ERROR unsupported provider {other:?}");
-            println!("hint: M7 supports app profile asr = \"doubao\"");
+            println!("hint: M7 supports app profile [asr] provider = \"doubao\"");
         }
     }
 }

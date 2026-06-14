@@ -38,6 +38,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tokio_util::sync::CancellationToken;
+use toml::value::Table;
 
 const ENDPOINT: &str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
 
@@ -89,7 +90,7 @@ pub fn config_path() -> PathBuf {
     PathBuf::from(home).join(".config/shuohua/asr/doubao.toml")
 }
 
-pub fn load_config() -> anyhow::Result<DoubaoConfig> {
+pub fn load_config_with_overrides(overrides: Option<&Table>) -> anyhow::Result<DoubaoConfig> {
     let path = config_path();
     let body = std::fs::read_to_string(&path).map_err(|e| {
         anyhow::anyhow!(
@@ -99,8 +100,19 @@ pub fn load_config() -> anyhow::Result<DoubaoConfig> {
             path.display(),
         )
     })?;
-    let mut cfg: DoubaoConfig =
+    let mut value: toml::Value =
         toml::from_str(&body).map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))?;
+    if let Some(overrides) = overrides {
+        let table = value.as_table_mut().ok_or_else(|| {
+            anyhow::anyhow!("parse {}: expected top-level TOML table", path.display())
+        })?;
+        for (key, value) in overrides {
+            table.insert(key.clone(), value.clone());
+        }
+    }
+    let mut cfg: DoubaoConfig = value
+        .try_into()
+        .map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))?;
     // 控制台复制粘贴常带首尾空格，进协议帧前裁掉，避免 401。
     cfg.app_key = cfg.app_key.trim().to_string();
     cfg.access_key = cfg.access_key.trim().to_string();
@@ -122,9 +134,9 @@ pub struct DoubaoProvider {
 }
 
 impl DoubaoProvider {
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new_with_overrides(overrides: Option<&Table>) -> anyhow::Result<Self> {
         Ok(Self {
-            config: load_config()?,
+            config: load_config_with_overrides(overrides)?,
         })
     }
 }

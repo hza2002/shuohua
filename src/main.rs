@@ -302,11 +302,12 @@ async fn run_daemon(
                         };
                         let post_dir = post::config::default_dir();
                         let post_chain = match post::config::load_components(
-                            &profile.post_chain,
+                            &profile.post.chain,
                             &post::config::PostDirs {
                                 rules: post_dir.join("rules"),
                                 llm: post_dir.join("llm"),
                             },
+                            &profile.post.llm,
                         ) {
                             Ok(chain) => chain,
                             Err(e) => {
@@ -315,7 +316,8 @@ async fn run_daemon(
                                 continue;
                             }
                         };
-                        let provider = match build_provider(&profile.asr) {
+                        let provider =
+                            match build_provider(&profile.asr.provider, &profile.asr.overrides) {
                             Ok(provider) => provider,
                             Err(e) => {
                                 eprintln!("[asr] provider init failed: {e:#}");
@@ -328,7 +330,7 @@ async fn run_daemon(
                             auto_paste: cfg.voice.auto_paste,
                             record_audio: cfg.voice.record_audio,
                             stop_delay_ms: cfg.voice.stop_delay_ms,
-                            hotwords: profile.hotwords.clone(),
+                            hotwords: profile.asr.hotwords.clone(),
                             start_app_context,
                             post_chain,
                             post_timeout_ms: cfg.post.timeout_ms,
@@ -349,10 +351,11 @@ async fn run_daemon(
     }
 }
 
-fn build_provider(name: &str) -> Result<Arc<dyn asr::AsrProvider>> {
+fn build_provider(name: &str, overrides: &toml::value::Table) -> Result<Arc<dyn asr::AsrProvider>> {
     match name {
         "doubao" => Ok(Arc::new(
-            asr::providers::doubao::DoubaoProvider::new().context("init doubao provider")?,
+            asr::providers::doubao::DoubaoProvider::new_with_overrides(Some(overrides))
+                .context("init doubao provider")?,
         )),
         other => anyhow::bail!("未知 ASR provider {other:?}。M5 仅支持 \"doubao\""),
     }

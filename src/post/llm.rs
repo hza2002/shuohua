@@ -1,6 +1,6 @@
 use super::{AppContext, PipelineText, PostError, PostProcessor};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderFormat {
@@ -16,7 +16,7 @@ pub struct LlmCleanupConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
-    pub thinking: Option<bool>,
+    pub extra_body: Map<String, Value>,
     pub system_prompt: Option<String>,
     pub prompt: String,
 }
@@ -139,10 +139,8 @@ fn build_openai_request(cfg: &LlmCleanupConfig, prompt: &str) -> Value {
         "model": cfg.model,
         "messages": messages,
     });
-    if let Some(thinking) = cfg.thinking {
-        body["thinking"] = json!({
-            "type": if thinking { "enabled" } else { "disabled" },
-        });
+    for (key, value) in &cfg.extra_body {
+        body[key] = value.clone();
     }
     body
 }
@@ -258,7 +256,7 @@ mod tests {
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: "secret".to_string(),
             model: "gpt-4o-mini".to_string(),
-            thinking: None,
+            extra_body: Map::new(),
             system_prompt: Some("system".to_string()),
             prompt: "{{text}}".to_string(),
         };
@@ -272,7 +270,9 @@ mod tests {
     }
 
     #[test]
-    fn openai_request_can_disable_provider_thinking() {
+    fn openai_request_includes_provider_extra_body() {
+        let mut extra_body = Map::new();
+        extra_body.insert("thinking".to_string(), json!({ "type": "disabled" }));
         let cfg = LlmCleanupConfig {
             name: "clean".to_string(),
             format: ProviderFormat::OpenAi,
@@ -280,7 +280,7 @@ mod tests {
             base_url: "https://api.deepseek.com".to_string(),
             api_key: "secret".to_string(),
             model: "deepseek-v4-flash".to_string(),
-            thinking: Some(false),
+            extra_body,
             system_prompt: None,
             prompt: "{{text}}".to_string(),
         };

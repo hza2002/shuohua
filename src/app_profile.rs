@@ -2,15 +2,30 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use toml::value::Table;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppProfile {
     pub name: String,
-    pub asr: String,
+    pub asr: AppAsrProfile,
+    pub post: AppPostProfile,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AppAsrProfile {
+    pub provider: String,
     #[serde(default)]
     pub hotwords: Vec<String>,
+    #[serde(flatten)]
+    pub overrides: Table,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AppPostProfile {
     #[serde(default)]
-    pub post_chain: Vec<String>,
+    pub chain: Vec<String>,
+    #[serde(default)]
+    pub llm: Table,
 }
 
 pub fn default_dir() -> PathBuf {
@@ -56,9 +71,12 @@ mod tests {
             dir.join("default.toml"),
             r#"
 name = "default"
-asr = "doubao"
+[asr]
+provider = "doubao"
 hotwords = ["Rust"]
-post_chain = ["rule:filler", "llm:deepseek"]
+
+[post]
+chain = ["rule:filler", "llm:deepseek"]
 "#,
         )
         .unwrap();
@@ -66,9 +84,9 @@ post_chain = ["rule:filler", "llm:deepseek"]
         let profile = load_for_app(&dir, Some("com.example.Missing")).unwrap();
 
         assert_eq!(profile.name, "default");
-        assert_eq!(profile.asr, "doubao");
-        assert_eq!(profile.hotwords, vec!["Rust"]);
-        assert_eq!(profile.post_chain, vec!["rule:filler", "llm:deepseek"]);
+        assert_eq!(profile.asr.provider, "doubao");
+        assert_eq!(profile.asr.hotwords, vec!["Rust"]);
+        assert_eq!(profile.post.chain, vec!["rule:filler", "llm:deepseek"]);
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -79,8 +97,11 @@ post_chain = ["rule:filler", "llm:deepseek"]
             dir.join("default.toml"),
             r#"
 name = "default"
-asr = "doubao"
-post_chain = ["rule:filler"]
+[asr]
+provider = "doubao"
+
+[post]
+chain = ["rule:filler"]
 "#,
         )
         .unwrap();
@@ -88,8 +109,14 @@ post_chain = ["rule:filler"]
             dir.join("com.example.App.toml"),
             r#"
 name = "app"
-asr = "doubao"
-post_chain = ["llm:deepseek"]
+[asr]
+provider = "doubao"
+
+[post]
+chain = ["llm:deepseek"]
+
+[post.llm.deepseek]
+system_prompt = "app prompt"
 "#,
         )
         .unwrap();
@@ -97,7 +124,17 @@ post_chain = ["llm:deepseek"]
         let profile = load_for_app(&dir, Some("com.example.App")).unwrap();
 
         assert_eq!(profile.name, "app");
-        assert_eq!(profile.post_chain, vec!["llm:deepseek"]);
+        assert_eq!(profile.post.chain, vec!["llm:deepseek"]);
+        assert_eq!(
+            profile
+                .post
+                .llm
+                .get("deepseek")
+                .unwrap()
+                .get("system_prompt")
+                .and_then(toml::Value::as_str),
+            Some("app prompt")
+        );
         let _ = fs::remove_dir_all(dir);
     }
 }

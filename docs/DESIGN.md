@@ -327,9 +327,9 @@ pub enum AsrError {
 
 ```
 ~/.config/shuohua/
-├── config.toml              # 全局：hotkey / voice / apps/post 目录指路
+├── config.toml              # 全局：hotkey / voice / post timeout
 ├── apps/
-│   ├── default.toml         # 默认 app profile：选择 ASR + post_chain
+│   ├── default.toml         # 默认 app profile：选择 ASR + post chain + 覆盖项
 │   └── com.mitchellh.ghostty.toml
 ├── post/
 │   ├── rules/
@@ -356,13 +356,17 @@ record_audio  = false                        # ← 见 §7
 timeout_ms = 2000
 ```
 
-`apps/default.toml`（app profile，负责组合；app 相关热词优先放这里）：
+`apps/default.toml`（app profile，负责组合；app 相关热词和局部覆盖优先放这里）：
 
 ```toml
 name = "Default"
-asr = "doubao"                               # → 加载 asr/doubao.toml
+
+[asr]
+provider = "doubao"                         # → 加载 asr/doubao.toml
 hotwords = ["Rust", "tokio", "Kubernetes"]   # provider 自由解释；不支持的 provider 静默忽略
-post_chain = ["rule:filler", "llm:deepseek"]
+
+[post]
+chain = ["rule:filler", "llm:deepseek"]
 ```
 
 `asr/doubao.toml`（provider 私有，voice 模块永远不见）：
@@ -371,10 +375,12 @@ post_chain = ["rule:filler", "llm:deepseek"]
 app_key     = ""
 access_key  = ""
 resource_id = "volc.bigasr.sauc.duration"
-language    = "zh-CN"
+language    = "zh-CN"         # 可省略；省略时自动中英混合
 enable_itn  = true
 enable_punc = true
-enable_ddc  = false
+enable_ddc  = true
+stream_mode = 2               # 可选实验字段；不确定时注释掉
+ai_vad      = true            # 可选实验字段；不确定时注释掉
 ```
 
 `asr/whisper_cpp.toml`（未来 M8）：
@@ -388,7 +394,7 @@ initial_prompt = "以下文本包含 Rust、tokio、Kubernetes 等技术术语" 
 
 provider 之间**完全不共享 schema**。每个 provider impl 自己 deserialize 自家文件。hotwords 由 app profile 选择后塞进 `SessionCtx`。
 
-配置分层原则：ASR / post component 文件描述可复用能力和默认参数；app profile 描述“这个 App 选哪套 ASR、哪些 hotwords、跑哪条 post chain”。当某个 prompt 或 hotwords 明显只服务一个 App 时，归属 app profile；当它代表一个可复用处理器能力时，归属 `post/llm/*.toml` 或 `post/rules/*.toml`。M7 先用多个 component 文件表达 app 差异，后续如需要再在 app profile 增加局部 override，避免把 terminal 场景误建模成 DeepSeek provider 本身。
+配置分层原则：ASR / post component 文件描述可复用能力和默认参数；app profile 描述“这个 App 选哪套 ASR、哪些 hotwords、跑哪条 post chain，以及哪些 provider 字段要浅覆盖”。当某个 prompt、hotwords 或 ASR 旋钮明显只服务一个 App 时，归属 app profile override；当它代表一个可复用默认能力时，归属 `asr/*.toml`、`post/llm/*.toml` 或 `post/rules/*.toml`。数组/字符串/表字段都是写了就替换，不做深层智能合并。
 
 ### 2.9 客户端 VAD + 多段 session（"思考不计费"机制）
 
@@ -539,7 +545,7 @@ pub struct PipelineStep {
     └── scripts/                         # 预留；M7 不执行用户脚本
 ```
 
-匹配逻辑：toggle ON 时取一次 `frontmost_bundle_id`，去 `apps/<bundle_id>.toml` 找；找到就用，找不到 fall back 到 `apps/default.toml`。该 profile 决定本次录音的 ASR provider、hotwords 和 post_chain。toggle OFF 时只再取一次 AppContext 作为 prompt 变量，**不重新选择 profile**，避免录音中切 App 导致 ASR/post 配置中途变化。
+匹配逻辑：toggle ON 时取一次 `frontmost_bundle_id`，去 `apps/<bundle_id>.toml` 找；找到就用，找不到 fall back 到 `apps/default.toml`。该 profile 决定本次录音的 ASR provider、hotwords、provider 覆盖项和 post chain。toggle OFF 时只再取一次 AppContext 作为 prompt 变量，**不重新选择 profile**，避免录音中切 App 导致 ASR/post 配置中途变化。
 
 目录固定：
 
@@ -558,9 +564,17 @@ app profile 长这样：
 ```toml
 # apps/com.mitchellh.ghostty.toml
 name = "Ghostty"
-asr = "doubao"
-hotwords = ["Rust", "tokio", "Kubernetes"]
-post_chain = ["rule:filler", "llm:deepseek_ghostty"]
+
+[asr]
+provider = "doubao"
+hotwords = ["Rust", "tokio", "Kubernetes", "cargo", "git", "zsh"]
+
+[post]
+chain = ["rule:filler", "llm:deepseek"]
+
+[post.llm.deepseek]
+model = "deepseek-v4-flash"
+system_prompt = "你是终端语音输入清洗器，只输出清洗后的文本。"
 ```
 
 Post component 长这样：
@@ -572,21 +586,23 @@ patterns = ["嗯", "啊", "呃", "那个", "就是"]
 ```
 
 ```toml
-# post/llm/deepseek_ghostty.toml
+# post/llm/deepseek.toml
 type        = "llm"
 format      = "openai"             # anthropic | openai
 name        = "deepseek"           # provider display/default routing name
 base_url    = "https://api.deepseek.com"
 model       = "deepseek-chat"
 api_key     = "sk-..."
-thinking    = false                 # OpenAI-compatible 可选；DeepSeek 等 provider 可关闭思考模式
-system_prompt = "你是终端语音输入清洗器，只输出清洗后的文本。"
+system_prompt = "你是语音输入文本清洗器，只输出清洗后的文本。"
 prompt = """
 当前 App: {{app_name}} ({{bundle_id}})
 原始文本: {{text}}
-清洗成适合终端输入的文本。
+清洗语音识别文本。
 只输出清洗后的文本，不要解释。
 """
+
+[extra_body]                         # provider-specific OpenAI-compatible 请求体扩展
+thinking = { type = "disabled" }     # DeepSeek 专属；不是 OpenAI 通用默认字段
 ```
 
 #### 内置 processors（v1）
@@ -764,8 +780,8 @@ reload.rs
 | `ui.language` | 立即（重译 state label） | `spawn_i18n` → `i18n::init` + `Relabel` | ✓ |
 | `[hotkey].trigger` | 立即（下次按键判定） | `spawn_hotkey` → mpsc<Combo> → `tokio::select!` 换 Tracker + Suppressor | ✓ |
 | `[voice].*` 全部 | 下次起 session | daemon 主循环 `cfg_rx.borrow()` 取最新快照 | ✓ |
-| `apps/*.toml` 的 `asr` / `hotwords` / `post_chain` | 下次起 session | daemon 主循环按 toggle ON 的 App profile 选择 | ✓ |
-| `post/rules/*.toml` / `post/llm/*.toml` | 下次起 session | app profile 的 `post_chain` 引用组件 | ✓ |
+| `apps/*.toml` 的 `[asr]` / `[post]` / override | 下次起 session | daemon 主循环按 toggle ON 的 App profile 选择 | ✓ |
+| `post/rules/*.toml` / `post/llm/*.toml` | 下次起 session | app profile 的 `[post].chain` 引用组件 | ✓ |
 | 手动触发 `{"op":"reload_config"}` | 立即 | 走 UDS server | ✓ |
 
 #### Hotkey trigger 特别说明

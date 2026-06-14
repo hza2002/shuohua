@@ -16,12 +16,17 @@ use regex::Regex;
 use super::{AppContext, PipelineText, PostError, PostProcessor};
 
 pub struct RuleBasedFiller {
+    name: String,
     pattern: Regex,
 }
 
 impl RuleBasedFiller {
     /// 用任意 filler 词列表构造。词会被 regex escape 后做 alternation。
     pub fn new(patterns: &[&str]) -> Self {
+        Self::with_name("filler", patterns)
+    }
+
+    pub fn with_name(name: impl Into<String>, patterns: &[&str]) -> Self {
         let alt = patterns
             .iter()
             .map(|p| regex::escape(p))
@@ -29,7 +34,10 @@ impl RuleBasedFiller {
             .join("|");
         // alt 来自 hardcoded 词列表，escape 后保证合法 → expect 安全
         let pattern = Regex::new(&alt).expect("filler patterns regex");
-        Self { pattern }
+        Self {
+            name: name.into(),
+            pattern,
+        }
     }
 
     /// 默认 5 词集合（DESIGN §2.10 示例）：嗯 啊 呃 那个 就是。
@@ -41,7 +49,7 @@ impl RuleBasedFiller {
 #[async_trait]
 impl PostProcessor for RuleBasedFiller {
     fn name(&self) -> &str {
-        "filler"
+        &self.name
     }
 
     async fn process(

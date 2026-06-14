@@ -19,10 +19,9 @@
 
 use std::time::{Duration, Instant};
 
-use crate::app_context_darwin;
 use crate::asr::types::{AsrEvent, AsrProvider, AsrSession, LanguageMode, SessionCtx};
 use crate::overlay::{OverlayCmd, OverlayHandle, OverlayState, TextKind, ToastLevel};
-use crate::post::{self, PipelineStepStatus, PipelineText, RuleBasedFiller};
+use crate::post::{self, PipelineStepStatus, PipelineText};
 use crate::state::history::{
     self, AsrHistory, AsrSessionHistory, HistoryError, HistoryRecord, HistoryStatus,
     PipelineStepHistory, PipelineStepStatus as HistoryPipelineStepStatus,
@@ -38,6 +37,8 @@ pub struct SessionParams {
     pub record_audio: bool,
     pub stop_delay_ms: u32,
     pub hotwords: Vec<String>,
+    pub post_dir: PathBuf,
+    pub post_timeout_ms: u64,
     pub overlay: Option<OverlayHandle>,
     pub state: StateStore,
 }
@@ -51,7 +52,8 @@ pub async fn run_recording(
     let recording_started_at = time::OffsetDateTime::now_utc();
     let recording_started_instant = Instant::now();
     crate::debug_println!("[shuo] ▶ recording id={recording_id}");
-    let mut app_context = app_context_darwin::frontmost_app();
+    let mut app_context = post::app_context::AppContext::default();
+    let mut post_chain: Option<post::config::PostChain> = None;
     params
         .state
         .set_recording(recording_id.clone(), recording_started_at);
@@ -263,7 +265,29 @@ pub async fn run_recording(
             break;
         }
         if stop_requested {
-            app_context = app_context_darwin::frontmost_app();
+            app_context = post::app_context::frontmost_app();
+            let loaded_chain = post::config::load_for_app(
+                &params.post_dir,
+                &app_context,
+                Duration::from_millis(params.post_timeout_ms),
+            )
+            .map_err(|e| {
+                eprintln!("[post] load chain failed, fallback to filler: {e:#}");
+                e
+            })
+            .unwrap_or_else(|e| {
+                overlay_send(
+                    &params,
+                    OverlayCmd::Toast {
+                        text: format!("post config failed, using filler: {e:#}"),
+                        level: ToastLevel::Warn,
+                        ttl_ms: 1500,
+                    },
+                );
+                post::config::PostChain::builtin_filler()
+            });
+            let chain_summary = loaded_chain.name.clone();
+            post_chain = Some(loaded_chain);
             params
                 .state
                 .app(app_context.bundle_id.clone(), app_context.app_name.clone());
@@ -272,7 +296,7 @@ pub async fn run_recording(
                 OverlayCmd::SetApp {
                     bundle_id: app_context.bundle_id.clone(),
                     app_name: app_context.app_name.clone(),
-                    chain_summary: "filler".to_string(),
+                    chain_summary,
                 },
             );
             overlay_send(
@@ -314,7 +338,6 @@ pub async fn run_recording(
         .collect::<String>();
     if cancel_requested {
         crate::debug_println!("[shuo] ✖ recording canceled");
-        app_context = app_context_darwin::frontmost_app();
         params.state.set_idle();
         overlay_send(
             &params,
@@ -341,10 +364,15 @@ pub async fn run_recording(
         }
         return;
     }
-    let (pipeline, status, error) =
-        dispatch_with_filler(&pending_segments, params.auto_paste, &app_context)
-            .await
-            .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)));
+    let (pipeline, status, error) = dispatch_with_post_chain(
+        &pending_segments,
+        params.auto_paste,
+        &app_context,
+        &params,
+        post_chain.unwrap_or_else(post::config::PostChain::builtin_filler),
+    )
+    .await
+    .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)));
     if let Some(last_text) = pipeline.iter().rev().find_map(|step| step.text.clone()) {
         overlay_send(
             &params,
@@ -539,10 +567,12 @@ async fn cancel_session(
     }
 }
 
-async fn dispatch_with_filler(
+async fn dispatch_with_post_chain(
     segments: &[SegmentCapture],
     auto_paste: bool,
     app_context: &post::AppContext,
+    params: &SessionParams,
+    chain: post::config::PostChain,
 ) -> Result<
     (
         Vec<PipelineStepHistory>,
@@ -557,10 +587,39 @@ async fn dispatch_with_filler(
         crate::debug_println!("[shuo] (空识别结果，跳过 dispatch)");
         return Ok((Vec::new(), HistoryStatus::Canceled, None));
     }
-    let chain: Vec<Box<dyn post::PostProcessor>> =
-        vec![Box::new(RuleBasedFiller::default_patterns())];
     let initial = PipelineText::new(raw_text, segment_texts);
-    let (out, steps) = post::run_chain(&chain, initial, app_context, Duration::from_secs(2)).await;
+    overlay_send(
+        params,
+        OverlayCmd::SetState {
+            state: OverlayState::Thinking,
+        },
+    );
+    let (out, steps) = post::run_chain(
+        &chain.processors,
+        initial,
+        app_context,
+        Duration::from_millis(params.post_timeout_ms),
+    )
+    .await;
+    for step in &steps {
+        match step.status {
+            PipelineStepStatus::Error | PipelineStepStatus::Timeout => {
+                let text = match step.status {
+                    PipelineStepStatus::Timeout => format!("{} timed out, skipped", step.name),
+                    _ => format!("{} failed, skipped", step.name),
+                };
+                overlay_send(
+                    params,
+                    OverlayCmd::Toast {
+                        text,
+                        level: ToastLevel::Warn,
+                        ttl_ms: 1500,
+                    },
+                );
+            }
+            PipelineStepStatus::Ok | PipelineStepStatus::Skipped => {}
+        }
+    }
     crate::debug_println!("[shuo] ✓ 最终: {}", out.text);
     let pipeline = steps.into_iter().map(PipelineStepHistory::from).collect();
     if let Err(e) = dispatch::dispatch(&out.text, auto_paste) {

@@ -541,10 +541,14 @@ collapse_repeats = true
 
 [processors.llm_casual]
 type        = "llm"
-provider    = "anthropic"
+format      = "anthropic"          # anthropic | openai
+name        = "anthropic"          # provider display/default routing name
 model       = "claude-haiku-4-5"
-api_key_env = "ANTHROPIC_API_KEY"
+api_key     = "sk-ant-..."
+system_prompt = "你是语音输入清洗器，只输出清洗后的文本。"
 prompt = """
+当前 App: {{app_name}} ({{bundle_id}})
+原始文本: {{text}}
 清洗成 Slack 聊天风格的中文/英文混合文本。保留口语化。
 只输出清洗后的文本，不要解释。
 """
@@ -935,7 +939,7 @@ shuohua/
 ## 7. 安全与隐私
 
 - **配置文件权限**：首次写入 `~/.config/shuohua/config.toml` 时强制 `chmod 0600`。其他 toml 不强制（用户自己负责）。
-- **API key 存储**：明文 TOML 是 v1 选择（仓库放模板，用户填）。未来可选 `keychain://` 前缀走 macOS Keychain，但 v1 不做。LLM provider 可写 `api_key_env = "ANTHROPIC_API_KEY"` 走环境变量。
+- **API key 存储**：明文 TOML 是 v1 选择（仓库放模板，用户填）。未来可选 `keychain://` 前缀走 macOS Keychain，但 v1 不做。LLM post 配置用 `api_key = "..."`，不写入 history。
 - **日志**：见 §2.13。release stderr 只兜底错误 / 警告 / 启动；debug build 才打 partial / segment 等识别文本细节。launchd 日志文件不含识别内容。
 - **history.jsonl 明文**：是设计选择（用户唯一数据源），用户应当知道并定期清理。提供 `shuo doctor` 提示"history 已 X MB / Y 条"，但 v1 不自动清理。
 - **音频留存可选**：`voice.record_audio = false` 是默认。开启时写 `~/.local/state/shuohua/audio/<recording_id>.wav`（跟 history.jsonl 同一根目录，state dir 语义 = "用户主动留档，不允许被系统 cache cleanup 清掉"；不用 `/tmp`/`~/.cache`）。文件名 = 该次 recording 的 ULID，跟 history.jsonl 行天然 join。多 session 情况（M2.5+）下整次录音仍是一个 wav（含静音停顿），段边界由 `history.asr.sessions[].started_at/ended_at` 切分。关闭路径完全跳过 wav 写入逻辑，零开销，零额外内存分配。

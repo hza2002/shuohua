@@ -66,6 +66,7 @@ objc2-foundation = { version = "0.3", features = [
 ] }
 objc2-quartz-core = { version = "0.3", features = ["CAAnimation", "CALayer", "CAMediaTiming", "objc2-core-graphics"] }
 regex           = "1"
+reqwest         = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 notify          = "8"
 ratatui         = "0.30"
 crossterm       = "0.29"

@@ -18,6 +18,8 @@ pub struct Config {
     pub ui: UiCfg,
     #[serde(default)]
     pub overlay: OverlayCfg,
+    #[serde(default)]
+    pub post: PostCfg,
     pub asr: AsrCfg,
 }
 
@@ -52,6 +54,31 @@ fn default_stop_delay_ms() -> u32 {
 }
 fn default_auto_paste() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PostCfg {
+    #[serde(default = "default_post_dir")]
+    pub dir: PathBuf,
+    #[serde(default = "default_post_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+impl Default for PostCfg {
+    fn default() -> Self {
+        Self {
+            dir: default_post_dir(),
+            timeout_ms: default_post_timeout_ms(),
+        }
+    }
+}
+
+fn default_post_dir() -> PathBuf {
+    crate::post::config::default_dir()
+}
+
+fn default_post_timeout_ms() -> u64 {
+    2000
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -217,6 +244,8 @@ provider = "doubao"
         assert!(!cfg.voice.record_audio);
         assert!(cfg.voice.auto_paste);
         assert_eq!(cfg.ui.language, "auto");
+        assert_eq!(cfg.post.timeout_ms, 2000);
+        assert!(cfg.post.dir.ends_with("shuohua/post"));
         assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
         assert_eq!(cfg.overlay.glass_variant, 19);
         assert_eq!(cfg.overlay.glass_style, GlassStyle::Clear);
@@ -324,5 +353,23 @@ provider = "doubao"
         assert_eq!(cfg.overlay.subdued, 1);
         assert_eq!(cfg.overlay.max_text_lines, 6);
         assert_eq!(cfg.overlay.thinking_delay_ms, 900);
+    }
+
+    #[test]
+    fn post_is_configurable() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+
+[post]
+dir = "/tmp/shuohua-post"
+timeout_ms = 3500
+
+[asr]
+provider = "doubao"
+"#;
+        let cfg = parse(body).unwrap();
+        assert_eq!(cfg.post.dir, PathBuf::from("/tmp/shuohua-post"));
+        assert_eq!(cfg.post.timeout_ms, 3500);
     }
 }

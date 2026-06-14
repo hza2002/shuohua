@@ -11,7 +11,10 @@
 //!   的 text。最差产出 == raw（不会丢内容）。
 //! - M2.5 不接 toast / step_tx；M3 加 overlay 时再扩参数。失败/超时走 eprintln!。
 
+pub mod app_context;
+pub mod config;
 pub mod filler;
+pub mod llm;
 
 use async_trait::async_trait;
 use std::time::{Duration, Instant};

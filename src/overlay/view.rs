@@ -392,18 +392,6 @@ impl OverlayView {
     }
 
     fn effective_state(&self) -> (OverlayState, String, u32) {
-        let thinking_delay = Duration::from_millis(self.cfg.thinking_delay_ms);
-        if self.model.state == OverlayState::Recording
-            && self
-                .last_text_update
-                .is_some_and(|last| last.elapsed() >= thinking_delay)
-        {
-            return (
-                OverlayState::Thinking,
-                crate::t!(OverlayState::Thinking.label_key()),
-                OverlayState::Thinking.color_rgb(),
-            );
-        }
         (
             self.model.state,
             self.model.state_label.clone(),

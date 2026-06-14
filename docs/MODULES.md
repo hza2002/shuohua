@@ -2,7 +2,7 @@
 
 `src/` 只包含已实现的模块。未实现的模块按里程碑列在下方，路径细节看 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)，里程碑定义看 [REQUIREMENTS.md §6](../REQUIREMENTS.md#6-里程碑)。
 
-## 已实现（M6 完）
+## 已实现（M7 完）
 
 ```
 src/
@@ -35,11 +35,14 @@ src/
 │       └── doubao.rs                    # bigmodel_async WS + 二进制帧 + Partial/Segment 映射 + DriftProbe (debug-only)
 ├── post/
 │   ├── mod.rs                           # PostProcessor trait + PipelineText + run_chain
-│   └── filler.rs                        # RuleBasedFiller
+│   ├── app_context.rs                   # post 层 AppContext 入口；macOS 复用 app_context_darwin
+│   ├── config.rs                        # per-app/default post 链配置加载；缺配置 fallback 内置 filler
+│   ├── filler.rs                        # RuleBasedFiller
+│   └── llm.rs                           # LlmCleanup；OpenAI-compatible / Anthropic native 一次性调用
 ├── voice/
 │   ├── mod.rs
 │   ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 可选 wav 留存
-│   ├── finish.rs                        # 一次录音的生命周期 + stop_delay drain + filler pipeline + dispatch
+│   ├── finish.rs                        # 一次录音的生命周期 + stop_delay drain + post pipeline + dispatch
 │   └── dispatch.rs                      # 剪贴板 + 可选 Cmd+V
 ├── state/
 │   ├── mod.rs                           # StateStore + 原子 subscribe_with_snapshot + StateEvent broadcast
@@ -62,13 +65,12 @@ src/
     └── mod.rs                            # assets/i18n/*.toml 加载 + 静态 LANG 切换
 ```
 
-数据流：键盘事件 → CGEventTap 回调（Default 模式，可吞）→ 解码成 4 字节 `RawEvent`（含 `EventKind` + `keycode` + 8-bit `ModMask`）→ pipe → mpsc → `Tracker::on_event(ev, Instant::now())` → tokio main loop。回调里同步问 `Mutex<Suppressor>` 决定 `CallbackResult::Drop` / `Keep`，按 trigger 类型分发：纯键 / combo 吞 key 部分的 down + 配对 up（§5 不变量 8，即使 reload 中途换 trigger 也安全）；modifier-only trigger 不吞任何事件（modifier 太常用，吞了破坏太多）。`Tracker` 内部分三个 sub-machine：纯键 / combo 走"KeyDown 时 mods 精确匹配 + auto-repeat 去抖"；modifier-only 走"FlagsChanged 检测 clean tap"（500ms hold 阈值 + 中间无普通键 + 中间无额外 modifier）；`:double` 后缀在 `register_tap` 用 400ms 窗口判定。第一次 trigger 命中 = spawn `finish::run_recording` 任务：cpal stream → `DoubaoSession.send_pcm` 流式推、`AsrEvent::Segment` 累积、`StateStore` 同步状态、`OverlayHandle` 推 UI 命令、UDS server fanout 给 TUI。第二次命中 = oneshot 通知 task 收尾：drain `stop_delay_ms` 尾音 → send `is_last` → 等 Done（5s 超时）→ segments 直接 concat（provider 自带分隔） → filler pipeline → 剪贴板 + Cmd+V → `history.jsonl` 落一行 → `history_appended` 推给 TUI。配置热重载：notify watcher 监听 `~/.config/shuohua/` → 通过 `watch::Sender` 广播给 overlay / i18n / hotkey 三个 subscriber；hotkey subscriber 收到新 `Combo` 时同步调 `Tracker::set_trigger` 和 `Suppressor::set_trigger`；UDS `reload_config` 复用同一个 parse + broadcast 入口；`asr.provider` 在下一次录音开始时重新构建 provider 生效。
+数据流：键盘事件 → CGEventTap 回调（Default 模式，可吞）→ 解码成 4 字节 `RawEvent`（含 `EventKind` + `keycode` + 8-bit `ModMask`）→ pipe → mpsc → `Tracker::on_event(ev, Instant::now())` → tokio main loop。回调里同步问 `Mutex<Suppressor>` 决定 `CallbackResult::Drop` / `Keep`，按 trigger 类型分发：纯键 / combo 吞 key 部分的 down + 配对 up（§5 不变量 8，即使 reload 中途换 trigger 也安全）；modifier-only trigger 不吞任何事件（modifier 太常用，吞了破坏太多）。`Tracker` 内部分三个 sub-machine：纯键 / combo 走"KeyDown 时 mods 精确匹配 + auto-repeat 去抖"；modifier-only 走"FlagsChanged 检测 clean tap"（500ms hold 阈值 + 中间无普通键 + 中间无额外 modifier）；`:double` 后缀在 `register_tap` 用 400ms 窗口判定。第一次 trigger 命中 = spawn `finish::run_recording` 任务：cpal stream → `DoubaoSession.send_pcm` 流式推、`AsrEvent::Segment` 累积、`StateStore` 同步状态、`OverlayHandle` 推 UI 命令、UDS server fanout 给 TUI。第二次命中 = oneshot 通知 task 收尾：toggle OFF 瞬间取一次 `frontmost_app`，按 `post/<bundle_id>.toml` / `post/default.toml` / 内置 filler 选定同一条 post chain；drain `stop_delay_ms` 尾音 → send `is_last` → 等 Done（5s 超时）→ segments 直接 concat（provider 自带分隔） → post chain（执行时 overlay 显示 Thinking；单步失败/超时跳过 + toast + pipeline trace）→ 剪贴板 + Cmd+V → `history.jsonl` 落一行 → `history_appended` 推给 TUI。配置热重载：notify watcher 监听 `~/.config/shuohua/` → 通过 `watch::Sender` 广播给 overlay / i18n / hotkey 三个 subscriber；hotkey subscriber 收到新 `Combo` 时同步调 `Tracker::set_trigger` 和 `Suppressor::set_trigger`；UDS `reload_config` 复用同一个 parse + broadcast 入口；`asr.provider` 在下一次录音开始时重新构建 provider 生效；`post.dir` / `post.timeout_ms` 同样在下一次录音开始时生效，post 链文件在 toggle OFF 时读取一次。
 
 ## 未实现（按里程碑）
 
 | M | 新增路径 | 主要新依赖 |
 |---|---|---|
-| **M7** | `post/{llm,app_context}.rs` | reqwest |
 | **M8** | `asr/providers/whisper_cpp.rs` | whisper-rs (feature flag) |
 | **M9** | `asr/providers/apple_speech.rs` | objc2-speech |
 

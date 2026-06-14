@@ -304,6 +304,8 @@ async fn run_daemon(
                             record_audio: cfg.voice.record_audio,
                             stop_delay_ms: cfg.voice.stop_delay_ms,
                             hotwords: cfg.asr.hotwords.clone(),
+                            post_dir: cfg.post.dir.clone(),
+                            post_timeout_ms: cfg.post.timeout_ms,
                             overlay: Some(overlay.clone()),
                             state: state_store.clone(),
                         };

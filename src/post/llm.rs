@@ -16,6 +16,7 @@ pub struct LlmCleanupConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    pub thinking: Option<bool>,
     pub system_prompt: Option<String>,
     pub prompt: String,
 }
@@ -134,10 +135,16 @@ fn build_openai_request(cfg: &LlmCleanupConfig, prompt: &str) -> Value {
         messages.push(json!({ "role": "system", "content": system }));
     }
     messages.push(json!({ "role": "user", "content": prompt }));
-    json!({
+    let mut body = json!({
         "model": cfg.model,
         "messages": messages,
-    })
+    });
+    if let Some(thinking) = cfg.thinking {
+        body["thinking"] = json!({
+            "type": if thinking { "enabled" } else { "disabled" },
+        });
+    }
+    body
 }
 
 fn build_anthropic_request(cfg: &LlmCleanupConfig, prompt: &str) -> Value {
@@ -251,6 +258,7 @@ mod tests {
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: "secret".to_string(),
             model: "gpt-4o-mini".to_string(),
+            thinking: None,
             system_prompt: Some("system".to_string()),
             prompt: "{{text}}".to_string(),
         };
@@ -260,6 +268,26 @@ mod tests {
         assert_eq!(body["model"], "gpt-4o-mini");
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(body["messages"][1]["content"], "hello");
+        assert!(body.get("api_key").is_none());
+    }
+
+    #[test]
+    fn openai_request_can_disable_provider_thinking() {
+        let cfg = LlmCleanupConfig {
+            name: "clean".to_string(),
+            format: ProviderFormat::OpenAi,
+            provider_name: "deepseek".to_string(),
+            base_url: "https://api.deepseek.com".to_string(),
+            api_key: "secret".to_string(),
+            model: "deepseek-v4-flash".to_string(),
+            thinking: Some(false),
+            system_prompt: None,
+            prompt: "{{text}}".to_string(),
+        };
+
+        let body = build_openai_request(&cfg, "hello");
+
+        assert_eq!(body["thinking"], json!({ "type": "disabled" }));
         assert!(body.get("api_key").is_none());
     }
 }

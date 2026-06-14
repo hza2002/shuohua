@@ -66,6 +66,8 @@ enum ProcessorCfg {
         api_key: String,
         model: String,
         #[serde(default)]
+        thinking: Option<bool>,
+        #[serde(default)]
         system_prompt: Option<String>,
         prompt: String,
     },
@@ -95,6 +97,7 @@ impl ProcessorCfg {
                 base_url,
                 api_key,
                 model,
+                thinking,
                 system_prompt,
                 prompt,
             } => Ok(Box::new(LlmCleanup::new(LlmCleanupConfig {
@@ -109,6 +112,7 @@ impl ProcessorCfg {
                     .unwrap_or_else(|| default_base_url(*format, name)),
                 api_key: api_key.clone(),
                 model: model.clone(),
+                thinking: *thinking,
                 system_prompt: system_prompt.clone(),
                 prompt: prompt.clone(),
             }))),

@@ -335,7 +335,7 @@ pub enum AsrError {
 │   ├── rules/
 │   │   └── filler.toml      # 后处理组件定义：规则
 │   └── llm/
-│       └── deepseek.toml    # 后处理组件定义：LLM provider/model/prompt
+│       └── deepseek.toml    # 后处理组件定义：LLM provider/model/prompt 默认值
 └── asr/
     ├── doubao.toml          # ← 文件名 == provider 名
     ├── whisper_cpp.toml     # 未来 M8
@@ -356,7 +356,7 @@ record_audio  = false                        # ← 见 §7
 timeout_ms = 2000
 ```
 
-`apps/default.toml`（app profile，负责组合）：
+`apps/default.toml`（app profile，负责组合；app 相关热词优先放这里）：
 
 ```toml
 name = "Default"
@@ -387,6 +387,8 @@ initial_prompt = "以下文本包含 Rust、tokio、Kubernetes 等技术术语" 
 ```
 
 provider 之间**完全不共享 schema**。每个 provider impl 自己 deserialize 自家文件。hotwords 由 app profile 选择后塞进 `SessionCtx`。
+
+配置分层原则：ASR / post component 文件描述可复用能力和默认参数；app profile 描述“这个 App 选哪套 ASR、哪些 hotwords、跑哪条 post chain”。当某个 prompt 或 hotwords 明显只服务一个 App 时，归属 app profile；当它代表一个可复用处理器能力时，归属 `post/llm/*.toml` 或 `post/rules/*.toml`。M7 先用多个 component 文件表达 app 差异，后续如需要再在 app profile 增加局部 override，避免把 terminal 场景误建模成 DeepSeek provider 本身。
 
 ### 2.9 客户端 VAD + 多段 session（"思考不计费"机制）
 
@@ -577,6 +579,7 @@ name        = "deepseek"           # provider display/default routing name
 base_url    = "https://api.deepseek.com"
 model       = "deepseek-chat"
 api_key     = "sk-..."
+thinking    = false                 # OpenAI-compatible 可选；DeepSeek 等 provider 可关闭思考模式
 system_prompt = "你是终端语音输入清洗器，只输出清洗后的文本。"
 prompt = """
 当前 App: {{app_name}} ({{bundle_id}})

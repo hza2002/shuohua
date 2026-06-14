@@ -20,8 +20,6 @@ pub struct Config {
     pub overlay: OverlayCfg,
     #[serde(default)]
     pub post: PostCfg,
-    #[serde(default)]
-    pub apps: AppsCfg,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -59,8 +57,6 @@ fn default_auto_paste() -> bool {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PostCfg {
-    #[serde(default = "default_post_dir")]
-    pub dir: PathBuf,
     #[serde(default = "default_post_timeout_ms")]
     pub timeout_ms: u64,
 }
@@ -68,36 +64,13 @@ pub struct PostCfg {
 impl Default for PostCfg {
     fn default() -> Self {
         Self {
-            dir: default_post_dir(),
             timeout_ms: default_post_timeout_ms(),
         }
     }
 }
 
-fn default_post_dir() -> PathBuf {
-    crate::post::config::default_dir()
-}
-
 fn default_post_timeout_ms() -> u64 {
     2000
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct AppsCfg {
-    #[serde(default = "default_apps_dir")]
-    pub dir: PathBuf,
-}
-
-impl Default for AppsCfg {
-    fn default() -> Self {
-        Self {
-            dir: default_apps_dir(),
-        }
-    }
-}
-
-fn default_apps_dir() -> PathBuf {
-    crate::app_profile::default_dir()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -253,8 +226,6 @@ trigger = "f16"
         assert!(cfg.voice.auto_paste);
         assert_eq!(cfg.ui.language, "auto");
         assert_eq!(cfg.post.timeout_ms, 2000);
-        assert!(cfg.post.dir.ends_with("shuohua/post"));
-        assert!(cfg.apps.dir.ends_with("shuohua/apps"));
         assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
         assert_eq!(cfg.overlay.glass_variant, 19);
         assert_eq!(cfg.overlay.glass_style, GlassStyle::Clear);
@@ -357,15 +328,9 @@ thinking_delay_ms = 900
 trigger = "f16"
 
 [post]
-dir = "/tmp/shuohua-post"
 timeout_ms = 3500
-
-[apps]
-dir = "/tmp/shuohua-apps"
 "#;
         let cfg = parse(body).unwrap();
-        assert_eq!(cfg.post.dir, PathBuf::from("/tmp/shuohua-post"));
         assert_eq!(cfg.post.timeout_ms, 3500);
-        assert_eq!(cfg.apps.dir, PathBuf::from("/tmp/shuohua-apps"));
     }
 }

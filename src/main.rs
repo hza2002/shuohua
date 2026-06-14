@@ -149,13 +149,11 @@ fn run_daemon_process() -> Result<()> {
 
     eprintln!(
         "[shuo] config {} loaded:\n         trigger={} (parsed={})\n         \
-         apps.dir={}\n         post.dir={}  post.timeout_ms={}\n         \
-         voice.auto_paste={}  voice.record_audio={}  voice.stop_delay_ms={}  ui.language={}",
+         post.timeout_ms={}\n         voice.auto_paste={}  voice.record_audio={}  \
+         voice.stop_delay_ms={}  ui.language={}",
         cfg_path.display(),
         cfg.hotkey.trigger,
         trigger,
-        cfg.apps.dir.display(),
-        cfg.post.dir.display(),
         cfg.post.timeout_ms,
         cfg.voice.auto_paste,
         cfg.voice.record_audio,
@@ -290,8 +288,9 @@ async fn run_daemon(
                         // 新 session 起来时从 cfg_rx 取最新 voice/apps/post 配置。
                         let cfg = cfg_rx.borrow().clone();
                         let start_app_context = post::app_context::frontmost_app();
+                        let apps_dir = app_profile::default_dir();
                         let profile = match app_profile::load_for_app(
-                            &cfg.apps.dir,
+                            &apps_dir,
                             start_app_context.bundle_id.as_deref(),
                         ) {
                             Ok(profile) => profile,
@@ -301,11 +300,12 @@ async fn run_daemon(
                                 continue;
                             }
                         };
+                        let post_dir = post::config::default_dir();
                         let post_chain = match post::config::load_components(
                             &profile.post_chain,
                             &post::config::PostDirs {
-                                rules: cfg.post.dir.join("rules"),
-                                llm: cfg.post.dir.join("llm"),
+                                rules: post_dir.join("rules"),
+                                llm: post_dir.join("llm"),
                             },
                         ) {
                             Ok(chain) => chain,

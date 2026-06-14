@@ -342,7 +342,7 @@ pub enum AsrError {
     └── apple_speech.toml    # 未来 M9
 ```
 
-`config.toml` 主指路：
+`config.toml` 只保留全局行为开关；apps/post 目录固定走 XDG 路径：
 
 ```toml
 [hotkey]
@@ -352,11 +352,7 @@ trigger = "f16"
 stop_delay_ms = 800
 record_audio  = false                        # ← 见 §7
 
-[apps]
-dir = "~/.config/shuohua/apps"
-
 [post]
-dir = "~/.config/shuohua/post"
 timeout_ms = 2000
 ```
 
@@ -543,14 +539,15 @@ pub struct PipelineStep {
 
 匹配逻辑：toggle ON 时取一次 `frontmost_bundle_id`，去 `apps/<bundle_id>.toml` 找；找到就用，找不到 fall back 到 `apps/default.toml`。该 profile 决定本次录音的 ASR provider、hotwords 和 post_chain。toggle OFF 时只再取一次 AppContext 作为 prompt 变量，**不重新选择 profile**，避免录音中切 App 导致 ASR/post 配置中途变化。
 
-主 `config.toml` 只指路：
+目录固定：
+
+- app profile：`~/.config/shuohua/apps/default.toml` / `~/.config/shuohua/apps/<bundle_id>.toml`
+- post components：`~/.config/shuohua/post/rules/*.toml` / `~/.config/shuohua/post/llm/*.toml`
+
+主 `config.toml` 只配置单步超时：
 
 ```toml
-[apps]
-dir = "~/.config/shuohua/apps"
-
 [post]
-dir        = "~/.config/shuohua/post/"
 timeout_ms = 2000     # 单步 processor 超时
 ```
 

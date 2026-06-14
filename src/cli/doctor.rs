@@ -37,8 +37,6 @@ fn check_config() {
             println!("config: OK {}", path.display());
             println!("effective config:");
             println!("  hotkey.trigger = {:?}", cfg.hotkey.trigger);
-            println!("  apps.dir = {}", cfg.apps.dir.display());
-            println!("  post.dir = {}", cfg.post.dir.display());
             println!("  post.timeout_ms = {}", cfg.post.timeout_ms);
             println!("  voice.stop_delay_ms = {}", cfg.voice.stop_delay_ms);
             println!("  voice.record_audio = {}", cfg.voice.record_audio);
@@ -67,15 +65,15 @@ fn check_hotkey() {
 }
 
 fn check_asr_provider() {
-    let cfg = match crate::config::load_from(&crate::config::default_path()) {
-        Ok(cfg) => cfg,
-        Err(_) => return,
-    };
-    let profile = match crate::app_profile::load_for_app(&cfg.apps.dir, None) {
+    if crate::config::load_from(&crate::config::default_path()).is_err() {
+        return;
+    }
+    let apps_dir = crate::app_profile::default_dir();
+    let profile = match crate::app_profile::load_for_app(&apps_dir, None) {
         Ok(profile) => profile,
         Err(e) => {
             println!("asr: ERROR default app profile unreadable: {e:#}");
-            println!("hint: edit {}", cfg.apps.dir.join("default.toml").display());
+            println!("hint: edit {}", apps_dir.join("default.toml").display());
             return;
         }
     };

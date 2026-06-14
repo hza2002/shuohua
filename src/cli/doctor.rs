@@ -55,12 +55,12 @@ fn check_config() {
 
 fn check_hotkey() {
     match crate::config::load_from(&crate::config::default_path())
-        .and_then(|cfg| crate::hotkey::parse::parse(&cfg.hotkey.trigger).map(|code| (cfg, code)))
+        .and_then(|cfg| crate::hotkey::parse::parse(&cfg.hotkey.trigger).map(|combo| (cfg, combo)))
     {
-        Ok((cfg, code)) => println!("hotkey: OK {:?} -> 0x{code:02X}", cfg.hotkey.trigger),
+        Ok((cfg, combo)) => println!("hotkey: OK {:?} -> {}", cfg.hotkey.trigger, combo),
         Err(e) => {
             println!("hotkey: ERROR {e:#}");
-            println!("hint: M5 supports F1-F20 single-key triggers");
+            println!("hint: see docs/DESIGN.md §2.4 for the supported hotkey grammar");
         }
     }
 }

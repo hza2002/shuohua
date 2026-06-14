@@ -1,78 +1,105 @@
 //! Property tests for hotkey state machines.
 //!
-//! Two state machines are exercised: `Suppressor` (callback-side, decides
-//! whether to drop the OS event — guards §5 invariant 8) and `Tracker`
-//! (tokio-side, debounces auto-repeat into a single `TriggerRecord`).
+//! Two state machines exercised:
 //!
-//! Each test runs a generated sequence against the impl and an independent
-//! reference model. The reference model IS the spec; agreement after every
-//! step is the property.
+//! - [`Suppressor`]: covered against a HashSet reference model across
+//!   arbitrary sequences of `KeyDown` / `KeyUp` plus occasional trigger
+//!   swaps. Guards §5 invariant 8 (down/up pairing keyed off `held`, not
+//!   the current trigger).
+//!
+//! - [`Tracker`] (pure-key only): covered against a bool reference model
+//!   for auto-repeat debounce. Combo / modifier-only / double-tap state
+//!   machines have richer unit tests in their own modules; their
+//!   property-test coverage is intentionally limited here since the
+//!   reference model has to mirror almost the entire impl.
 
-use super::{HotkeyEvent, RawKey, Suppressor, Tracker};
+use super::combo::{Combo, ModMatcher};
+use super::{EventKind, HotkeyEvent, ModMask, RawEvent, Suppressor, Tracker};
 use proptest::prelude::*;
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 const F16: u16 = 0x6A;
 const F17: u16 = 0x40;
 const A: u16 = 0x00;
 const B: u16 = 0x0B;
 
-/// Constrain the alphabet so shrinking converges quickly.
 fn keycode() -> impl Strategy<Value = u16> {
     prop_oneof![Just(F16), Just(F17), Just(A), Just(B)]
 }
 
-fn raw_key() -> impl Strategy<Value = RawKey> {
-    (any::<bool>(), keycode()).prop_map(|(down, code)| RawKey { down, code })
+fn key_event_kind() -> impl Strategy<Value = EventKind> {
+    prop_oneof![Just(EventKind::KeyDown), Just(EventKind::KeyUp)]
+}
+
+fn key_event() -> impl Strategy<Value = RawEvent> {
+    (key_event_kind(), keycode()).prop_map(|(kind, code)| RawEvent {
+        kind,
+        code,
+        mods: ModMask::empty(),
+    })
+}
+
+fn pure_key_combo(code: u16) -> Combo {
+    Combo {
+        mods: [ModMatcher::NotPresent; 4],
+        key: Some(code),
+        double: false,
+    }
 }
 
 #[derive(Debug, Clone)]
-enum SuppressAction {
-    Raw(RawKey),
-    SetTrigger(u16),
+enum Action {
+    Event(RawEvent),
+    SwapTrigger(u16),
 }
 
-fn suppress_action() -> impl Strategy<Value = SuppressAction> {
+fn action() -> impl Strategy<Value = Action> {
     prop_oneof![
-        9 => raw_key().prop_map(SuppressAction::Raw),
-        1 => keycode().prop_map(SuppressAction::SetTrigger),
+        9 => key_event().prop_map(Action::Event),
+        1 => keycode().prop_map(Action::SwapTrigger),
     ]
 }
 
 proptest! {
     /// `Suppressor` matches a HashSet-based reference model on every step.
-    /// Covers down/up pairing, trigger hot-swap, auto-repeat, and lone keyups
-    /// in one sweep.
+    /// The model encodes: KeyDown of (current trigger OR already-held)
+    /// adds to held + returns true; KeyUp of held removes + returns true;
+    /// everything else returns false. Trigger swap preserves the held set.
     #[test]
     fn suppressor_matches_reference_model(
-        initial_trigger in keycode(),
-        actions in proptest::collection::vec(suppress_action(), 0..64),
+        initial in keycode(),
+        actions in proptest::collection::vec(action(), 0..64),
     ) {
-        let mut s = Suppressor::new(initial_trigger);
+        let mut s = Suppressor::new(pure_key_combo(initial));
         let mut model_held: HashSet<u16> = HashSet::new();
-        let mut model_trigger = initial_trigger;
+        let mut model_trigger = initial;
 
-        for action in actions {
-            match action {
-                SuppressAction::SetTrigger(code) => {
-                    s.set_trigger(code);
+        for a in actions {
+            match a {
+                Action::SwapTrigger(code) => {
+                    s.set_trigger(pure_key_combo(code));
                     model_trigger = code;
                 }
-                SuppressAction::Raw(raw) => {
-                    let actual = s.on_raw(raw);
-                    let expected = if raw.down {
-                        if raw.code == model_trigger || model_held.contains(&raw.code) {
-                            model_held.insert(raw.code);
-                            true
-                        } else {
-                            false
+                Action::Event(ev) => {
+                    let actual = s.on_raw(ev);
+                    let expected = match ev.kind {
+                        EventKind::KeyDown => {
+                            if model_held.contains(&ev.code) {
+                                true
+                            } else if ev.code == model_trigger {
+                                // ev.mods is always empty for pure-key combos,
+                                // and pure-key combo requires empty mods → match.
+                                model_held.insert(ev.code);
+                                true
+                            } else {
+                                false
+                            }
                         }
-                    } else {
-                        model_held.remove(&raw.code)
+                        EventKind::KeyUp => model_held.remove(&ev.code),
+                        EventKind::FlagsChanged => false,
                     };
-                    prop_assert_eq!(actual, expected, "raw={:?} trigger={:#x}", raw, model_trigger);
-
-                    // Held sets must agree.
+                    prop_assert_eq!(actual, expected, "ev={:?} trigger={:#x}", ev, model_trigger);
                     let impl_held: HashSet<u16> = s.held().iter().copied().collect();
                     prop_assert_eq!(impl_held, model_held.clone());
                 }
@@ -80,106 +107,120 @@ proptest! {
         }
     }
 
-    /// §5 invariant 8 lifted to a global property: across an arbitrary
-    /// sequence, the *count* of suppressed KeyDowns per code equals the count
-    /// of suppressed KeyUps for that code, plus 1 if still held at end.
+    /// Global down/up pairing: for any code, the number of suppressed
+    /// `KeyDown`s entering a held cycle equals the number of suppressed
+    /// `KeyUp`s plus 1 if the code is still held at the end. Protects the
+    /// §5 invariant 8 across an arbitrary sequence (no orphan eaten
+    /// `KeyUp` either way).
     #[test]
     fn suppressed_downs_pair_with_suppressed_ups(
-        initial_trigger in keycode(),
-        actions in proptest::collection::vec(suppress_action(), 0..64),
+        initial in keycode(),
+        actions in proptest::collection::vec(action(), 0..64),
     ) {
-        let mut s = Suppressor::new(initial_trigger);
-        let mut down_count = std::collections::HashMap::<u16, i32>::new();
-        let mut up_count = std::collections::HashMap::<u16, i32>::new();
+        let mut s = Suppressor::new(pure_key_combo(initial));
+        let mut entered = std::collections::HashMap::<u16, i32>::new();
+        let mut left = std::collections::HashMap::<u16, i32>::new();
+        let mut held_set: HashSet<u16> = HashSet::new();
 
-        for action in actions {
-            match action {
-                SuppressAction::SetTrigger(code) => s.set_trigger(code),
-                SuppressAction::Raw(raw) => {
-                    let suppressed = s.on_raw(raw);
-                    if suppressed {
-                        if raw.down {
-                            // Only count the *first* suppressed down per held cycle,
-                            // since auto-repeats reuse the same `held` slot.
-                            if !s.held().contains(&raw.code) {
-                                unreachable!("a suppressed down must leave the code in held");
-                            }
-                            // Increment only if this was the cycle-start (transition
-                            // from absent → present). Reference: track via separate
-                            // model below.
+        for a in actions {
+            match a {
+                Action::SwapTrigger(code) => s.set_trigger(pure_key_combo(code)),
+                Action::Event(ev) => {
+                    let suppressed = s.on_raw(ev);
+                    match ev.kind {
+                        EventKind::KeyDown if suppressed && !held_set.contains(&ev.code) => {
+                            // Fresh entry into held.
+                            *entered.entry(ev.code).or_default() += 1;
+                            held_set.insert(ev.code);
                         }
-                    }
-                    // Replay the same event into the simple counter model:
-                    //   - count keydowns of trigger / already-held only when entering
-                    //   - count keyups when leaving
-                    let was_held_before = down_count.get(&raw.code).copied().unwrap_or(0)
-                        > up_count.get(&raw.code).copied().unwrap_or(0);
-                    let _ = was_held_before; // not needed; the suppressed-flag drives counts
-                    if suppressed && raw.down && !was_held_before {
-                        *down_count.entry(raw.code).or_default() += 1;
-                    }
-                    if suppressed && !raw.down {
-                        *up_count.entry(raw.code).or_default() += 1;
+                        EventKind::KeyUp if suppressed => {
+                            *left.entry(ev.code).or_default() += 1;
+                            held_set.remove(&ev.code);
+                        }
+                        _ => {}
                     }
                 }
             }
         }
 
-        // For each code: suppressed-up count ≤ suppressed-down count, and the
-        // difference ≤ 1 (only when the key is still held at the end).
-        let still_held: HashSet<u16> = s.held().iter().copied().collect();
-        for code in down_count.keys().chain(up_count.keys()).copied().collect::<HashSet<_>>() {
-            let d = down_count.get(&code).copied().unwrap_or(0);
-            let u = up_count.get(&code).copied().unwrap_or(0);
-            let diff = d - u;
-            let expected_diff = if still_held.contains(&code) { 1 } else { 0 };
-            prop_assert_eq!(
-                diff, expected_diff,
-                "code={:#x} downs={} ups={} held={}",
-                code, d, u, still_held.contains(&code)
-            );
+        for code in entered.keys().chain(left.keys()).copied().collect::<HashSet<_>>() {
+            let e = entered.get(&code).copied().unwrap_or(0);
+            let l = left.get(&code).copied().unwrap_or(0);
+            let still_held = held_set.contains(&code);
+            let expected_diff = if still_held { 1 } else { 0 };
+            prop_assert_eq!(e - l, expected_diff, "code={:#x}", code);
         }
     }
 
-    /// `Tracker` emits exactly one `TriggerRecord` per fresh down-cycle of the
-    /// trigger key. Reference model: emit on `down && !pressed`.
+    /// `Tracker::on_event` on a pure-key trigger fires exactly once per
+    /// "fresh down" — i.e. KeyDown of the trigger code with no preceding
+    /// un-released KeyDown of the same code. Auto-repeats are debounced.
+    /// Other codes never fire.
     #[test]
-    fn tracker_matches_reference_model(
+    fn tracker_pure_key_matches_reference(
         trigger in keycode(),
-        events in proptest::collection::vec(raw_key(), 0..64),
+        events in proptest::collection::vec(key_event(), 0..64),
     ) {
-        let mut t = Tracker::new(trigger);
+        let mut t = Tracker::new(pure_key_combo(trigger));
+        let base = Instant::now();
         let mut model_pressed = false;
 
-        for raw in events {
-            let actual = t.on_raw(raw);
-            let expected = if raw.code != trigger {
+        for (i, ev) in events.iter().enumerate() {
+            let now = base + Duration::from_millis((i as u64) * 10);
+            let actual = t.on_event(*ev, now);
+            let expected = if ev.code != trigger {
                 None
-            } else if raw.down && !model_pressed {
-                model_pressed = true;
-                Some(HotkeyEvent::TriggerRecord)
-            } else if raw.down {
-                None // auto-repeat
             } else {
-                model_pressed = false;
-                None
+                match ev.kind {
+                    EventKind::KeyDown if !model_pressed => {
+                        model_pressed = true;
+                        Some(HotkeyEvent::TriggerRecord)
+                    }
+                    EventKind::KeyDown => None, // auto-repeat
+                    EventKind::KeyUp => {
+                        model_pressed = false;
+                        None
+                    }
+                    EventKind::FlagsChanged => None,
+                }
             };
-            prop_assert_eq!(actual, expected, "raw={:?} pressed_before={}", raw, !model_pressed);
+            prop_assert_eq!(actual, expected, "i={} ev={:?}", i, ev);
         }
     }
 
-    /// Non-trigger keys never affect Tracker emission count.
+    /// Pure-key `:double`: a `TriggerRecord` is emitted iff the second
+    /// `KeyDown` of the trigger within the double-tap window has a
+    /// preceding `KeyDown` (also of the trigger) at a fresh cycle and
+    /// within window. We verify the weaker invariant: the emit count
+    /// equals floor(N / 2) for N "fresh keydowns" all clustered within
+    /// the window.
     #[test]
-    fn tracker_ignores_non_trigger_codes(
+    fn tracker_double_tap_fires_on_even_taps(
         trigger in keycode(),
-        noise in proptest::collection::vec(raw_key(), 0..32),
+        n_taps in 0u32..8,
     ) {
-        let mut t = Tracker::new(trigger);
-        let noise: Vec<_> = noise.into_iter().filter(|r| r.code != trigger).collect();
-        for raw in &noise {
-            prop_assert_eq!(t.on_raw(*raw), None);
+        let mut combo = pure_key_combo(trigger);
+        combo.double = true;
+        let mut t = Tracker::new(combo);
+        let base = Instant::now();
+        let mut emits = 0u32;
+
+        for i in 0..n_taps {
+            // All within window: 50ms spacing → far below 400ms default.
+            let now = base + Duration::from_millis(i as u64 * 50);
+            let r = t.on_event(
+                RawEvent { kind: EventKind::KeyDown, code: trigger, mods: ModMask::empty() },
+                now,
+            );
+            if matches!(r, Some(HotkeyEvent::TriggerRecord)) {
+                emits += 1;
+            }
+            t.on_event(
+                RawEvent { kind: EventKind::KeyUp, code: trigger, mods: ModMask::empty() },
+                now + Duration::from_millis(1),
+            );
         }
-        // Now feed a clean trigger cycle and confirm it still fires.
-        prop_assert_eq!(t.on_raw(RawKey { down: true, code: trigger }), Some(HotkeyEvent::TriggerRecord));
+
+        prop_assert_eq!(emits, n_taps / 2);
     }
 }

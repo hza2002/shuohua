@@ -168,13 +168,63 @@ fn dispatch(token: OutputToken, text: String) { /* 消费掉 */ }
 
 录音收尾五步链（recorder stop → final send → ASR final wait → dispatch → ASR close）挂在一棵 `tokio::task` 树上，通过 `CancellationToken` 一次取消全链。Go 的 sessionGen / sessionID 双计数器不再需要。
 
-### 2.4 真正实现热键 Suppress
+### 2.4 真正实现热键 Suppress + 完整 hotkey 语法
 
-CGEventTap 装在 `CGEventTapOptions::Default` 模式（不是 ListenOnly）下，回调里读注册表决定 `CallbackResult::Drop` 还是 `Keep` —— `Drop` 在 `core-graphics ≥ 0.25` 的 safe wrapper 里真返回 NULL 给系统，事件就不会到前台 App。toggle 模式下也可以真正吞掉热键的 keydown 跟配对的 keyup，避免泄漏（见 §5 不变量 down/up 配对吞）。
+CGEventTap 装在 `CGEventTapOptions::Default` 模式下，回调读 `Suppressor` 决定 `CallbackResult::Drop` 还是 `Keep` —— `Drop` 在 `core-graphics ≥ 0.25` 的 safe wrapper 里真返回 NULL 给系统，事件就不会到前台 App。Event mask 含 `KeyDown` / `KeyUp` / `FlagsChanged`，回调将每个事件编码成 4 字节 `RawEvent` 写到 pipe 给 tokio 端 `Tracker`，即使被 suppress 的事件也照样写（Tracker 仍需要看见每个事件做 combo 匹配 / tap 检测）。
 
 > **依赖红线**：suppress 落地依赖 `core-graphics ≥ 0.25` 的 `CallbackResult` API。0.24 的 safe wrapper 没有返 NULL 的路径，回滚版本 = suppress 静默失效。
+
+#### Hotkey 配置语法
+
+参考 VSCode `+` 分隔 + Karabiner 显式 `left_` / `right_` 前缀 + 自创 `:double` 后缀，组合成 single-line TOML 友好的 grammar：
+
+```text
+trigger     := combo (":double")?
+combo       := token ("+" token)*
+token       := modifier | key
+modifier    := ("left_" | "right_")? mod_name
+mod_name    := "cmd" | "command"                  // 都接受，canonical 是 "cmd"
+            |  "ctrl" | "control"                  // 都接受，canonical 是 "ctrl"
+            |  "opt"  | "alt"     | "option"       // 都接受，canonical 是 "opt"
+            |  "shift"
+key         := f1..f20 | a..z | 0..9
+            |  space | tab | escape | return | delete | backspace
+            |  up | down | left | right  (arrow keys; `left_cmd` 等模糊歧义靠下划线区分)
+            |  ";" | "," | "." | "/" | "\" | "[" | "]" | "'" | "`" | "-" | "="
+```
+
+| 触发形态 | 语法示例 | 触发时机 | Suppress |
+|---|---|---|---|
+| 纯按键 | `f16` / `escape` / `a` | KeyDown 时（mods 必须**完全无**），auto-repeat 不重复触发 | 该 key 的 down + 配对 up |
+| 修饰键 + 键 | `cmd+r` / `left_cmd+shift+r` / `cmd+;` | KeyDown 时 mods **精确匹配**（指定的必须按下、未指定的必须松开） | 仅 key 部分的 down/up；modifier 事件全放行 |
+| 修饰键单按 | `right_shift` / `cmd` / `cmd+shift`（多修饰键也可） | "clean tap"：required mods 按下到松开期间无中间普通键 + 无额外修饰键 + 时长 < 500ms | 不吞任何事件（modifier 太常用） |
+| 双击 | 上面任一种 + `:double` 后缀 | 两次 tap 在 400ms 内连发 | 同对应基础类型 |
+
+**关键规则**：
+- 全小写，大小写不敏感（normalize 到小写后处理）
+- `left_` / `right_` 前缀只对修饰键有意义，未指定 = 任一侧匹配
+- 修饰键有别名（`command` = `cmd`，`control` = `ctrl`，`alt` / `option` = `opt`），输入接受所有别名，`Display` 输出 canonical 3 字母形式以便 TUI capture round-trip 稳定
+- 精确匹配：trigger 里没写的 modifier 必须松开。`cmd+r` 配置下按 `cmd+shift+r` 不触发（保持跟 VSCode 一致）
+- `cmd+left_cmd` 退化为 `left_cmd`；`left_cmd+right_cmd`（两侧都按）M6 拒绝以避免 `ModMatcher` 类型膨胀，需要时再加 `BothSides` 变体
+- `:double` 后缀仅一个，必须在末尾
+- arrow keys `left`/`right`/`up`/`down` 跟修饰键 `left_cmd` 等通过下划线区分，token 化无歧义
+
+**时间常数**（写死 `src/hotkey/tracker.rs` 顶部，不暴露给用户）：
+- `MOD_HOLD_THRESHOLD = 500ms`：modifier-only tap 的"按下 → 松开"上限。超出视为长按而非 tap。500ms 是 BetterTouchTool / Hammerspoon 社区收敛值（Karabiner 默认 1000ms 偏慢，250ms 偏激进）
+- `DOUBLE_TAP_WINDOW = 400ms`：双击两次之间上限。macOS Dictation Right Shift x2 实测 ~350ms，留 50ms 容错
+
+**单按 tap 不会被双击 trigger 延迟**：每个 trigger 只有一种解释（单按 OR 双击），单按版本不需要等 400ms 窗口过期才 fire。
+
+**模块拆分**（见 [MODULES.md](MODULES.md)）：
+- `combo.rs`：`Combo` / `ModMatcher` / `ModMask` / `Side` / `ModType` 数据类型 + 精确匹配函数
+- `parse.rs`：grammar → `Combo`
+- `tracker.rs`：纯函数状态机 `RawEvent + Instant → HotkeyEvent`，分发到三个 sub-machine（纯键 / combo / modifier-only）+ 双击窗口
+- `suppressor.rs`：纯函数 `RawEvent → bool`，按 trigger 类型决定吞什么
+- `provider_darwin.rs`：CGEventTap + `decode_mods` 把 `CGEventFlags` 里 `NX_DEVICE*` 位转 `ModMask`
+
+> **`ModMask` 设计**：8-bit 紧凑 packed mask，L/R per modifier。pipe 线协议 4 字节 `[kind, code_lo, code_hi, mods]`。`Instant` 不上线协议（Tracker 收到事件时 `Instant::now()`，亚毫秒延迟远低于 250/400ms 窗口）。
 >
-> **当前实现（M6 part 1）**：注册表是单 trigger keycode，包在 `std::sync::Mutex<Suppressor>` 里跟 daemon 主循环共享。callback 频率远低于 Mutex 竞争阈值（人工按键 ≪ ns 级锁开销）。M6 part 2 引入修饰键组合 / 双击后可视情况换 `ArcSwap` 做无锁快照。
+> **当前 Suppressor 注册表**：单 `Combo` 包在 `std::sync::Mutex<Suppressor>` 里跟主循环共享。CGEventTap callback 频率远低于 Mutex 竞争阈值。未来若加多 trigger 多绑定，可换 `ArcSwap` 做无锁快照。
 
 ### 2.5 去掉 Plugin 抽象
 
@@ -655,7 +705,7 @@ reload.rs
 ├── pub fn watch(path) -> Result<Rx>           ── notify watcher（专用 std::thread）
 ├── pub fn spawn_overlay(rx, OverlayHandle)    ── [overlay] 段 diff → OverlayCmd::ReloadConfig
 ├── pub fn spawn_i18n(rx, OverlayHandle)       ── ui.language diff → i18n::init + OverlayCmd::Relabel
-└── pub fn spawn_hotkey(rx, mpsc::Sender<u16>) ── [hotkey].trigger diff → 主循环 swap Tracker
+└── pub fn spawn_hotkey(rx, mpsc::Sender<Combo>) ── [hotkey].trigger diff → 主循环 swap Tracker + Suppressor
 ```
 
 `Rx = tokio::sync::watch::Receiver<Arc<Config>>`，跟 [§2.5](#25-去掉-plugin-抽象) 里"配置变化通过 watch 广播"对上。
@@ -673,7 +723,7 @@ reload.rs
 |---|---|---|---|
 | `[overlay].*` 所有字段 | 立即（next render） | `spawn_overlay` → `rebuild_chrome` | ✓ |
 | `ui.language` | 立即（重译 state label） | `spawn_i18n` → `i18n::init` + `Relabel` | ✓ |
-| `[hotkey].trigger` | 立即（下次按键判定） | `spawn_hotkey` → mpsc → `tokio::select!` 换 Tracker | ✓ |
+| `[hotkey].trigger` | 立即（下次按键判定） | `spawn_hotkey` → mpsc<Combo> → `tokio::select!` 换 Tracker + Suppressor | ✓ |
 | `[voice].*` 全部 | 下次起 session | daemon 主循环 `cfg_rx.borrow()` 取最新快照 | ✓ |
 | `[asr].hotwords` | 下次起 session | 同上 | ✓ |
 | `[asr].provider` | 下次起 session | daemon 主循环重新构建 provider | ✓ |

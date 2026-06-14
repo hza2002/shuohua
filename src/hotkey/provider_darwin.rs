@@ -1,14 +1,11 @@
 //! CGEventTap → pipe bridge + foreground-app suppress.
 //!
-//! docs/DESIGN.md §2.4 + §5 invariant 8: the tap runs in `Default` mode so the
-//! callback can decide to *drop* an event (return `CallbackResult::Drop` → the
-//! safe wrapper returns NULL → the OS does not forward the event to other
-//! consumers). We always also write the event to the pipe so the tokio-side
-//! `Tracker` keeps seeing every keypress, regardless of suppression.
-//!
-//! Suppress decisions live in [`Suppressor`] — a pure state machine that
-//! tracks the "physical keys we've eaten so far" so the matching KeyUp is
-//! suppressed even when the trigger is re-bound mid-hold.
+//! docs/DESIGN.md §2.4 + §5 invariant 8: the tap runs in `Default` mode so
+//! the callback can `CallbackResult::Drop` events (returns NULL to the OS).
+//! Every event (KeyDown / KeyUp / FlagsChanged) is encoded into the 4-byte
+//! `RawEvent` wire format and pushed to the pipe so the tokio-side
+//! `Tracker` keeps seeing everything, even events we drop. Suppression
+//! decisions live in [`Suppressor`].
 
 use anyhow::{anyhow, Result};
 use core_foundation::runloop::CFRunLoop;
@@ -20,40 +17,60 @@ use os_pipe::PipeWriter;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use super::{RawKey, Suppressor};
+use super::combo::{ModMask, ModType, Side};
+use super::{EventKind, RawEvent, Suppressor};
 
-/// Install a CGEventTap on the current thread's CFRunLoop and block until the
-/// runloop stops. Every observed KeyDown/KeyUp is encoded to the pipe.
-/// Suppression is delegated to `suppressor` (shared with daemon main loop so
-/// `[hotkey].trigger` reloads can update the trigger code without restarting
-/// the tap).
+// Device-specific modifier bits inside `CGEventFlags::bits()` (low 16 bits).
+// See IOLLEvent.h `NX_DEVICE*` constants. Right Control is the outlier at
+// 0x2000 instead of being adjacent to Left Control — Apple convention.
+const NX_LCTL: u64 = 0x0000_0001;
+const NX_LSHIFT: u64 = 0x0000_0002;
+const NX_RSHIFT: u64 = 0x0000_0004;
+const NX_LCMD: u64 = 0x0000_0008;
+const NX_RCMD: u64 = 0x0000_0010;
+const NX_LOPT: u64 = 0x0000_0020;
+const NX_ROPT: u64 = 0x0000_0040;
+const NX_RCTL: u64 = 0x0000_2000;
+
+/// Install a CGEventTap and block until the runloop stops.
 pub fn run(writer: PipeWriter, suppressor: Arc<Mutex<Suppressor>>) -> Result<()> {
     let pipe = Mutex::new(writer);
 
     CGEventTap::with_enabled(
-        // Session level matches our M1 design. HID-level taps need stronger
-        // entitlements and aren't needed here.
         CGEventTapLocation::Session,
         CGEventTapPlacement::HeadInsertEventTap,
-        // Default = active filter: callback's return value decides whether
-        // the event continues to other consumers. ListenOnly would ignore it.
+        // Default = active filter; ListenOnly would ignore the return
+        // value. We need the active path to suppress.
         CGEventTapOptions::Default,
-        vec![CGEventType::KeyDown, CGEventType::KeyUp],
+        // FlagsChanged is added (vs M6 part 1's KeyDown/KeyUp-only mask)
+        // so the tokio-side Tracker can detect modifier-only triggers and
+        // maintain a current `ModMask` snapshot for combo matching.
+        vec![
+            CGEventType::KeyDown,
+            CGEventType::KeyUp,
+            CGEventType::FlagsChanged,
+        ],
         move |_proxy, etype, event| {
-            let down = matches!(etype, CGEventType::KeyDown);
+            let kind = match etype {
+                CGEventType::KeyDown => EventKind::KeyDown,
+                CGEventType::KeyUp => EventKind::KeyUp,
+                CGEventType::FlagsChanged => EventKind::FlagsChanged,
+                _ => return CallbackResult::Keep,
+            };
             let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+            let mods = decode_mods(event.get_flags().bits());
+            let raw = RawEvent { kind, code, mods };
 
-            // Forward unconditionally — the Tracker on the tokio side must see
-            // every event, including ones we eat for the foreground app.
-            let buf = RawKey::encode(down, code);
+            // Always forward — Tracker (tokio side) needs every event even
+            // for keys we end up dropping for the foreground.
             if let Ok(mut w) = pipe.lock() {
-                let _ = w.write_all(&buf);
+                let _ = w.write_all(&raw.encode());
             }
 
             let drop_event = match suppressor.lock() {
-                Ok(mut s) => s.on_raw(RawKey { down, code }),
-                // Poisoned mutex means a panic happened on a Suppressor user;
-                // safer to let events through than to silently eat them.
+                Ok(mut s) => s.on_raw(raw),
+                // Poisoned mutex: a Suppressor user panicked. Let events
+                // through rather than silently eating them.
                 Err(_) => false,
             };
 
@@ -76,4 +93,90 @@ pub fn run(writer: PipeWriter, suppressor: Arc<Mutex<Suppressor>>) -> Result<()>
     })?;
 
     Ok(())
+}
+
+/// Decode CGEvent's `flags` field into our `ModMask`. Reads the device-
+/// specific (left/right) bits; the device-independent high-half bits
+/// (`CGEventFlagCommand` etc.) are ignored because they don't distinguish
+/// sides. Synthetic events that set only the high half won't be
+/// recognized — acceptable since shuohua only consumes hardware events.
+fn decode_mods(flags: u64) -> ModMask {
+    let mut m = ModMask::empty();
+    if flags & NX_LCTL != 0 {
+        m.set(ModType::Ctrl, Side::Left, true);
+    }
+    if flags & NX_RCTL != 0 {
+        m.set(ModType::Ctrl, Side::Right, true);
+    }
+    if flags & NX_LSHIFT != 0 {
+        m.set(ModType::Shift, Side::Left, true);
+    }
+    if flags & NX_RSHIFT != 0 {
+        m.set(ModType::Shift, Side::Right, true);
+    }
+    if flags & NX_LCMD != 0 {
+        m.set(ModType::Cmd, Side::Left, true);
+    }
+    if flags & NX_RCMD != 0 {
+        m.set(ModType::Cmd, Side::Right, true);
+    }
+    if flags & NX_LOPT != 0 {
+        m.set(ModType::Opt, Side::Left, true);
+    }
+    if flags & NX_ROPT != 0 {
+        m.set(ModType::Opt, Side::Right, true);
+    }
+    m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_empty() {
+        assert_eq!(decode_mods(0), ModMask::empty());
+    }
+
+    #[test]
+    fn decode_individual_sides() {
+        for (flag, ty, side) in [
+            (NX_LCTL, ModType::Ctrl, Side::Left),
+            (NX_RCTL, ModType::Ctrl, Side::Right),
+            (NX_LSHIFT, ModType::Shift, Side::Left),
+            (NX_RSHIFT, ModType::Shift, Side::Right),
+            (NX_LCMD, ModType::Cmd, Side::Left),
+            (NX_RCMD, ModType::Cmd, Side::Right),
+            (NX_LOPT, ModType::Opt, Side::Left),
+            (NX_ROPT, ModType::Opt, Side::Right),
+        ] {
+            let m = decode_mods(flag);
+            assert!(m.is_side_down(ty, side), "expected {ty:?}/{side:?} set");
+            // No other bits.
+            for ty2 in ModType::ALL {
+                for side2 in [Side::Left, Side::Right] {
+                    if (ty2, side2) != (ty, side) {
+                        assert!(!m.is_side_down(ty2, side2));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn decode_multiple_sides_combined() {
+        // Left Cmd + Right Shift held simultaneously.
+        let m = decode_mods(NX_LCMD | NX_RSHIFT);
+        assert!(m.is_side_down(ModType::Cmd, Side::Left));
+        assert!(m.is_side_down(ModType::Shift, Side::Right));
+        assert!(!m.is_side_down(ModType::Cmd, Side::Right));
+    }
+
+    #[test]
+    fn decode_ignores_device_independent_high_bits() {
+        // Synthetic event that only sets `CGEventFlagCommand` (0x00100000)
+        // without a side bit → we ignore it.
+        let m = decode_mods(0x0010_0000);
+        assert_eq!(m, ModMask::empty());
+    }
 }

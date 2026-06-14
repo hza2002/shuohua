@@ -1,65 +1,79 @@
-//! Pure state machine: decide whether a `RawKey` should be suppressed before
-//! it reaches the foreground app. Mirror of the §5 invariant 8 contract.
+//! Decide whether to drop a `RawEvent` so it never reaches the foreground
+//! app. Pure state; the CGEventTap callback wraps an instance in
+//! `Mutex<Suppressor>`.
 //!
-//! Inputs come from the CGEventTap callback (one per system key event); the
-//! output is the `suppress: bool` returned by the callback. The state machine
-//! is independent from the Tracker that emits `HotkeyEvent` — the callback
-//! always also forwards events into the pipe so the Tracker keeps working
-//! even for keys that we suppress.
+//! Per-trigger-type behavior:
 //!
-//! Invariants enforced (covered by [`tests`] + `proptest`):
+//! - **Pure key / combo (`trigger.key` is `Some`)**: suppress the
+//!   configured key's `KeyDown` (when modifiers exactly match at that
+//!   instant), plus its auto-repeat `KeyDown`s and the matching `KeyUp`.
+//!   Modifier events are never suppressed — apps that rely on `Cmd` /
+//!   `Shift` transitions need them.
 //!
-//! 1. **Down/up pairing**. Once a code C is added to `held` by a suppressed
-//!    KeyDown, the *next* KeyUp of C is also suppressed and removes C from
-//!    `held`. Foreground apps therefore never see an orphan KeyUp whose
-//!    matching KeyDown was eaten.
-//! 2. **Trigger hot-swap is safe mid-hold**. Changing the trigger code while
-//!    a key is held does not orphan its KeyUp — pairing is keyed off `held`,
-//!    not the current `trigger_code`.
-//! 3. **Auto-repeat keeps suppressing**. Subsequent KeyDowns of a code that
-//!    is already in `held` are suppressed (foreground app never sees the
-//!    OS-generated repeats either).
-//! 4. **Non-trigger keys pass through**. Any KeyDown of a code that is
-//!    neither the current trigger nor already held is forwarded unchanged,
-//!    and so is its KeyUp.
+//! - **Modifier-only**: nothing is suppressed. Stealing modifier events
+//!   breaks far too many foreground interactions (text selection, app
+//!   shortcuts, system gestures). The cost is that the foreground app
+//!   sees a brief modifier flash when the user taps the trigger —
+//!   imperceptible in practice and matches macOS Dictation's behavior.
+//!
+//! The held-key set is independent of `trigger.key`: once a code is
+//! suppressed on `KeyDown`, its `KeyUp` is suppressed too, even if the
+//! trigger has been re-bound mid-hold (§5 invariant 8). Auto-repeat
+//! `KeyDown`s of a held code are also suppressed.
 
-use super::RawKey;
+use super::combo::Combo;
+use super::{EventKind, RawEvent};
 
 #[derive(Debug)]
 pub struct Suppressor {
-    trigger_code: u16,
+    trigger: Combo,
+    /// Physical keycodes we've eaten the down of and not yet seen the up.
     held: Vec<u16>,
 }
 
 impl Suppressor {
-    pub fn new(trigger_code: u16) -> Self {
+    pub fn new(trigger: Combo) -> Self {
         Self {
-            trigger_code,
+            trigger,
             held: Vec::new(),
         }
     }
 
-    pub fn set_trigger(&mut self, code: u16) {
-        self.trigger_code = code;
+    pub fn set_trigger(&mut self, trigger: Combo) {
+        self.trigger = trigger;
+        // Intentionally keep `held` — see §5 invariant 8: a key whose down
+        // was suppressed must still have its up suppressed even if the
+        // trigger has changed.
     }
 
     /// Returns `true` when the OS-level event should be dropped.
-    pub fn on_raw(&mut self, raw: RawKey) -> bool {
-        let already_held = self.held.contains(&raw.code);
-        if raw.down {
-            if raw.code == self.trigger_code || already_held {
-                if !already_held {
-                    self.held.push(raw.code);
+    pub fn on_raw(&mut self, ev: RawEvent) -> bool {
+        let already_held = self.held.contains(&ev.code);
+        match ev.kind {
+            EventKind::KeyDown => {
+                if already_held {
+                    return true; // auto-repeat of a key whose down was eaten
                 }
-                true
-            } else {
+                let Some(key) = self.trigger.key else {
+                    return false; // modifier-only trigger: nothing to suppress
+                };
+                if ev.code == key && ev.mods.matches_combo(&self.trigger) {
+                    self.held.push(ev.code);
+                    return true;
+                }
                 false
             }
-        } else if already_held {
-            self.held.retain(|c| *c != raw.code);
-            true
-        } else {
-            false
+            EventKind::KeyUp => {
+                if already_held {
+                    self.held.retain(|c| *c != ev.code);
+                    return true;
+                }
+                false
+            }
+            EventKind::FlagsChanged => {
+                // Modifier transitions always flow through (see module docs).
+                false
+            }
         }
     }
 
@@ -72,88 +86,165 @@ impl Suppressor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hotkey::combo::{ModMask, ModMatcher, ModType, Side};
 
     const F16: u16 = 0x6A;
     const F17: u16 = 0x40;
+    const R: u16 = 0x0F;
     const A: u16 = 0x00;
+    const L_CMD: u16 = 0x37;
 
-    fn down(code: u16) -> RawKey {
-        RawKey { down: true, code }
+    fn pure_key(code: u16) -> Combo {
+        Combo {
+            mods: [ModMatcher::NotPresent; 4],
+            key: Some(code),
+            double: false,
+        }
     }
-    fn up(code: u16) -> RawKey {
-        RawKey { down: false, code }
+
+    fn cmd_plus(code: u16) -> Combo {
+        let mut mods = [ModMatcher::NotPresent; 4];
+        mods[ModType::Cmd as usize] = ModMatcher::EitherSide;
+        Combo {
+            mods,
+            key: Some(code),
+            double: false,
+        }
     }
+
+    fn right_shift_only() -> Combo {
+        let mut mods = [ModMatcher::NotPresent; 4];
+        mods[ModType::Shift as usize] = ModMatcher::Specific(Side::Right);
+        Combo {
+            mods,
+            key: None,
+            double: false,
+        }
+    }
+
+    fn cmd_mod() -> ModMask {
+        let mut m = ModMask::empty();
+        m.set(ModType::Cmd, Side::Left, true);
+        m
+    }
+
+    fn down(code: u16, mods: ModMask) -> RawEvent {
+        RawEvent {
+            kind: EventKind::KeyDown,
+            code,
+            mods,
+        }
+    }
+    fn up(code: u16, mods: ModMask) -> RawEvent {
+        RawEvent {
+            kind: EventKind::KeyUp,
+            code,
+            mods,
+        }
+    }
+    fn flag(code: u16, mods: ModMask) -> RawEvent {
+        RawEvent {
+            kind: EventKind::FlagsChanged,
+            code,
+            mods,
+        }
+    }
+
+    // ---------- pure key ----------
 
     #[test]
-    fn trigger_keydown_is_suppressed_and_marks_held() {
-        let mut s = Suppressor::new(F16);
-        assert!(s.on_raw(down(F16)));
-        assert_eq!(s.held(), &[F16]);
-    }
-
-    #[test]
-    fn matching_keyup_is_suppressed_and_clears_held() {
-        let mut s = Suppressor::new(F16);
-        s.on_raw(down(F16));
-        assert!(s.on_raw(up(F16)));
+    fn pure_key_suppresses_full_press_cycle() {
+        let mut s = Suppressor::new(pure_key(F16));
+        assert!(s.on_raw(down(F16, ModMask::empty())));
+        assert!(s.on_raw(down(F16, ModMask::empty()))); // auto-repeat
+        assert!(s.on_raw(up(F16, ModMask::empty())));
         assert!(s.held().is_empty());
     }
 
     #[test]
-    fn auto_repeat_keydown_keeps_suppressing() {
-        let mut s = Suppressor::new(F16);
-        s.on_raw(down(F16));
-        assert!(s.on_raw(down(F16)));
-        assert!(s.on_raw(down(F16)));
-        assert_eq!(s.held(), &[F16]); // still exactly one entry
+    fn pure_key_lone_keyup_passes() {
+        let mut s = Suppressor::new(pure_key(F16));
+        assert!(!s.on_raw(up(F16, ModMask::empty())));
     }
 
     #[test]
-    fn non_trigger_key_passes_through() {
-        let mut s = Suppressor::new(F16);
-        assert!(!s.on_raw(down(A)));
-        assert!(!s.on_raw(up(A)));
+    fn pure_key_does_not_suppress_other_keys() {
+        let mut s = Suppressor::new(pure_key(F16));
+        assert!(!s.on_raw(down(A, ModMask::empty())));
+        assert!(!s.on_raw(up(A, ModMask::empty())));
+    }
+
+    #[test]
+    fn pure_key_does_not_suppress_when_extra_mods_present() {
+        let mut s = Suppressor::new(pure_key(F16));
+        let m = cmd_mod();
+        assert!(!s.on_raw(down(F16, m)));
+        // KeyUp not held → also pass through.
+        assert!(!s.on_raw(up(F16, m)));
+    }
+
+    // ---------- combo ----------
+
+    #[test]
+    fn combo_suppresses_key_only_when_mods_match() {
+        let mut s = Suppressor::new(cmd_plus(R));
+        // Without cmd: pass through.
+        assert!(!s.on_raw(down(R, ModMask::empty())));
+        assert!(!s.on_raw(up(R, ModMask::empty())));
+        // With cmd: suppress key.
+        assert!(s.on_raw(down(R, cmd_mod())));
+        assert!(s.on_raw(up(R, cmd_mod())));
+    }
+
+    #[test]
+    fn combo_does_not_suppress_modifier_events() {
+        let mut s = Suppressor::new(cmd_plus(R));
+        assert!(!s.on_raw(flag(L_CMD, cmd_mod())));
+        assert!(!s.on_raw(flag(L_CMD, ModMask::empty())));
+    }
+
+    #[test]
+    fn combo_keyup_after_mod_release_still_suppressed() {
+        // User presses cmd+r, releases cmd, then releases r. The r-up
+        // should still be suppressed because its down was suppressed.
+        let mut s = Suppressor::new(cmd_plus(R));
+        assert!(s.on_raw(down(R, cmd_mod())));
+        // Cmd released — modifier event passes through, doesn't affect held.
+        assert!(!s.on_raw(flag(L_CMD, ModMask::empty())));
+        assert!(s.on_raw(up(R, ModMask::empty())));
+        assert!(s.held().is_empty());
+    }
+
+    // ---------- modifier-only ----------
+
+    #[test]
+    fn modifier_only_suppresses_nothing() {
+        let mut s = Suppressor::new(right_shift_only());
+        assert!(!s.on_raw(flag(0x3C, ModMask::empty())));
+        assert!(!s.on_raw(down(A, ModMask::empty())));
+        assert!(!s.on_raw(up(A, ModMask::empty())));
+    }
+
+    // ---------- trigger swap ----------
+
+    #[test]
+    fn trigger_swap_preserves_held_pairing() {
+        // Held key's up must be suppressed even if trigger changes
+        // mid-hold (§5 invariant 8).
+        let mut s = Suppressor::new(pure_key(F16));
+        assert!(s.on_raw(down(F16, ModMask::empty())));
+        s.set_trigger(pure_key(F17));
+        assert!(s.on_raw(up(F16, ModMask::empty())));
         assert!(s.held().is_empty());
     }
 
     #[test]
-    fn lone_keyup_passes_through() {
-        // Stray KeyUp without matching KeyDown (e.g. process started while key
-        // was already held). Must NOT be suppressed — foreground app needs it
-        // to clear its own pressed-key state.
-        let mut s = Suppressor::new(F16);
-        assert!(!s.on_raw(up(F16)));
-        assert!(s.held().is_empty());
-    }
-
-    #[test]
-    fn trigger_swap_mid_hold_still_pairs_keyup() {
-        // User holds F16, config reload changes trigger to F17, user releases F16.
-        // The F16 KeyUp must still be suppressed (invariant 2).
-        let mut s = Suppressor::new(F16);
-        assert!(s.on_raw(down(F16)));
-        s.set_trigger(F17);
-        assert!(s.on_raw(up(F16)), "F16 KeyUp must be suppressed");
-        assert!(s.held().is_empty());
-        // After swap, F16 is back to a normal key:
-        assert!(!s.on_raw(down(F16)));
-    }
-
-    #[test]
-    fn trigger_swap_mid_hold_new_trigger_works_immediately() {
-        let mut s = Suppressor::new(F16);
-        s.on_raw(down(F16));
-        s.set_trigger(F17);
-        assert!(s.on_raw(down(F17)));
-        assert!(s.on_raw(up(F17)));
-        assert!(s.on_raw(up(F16))); // still paired
-    }
-
-    #[test]
-    fn keyup_of_non_held_passes_even_with_matching_trigger_code() {
-        // Edge case: spurious KeyUp of the current trigger when we never saw
-        // its KeyDown (e.g. provider started mid-hold). Must pass through.
-        let mut s = Suppressor::new(F16);
-        assert!(!s.on_raw(up(F16)));
+    fn trigger_swap_to_modifier_only_still_pairs_old_keyup() {
+        let mut s = Suppressor::new(pure_key(F16));
+        assert!(s.on_raw(down(F16, ModMask::empty())));
+        s.set_trigger(right_shift_only());
+        // F16 release must still be eaten — the foreground app must not
+        // see an orphan KeyUp.
+        assert!(s.on_raw(up(F16, ModMask::empty())));
     }
 }

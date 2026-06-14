@@ -156,10 +156,10 @@ pub fn spawn_i18n(mut rx: Rx, handle: OverlayHandle) {
     });
 }
 
-/// Hotkey subscriber：`[hotkey].trigger` 变化 → 重新 parse，成功则发新 keycode 到 daemon
-/// 主循环（主循环用 tokio::select 在 RawKey 和这个 channel 之间多路复用，swap Tracker）。
-/// parse 失败保留旧 trigger，只打日志。
-pub fn spawn_hotkey(mut rx: Rx, code_tx: mpsc::UnboundedSender<u16>) {
+/// Hotkey subscriber：`[hotkey].trigger` 变化 → 重新 parse，成功则发新 `Combo` 到 daemon
+/// 主循环（主循环用 tokio::select 在 `RawEvent` 和这个 channel 之间多路复用，swap Tracker
+/// 与 Suppressor）。parse 失败保留旧 trigger，只打日志。
+pub fn spawn_hotkey(mut rx: Rx, combo_tx: mpsc::UnboundedSender<crate::hotkey::Combo>) {
     tokio::spawn(async move {
         let mut prev = rx.borrow().hotkey.trigger.clone();
         while rx.changed().await.is_ok() {
@@ -168,11 +168,12 @@ pub fn spawn_hotkey(mut rx: Rx, code_tx: mpsc::UnboundedSender<u16>) {
                 continue;
             }
             match crate::hotkey::parse::parse(&next) {
-                Ok(code) => {
-                    if code_tx.send(code).is_err() {
+                Ok(combo) => {
+                    let printed = combo.to_string();
+                    if combo_tx.send(combo).is_err() {
                         return;
                     }
-                    crate::debug_println!("[reload] hotkey trigger → {next} (0x{code:02X})");
+                    crate::debug_println!("[reload] hotkey trigger → {next} (parsed={printed})");
                 }
                 Err(e) => {
                     eprintln!("[reload] invalid hotkey {next:?}, keeping previous: {e:#}");

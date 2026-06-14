@@ -15,6 +15,7 @@
 mod app_context_darwin;
 mod asr;
 mod autotype_darwin;
+mod cli;
 mod clipboard_darwin;
 mod config;
 mod focused_window_darwin;
@@ -48,14 +49,14 @@ use voice::SessionControl;
 const KEY_ESCAPE: u16 = 0x35;
 
 fn main() -> Result<()> {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
-    if args.iter().any(|arg| arg == "--daemon") {
+    let args = cli::parse();
+    if args.daemon {
         return run_daemon_process();
     }
-    if args.is_empty() {
-        return run_smart_fallback();
+    if let Some(command) = args.command {
+        return cli::run_command(command);
     }
-    anyhow::bail!("unknown arguments: {}", args.join(" "));
+    run_smart_fallback()
 }
 
 fn run_smart_fallback() -> Result<()> {
@@ -138,18 +139,14 @@ impl Drop for DaemonLock {
 fn run_daemon_process() -> Result<()> {
     let _lock = DaemonLock::acquire()?;
     let cfg_path = config::default_path();
-    let cfg_rx = reload::watch(cfg_path.clone()).context("start config watcher")?;
+    let (cfg_rx, reload_handle) =
+        reload::watch_with_handle(cfg_path.clone()).context("start config watcher")?;
     let cfg: Arc<config::Config> = cfg_rx.borrow().clone();
     i18n::init(&cfg.ui.language);
     let trigger_code = hotkey::parse::parse(&cfg.hotkey.trigger)
         .with_context(|| format!("parse [hotkey] trigger = {:?}", cfg.hotkey.trigger))?;
 
-    let provider: Arc<dyn asr::AsrProvider> = match cfg.asr.provider.as_str() {
-        "doubao" => {
-            Arc::new(asr::providers::doubao::DoubaoProvider::new().context("init doubao provider")?)
-        }
-        other => anyhow::bail!("未知 ASR provider {other:?}。M2 仅支持 \"doubao\""),
-    };
+    let provider = build_provider(&cfg.asr.provider)?;
 
     eprintln!(
         "[shuo] config {} loaded:\n         trigger={} (code=0x{:02X})\n         \
@@ -169,8 +166,8 @@ fn run_daemon_process() -> Result<()> {
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let state_store = StateStore::new();
 
-    let provider_for_daemon = provider.clone();
     let cfg_rx_for_daemon = cfg_rx.clone();
+    let reload_for_daemon = reload_handle.clone();
     let overlay_for_daemon = overlay.clone();
     let state_for_daemon = state_store.clone();
     thread::Builder::new()
@@ -182,8 +179,8 @@ fn run_daemon_process() -> Result<()> {
                 .expect("create tokio runtime");
             if let Err(e) = rt.block_on(run_daemon(
                 cfg_rx_for_daemon,
+                reload_for_daemon,
                 trigger_code,
-                provider_for_daemon,
                 overlay_for_daemon,
                 state_for_daemon,
             )) {
@@ -199,14 +196,21 @@ fn run_daemon_process() -> Result<()> {
 
 async fn run_daemon(
     cfg_rx: reload::Rx,
+    reload_handle: reload::Handle,
     initial_trigger_code: u16,
-    provider: Arc<dyn asr::AsrProvider>,
     overlay: OverlayHandle,
     state_store: StateStore,
 ) -> Result<()> {
     let listener = ipc::server::bind_default().await?;
     let socket_path = ipc::server::default_socket_path();
-    tokio::spawn(ipc::server::run(listener, state_store.clone()));
+    tokio::spawn(ipc::server::run(
+        listener,
+        state_store.clone(),
+        ipc::server::ServerControl {
+            reload: reload_handle,
+            started_at: Instant::now(),
+        },
+    ));
 
     // 三个 subscriber，跟主循环解耦。每个都在 reload 模块里实现。
     reload::spawn_overlay(cfg_rx.clone(), overlay.clone());
@@ -273,6 +277,14 @@ async fn run_daemon(
                     None => {
                         // 新 session 起来时从 cfg_rx 取最新 voice/asr 配置。
                         let cfg = cfg_rx.borrow().clone();
+                        let provider = match build_provider(&cfg.asr.provider) {
+                            Ok(provider) => provider,
+                            Err(e) => {
+                                eprintln!("[asr] provider init failed: {e:#}");
+                                state_store.set_error(None);
+                                continue;
+                            }
+                        };
                         let (control_tx, control_rx) = tokio::sync::watch::channel(SessionControl::Idle);
                         let params = SessionParams {
                             auto_paste: cfg.voice.auto_paste,
@@ -282,7 +294,6 @@ async fn run_daemon(
                             overlay: Some(overlay.clone()),
                             state: state_store.clone(),
                         };
-                        let provider = provider.clone();
                         let join = tokio::spawn(async move {
                             voice::finish::run_recording(provider.as_ref(), params, control_rx).await;
                         });
@@ -294,6 +305,15 @@ async fn run_daemon(
                 }
             }
         }
+    }
+}
+
+fn build_provider(name: &str) -> Result<Arc<dyn asr::AsrProvider>> {
+    match name {
+        "doubao" => Ok(Arc::new(
+            asr::providers::doubao::DoubaoProvider::new().context("init doubao provider")?,
+        )),
+        other => anyhow::bail!("未知 ASR provider {other:?}。M5 仅支持 \"doubao\""),
     }
 }
 

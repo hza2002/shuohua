@@ -30,8 +30,21 @@ use crate::overlay::{OverlayCmd, OverlayHandle};
 pub type Cfg = Arc<Config>;
 pub type Rx = watch::Receiver<Cfg>;
 
-/// 起 watcher 线程，返回带初值的 `watch::Receiver`。初值 = `config::load_from(path)`。
-pub fn watch(path: PathBuf) -> Result<Rx> {
+#[derive(Clone)]
+pub struct Handle {
+    path: PathBuf,
+    tx: watch::Sender<Cfg>,
+}
+
+impl Handle {
+    pub fn reload_now(&self) -> Result<()> {
+        load_and_broadcast(&self.path, &self.tx)
+    }
+}
+
+/// 起 watcher 线程，返回带初值的 `watch::Receiver` 和手动 reload handle。
+/// 初值 = `config::load_from(path)`。
+pub fn watch_with_handle(path: PathBuf) -> Result<(Rx, Handle)> {
     let initial = Arc::new(config::load_from(&path).context("initial config load")?);
     let (tx, rx) = watch::channel(initial);
 
@@ -44,6 +57,11 @@ pub fn watch(path: PathBuf) -> Result<Rx> {
         .context("config path has no file name")?
         .to_os_string();
 
+    let handle = Handle {
+        path: path.clone(),
+        tx: tx.clone(),
+    };
+
     std::thread::Builder::new()
         .name("config-watcher".into())
         .spawn(move || {
@@ -53,7 +71,7 @@ pub fn watch(path: PathBuf) -> Result<Rx> {
         })
         .context("spawn config-watcher thread")?;
 
-    Ok(rx)
+    Ok((rx, handle))
 }
 
 fn run_watcher(
@@ -92,18 +110,20 @@ fn run_watcher(
         }
         while event_rx.recv_timeout(debounce).is_ok() {}
 
-        match config::load_from(&path) {
-            Ok(cfg) => {
-                if tx.send(Arc::new(cfg)).is_err() {
-                    return Ok(());
-                }
-                crate::debug_println!("[reload] config reloaded from {}", path.display());
-            }
+        match load_and_broadcast(&path, &tx) {
+            Ok(()) => {}
             Err(e) => {
                 eprintln!("[reload] parse failed, keeping previous: {e:#}");
             }
         }
     }
+}
+
+fn load_and_broadcast(path: &PathBuf, tx: &watch::Sender<Cfg>) -> Result<()> {
+    let cfg = config::load_from(path)?;
+    tx.send(Arc::new(cfg)).context("broadcast config reload")?;
+    crate::debug_println!("[reload] config reloaded from {}", path.display());
+    Ok(())
 }
 
 /// Overlay subscriber：`[overlay]` 段变化 → `OverlayCmd::ReloadConfig`。

@@ -672,8 +672,8 @@ reload.rs
 | `[hotkey].trigger` | 立即（下次按键判定） | `spawn_hotkey` → mpsc → `tokio::select!` 换 Tracker | ✓ |
 | `[voice].*` 全部 | 下次起 session | daemon 主循环 `cfg_rx.borrow()` 取最新快照 | ✓ |
 | `[asr].hotwords` | 下次起 session | 同上 | ✓ |
-| `[asr].provider` | 需重启 | 涉及 trait object 重建 + cancel 当前 session | ⏸ M5 |
-| 手动触发 `{"op":"reload_config"}` | 立即 | 走 UDS server | ⏸ 依赖 M4 |
+| `[asr].provider` | 下次起 session | daemon 主循环重新构建 provider | ✓ |
+| 手动触发 `{"op":"reload_config"}` | 立即 | 走 UDS server | ✓ |
 
 #### Hotkey trigger 特别说明
 
@@ -681,12 +681,12 @@ reload.rs
 
 parse 失败（非法 trigger 字符串）只打日志保留旧 trigger，不向主循环发新 keycode。
 
-#### M5 收口检查清单
+#### M5 收口结果
 
-- [ ] `[asr].provider` 切换：需要 cancel 当前 session、重建 `Arc<dyn AsrProvider>`、重连 WebSocket。建议加 `OverlayCmd::Toast` 通知用户切换中
-- [ ] UDS `{"op":"reload_config"}` op：M4 的 UDS server 起来后，加一条 op 直接重 parse + 走和 watcher 同样的 broadcast 路径（不要绕过 watch::Sender，否则订阅者会漏触发）
-- [ ] `shuo doctor`：打印 `effective config`（`cfg_rx.borrow()` 快照），校验 + 提示哪些字段不支持热重载
-- [ ] launchd 自启：跟 reload 无关，纯独立 feature
+- `shuo doctor` 已实现：打印 `effective config`，校验主 config、hotkey、Doubao 配置、UDS 状态、launchd plist 和权限状态
+- `shuo install/uninstall/start/stop/restart/status` 已实现：launchd plist 使用当前 `shuo` 绝对路径，状态优先走 UDS `daemon_status`
+- `UDS {"op":"reload_config"}` 已接入：走 watcher 同一路径 parse + broadcast，不绕过 `watch::Sender`
+- `[asr].provider` 已按配置在下一次录音开始时重建，不在录音中途热替换 session
 
 ---
 

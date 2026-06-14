@@ -205,6 +205,9 @@ impl App {
                 self.selected_history = 0;
             }
             Event::DaemonStatus { .. } => {}
+            Event::ConfigReloaded { path } => {
+                self.status = format!("config reloaded: {path}");
+            }
             Event::Error { kind, msg, .. } => {
                 self.status = format!("{kind}: {msg}");
             }

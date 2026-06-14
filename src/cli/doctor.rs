@@ -1,0 +1,229 @@
+use anyhow::{Context, Result};
+use clap::Args;
+use objc2::msg_send;
+use objc2::runtime::AnyClass;
+use objc2_foundation::ns_string;
+
+use crate::asr::AsrProvider;
+use crate::ipc::protocol::{Command, Event};
+
+#[derive(Debug, Args)]
+pub struct DoctorArgs {
+    /// Reserved for future network checks. M5 never sends PCM.
+    #[arg(long)]
+    pub full: bool,
+}
+
+pub fn run(args: DoctorArgs) -> Result<()> {
+    println!("shuo doctor");
+    println!("version: {}", env!("CARGO_PKG_VERSION"));
+    if args.full {
+        println!("asr.full: skipped in M5 (no PCM is sent by doctor)");
+    }
+
+    check_config();
+    check_hotkey();
+    check_asr_provider();
+    check_uds();
+    check_launchd();
+    check_permissions();
+    Ok(())
+}
+
+fn check_config() {
+    let path = crate::config::default_path();
+    match crate::config::load_from(&path) {
+        Ok(cfg) => {
+            println!("config: OK {}", path.display());
+            println!("effective config:");
+            println!("  hotkey.trigger = {:?}", cfg.hotkey.trigger);
+            println!("  asr.provider = {:?}", cfg.asr.provider);
+            println!("  asr.hotwords = {} entries", cfg.asr.hotwords.len());
+            println!("  voice.stop_delay_ms = {}", cfg.voice.stop_delay_ms);
+            println!("  voice.record_audio = {}", cfg.voice.record_audio);
+            println!("  voice.auto_paste = {}", cfg.voice.auto_paste);
+            println!("  ui.language = {:?}", cfg.ui.language);
+            println!("  overlay.position = {:?}", cfg.overlay.position);
+            println!("  overlay.glass_variant = {}", cfg.overlay.glass_variant);
+        }
+        Err(e) => {
+            println!("config: ERROR {e:#}");
+            println!("hint: edit {}", path.display());
+        }
+    }
+}
+
+fn check_hotkey() {
+    match crate::config::load_from(&crate::config::default_path())
+        .and_then(|cfg| crate::hotkey::parse::parse(&cfg.hotkey.trigger).map(|code| (cfg, code)))
+    {
+        Ok((cfg, code)) => println!("hotkey: OK {:?} -> 0x{code:02X}", cfg.hotkey.trigger),
+        Err(e) => {
+            println!("hotkey: ERROR {e:#}");
+            println!("hint: M5 supports F1-F20 single-key triggers");
+        }
+    }
+}
+
+fn check_asr_provider() {
+    let cfg = match crate::config::load_from(&crate::config::default_path()) {
+        Ok(cfg) => cfg,
+        Err(_) => return,
+    };
+    match cfg.asr.provider.as_str() {
+        "doubao" => match crate::asr::providers::doubao::DoubaoProvider::new() {
+            Ok(provider) => {
+                let caps = provider.caps();
+                println!(
+                    "asr.doubao: OK config readable (hotwords={}, multilingual={})",
+                    caps.hotwords, caps.multilingual
+                );
+                println!("asr.doubao: network/auth handshake not run; no PCM sent");
+            }
+            Err(e) => {
+                println!("asr.doubao: ERROR {e:#}");
+                println!(
+                    "hint: edit {}",
+                    crate::asr::providers::doubao::config_path().display()
+                );
+            }
+        },
+        other => {
+            println!("asr: ERROR unsupported provider {other:?}");
+            println!("hint: M5 supports provider = \"doubao\"");
+        }
+    }
+}
+
+fn check_uds() {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("create doctor runtime")
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            println!("daemon: ERROR {e:#}");
+            return;
+        }
+    };
+    match rt.block_on(query_daemon_status()) {
+        Ok(Some(status)) => println!("{status}"),
+        Ok(None) => println!(
+            "daemon: not running ({} not reachable)",
+            crate::ipc::server::default_socket_path().display()
+        ),
+        Err(e) => println!("daemon: ERROR {e:#}"),
+    }
+}
+
+async fn query_daemon_status() -> Result<Option<String>> {
+    let socket = crate::ipc::server::default_socket_path();
+    let mut client = match crate::ipc::client::IpcClient::connect(&socket).await {
+        Ok(client) => client,
+        Err(_) => return Ok(None),
+    };
+    client.send(&Command::DaemonStatus).await?;
+    while let Some(event) = client.recv().await? {
+        match event {
+            Event::DaemonStatus {
+                pid,
+                uptime_ms,
+                state,
+                recording_id,
+            } => {
+                return Ok(Some(format!(
+                    "daemon: OK pid={pid} uptime={} state={state:?} recording={}",
+                    format_duration(uptime_ms),
+                    recording_id.as_deref().unwrap_or("-")
+                )));
+            }
+            Event::Error { kind, msg, .. } => anyhow::bail!("{kind}: {msg}"),
+            _ => {}
+        }
+    }
+    Ok(None)
+}
+
+fn check_launchd() {
+    let path = crate::cli::service::plist_path();
+    if path.exists() {
+        println!("launchd.plist: installed {}", path.display());
+    } else {
+        println!("launchd.plist: not installed {}", path.display());
+    }
+}
+
+fn check_permissions() {
+    if accessibility_trusted() {
+        println!("permissions.accessibility: OK");
+    } else {
+        println!("permissions.accessibility: missing or not granted");
+        println!("hint: grant the terminal app that starts shuo in System Settings > Privacy & Security > Accessibility");
+    }
+    match microphone_authorization() {
+        Some(MicrophoneAuthorization::Authorized) => println!("permissions.microphone: OK"),
+        Some(MicrophoneAuthorization::NotDetermined) => {
+            println!("permissions.microphone: not determined");
+            println!("hint: start recording once from the terminal app that runs shuo to trigger the system prompt");
+        }
+        Some(MicrophoneAuthorization::Denied) => {
+            println!("permissions.microphone: denied");
+            println!("hint: grant the terminal app that starts shuo in System Settings > Privacy & Security > Microphone");
+        }
+        Some(MicrophoneAuthorization::Restricted) => {
+            println!("permissions.microphone: restricted by system policy");
+        }
+        None => {
+            println!("permissions.microphone: unknown");
+            println!("hint: grant the terminal app that starts shuo in System Settings > Privacy & Security > Microphone");
+        }
+    }
+}
+
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+}
+
+fn accessibility_trusted() -> bool {
+    unsafe { AXIsProcessTrusted() }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MicrophoneAuthorization {
+    NotDetermined,
+    Restricted,
+    Denied,
+    Authorized,
+}
+
+#[link(name = "AVFoundation", kind = "framework")]
+extern "C" {}
+
+fn microphone_authorization() -> Option<MicrophoneAuthorization> {
+    let class = AnyClass::get(c"AVCaptureDevice")?;
+    let status: isize =
+        unsafe { msg_send![class, authorizationStatusForMediaType: ns_string!("soun")] };
+    match status {
+        0 => Some(MicrophoneAuthorization::NotDetermined),
+        1 => Some(MicrophoneAuthorization::Restricted),
+        2 => Some(MicrophoneAuthorization::Denied),
+        3 => Some(MicrophoneAuthorization::Authorized),
+        _ => None,
+    }
+}
+
+fn format_duration(ms: u64) -> String {
+    let secs = ms / 1000;
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if h > 0 {
+        format!("{h}h{m}m{s}s")
+    } else if m > 0 {
+        format!("{m}m{s}s")
+    } else {
+        format!("{s}s")
+    }
+}

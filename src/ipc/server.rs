@@ -4,6 +4,7 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -35,19 +36,30 @@ pub async fn bind(path: impl AsRef<Path>) -> Result<UnixListener> {
     Ok(listener)
 }
 
-pub async fn run(listener: UnixListener, state: StateStore) -> Result<()> {
+#[derive(Clone)]
+pub struct ServerControl {
+    pub reload: crate::reload::Handle,
+    pub started_at: Instant,
+}
+
+pub async fn run(listener: UnixListener, state: StateStore, control: ServerControl) -> Result<()> {
     loop {
         let (stream, _) = listener.accept().await.context("accept UDS client")?;
         let state = state.clone();
+        let control = control.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, state).await {
+            if let Err(e) = handle_client(stream, state, control).await {
                 crate::debug_println!("[ipc] client ended: {e:#}");
             }
         });
     }
 }
 
-async fn handle_client(stream: UnixStream, state: StateStore) -> Result<()> {
+async fn handle_client(
+    stream: UnixStream,
+    state: StateStore,
+    control: ServerControl,
+) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     let (tx, mut rx) = mpsc::channel::<Event>(CLIENT_QUEUE);
@@ -115,15 +127,29 @@ async fn handle_client(stream: UnixStream, state: StateStore) -> Result<()> {
                     &tx,
                     Event::DaemonStatus {
                         pid: std::process::id(),
+                        uptime_ms: control.started_at.elapsed().as_millis() as u64,
                         state: snapshot.state.into(),
                         recording_id: snapshot.recording_id,
                     },
                 );
             }
-            Command::StartRecording
-            | Command::StopRecording
-            | Command::CancelRecording
-            | Command::ReloadConfig => {
+            Command::ReloadConfig => match control.reload.reload_now() {
+                Ok(()) => send_or_drop(
+                    &tx,
+                    Event::ConfigReloaded {
+                        path: crate::config::default_path().display().to_string(),
+                    },
+                ),
+                Err(e) => send_or_drop(
+                    &tx,
+                    Event::Error {
+                        recording_id: None,
+                        kind: "reload_config_failed".to_string(),
+                        msg: e.to_string(),
+                    },
+                ),
+            },
+            Command::StartRecording | Command::StopRecording | Command::CancelRecording => {
                 send_or_drop(
                     &tx,
                     Event::Error {
@@ -329,7 +355,22 @@ mod tests {
             std::env::temp_dir().join(format!("shuohua-ipc-test-{}.sock", ulid::Ulid::new()));
         let listener = bind(&path).await.unwrap();
         let state = StateStore::new();
-        let server = tokio::spawn(run(listener, state.clone()));
+        let cfg_path =
+            std::env::temp_dir().join(format!("shuohua-ipc-test-{}.toml", ulid::Ulid::new()));
+        std::fs::write(
+            &cfg_path,
+            "[hotkey]\ntrigger=\"f16\"\n\n[asr]\nprovider=\"doubao\"\n",
+        )
+        .unwrap();
+        let (_rx, reload) = crate::reload::watch_with_handle(cfg_path).unwrap();
+        let server = tokio::spawn(run(
+            listener,
+            state.clone(),
+            ServerControl {
+                reload,
+                started_at: Instant::now(),
+            },
+        ));
 
         let mut a = TestClient::connect(&path).await;
         let mut b = TestClient::connect(&path).await;

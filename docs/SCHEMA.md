@@ -31,6 +31,7 @@
 {"event":"segment","recording_id":"01HXYZ...","text":"今天天气真好。"}    // 已定型文本段
 {"event":"pipeline_step","recording_id":"01HXYZ...","name":"filler","status":"ok","duration_ms":0.3,"text":"..."}
 {"event":"history","records":[...]}                         // get_history 回包，从新到旧
+{"event":"config_reloaded","path":"/Users/me/.config/shuohua/config.toml"} // reload_config 成功回包
 {"event":"error","recording_id":"01HXYZ...","kind":"asr_timeout","msg":"..."}
 {"event":"history_appended","record":{...}}              // 唯一的"会话完成"事件，含整条 history record
 ```

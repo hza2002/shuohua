@@ -91,8 +91,12 @@ pub enum Event {
     },
     DaemonStatus {
         pid: u32,
+        uptime_ms: u64,
         state: WireState,
         recording_id: Option<String>,
+    },
+    ConfigReloaded {
+        path: String,
     },
     Error {
         recording_id: Option<String>,

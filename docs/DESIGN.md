@@ -379,8 +379,8 @@ language    = "zh-CN"         # 可省略；省略时自动中英混合
 enable_itn  = true
 enable_punc = true
 enable_ddc  = true
-# stream_mode = 2             # 可选实验字段；默认不发
-# ai_vad      = true          # 可选实验字段；默认不发
+stream_mode = 2               # 可选实验字段；不确定时注释掉
+ai_vad      = true            # 可选实验字段；不确定时注释掉
 ```
 
 `asr/whisper_cpp.toml`（未来 M8）：

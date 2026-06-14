@@ -38,7 +38,6 @@ pub struct SessionParams {
     pub record_audio: bool,
     pub stop_delay_ms: u32,
     pub hotwords: Vec<String>,
-    pub segment_separator: String,
     pub overlay: Option<OverlayHandle>,
     pub state: StateStore,
 }
@@ -51,7 +50,7 @@ pub async fn run_recording(
     let recording_id = ulid::Ulid::new().to_string();
     let recording_started_at = time::OffsetDateTime::now_utc();
     let recording_started_instant = Instant::now();
-    eprintln!("[shuo] ▶ recording id={recording_id}");
+    crate::debug_println!("[shuo] ▶ recording id={recording_id}");
     params.state.set_recording(recording_id.clone());
     let mut app_context = app_context_darwin::frontmost_app();
     overlay_send(
@@ -81,7 +80,7 @@ pub async fn run_recording(
         None
     };
     if let Some(p) = &audio_path {
-        eprintln!("[shuo] 留存 wav → {}", p.display());
+        crate::debug_println!("[shuo] 留存 wav → {}", p.display());
     }
 
     let mut rec = match recorder::start(audio_path) {
@@ -172,7 +171,7 @@ pub async fn run_recording(
                 match ev {
                     None => break,
                     Some(AsrEvent::Partial { text, seq }) => {
-                        eprintln!("[shuo]   partial#{seq}: {text}");
+                        crate::debug_println!("[shuo]   partial#{seq}: {text}");
                         params.state.partial(recording_id.clone(), text.clone());
                         overlay_send(
                             &params,
@@ -187,7 +186,7 @@ pub async fn run_recording(
                         );
                     }
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                        eprintln!("[shuo]   segment: {text}");
+                        crate::debug_println!("[shuo]   segment: {text}");
                         overlay_send(&params, OverlayCmd::AppendSegment { text: text.clone() });
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
@@ -215,8 +214,7 @@ pub async fn run_recording(
                             raw_text: pending_segments
                                 .iter()
                                 .map(|s| s.text.as_str())
-                                .collect::<Vec<_>>()
-                                .join(&params.segment_separator),
+                                .collect::<String>(),
                             segments: pending_segments,
                             pipeline: Vec::new(),
                             audio_ms: samples_to_ms(audio_samples_sent),
@@ -283,10 +281,9 @@ pub async fn run_recording(
     let raw_text = pending_segments
         .iter()
         .map(|s| s.text.as_str())
-        .collect::<Vec<_>>()
-        .join(&params.segment_separator);
+        .collect::<String>();
     if cancel_requested {
-        eprintln!("[shuo] ✖ recording canceled");
+        crate::debug_println!("[shuo] ✖ recording canceled");
         app_context = app_context_darwin::frontmost_app();
         params.state.set_idle();
         overlay_send(
@@ -316,7 +313,6 @@ pub async fn run_recording(
     }
     let (pipeline, status, error) = dispatch_with_filler(
         &pending_segments,
-        &params.segment_separator,
         params.auto_paste,
         &app_context,
     )
@@ -423,12 +419,12 @@ async fn finish(
                 match ev {
                     None => break,
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                        eprintln!("[shuo]   segment (drain): {text}");
+                        crate::debug_println!("[shuo]   segment (drain): {text}");
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Done) => break,
                     Some(AsrEvent::Partial { text, seq }) => {
-                        eprintln!("[shuo]   partial#{seq} (drain): {text}");
+                        crate::debug_println!("[shuo]   partial#{seq} (drain): {text}");
                     }
                     Some(AsrEvent::Error { err }) => {
                         eprintln!("[shuo] ❌ ASR error during drain: {err}");
@@ -481,11 +477,11 @@ async fn finish(
                     None => return false,
                     Some(AsrEvent::Done) => return false,
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                        eprintln!("[shuo]   segment (final): {text}");
+                        crate::debug_println!("[shuo]   segment (final): {text}");
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Partial { text, seq }) => {
-                        eprintln!("[shuo]   partial#{seq} (final): {text}");
+                        crate::debug_println!("[shuo]   partial#{seq} (final): {text}");
                     }
                     Some(AsrEvent::Error { err }) => {
                         eprintln!("[shuo] ❌ ASR error during final: {err}");
@@ -514,7 +510,6 @@ async fn cancel_session(
 
 async fn dispatch_with_filler(
     segments: &[SegmentCapture],
-    sep: &str,
     auto_paste: bool,
     app_context: &post::AppContext,
 ) -> Result<
@@ -526,16 +521,16 @@ async fn dispatch_with_filler(
     HistoryError,
 > {
     let segment_texts: Vec<String> = segments.iter().map(|s| s.text.clone()).collect();
-    let raw_text = segment_texts.join(sep);
+    let raw_text: String = segment_texts.concat();
     if raw_text.is_empty() {
-        eprintln!("[shuo] (空识别结果，跳过 dispatch)");
+        crate::debug_println!("[shuo] (空识别结果，跳过 dispatch)");
         return Ok((Vec::new(), HistoryStatus::Canceled, None));
     }
     let chain: Vec<Box<dyn post::PostProcessor>> =
         vec![Box::new(RuleBasedFiller::default_patterns())];
     let initial = PipelineText::new(raw_text, segment_texts);
     let (out, steps) = post::run_chain(&chain, initial, app_context, Duration::from_secs(2)).await;
-    eprintln!("[shuo] ✓ 最终: {}", out.text);
+    crate::debug_println!("[shuo] ✓ 最终: {}", out.text);
     let pipeline = steps.into_iter().map(PipelineStepHistory::from).collect();
     if let Err(e) = dispatch::dispatch(&out.text, auto_paste) {
         eprintln!("[shuo] ❌ 剪贴板写入失败: {e:#}");

@@ -362,7 +362,7 @@ auto_stop_silence_ms = 600000    # 静音多久后完全停止录音（未来）
 #### 关键不变量
 
 1. **VAD 独立于 provider**：任何 provider 不需要关心 VAD。
-2. **段间分隔符**默认空格，已配置化（`voice.segment_separator`）。
+2. **段间无分隔符**：provider 保证 emit 的 segment 直接 concat 就是它想要的最终文本。Doubao 自带句末标点；其他 provider 若不自带，应在 adapter 内部补，不暴露 voice 层旋钮。
 3. **cpal 跟随 Voice 状态机**：Voice::Idle 时绝不持有 cpal stream。
 
 ### 2.10 PostProcessor 抽象
@@ -687,6 +687,45 @@ parse 失败（非法 trigger 字符串）只打日志保留旧 trigger，不向
 - [ ] UDS `{"op":"reload_config"}` op：M4 的 UDS server 起来后，加一条 op 直接重 parse + 走和 watcher 同样的 broadcast 路径（不要绕过 watch::Sender，否则订阅者会漏触发）
 - [ ] `shuo doctor`：打印 `effective config`（`cfg_rx.borrow()` 快照），校验 + 提示哪些字段不支持热重载
 - [ ] launchd 自启：跟 reload 无关，纯独立 feature
+
+---
+
+### 2.13 日志门禁（release vs debug）
+
+shuohua 是 launchd 后台 daemon。release binary 跑起来时 stderr 会被 launchd `.plist` 的 `StandardErrorPath` 重定向到日志文件，**长年累积**——所以发到 stderr 的每一行都按"将来谁会读这条"标准来判断。
+
+#### 三层
+
+| 层 | 角色 | 在 release | 实现 |
+|---|---|---|---|
+| **canonical 记录** | 已完成 session 的事实（raw_text、segment 时间戳、pipeline 步骤、status、error） | 是，写 `~/.local/state/shuohua/history.jsonl` | `state::history::append_default` |
+| **stderr error 兜底** | 错误 / 警告 / 启动 OK / 致命路径 | 是，走 stderr → launchd 日志文件 | `eprintln!` 直调 |
+| **stderr debug narration** | partial / segment / 探针 / 每帧细节 / 成功路径口播 | **否**（编译期消除） | `crate::debug_println!` 宏 |
+
+核心原则：**history.jsonl 是真事实源**，stderr 只在 history 兜不到的失败路径（连接前崩、panic、未到 record state 的错误）当兜底。narration 是开发期工具，不该污染长驻 daemon 的日志文件。
+
+#### 怎么判一条 `eprintln!` 该归哪
+
+| 这条日志的内容是 | 归层 |
+|---|---|
+| 错误 / 异常 (`❌`)、警告 (`⚠`) | `eprintln!`（release） |
+| 启动一次性信息（"daemon ready"、配置摘要、hotwords 数）| `eprintln!`（release） |
+| 单 session 内逐步 narration（"▶ recording"、"partial#N"、"segment"、"✓ 剪贴板已写入"）| `debug_println!` |
+| 探针 / 内省（drift、glass probe、协议帧 dump）| `debug_println!`（或整个模块 `#[cfg(debug_assertions)]`）|
+| history.jsonl 里**已经记录**的内容（pipeline 步骤耗时、最终文本、recording id）| `debug_println!` |
+| **正常路径**的 OK 行（"reloaded"、"language → en"）| `debug_println!` |
+
+#### 实现细节
+
+- `src/log.rs` 定义 `debug_println!`：debug build 直接 `eprintln!`；release build 用 `let _ = format_args!(...)` 消耗参数（避免 unused_variables 警告）但不做 IO。
+- 探针类对象（如 `DriftProbe`）走两份 `cfg` 分支的 struct + impl：debug build 持 `Vec<String>`、方法干活；release build zero-sized struct、方法空体。
+- 表达式位置（如 match arm）能直接用：`Ok(()) => crate::debug_println!("✓ ...")`。
+
+#### 不变量
+
+1. **不引入 `tracing` / `log` 等框架**，直到 shuohua 真有第二个用户 / 需要 runtime 级别切换 / 需要 structured fields。现在的二级门禁够了。
+2. **不在 release 路径里做 narration**。逐条决策点见上表，新写代码也按此分。
+3. **history.jsonl schema 升级走 SCHEMA.md**，不依赖 stderr 推测过去发生了什么。
 
 ---
 

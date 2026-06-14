@@ -97,7 +97,7 @@ fn run_watcher(
                 if tx.send(Arc::new(cfg)).is_err() {
                     return Ok(());
                 }
-                eprintln!("[reload] config reloaded from {}", path.display());
+                crate::debug_println!("[reload] config reloaded from {}", path.display());
             }
             Err(e) => {
                 eprintln!("[reload] parse failed, keeping previous: {e:#}");
@@ -129,7 +129,7 @@ pub fn spawn_i18n(mut rx: Rx, handle: OverlayHandle) {
             if next != prev {
                 crate::i18n::init(&next);
                 handle.send(OverlayCmd::Relabel);
-                eprintln!("[reload] language → {next}");
+                crate::debug_println!("[reload] language → {next}");
                 prev = next;
             }
         }
@@ -152,7 +152,7 @@ pub fn spawn_hotkey(mut rx: Rx, code_tx: mpsc::UnboundedSender<u16>) {
                     if code_tx.send(code).is_err() {
                         return;
                     }
-                    eprintln!("[reload] hotkey trigger → {next} (0x{code:02X})");
+                    crate::debug_println!("[reload] hotkey trigger → {next} (0x{code:02X})");
                 }
                 Err(e) => {
                     eprintln!("[reload] invalid hotkey {next:?}, keeping previous: {e:#}");

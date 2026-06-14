@@ -20,6 +20,7 @@ mod config;
 mod focused_window_darwin;
 mod hotkey;
 mod i18n;
+mod log;
 mod overlay;
 mod post;
 mod reload;
@@ -177,7 +178,6 @@ async fn run_daemon(
                             record_audio: cfg.voice.record_audio,
                             stop_delay_ms: cfg.voice.stop_delay_ms,
                             hotwords: cfg.asr.hotwords.clone(),
-                            segment_separator: cfg.voice.segment_separator.clone(),
                             overlay: Some(overlay.clone()),
                             state: state_store.clone(),
                         };

@@ -127,7 +127,7 @@ pub async fn run_chain(
         match tokio::time::timeout(timeout, p.process(current.clone(), ctx)).await {
             Ok(Ok(out)) => {
                 let step = PipelineStep::ok(p.name(), started.elapsed(), out.text.clone());
-                eprintln!("[post] {} ok in {:.1}ms", p.name(), step.duration_ms);
+                crate::debug_println!("[post] {} ok in {:.1}ms", p.name(), step.duration_ms);
                 current = out;
                 steps.push(step);
             }

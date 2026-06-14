@@ -90,7 +90,7 @@ fn run_recorder(
     if sample_format != SampleFormat::F32 {
         bail!("recorder requires F32 input, got {sample_format:?}");
     }
-    eprintln!("[recorder] {src_rate}Hz × {channels}ch F32 → 16k mono s16le");
+    crate::debug_println!("[recorder] {src_rate}Hz × {channels}ch F32 → 16k mono s16le");
 
     let wav: Arc<Mutex<Option<hound::WavWriter<std::io::BufWriter<std::fs::File>>>>> =
         Arc::new(Mutex::new(open_wav(audio_wav_path.as_deref())?));

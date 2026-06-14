@@ -51,15 +51,27 @@ pub struct DoubaoConfig {
     pub access_key: String,
     #[serde(default = "default_resource_id")]
     pub resource_id: String,
-    /// 留空 = bigmodel_async 自动中英混合识别。
+    /// 留空 = bigmodel_async 自动中英混合识别（默认推荐，中英混杂技术词汇友好）。
+    /// 设置 `"zh-CN"` / `"en-US"` 等强制单语，换更高单语 confidence。
+    /// 优先级：本字段 > `SessionCtx.language`（voice 层目前固定 Multilingual）。
     #[serde(default)]
     pub language: Option<String>,
     #[serde(default = "default_true")]
     pub enable_itn: bool,
     #[serde(default = "default_true")]
     pub enable_punc: bool,
-    #[serde(default)]
+    /// 服务端去口语词。我们本地 PostProcessor 也做一遍，双重保险。
+    #[serde(default = "default_true")]
     pub enable_ddc: bool,
+    /// 实验：StreamMode。0=流式 I/O，1=流式输入一次性输出，2=双向流式优化（火山推荐）。
+    /// `None` = 不发字段走服务端默认。直连 WS 是否支持未文档化，实测中。
+    #[serde(default)]
+    pub stream_mode: Option<u8>,
+    /// 实验：启用服务端 AI VAD（语义级句末检测）。理论上减少"半句被切成 definite"。
+    /// `None` / `false` = 不发字段。字段名按 RTC 文档结构映射 `vad_config.ai_vad`，
+    /// 直连 WS 不接受会触发 server protocol error，到时换名重试。
+    #[serde(default)]
+    pub ai_vad: Option<bool>,
 }
 
 fn default_resource_id() -> String {
@@ -87,9 +99,12 @@ pub fn load_config() -> anyhow::Result<DoubaoConfig> {
             path.display(),
         )
     })?;
-    let cfg: DoubaoConfig =
+    let mut cfg: DoubaoConfig =
         toml::from_str(&body).map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))?;
-    if cfg.app_key.trim().is_empty() || cfg.access_key.trim().is_empty() {
+    // 控制台复制粘贴常带首尾空格，进协议帧前裁掉，避免 401。
+    cfg.app_key = cfg.app_key.trim().to_string();
+    cfg.access_key = cfg.access_key.trim().to_string();
+    if cfg.app_key.is_empty() || cfg.access_key.is_empty() {
         anyhow::bail!(
             "{}: app_key / access_key 为空。从 console.volcengine.com/speech 拿一对填进去",
             path.display()
@@ -165,7 +180,7 @@ impl AsrProvider for DoubaoProvider {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("-")
             .to_string();
-        eprintln!("[doubao] connected, X-Tt-Logid={logid}");
+        crate::debug_println!("[doubao] connected, X-Tt-Logid={logid}");
 
         // 首条 full client request
         let payload = build_full_client_request_payload(&self.config, &ctx);
@@ -254,6 +269,7 @@ async fn session_task(
     let (mut sink, mut stream) = ws.split();
     let started_at = Instant::now();
     let mut definite_emitted: usize = 0;
+    let mut drift = DriftProbe::new();
     let mut seq: u64 = 0;
     let mut last_sent = false; // 是否已发出 is_last 帧；之后只等服务端 Done
 
@@ -297,6 +313,7 @@ async fn session_task(
                             &data,
                             started_at,
                             &mut definite_emitted,
+                            &mut drift,
                             &mut seq,
                             &evt_tx,
                         ).await {
@@ -325,10 +342,70 @@ enum ResponseAction {
     Errored,
 }
 
+/// Drift 探针 — debug-only。release build 里方法体空、struct zero-sized，编译器消除得干净。
+///
+/// 监测两类豆包行为偏离我们的假设：
+/// 1. 已 emit 的 definite utterance 在后续帧里 text 被改（[`Self::check_drift`]）
+/// 2. session 末尾 `snapshots.concat()` 与豆包 cumulative `result.text` 不一致（[`Self::check_final`]）
+///
+/// 任何一条 `⚠` 出现就该回头看豆包协议是不是变了 / 我们的 segment-concat 假设是不是破了。
+/// 日志门禁原则见 `docs/DESIGN.md` §2.13。
+///
+/// 用两份 `cfg` impl 分支，避免在表达式 / 语句位置写 `#[cfg]`（仍是 nightly）。
+#[cfg(debug_assertions)]
+struct DriftProbe {
+    snapshots: Vec<String>,
+}
+
+#[cfg(not(debug_assertions))]
+struct DriftProbe;
+
+#[cfg(debug_assertions)]
+impl DriftProbe {
+    fn new() -> Self {
+        Self {
+            snapshots: Vec::new(),
+        }
+    }
+
+    fn check_drift(&self, i: usize, current: &str) {
+        if let Some(prev) = self.snapshots.get(i) {
+            if prev != current {
+                eprintln!("[doubao] ⚠ utterance[{i}] drift: {prev:?} → {:?}", current);
+            }
+        }
+    }
+
+    fn record(&mut self, text: String) {
+        self.snapshots.push(text);
+    }
+
+    fn check_final(&self, doubao_text: &str) {
+        let ours: String = self.snapshots.concat();
+        if ours != doubao_text {
+            eprintln!(
+                "[doubao] ⚠ final mismatch\n  ours:   {ours:?}\n  doubao: {:?}",
+                doubao_text
+            );
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+impl DriftProbe {
+    fn new() -> Self {
+        Self
+    }
+    fn check_drift(&self, _i: usize, _current: &str) {}
+    fn record(&mut self, _text: String) {}
+    fn check_final(&self, _doubao_text: &str) {}
+}
+
 async fn handle_response(
     data: &[u8],
     started_at: Instant,
     definite_emitted: &mut usize,
+    drift: &mut DriftProbe,
     seq: &mut u64,
     evt_tx: &mpsc::Sender<AsrEvent>,
 ) -> ResponseAction {
@@ -369,12 +446,21 @@ async fn handle_response(
     };
 
     if let Some(result) = parsed.result {
-        // 新出现的 definite=true utterance 各推一条 Segment
+        // 新出现的 definite=true utterance 各推一条 Segment；已 emit 的过快照对比。
         for (i, u) in result.utterances.iter().enumerate() {
             if i < *definite_emitted {
+                drift.check_drift(i, &u.text);
                 continue;
             }
             if u.definite {
+                if u.text.is_empty() {
+                    // 豆包偶发：空 utterance 标 definite。不发 Segment 给上层
+                    // （overlay / history / dispatch 都没意义），但 drift 快照得占位推进，
+                    // 否则索引和 utterances[] 错位。
+                    drift.record(String::new());
+                    *definite_emitted = i + 1;
+                    continue;
+                }
                 let _ = evt_tx
                     .send(AsrEvent::Segment {
                         text: u.text.clone(),
@@ -382,15 +468,23 @@ async fn handle_response(
                         ended_at: Instant::now(),
                     })
                     .await;
+                drift.record(u.text.clone());
                 *definite_emitted = i + 1;
             }
         }
-        // Partial = 累计文本（result.text 已经是所有 utterance 拼起来的全文）
-        if !result.text.is_empty() {
+        if frame.is_last {
+            drift.check_final(&result.text);
+        }
+        // Partial 只取尾巴：result.text 是 cumulative 全文，会与已 emit 的
+        // Segment 前缀重叠，导致 overlay (segments + partial) 复读。
+        // AsrEvent::Partial 契约要求只发"当前 utterance 尾巴"，即非 definite
+        // utterance 的拼接。
+        let partial = compute_partial_text(&result.utterances);
+        if !partial.is_empty() {
             *seq += 1;
             let _ = evt_tx
                 .send(AsrEvent::Partial {
-                    text: result.text,
+                    text: partial,
                     seq: *seq,
                 })
                 .await;
@@ -522,6 +616,12 @@ fn build_full_client_request_payload(cfg: &DoubaoConfig, ctx: &SessionCtx) -> se
     if !ctx.hotwords.is_empty() {
         request["corpus"] = json!({ "context": build_hotwords_context(&ctx.hotwords) });
     }
+    if let Some(mode) = cfg.stream_mode {
+        request["stream_mode"] = json!(mode);
+    }
+    if cfg.ai_vad == Some(true) {
+        request["vad_config"] = json!({ "ai_vad": true });
+    }
 
     json!({
         "user":    { "uid": "shuohua" },
@@ -566,6 +666,19 @@ struct DoubaoUtterance {
     #[serde(default)]
     definite: bool,
     // start_time / end_time / words 字段忽略（M2 用不到，DESIGN §2.8 Segment 内部用 Instant）
+}
+
+/// 从 utterances 里抽出"还在变化的尾巴"：跳过所有 definite=true 的（它们已经
+/// 作为 Segment emit 过），把剩下的 text 拼起来。
+///
+/// 不能直接用 `result.text`：那是包含 definite 段的累计全文，会和已 emit 的
+/// Segment 在 overlay (segments + partial) 里重复显示。
+fn compute_partial_text(utterances: &[DoubaoUtterance]) -> String {
+    utterances
+        .iter()
+        .filter(|u| !u.definite)
+        .map(|u| u.text.as_str())
+        .collect()
 }
 
 // ============================================================
@@ -647,6 +760,42 @@ mod tests {
     }
 
     #[test]
+    fn compute_partial_skips_definite_utterances() {
+        // segment 定型后，doubao 会再发一帧 utterances=[{definite:true}]，
+        // cumulative result.text 也仍然带这段文本。Partial 必须为空，否则
+        // overlay 会把同一句显示两遍（见 overlay/mod.rs 的 segments+partial 模型）。
+        let utterances = vec![DoubaoUtterance {
+            text: "测试一下说话。".into(),
+            definite: true,
+        }];
+        assert_eq!(compute_partial_text(&utterances), "");
+    }
+
+    #[test]
+    fn compute_partial_concatenates_only_non_definite_tail() {
+        let utterances = vec![
+            DoubaoUtterance {
+                text: "你好。".into(),
+                definite: true,
+            },
+            DoubaoUtterance {
+                text: "我".into(),
+                definite: false,
+            },
+            DoubaoUtterance {
+                text: "在说话".into(),
+                definite: false,
+            },
+        ];
+        assert_eq!(compute_partial_text(&utterances), "我在说话");
+    }
+
+    #[test]
+    fn compute_partial_empty_when_no_utterances() {
+        assert_eq!(compute_partial_text(&[]), "");
+    }
+
+    #[test]
     fn hotwords_context_dedup_and_format() {
         let words = vec![
             "Rust".to_string(),
@@ -672,6 +821,8 @@ mod tests {
             enable_itn: true,
             enable_punc: true,
             enable_ddc: false,
+            stream_mode: None,
+            ai_vad: None,
         };
         let ctx = SessionCtx {
             language: LanguageMode::Multilingual { hint: vec![] },
@@ -690,6 +841,50 @@ mod tests {
     }
 
     #[test]
+    fn full_client_request_payload_injects_experimental_knobs_when_set() {
+        let cfg = DoubaoConfig {
+            app_key: "k".into(),
+            access_key: "a".into(),
+            resource_id: default_resource_id(),
+            language: None,
+            enable_itn: true,
+            enable_punc: true,
+            enable_ddc: true,
+            stream_mode: Some(2),
+            ai_vad: Some(true),
+        };
+        let ctx = SessionCtx {
+            language: LanguageMode::Multilingual { hint: vec![] },
+            hotwords: vec![],
+        };
+        let v = build_full_client_request_payload(&cfg, &ctx);
+        assert_eq!(v["request"]["stream_mode"], 2);
+        assert_eq!(v["request"]["vad_config"]["ai_vad"], true);
+    }
+
+    #[test]
+    fn full_client_request_payload_omits_experimental_knobs_when_none() {
+        let cfg = DoubaoConfig {
+            app_key: "k".into(),
+            access_key: "a".into(),
+            resource_id: default_resource_id(),
+            language: None,
+            enable_itn: true,
+            enable_punc: true,
+            enable_ddc: true,
+            stream_mode: None,
+            ai_vad: None,
+        };
+        let ctx = SessionCtx {
+            language: LanguageMode::Multilingual { hint: vec![] },
+            hotwords: vec![],
+        };
+        let v = build_full_client_request_payload(&cfg, &ctx);
+        assert!(v["request"]["stream_mode"].is_null());
+        assert!(v["request"]["vad_config"].is_null());
+    }
+
+    #[test]
     fn full_client_request_payload_skips_corpus_when_no_hotwords() {
         let cfg = DoubaoConfig {
             app_key: "k".into(),
@@ -699,6 +894,8 @@ mod tests {
             enable_itn: true,
             enable_punc: true,
             enable_ddc: false,
+            stream_mode: None,
+            ai_vad: None,
         };
         let ctx = SessionCtx {
             language: LanguageMode::Single("zh-CN".into()),

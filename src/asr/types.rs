@@ -63,7 +63,10 @@ pub enum LanguageMode {
 /// history.jsonl 写入时转 RFC3339（SCHEMA.md §2）由 history 模块自己映射。
 #[derive(Debug, Clone)]
 pub enum AsrEvent {
-    /// 当前 utterance 最新猜测全文。会被后续 Partial 覆盖。
+    /// 当前 utterance **尾巴**（不含已经 emit 过的 Segment）。
+    /// 会被后续 Partial 覆盖。overlay 渲染 = `segments.join("") + partial`，
+    /// 所以 provider 必须保证 Partial 不与已 emit 的 Segment 前缀重叠——
+    /// 累计全文（cumulative result.text 类）要先去掉 definite 段再发。
     Partial { text: String, seq: u64 },
     /// 句末（server VAD / definite=true / is_last 收尾）—— 不再变。
     Segment {

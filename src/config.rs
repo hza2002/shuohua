@@ -35,11 +35,6 @@ pub struct VoiceCfg {
     /// true (默认) = 识别完成后立刻 Cmd+V 上屏；false = 只进剪贴板。
     #[serde(default = "default_auto_paste")]
     pub auto_paste: bool,
-    /// 多段 ASR segment 拼接时的分隔符。默认空格。
-    /// 目前只有 Doubao server VAD 切段（单 session 内），未来加客户端 VAD
-    /// 多 session 后也用它拼 session 间文本。
-    #[serde(default = "default_segment_separator")]
-    pub segment_separator: String,
 }
 
 impl Default for VoiceCfg {
@@ -48,7 +43,6 @@ impl Default for VoiceCfg {
             stop_delay_ms: default_stop_delay_ms(),
             record_audio: false,
             auto_paste: default_auto_paste(),
-            segment_separator: default_segment_separator(),
         }
     }
 }
@@ -58,9 +52,6 @@ fn default_stop_delay_ms() -> u32 {
 }
 fn default_auto_paste() -> bool {
     true
-}
-fn default_segment_separator() -> String {
-    " ".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -225,7 +216,6 @@ provider = "doubao"
         assert_eq!(cfg.voice.stop_delay_ms, 800);
         assert!(!cfg.voice.record_audio);
         assert!(cfg.voice.auto_paste);
-        assert_eq!(cfg.voice.segment_separator, " ");
         assert_eq!(cfg.ui.language, "auto");
         assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
         assert_eq!(cfg.overlay.glass_variant, 19);
@@ -275,22 +265,6 @@ provider = "doubao"
             cfg.voice.auto_paste,
             "auto_paste 默认应为 true (REQUIREMENTS §3.1)"
         );
-    }
-
-    #[test]
-    fn segment_separator_overridable() {
-        let body = r#"
-[hotkey]
-trigger = "f16"
-
-[voice]
-segment_separator = "，"
-
-[asr]
-provider = "doubao"
-"#;
-        let cfg = parse(body).unwrap();
-        assert_eq!(cfg.voice.segment_separator, "，");
     }
 
     #[test]

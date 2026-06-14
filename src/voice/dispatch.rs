@@ -17,11 +17,11 @@ pub fn dispatch(text: &str, auto_paste: bool) -> Result<()> {
         return Ok(());
     }
     clipboard_darwin::write_string(text).context("write clipboard")?;
-    eprintln!("[shuo] ✓ 剪贴板已写入");
+    crate::debug_println!("[shuo] ✓ 剪贴板已写入");
 
     if auto_paste {
         match autotype_darwin::paste() {
-            Ok(()) => eprintln!("[shuo] ✓ Cmd+V 已上屏"),
+            Ok(()) => crate::debug_println!("[shuo] ✓ Cmd+V 已上屏"),
             Err(e) => eprintln!("[shuo] ⚠ Cmd+V 失败，文本仍在剪贴板，可手动粘贴: {e:#}"),
         }
     }

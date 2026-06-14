@@ -32,7 +32,7 @@ src/
     └── dispatch.rs                      # 剪贴板 + 可选 Cmd+V
 ```
 
-数据流：F16 → CGEventTap → pipe → mpsc → `Tracker` → tokio main loop。第一次按 = spawn `finish::run_recording` 任务：cpal stream → `DoubaoSession.send_pcm` 流式推、`AsrEvent::Segment` 累积。第二次 F16 = oneshot 通知 task 收尾：drain `stop_delay_ms` 尾音 → send `is_last` → 等 Done（5s 超时）→ segments join `segment_separator` → filler pipeline → 剪贴板 + Cmd+V。
+数据流：F16 → CGEventTap → pipe → mpsc → `Tracker` → tokio main loop。第一次按 = spawn `finish::run_recording` 任务：cpal stream → `DoubaoSession.send_pcm` 流式推、`AsrEvent::Segment` 累积。第二次 F16 = oneshot 通知 task 收尾：drain `stop_delay_ms` 尾音 → send `is_last` → 等 Done（5s 超时）→ segments 直接 concat（provider 自带分隔） → filler pipeline → 剪贴板 + Cmd+V。
 
 ## 未实现（按里程碑）
 

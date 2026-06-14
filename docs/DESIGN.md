@@ -112,7 +112,7 @@ enum OverlayCmd {
 |---|---|---|
 | `/tmp/shuohua-${UID}.sock`（UDS） | 实时状态流 + 控制命令 | **TUI 不连接时 daemon 零 UI 开销**；连上时事件驱动 push，无 polling |
 | `${XDG_STATE_HOME:-~/.local/state}/shuohua/history.jsonl` | 识别历史 append-only | TUI 启动时读一次算统计；外部脚本/未来 GUI 也读它 |
-| `${XDG_STATE_HOME:-~/.local/state}/shuohua/log.jsonl` | 结构化日志 | tracing 写；TUI 可滚动查看 |
+| launchd 重定向的 stderr 文件 | release binary 的错误兜底日志 | 见 §2.13，不引入独立 log 框架；TUI **不**读这个文件 |
 
 UDS 协议格式见 [SCHEMA.md](./SCHEMA.md)。
 
@@ -629,7 +629,7 @@ language = "auto"        # auto | zh-CN | en-US
 | TUI 全部文本 | ✓ |
 | Doctor 输出 | ✓ |
 | `shuo help` / clap 自动文案 | 默认 en-US（clap 自带不易换；help 实际上是英文用户也能看懂的） |
-| 日志（tracing） | en-US 固定（debug 用，不走 i18n） |
+| 日志（stderr） | en-US 固定（debug 用，不走 i18n） |
 | history.jsonl | 不本地化（数据格式） |
 
 #### 热重载
@@ -745,7 +745,7 @@ shuohua 是 launchd 后台 daemon。release binary 跑起来时 stderr 会被 la
 | 文件监听 | `notify` | 监听**目录**而非文件（避免 inode 替换） |
 | 异步运行时 | `tokio`（multi-thread） | 标准 |
 | Async trait | `async-trait` | AsrProvider/AsrSession 用 |
-| 日志 | `tracing` + `tracing-subscriber` | TUI/守护两种 sink；同时落 JSONL |
+| 日志 | std `eprintln!` + 自家 `debug_println!` 宏 | 不引日志框架（见 §2.13）；release 走 launchd stderr，debug build 看完整 narration |
 | 错误 | `thiserror`（库错误）+ `anyhow`（main） | 标准组合 |
 | 配置校验 | `serde` 自带 + 自定义 `validate()` | 不引 garde 减少依赖 |
 | 无锁注册表快照 | `arc-swap` | suppress 实现关键，也用于 StateStore 快照 + i18n 字典 |
@@ -773,6 +773,7 @@ shuohua/
 ├── src/
 │   ├── main.rs                 # CLI 入口（clap 子命令分发 → daemon / TUI / install / doctor 等）
 │   ├── config.rs               # serde TOML + 热键字符串解析（纯类型，无 I/O）
+│   ├── log.rs                  # debug_println! 宏 + 日志门禁原则（见 §2.13）
 │   ├── reload.rs               # notify watcher + overlay/i18n/hotkey subscribers（M3.f）
 │   ├── doctor.rs               # 终端识别 + AX/麦克风权限检查
 │   ├── hotkey/
@@ -801,8 +802,10 @@ shuohua/
 │   │   ├── mod.rs              # 内存状态机 + tokio::sync::broadcast 给订阅者
 │   │   └── history.rs          # append-only history.jsonl + 派生统计
 │   ├── ipc/
-│   │   ├── mod.rs              # UDS server (daemon) / client (tui)
-│   │   └── protocol.rs         # 命令/事件 serde 类型
+│   │   ├── mod.rs              # 子模块声明 + 公共类型 re-export
+│   │   ├── protocol.rs         # 命令/事件 serde 类型（M4，schema 见 SCHEMA.md §1）
+│   │   ├── server.rs           # daemon 侧 UnixListener + 每 client 一个 tokio task；订阅 StateEvent broadcast
+│   │   └── client.rs           # TUI / 外部脚本侧连接 + 帧解析
 │   ├── overlay/
 │   │   ├── mod.rs              # 后台线程一侧：构造 OverlayCmd 推到主线程 channel
 │   │   ├── view.rs             # AppKit 视图层（NSPanel + NSGlassEffectView + 子视图）
@@ -880,7 +883,7 @@ shuohua/
 
 - **配置文件权限**：首次写入 `~/.config/shuohua/config.toml` 时强制 `chmod 0600`。其他 toml 不强制（用户自己负责）。
 - **API key 存储**：明文 TOML 是 v1 选择（仓库放模板，用户填）。未来可选 `keychain://` 前缀走 macOS Keychain，但 v1 不做。LLM provider 可写 `api_key_env = "ANTHROPIC_API_KEY"` 走环境变量。
-- **日志**：`tracing` 默认级别 INFO，**不打识别文本**（避免 log.jsonl 里漏出敏感语音内容）。`--debug` 或专门 target 才打。
+- **日志**：见 §2.13。release stderr 只兜底错误 / 警告 / 启动；debug build 才打 partial / segment 等识别文本细节。launchd 日志文件不含识别内容。
 - **history.jsonl 明文**：是设计选择（用户唯一数据源），用户应当知道并定期清理。提供 `shuo doctor` 提示"history 已 X MB / Y 条"，但 v1 不自动清理。
 - **音频留存可选**：`voice.record_audio = false` 是默认。开启时写 `~/.local/state/shuohua/audio/<recording_id>.wav`（跟 history.jsonl 同一根目录，state dir 语义 = "用户主动留档，不允许被系统 cache cleanup 清掉"；不用 `/tmp`/`~/.cache`）。文件名 = 该次 recording 的 ULID，跟 history.jsonl 行天然 join。多 session 情况（M2.5+）下整次录音仍是一个 wav（含静音停顿），段边界由 `history.asr.sessions[].started_at/ended_at` 切分。关闭路径完全跳过 wav 写入逻辑，零开销，零额外内存分配。
 - **PostProcessor 隔离**：LLM processor 把识别文本发给第三方 API。doctor 启动时 warn 一次"启用 LLM 后处理意味着文本会发给 {provider}"。

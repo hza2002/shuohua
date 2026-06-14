@@ -83,7 +83,7 @@
 | Q8 | **单二进制 + 扁平子命令**。CLI 设计见 [docs/CLI.md](docs/CLI.md) |
 | 进程模型 | **单进程 daemon + TUI 客户端**，daemon 常驻、TUI 按需打开 |
 | **不拆 overlay 子进程** | AppKit 主线程 + tokio 后台线程同进程跑。NSGlassEffectView 直接在 daemon 进程里渲染（参考 electron-liquid-glass 思路） |
-| IPC | **UDS** (`/tmp/shuohua-${UID}.sock`) 实时事件 + 控制命令；**history.jsonl** + **log.jsonl** 持久化。不引入 state.json |
+| IPC | **UDS** (`/tmp/shuohua-${UID}.sock`) 实时事件 + 控制命令；**history.jsonl** 持久化（无独立日志框架，见 [docs/DESIGN.md §2.13](docs/DESIGN.md#213-日志门禁release-vs-debug)）。不引入 state.json |
 | history 记录范围 | 每次会话都记录（含 `canceled` / `error` / `timeout`），含多段 ASR sessions + pipeline 步骤，不记录原始音频 |
 | **history schema** | v1 schema 见 [docs/SCHEMA.md](docs/SCHEMA.md)，含 `version` 字段，扩字段不破坏，删字段才升 version |
 | 统计来源 | 全部从 history.jsonl 派生，无独立 stats.json |

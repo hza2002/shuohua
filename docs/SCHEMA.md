@@ -39,7 +39,7 @@
 
 ### 1.3 不引入 state.json
 
-状态机当前快照只通过 UDS `subscribe` 拿。**唯一持久化文件是 history.jsonl + log.jsonl**。这样：
+状态机当前快照只通过 UDS `subscribe` 拿。**唯一持久化文件是 history.jsonl**（外加 release 跑 launchd 时的 stderr 兜底文件，见 [DESIGN.md §2.13](DESIGN.md#213-日志门禁release-vs-debug)）。这样：
 
 - 单一真相来源（history 派生统计）
 - 不浪费 SSD（无 1Hz 写）
@@ -97,7 +97,7 @@
 
 ### 2.4 写入失败处理
 
-append 失败（磁盘满 / 权限错 / inode 跑光）时，记录 `tracing::error!` + 推一条 UDS `error` 事件，但 daemon **不崩**。这条 recording 的数据丢弃，下条继续尝试。罕见路径（磁盘满几乎不会发生），不做自动回收或重试。
+append 失败（磁盘满 / 权限错 / inode 跑光）时，记录 `eprintln!` + 推一条 UDS `error` 事件，但 daemon **不崩**。这条 recording 的数据丢弃，下条继续尝试。罕见路径（磁盘满几乎不会发生），不做自动回收或重试。
 
 ---
 
@@ -113,5 +113,5 @@ ${XDG_STATE_HOME:-~/.local/state}/shuohua/audio/<recording_id>.wav
 - **格式固定**：16kHz s16le mono PCM（canonical 内部格式，跟喂给 ASR 的 PCM 同一份）。
 - **一次 recording = 一个 wav**，含静音段。M2.5+ 多 session 不改命名：段边界从 `history.asr.sessions[].started_at/ended_at` 时间戳切分（`ffmpeg -ss <start> -t <dur>` 重放某段，零信息丢失）。
 - **关闭路径 (`record_audio = false`, 默认)** 完全跳过写入逻辑：cpal callback 拿到 PCM 直接喂 ASR，不复制一份到落盘 buffer。
-- **写入失败**：跟 history.jsonl 同语义——`tracing::error!` + UDS `error` 事件，daemon 不崩，这次录音不留 wav，下次继续尝试。
+- **写入失败**：跟 history.jsonl 同语义——`eprintln!` + UDS `error` 事件，daemon 不崩，这次录音不留 wav，下次继续尝试。
 - **不存 history 字段**：路径完全由 ULID + 目录约定推出，无需在 history.jsonl 加 `audio_path`。文件不存在 = `record_audio` 当时是 false（或写失败）。

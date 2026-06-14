@@ -771,7 +771,7 @@ shuohua/
 │   ├── SCHEMA.md
 │   └── CLI.md
 ├── src/
-│   ├── main.rs                 # CLI 入口（clap 子命令分发 → daemon / TUI / install / doctor 等）
+│   ├── main.rs                 # smart fallback；--daemon 跑 AppKit + tokio daemon；M5 再接 clap 子命令
 │   ├── config.rs               # serde TOML + 热键字符串解析（纯类型，无 I/O）
 │   ├── log.rs                  # debug_println! 宏 + 日志门禁原则（见 §2.13）
 │   ├── reload.rs               # notify watcher + overlay/i18n/hotkey subscribers（M3.f）
@@ -812,17 +812,16 @@ shuohua/
 │   │   └── animations.rs       # CABasicAnimation / CATransition 包装
 │   ├── autotype_darwin.rs      # CGEventPost Cmd+V
 │   ├── clipboard_darwin.rs     # NSPasteboard
-│   ├── cli/
+│   ├── cli/                    # M5 引入
 │   │   ├── mod.rs              # clap derive，子命令分发
 │   │   ├── doctor.rs           # shuo doctor（包含配置 validate + 打印 effective config）
-│   │   ├── service.rs          # install / uninstall / start / stop / restart / status
-│   │   └── smart.rs            # 裸跑 shuo：连 UDS or 起 daemon + TUI
+│   │   └── service.rs          # install / uninstall / start / stop / restart / status
 │   ├── i18n/
 │   │   └── mod.rs              # t!() 宏 + 字典加载，~100 行
 │   └── tui/
-│       ├── mod.rs              # ratatui 主循环（订阅 UDS）
-│       ├── panes.rs            # 状态 / 历史 / pipeline 流水线视图
-│       └── keybindings.rs
+│       ├── mod.rs              # ratatui 主循环（订阅 UDS）；Status / History / Settings 三页
+│       ├── panes.rs            # 状态 / 历史 / pipeline / 配置浏览渲染
+│       └── keybindings.rs      # Tab/Shift-Tab + 1/2/3 翻页；h/l 留给未来设置项调整
 ├── assets/
 │   └── i18n/
 │       ├── zh-CN.toml          # 默认中文

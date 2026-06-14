@@ -20,17 +20,24 @@ mod config;
 mod focused_window_darwin;
 mod hotkey;
 mod i18n;
+mod ipc;
 mod log;
 mod overlay;
 mod post;
 mod reload;
 mod state;
+mod text_stats;
+mod tui;
 mod voice;
 
 use anyhow::{Context, Result};
 use std::io::Read;
+use std::os::fd::AsRawFd;
+use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use hotkey::{HotkeyEvent, RawKey, Tracker};
 use overlay::OverlayHandle;
@@ -41,6 +48,95 @@ use voice::SessionControl;
 const KEY_ESCAPE: u16 = 0x35;
 
 fn main() -> Result<()> {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.iter().any(|arg| arg == "--daemon") {
+        return run_daemon_process();
+    }
+    if args.is_empty() {
+        return run_smart_fallback();
+    }
+    anyhow::bail!("unknown arguments: {}", args.join(" "));
+}
+
+fn run_smart_fallback() -> Result<()> {
+    let socket = ipc::server::default_socket_path();
+    if !socket_accepts_connections(&socket) {
+        let stderr = smart_fallback_log("smart.stderr.log")?;
+        let stdout = smart_fallback_log("smart.stdout.log")?;
+        let child = Command::new(std::env::current_exe().context("resolve current exe")?)
+            .arg("--daemon")
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
+            .spawn()
+            .context("spawn shuo --daemon")?;
+        drop(child);
+        wait_for_socket(&socket, Duration::from_secs(2))?;
+    }
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("create TUI runtime")?;
+    rt.block_on(tui::run())
+}
+
+fn smart_fallback_log(name: &str) -> Result<std::fs::File> {
+    let dir = state::history::state_dir();
+    std::fs::create_dir_all(&dir).with_context(|| format!("create state dir {}", dir.display()))?;
+    let path = dir.join(name);
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))
+}
+
+fn socket_accepts_connections(path: &Path) -> bool {
+    std::os::unix::net::UnixStream::connect(path).is_ok()
+}
+
+fn wait_for_socket(path: &Path, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if socket_accepts_connections(path) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    anyhow::bail!("daemon did not accept UDS connections within {:?}", timeout)
+}
+
+struct DaemonLock(std::fs::File);
+
+impl DaemonLock {
+    fn acquire() -> Result<Self> {
+        let dir = state::history::state_dir();
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("create state dir {}", dir.display()))?;
+        let path = dir.join("daemon.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("open daemon lock {}", path.display()))?;
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc != 0 {
+            anyhow::bail!("another shuo daemon is already starting or running");
+        }
+        Ok(Self(file))
+    }
+}
+
+impl Drop for DaemonLock {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
+fn run_daemon_process() -> Result<()> {
+    let _lock = DaemonLock::acquire()?;
     let cfg_path = config::default_path();
     let cfg_rx = reload::watch(cfg_path.clone()).context("start config watcher")?;
     let cfg: Arc<config::Config> = cfg_rx.borrow().clone();
@@ -108,6 +204,10 @@ async fn run_daemon(
     overlay: OverlayHandle,
     state_store: StateStore,
 ) -> Result<()> {
+    let listener = ipc::server::bind_default().await?;
+    let socket_path = ipc::server::default_socket_path();
+    tokio::spawn(ipc::server::run(listener, state_store.clone()));
+
     // 三个 subscriber，跟主循环解耦。每个都在 reload 模块里实现。
     reload::spawn_overlay(cfg_rx.clone(), overlay.clone());
     reload::spawn_i18n(cfg_rx.clone(), overlay.clone());
@@ -133,7 +233,8 @@ async fn run_daemon(
         .context("spawn hotkey bridge thread")?;
 
     eprintln!(
-        "[shuo] M3.f ready. Press {} to toggle recording.",
+        "[shuo] M4 ready. UDS={} Press {} to toggle recording.",
+        socket_path.display(),
         cfg_rx.borrow().hotkey.trigger
     );
 

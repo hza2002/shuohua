@@ -16,17 +16,21 @@
 {"op":"stop_recording"}
 {"op":"cancel_recording"}
 {"op":"reload_config"}
-{"op":"get_history","limit":50,"before":"2026-06-12T22:00:00Z"}
+{"op":"get_history","limit":50,"before":"2026-06-12T22:00:00Z","query":"Rust"}
 {"op":"daemon_status"}          // 返回 PID / 启动时间 / 在录音否（shuo status 用）
 ```
 
 ### 1.2 daemon → TUI（事件）
 
 ```jsonc
-{"event":"snapshot","proto_version":1,"state":"idle","recording":null,"stats":{...}}   // subscribe 回包第一条，含协议版本
+{"event":"snapshot","proto_version":1,"state":"idle","recording":null,"started_at":null,"app":null,"app_name":null,"dur_ms":0,"chars":0,"words":0,"segments":[],"partial":"","stats":{...}}   // subscribe 回包第一条，含协议版本
 {"event":"state_changed","state":"recording","recording_id":"01HXYZ...","started_at":"..."}
+{"event":"app_changed","app":"com.apple.dt.Xcode","app_name":"Xcode"}
+{"event":"stats_changed","dur_ms":3200,"chars":84,"words":32}
 {"event":"partial","recording_id":"01HXYZ...","text":"今天天气真"}      // ASR 增量
+{"event":"segment","recording_id":"01HXYZ...","text":"今天天气真好。"}    // 已定型文本段
 {"event":"pipeline_step","recording_id":"01HXYZ...","name":"filler","status":"ok","duration_ms":0.3,"text":"..."}
+{"event":"history","records":[...]}                         // get_history 回包，从新到旧
 {"event":"error","recording_id":"01HXYZ...","kind":"asr_timeout","msg":"..."}
 {"event":"history_appended","record":{...}}              // 唯一的"会话完成"事件，含整条 history record
 ```
@@ -34,7 +38,11 @@
 **关键约定**：
 
 - **没有独立的 `final` 事件**——会话完成统一通过 `history_appended` 推送整条记录。TUI 想显示"最终上屏文本"就读 `record.pipeline.last().text`（chain 空时读 `record.asr.raw`）。
+- **`segment` + `partial` 模型**：`segment` 是已定型文本段，`partial` 是当前 utterance 尾巴，会被后续 partial 覆盖。`snapshot.segments` 包含订阅时已经定型的段。TUI 渲染实时文本 = `segments.join("") + partial`，和 overlay 保持一致。
+- **`chars` 是字符数**：按 Rust `str::chars().count()` 统计 Unicode scalar value。中文汉字通常 1 字 = 1 char；英文单词按字母逐个计数；标点也计入。
+- **`words` 是 shuohua 语义词数**：基于 Unicode word boundary，过滤空白边界段后计数。英文连续词算 1，中文单字通常算 1，标点算 1，空白算 0。它不是 LLM token count。
 - **`pipeline_step` 事件**：让 TUI 能实时看到每个 processor 的产出（流水线观测）。
+- **`get_history` 分页**：默认 `limit=50`，返回从新到旧。`before` 用 `started_at` RFC3339 时间戳，语义为只返回早于该时间的记录。`query` 是可选关键词过滤；M4 内置大小写不敏感 substring，未来如需 regex/fzf 体验由 TUI 层增强。
 - **协议版本**：`snapshot` 回包带 `proto_version: 1`。TUI 收到不认识的版本号时报 warning 但继续尝试解析；daemon 单方升级版本时必须同时升级 TUI（同二进制 → 不会错位）。未来加事件类型不破坏，删/改字段升 `proto_version`。
 
 ### 1.3 不引入 state.json
@@ -59,6 +67,7 @@
   "started_at": "2026-06-13T12:00:00Z",
   "ended_at":   "2026-06-13T12:00:08Z",
   "duration_ms": 8000,                              // recording 总时长（=ended_at - started_at）
+  "text_stats": { "chars": 18, "words": 14 },        // 最终上屏文本的统计
   "status": "submitted",                            // submitted | canceled | error | timeout
   "app": "com.apple.dt.Xcode",                      // bundle_id 字符串；取不到为 null
   "asr": {
@@ -80,6 +89,7 @@
 ### 2.1 字段约定
 
 - **顶层 `status`**：录音整体结局。`submitted | canceled | error | timeout`
+- **`text_stats`**：按最终上屏文本统计；pipeline 有输出时取 `pipeline.last().text`，否则取 `asr.raw`。开发期旧记录或外部导入记录缺少该字段时，消费端必须从最终文本即时派生 `chars` / `words`。
 - **pipeline 步骤 `status`**：单步结果。`ok | error | timeout | skipped`（同字段名，按层级语境）
 - **`error` 字段**：`status != submitted` 时追加 `"error": { "kind": "asr_timeout", "msg": "..." }`，其他情况省略（serde `skip_serializing_if`）
 - **时间戳**：ISO 8601 / RFC 3339，UTC（`Z` 后缀）

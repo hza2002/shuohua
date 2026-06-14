@@ -51,8 +51,13 @@ pub async fn run_recording(
     let recording_started_at = time::OffsetDateTime::now_utc();
     let recording_started_instant = Instant::now();
     crate::debug_println!("[shuo] ▶ recording id={recording_id}");
-    params.state.set_recording(recording_id.clone());
     let mut app_context = app_context_darwin::frontmost_app();
+    params
+        .state
+        .set_recording(recording_id.clone(), recording_started_at);
+    params
+        .state
+        .app(app_context.bundle_id.clone(), app_context.app_name.clone());
     overlay_send(
         &params,
         OverlayCmd::SetState {
@@ -180,6 +185,25 @@ pub async fn run_recording(
                                 chars: text.chars().count() as u32,
                             },
                         );
+                        let chars = pending_segments
+                            .iter()
+                            .map(|segment| segment.text.chars().count() as u32)
+                            .sum::<u32>()
+                            + text.chars().count() as u32;
+                        let live_text = format!(
+                            "{}{}",
+                            pending_segments
+                                .iter()
+                                .map(|segment| segment.text.as_str())
+                                .collect::<String>(),
+                            text
+                        );
+                        let words = crate::text_stats::compute(&live_text).words as u32;
+                        params.state.stats(
+                            recording_started_instant.elapsed().as_millis() as u64,
+                            chars,
+                            words,
+                        );
                         overlay_send(
                             &params,
                             OverlayCmd::SetText { text, kind: TextKind::Partial },
@@ -187,6 +211,7 @@ pub async fn run_recording(
                     }
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                         crate::debug_println!("[shuo]   segment: {text}");
+                        params.state.segment(recording_id.clone(), text.clone());
                         overlay_send(&params, OverlayCmd::AppendSegment { text: text.clone() });
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
@@ -239,6 +264,9 @@ pub async fn run_recording(
         }
         if stop_requested {
             app_context = app_context_darwin::frontmost_app();
+            params
+                .state
+                .app(app_context.bundle_id.clone(), app_context.app_name.clone());
             overlay_send(
                 &params,
                 OverlayCmd::SetApp {
@@ -259,6 +287,8 @@ pub async fn run_recording(
                 &mut session,
                 &mut events,
                 &mut pending_segments,
+                &params.state,
+                &recording_id,
                 params.stop_delay_ms,
                 &mut control_rx,
                 &mut audio_samples_sent,
@@ -311,13 +341,10 @@ pub async fn run_recording(
         }
         return;
     }
-    let (pipeline, status, error) = dispatch_with_filler(
-        &pending_segments,
-        params.auto_paste,
-        &app_context,
-    )
-    .await
-    .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)));
+    let (pipeline, status, error) =
+        dispatch_with_filler(&pending_segments, params.auto_paste, &app_context)
+            .await
+            .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)));
     if let Some(last_text) = pipeline.iter().rev().find_map(|step| step.text.clone()) {
         overlay_send(
             &params,
@@ -385,6 +412,8 @@ async fn finish(
     session: &mut Box<dyn AsrSession>,
     events: &mut mpsc::Receiver<AsrEvent>,
     pending_segments: &mut Vec<SegmentCapture>,
+    state: &crate::state::StateStore,
+    recording_id: &str,
     stop_delay_ms: u32,
     control_rx: &mut watch::Receiver<SessionControl>,
     audio_samples_sent: &mut u64,
@@ -420,6 +449,7 @@ async fn finish(
                     None => break,
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                         crate::debug_println!("[shuo]   segment (drain): {text}");
+                        state.segment(recording_id.to_string(), text.clone());
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Done) => break,
@@ -478,6 +508,7 @@ async fn finish(
                     Some(AsrEvent::Done) => return false,
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                         crate::debug_println!("[shuo]   segment (final): {text}");
+                        state.segment(recording_id.to_string(), text.clone());
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Partial { text, seq }) => {
@@ -585,6 +616,12 @@ struct HistoryInput {
 }
 
 fn append_history(input: HistoryInput) -> Option<HistoryRecord> {
+    let final_text = input
+        .pipeline
+        .iter()
+        .rev()
+        .find_map(|step| step.text.as_deref())
+        .unwrap_or(&input.raw_text);
     let record = HistoryRecord {
         version: 1,
         id: input.id,
@@ -593,6 +630,7 @@ fn append_history(input: HistoryInput) -> Option<HistoryRecord> {
         duration_ms: (input.ended_at - input.started_at)
             .whole_milliseconds()
             .max(0) as u64,
+        text_stats: Some(crate::text_stats::compute(final_text)),
         status: input.status,
         app: input.app,
         asr: AsrHistory {

@@ -3,10 +3,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-#[derive(Debug, Clone, Serialize)]
+use crate::text_stats::TextStats;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HistoryRecord {
     pub version: u8,
     pub id: String,
@@ -15,6 +17,8 @@ pub struct HistoryRecord {
     #[serde(with = "time::serde::rfc3339")]
     pub ended_at: OffsetDateTime,
     pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_stats: Option<TextStats>,
     pub status: HistoryStatus,
     pub app: Option<String>,
     pub asr: AsrHistory,
@@ -31,9 +35,14 @@ impl HistoryRecord {
             .find_map(|step| step.text.as_deref())
             .unwrap_or(&self.asr.raw)
     }
+
+    pub fn text_stats(&self) -> TextStats {
+        self.text_stats
+            .unwrap_or_else(|| crate::text_stats::compute(self.final_text()))
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HistoryStatus {
     Submitted,
@@ -42,13 +51,13 @@ pub enum HistoryStatus {
     Timeout,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryError {
     pub kind: String,
     pub msg: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AsrHistory {
     pub provider: String,
     pub raw: String,
@@ -56,7 +65,7 @@ pub struct AsrHistory {
     pub sessions: Vec<AsrSessionHistory>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AsrSessionHistory {
     pub text: String,
     #[serde(with = "time::serde::rfc3339")]
@@ -65,7 +74,7 @@ pub struct AsrSessionHistory {
     pub ended_at: OffsetDateTime,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PipelineStepHistory {
     pub name: String,
     pub status: PipelineStepStatus,
@@ -76,7 +85,7 @@ pub struct PipelineStepHistory {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PipelineStepStatus {
     Ok,
@@ -137,6 +146,7 @@ mod tests {
             started_at: datetime!(2026-06-13 12:00:00 UTC),
             ended_at: datetime!(2026-06-13 12:00:08 UTC),
             duration_ms: 8000,
+            text_stats: Some(crate::text_stats::compute("今天天气真好 我们出去走走")),
             status: HistoryStatus::Submitted,
             app: Some("com.apple.dt.Xcode".to_string()),
             asr: AsrHistory {
@@ -168,6 +178,8 @@ mod tests {
         assert_eq!(json["version"], 1);
         assert_eq!(json["started_at"], "2026-06-13T12:00:00Z");
         assert_eq!(json["ended_at"], "2026-06-13T12:00:08Z");
+        assert_eq!(json["text_stats"]["chars"], 13);
+        assert_eq!(json["text_stats"]["words"], 12);
         assert_eq!(json["status"], "submitted");
         assert_eq!(
             json["asr"]["sessions"][0]["started_at"],
@@ -176,5 +188,31 @@ mod tests {
         assert_eq!(json["pipeline"][0]["status"], "ok");
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn missing_text_stats_are_derived_from_final_text() {
+        let json = r#"{
+            "version": 1,
+            "id": "01HXYZABCDEF0123456789ABCD",
+            "started_at": "2026-06-13T12:00:00Z",
+            "ended_at": "2026-06-13T12:00:08Z",
+            "duration_ms": 8000,
+            "status": "submitted",
+            "app": null,
+            "asr": {
+                "provider": "doubao",
+                "raw": "Hello，你好。",
+                "audio_ms": 5300,
+                "sessions": []
+            },
+            "pipeline": []
+        }"#;
+
+        let record: HistoryRecord = serde_json::from_str(json).unwrap();
+
+        assert_eq!(record.text_stats, None);
+        assert_eq!(record.text_stats().chars, 9);
+        assert_eq!(record.text_stats().words, 5);
     }
 }

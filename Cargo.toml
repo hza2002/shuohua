@@ -17,7 +17,7 @@ hound           = "3"
 os_pipe         = "1"
 core-graphics   = "0.24"
 core-foundation = "0.10"
-tokio           = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio           = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 tokio-util      = { version = "0.7", features = ["rt"] }
 tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
 futures-util    = { version = "0.3", default-features = false, features = ["sink", "std"] }
@@ -66,6 +66,10 @@ objc2-foundation = { version = "0.3", features = [
 objc2-quartz-core = { version = "0.3", features = ["CAAnimation", "CALayer", "CAMediaTiming", "objc2-core-graphics"] }
 regex           = "1"
 notify          = "8"
+ratatui         = "0.30"
+crossterm       = "0.29"
+libc            = "0.2"
+unicode-segmentation = "1.13"
 
 [profile.release]
 opt-level = "z"

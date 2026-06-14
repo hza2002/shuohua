@@ -71,7 +71,7 @@ fn default_chain_name() -> String {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ProcessorCfg {
-    RuleBased {
+    Rule {
         patterns: Vec<String>,
     },
     Llm {
@@ -119,7 +119,7 @@ impl ChainFile {
 impl ProcessorCfg {
     fn build(&self, id: &str) -> Result<Box<dyn PostProcessor>> {
         match self {
-            ProcessorCfg::RuleBased { patterns } => {
+            ProcessorCfg::Rule { patterns } => {
                 let borrowed = patterns.iter().map(String::as_str).collect::<Vec<_>>();
                 Ok(Box::new(RuleBasedFiller::with_name(id, &borrowed)))
             }
@@ -200,7 +200,7 @@ name = "default"
 chain = ["filler"]
 
 [processors.filler]
-type = "rule_based"
+type = "rule"
 patterns = ["default"]
 "#,
         )
@@ -212,7 +212,7 @@ name = "app"
 chain = ["custom"]
 
 [processors.custom]
-type = "rule_based"
+type = "rule"
 patterns = ["app"]
 "#,
         )

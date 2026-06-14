@@ -535,7 +535,7 @@ name  = "Slack 偏 casual"
 chain = ["filler", "llm_casual"]
 
 [processors.filler]
-type     = "rule_based"
+type     = "rule"
 patterns = ["嗯", "啊", "呃", "那个", "就是"]
 collapse_repeats = true
 

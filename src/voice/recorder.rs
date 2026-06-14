@@ -66,7 +66,10 @@ pub fn start(audio_wav_path: Option<PathBuf>) -> Result<RecordingStream> {
         })
         .context("spawn recorder thread")?;
 
-    Ok(RecordingStream { pcm_rx, stop: Some(stop_tx) })
+    Ok(RecordingStream {
+        pcm_rx,
+        stop: Some(stop_tx),
+    })
 }
 
 fn run_recorder(
@@ -75,9 +78,12 @@ fn run_recorder(
     audio_wav_path: Option<PathBuf>,
 ) -> Result<()> {
     let host = cpal::default_host();
-    let device =
-        host.default_input_device().ok_or_else(|| anyhow!("no default input device"))?;
-    let supported = device.default_input_config().context("query default input config")?;
+    let device = host
+        .default_input_device()
+        .ok_or_else(|| anyhow!("no default input device"))?;
+    let supported = device
+        .default_input_config()
+        .context("query default input config")?;
     let src_rate = supported.sample_rate();
     let channels = supported.channels() as usize;
     let sample_format = supported.sample_format();
@@ -153,7 +159,10 @@ fn resample_to_16k_mono_i16(data: &[f32], channels: usize, src_rate: u32) -> Vec
         return Vec::new();
     }
     if src_rate == DST_RATE_HZ {
-        return mono.iter().map(|&s| (s.clamp(-1.0, 1.0) * 32767.0).round() as i16).collect();
+        return mono
+            .iter()
+            .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0).round() as i16)
+            .collect();
     }
     // 线性插值。每 cpal callback 内重置位置，相邻 callback 间有可忽略相位跳动。
     let ratio = src_rate as f64 / DST_RATE_HZ as f64;

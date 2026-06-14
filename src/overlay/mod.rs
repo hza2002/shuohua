@@ -1,17 +1,53 @@
 use tokio::sync::mpsc;
 
 pub mod animations;
+#[cfg(debug_assertions)]
+pub mod debug;
 pub mod view;
+
+// Gruvbox dark palette (https://github.com/morhetz/gruvbox).
+// 颜色不放进 config：状态色是语义、文字色是排版层级，都是设计决策不是用户偏好。
+// 想换主题改这里。
+pub const COLOR_PRIMARY_TEXT: u32 = 0xFBF1C7; // fg0 / light0
+pub const COLOR_SECONDARY_TEXT: u32 = 0xBDAE93; // fg3
+pub const COLOR_TOAST_WARN: u32 = 0xFABD2F; // bright_yellow
+pub const COLOR_TOAST_ERROR: u32 = 0xFB4934; // bright_red
 
 #[derive(Debug, Clone)]
 pub enum OverlayCmd {
-    SetState { state: OverlayState },
-    SetStats { dur_ms: u64, chars: u32 },
-    SetApp { bundle_id: Option<String>, app_name: Option<String>, chain_summary: String },
-    SetText { text: String, kind: TextKind },
-    AppendSegment { text: String },
-    Toast { text: String, level: ToastLevel, ttl_ms: u32 },
+    SetState {
+        state: OverlayState,
+    },
+    SetStats {
+        dur_ms: u64,
+        chars: u32,
+    },
+    SetApp {
+        bundle_id: Option<String>,
+        app_name: Option<String>,
+        chain_summary: String,
+    },
+    SetText {
+        text: String,
+        kind: TextKind,
+    },
+    AppendSegment {
+        text: String,
+    },
+    Toast {
+        text: String,
+        level: ToastLevel,
+        ttl_ms: u32,
+    },
     Hide,
+    /// 配置热重载：替换 chrome（glass / tint / 文本布局相关参数）。
+    /// model 不消费，view 单独处理。
+    ReloadConfig {
+        cfg: crate::config::OverlayCfg,
+    },
+    /// 语言切换后让 view 重新翻译当前 state label 并刷新。i18n 字典已经被
+    /// `reload::spawn_i18n` 在到达 view 之前换好。
+    Relabel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,13 +73,14 @@ impl OverlayState {
     }
 
     pub fn color_rgb(self) -> u32 {
+        // Gruvbox semantic colors.
         match self {
-            OverlayState::Idle => 0x8E8E93,
-            OverlayState::Connecting => 0xFF9F0A,
-            OverlayState::Recording => 0xFF3B30,
-            OverlayState::Thinking => 0x0A84FF,
-            OverlayState::Stopping => 0xFFD60A,
-            OverlayState::Error => 0xFF453A,
+            OverlayState::Idle => 0x8EC07C,       // aqua
+            OverlayState::Connecting => 0xFE8019, // bright_orange
+            OverlayState::Recording => 0xFB4934,  // bright_red
+            OverlayState::Thinking => 0x458588,   // bright_blue
+            OverlayState::Stopping => 0xFABD2F,   // bright_yellow
+            OverlayState::Error => 0xCC241D,      // red（比 Recording 略沉，区分语义）
         }
     }
 }
@@ -125,6 +162,9 @@ impl OverlayModel {
     pub fn apply(&mut self, cmd: OverlayCmd) {
         match cmd {
             OverlayCmd::SetState { state } => {
+                if matches!(state, OverlayState::Connecting) {
+                    self.clear_session();
+                }
                 self.state = state;
                 self.state_label = crate::t!(state.label_key());
                 self.state_color = state.color_rgb();
@@ -134,7 +174,11 @@ impl OverlayModel {
                 self.dur_ms = dur_ms;
                 self.chars = chars;
             }
-            OverlayCmd::SetApp { bundle_id, app_name, chain_summary } => {
+            OverlayCmd::SetApp {
+                bundle_id,
+                app_name,
+                chain_summary,
+            } => {
                 self.bundle_id = bundle_id;
                 self.app_name = app_name;
                 self.chain_summary = chain_summary;
@@ -150,16 +194,40 @@ impl OverlayModel {
                 self.segments.push(text);
                 self.partial.clear();
             }
-            OverlayCmd::Toast { text, level, ttl_ms } => {
-                self.toast = Some(Toast { text, level, ttl_ms });
+            OverlayCmd::Toast {
+                text,
+                level,
+                ttl_ms,
+            } => {
+                self.toast = Some(Toast {
+                    text,
+                    level,
+                    ttl_ms,
+                });
             }
             OverlayCmd::Hide => {
+                self.clear_session();
                 self.visible = false;
                 self.state = OverlayState::Idle;
                 self.state_label = crate::t!("overlay.state_idle");
                 self.state_color = OverlayState::Idle.color_rgb();
             }
+            OverlayCmd::ReloadConfig { .. } => {
+                // 仅 view 关心；model 无状态变更。
+            }
+            OverlayCmd::Relabel => {
+                self.state_label = crate::t!(self.state.label_key());
+            }
         }
+    }
+
+    fn clear_session(&mut self) {
+        self.dur_ms = 0;
+        self.chars = 0;
+        self.segments.clear();
+        self.partial.clear();
+        self.final_text.clear();
+        self.toast = None;
     }
 
     pub fn display_text(&self) -> String {
@@ -183,10 +251,20 @@ mod tests {
         i18n::init("en-US");
         let mut model = OverlayModel::default();
 
-        model.apply(OverlayCmd::SetState { state: OverlayState::Recording });
-        model.apply(OverlayCmd::SetStats { dur_ms: 3200, chars: 84 });
-        model.apply(OverlayCmd::AppendSegment { text: "今天".to_string() });
-        model.apply(OverlayCmd::SetText { text: "今天天气".to_string(), kind: TextKind::Partial });
+        model.apply(OverlayCmd::SetState {
+            state: OverlayState::Recording,
+        });
+        model.apply(OverlayCmd::SetStats {
+            dur_ms: 3200,
+            chars: 84,
+        });
+        model.apply(OverlayCmd::AppendSegment {
+            text: "今天".to_string(),
+        });
+        model.apply(OverlayCmd::SetText {
+            text: "今天天气".to_string(),
+            kind: TextKind::Partial,
+        });
         model.apply(OverlayCmd::Toast {
             text: "network reconnecting".to_string(),
             level: ToastLevel::Warn,
@@ -207,5 +285,38 @@ mod tests {
         let (handle, rx) = OverlayHandle::channel();
         drop(rx);
         handle.send(OverlayCmd::Hide);
+    }
+
+    #[test]
+    fn hide_clears_transient_recording_text() {
+        i18n::init("en-US");
+        let mut model = OverlayModel::default();
+        model.apply(OverlayCmd::AppendSegment {
+            text: "old".to_string(),
+        });
+        model.apply(OverlayCmd::SetText {
+            text: "old final".to_string(),
+            kind: TextKind::Final,
+        });
+        model.apply(OverlayCmd::Hide);
+
+        assert_eq!(model.display_text(), "");
+        assert_eq!(model.dur_ms, 0);
+        assert!(model.toast.is_none());
+    }
+
+    #[test]
+    fn connecting_starts_with_empty_text() {
+        i18n::init("en-US");
+        let mut model = OverlayModel::default();
+        model.apply(OverlayCmd::AppendSegment {
+            text: "old".to_string(),
+        });
+        model.apply(OverlayCmd::SetState {
+            state: OverlayState::Connecting,
+        });
+
+        assert_eq!(model.display_text(), "");
+        assert!(model.visible);
     }
 }

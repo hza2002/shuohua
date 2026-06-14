@@ -33,7 +33,11 @@ pub struct PipelineText {
 impl PipelineText {
     /// 从 raw + 多段构造初始 PipelineText（text == raw）。
     pub fn new(raw: String, segments: Vec<String>) -> Self {
-        Self { text: raw.clone(), raw, segments }
+        Self {
+            text: raw.clone(),
+            raw,
+            segments,
+        }
     }
 }
 
@@ -123,17 +127,17 @@ pub async fn run_chain(
         match tokio::time::timeout(timeout, p.process(current.clone(), ctx)).await {
             Ok(Ok(out)) => {
                 let step = PipelineStep::ok(p.name(), started.elapsed(), out.text.clone());
-                eprintln!(
-                    "[post] {} ok in {:.1}ms",
-                    p.name(),
-                    step.duration_ms
-                );
+                eprintln!("[post] {} ok in {:.1}ms", p.name(), step.duration_ms);
                 current = out;
                 steps.push(step);
             }
             Ok(Err(e)) => {
                 eprintln!("[post] ⚠ {} failed, skipped: {e}", p.name());
-                steps.push(PipelineStep::error(p.name(), started.elapsed(), e.to_string()));
+                steps.push(PipelineStep::error(
+                    p.name(),
+                    started.elapsed(),
+                    e.to_string(),
+                ));
             }
             Err(_) => {
                 eprintln!("[post] ⚠ {} timed out (>{:?}), skipped", p.name(), timeout);
@@ -159,7 +163,10 @@ mod tests {
             input: PipelineText,
             _ctx: &AppContext,
         ) -> Result<PipelineText, PostError> {
-            Ok(PipelineText { text: input.text.to_uppercase(), ..input })
+            Ok(PipelineText {
+                text: input.text.to_uppercase(),
+                ..input
+            })
         }
     }
 
@@ -197,8 +204,13 @@ mod tests {
     #[tokio::test]
     async fn empty_chain_returns_initial_unchanged() {
         let initial = PipelineText::new("hello".into(), vec!["hello".into()]);
-        let (out, steps) =
-            run_chain(&[], initial.clone(), &AppContext::default(), Duration::from_secs(1)).await;
+        let (out, steps) = run_chain(
+            &[],
+            initial.clone(),
+            &AppContext::default(),
+            Duration::from_secs(1),
+        )
+        .await;
         assert_eq!(out.text, "hello");
         assert_eq!(out.raw, "hello");
         assert!(steps.is_empty());

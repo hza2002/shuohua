@@ -23,7 +23,9 @@ impl FakeProvider {
     }
 
     pub fn failing(err: AsrError) -> Self {
-        Self { fail_on_open: Some(err) }
+        Self {
+            fail_on_open: Some(err),
+        }
     }
 }
 
@@ -34,7 +36,11 @@ impl AsrProvider for FakeProvider {
     }
 
     fn caps(&self) -> Caps {
-        Caps { hotwords: true, max_session_secs: None, multilingual: true }
+        Caps {
+            hotwords: true,
+            max_session_secs: None,
+            multilingual: true,
+        }
     }
 
     async fn open(
@@ -45,7 +51,14 @@ impl AsrProvider for FakeProvider {
             return Err(err.clone());
         }
         let (tx, rx) = mpsc::channel(16);
-        Ok((Box::new(FakeSession { evt_tx: tx, seq: 0, started_at: Instant::now() }), rx))
+        Ok((
+            Box::new(FakeSession {
+                evt_tx: tx,
+                seq: 0,
+                started_at: Instant::now(),
+            }),
+            rx,
+        ))
     }
 }
 
@@ -61,7 +74,10 @@ impl AsrSession for FakeSession {
         self.seq += 1;
         let text = format!("frame#{} ({} samples)", self.seq, pcm.len());
         self.evt_tx
-            .send(AsrEvent::Partial { text: text.clone(), seq: self.seq })
+            .send(AsrEvent::Partial {
+                text: text.clone(),
+                seq: self.seq,
+            })
             .await
             .map_err(|_| AsrError::Network("fake receiver dropped".into()))?;
 
@@ -90,7 +106,10 @@ mod tests {
     use super::*;
 
     fn ctx() -> SessionCtx {
-        SessionCtx { language: LanguageMode::Single("zh-CN".into()), hotwords: vec![] }
+        SessionCtx {
+            language: LanguageMode::Single("zh-CN".into()),
+            hotwords: vec![],
+        }
     }
 
     #[tokio::test]
@@ -105,9 +124,18 @@ mod tests {
         session.send_pcm(&[0i16; 50], true).await.unwrap();
 
         // 期望事件序列：Partial, Partial, Partial, Segment, Done
-        assert!(matches!(rx.recv().await, Some(AsrEvent::Partial { seq: 1, .. })));
-        assert!(matches!(rx.recv().await, Some(AsrEvent::Partial { seq: 2, .. })));
-        assert!(matches!(rx.recv().await, Some(AsrEvent::Partial { seq: 3, .. })));
+        assert!(matches!(
+            rx.recv().await,
+            Some(AsrEvent::Partial { seq: 1, .. })
+        ));
+        assert!(matches!(
+            rx.recv().await,
+            Some(AsrEvent::Partial { seq: 2, .. })
+        ));
+        assert!(matches!(
+            rx.recv().await,
+            Some(AsrEvent::Partial { seq: 3, .. })
+        ));
         assert!(matches!(rx.recv().await, Some(AsrEvent::Segment { .. })));
         assert!(matches!(rx.recv().await, Some(AsrEvent::Done)));
     }

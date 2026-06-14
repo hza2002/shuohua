@@ -22,9 +22,7 @@ pub fn dispatch(text: &str, auto_paste: bool) -> Result<()> {
     if auto_paste {
         match autotype_darwin::paste() {
             Ok(()) => eprintln!("[shuo] ✓ Cmd+V 已上屏"),
-            Err(e) => eprintln!(
-                "[shuo] ⚠ Cmd+V 失败，文本仍在剪贴板，可手动粘贴: {e:#}"
-            ),
+            Err(e) => eprintln!("[shuo] ⚠ Cmd+V 失败，文本仍在剪贴板，可手动粘贴: {e:#}"),
         }
     }
     Ok(())

@@ -35,9 +35,12 @@ objc2-app-kit   = { version = "0.3", features = [
     "NSColor",
     "NSControl",
     "NSFont",
+    "NSFontDescriptor",
     "NSGraphics",
     "NSImage",
     "NSImageView",
+    "NSCell",
+    "NSImageCell",
     "NSPanel",
     "NSParagraphStyle",
     "NSPasteboard",
@@ -62,6 +65,7 @@ objc2-foundation = { version = "0.3", features = [
 ] }
 objc2-quartz-core = { version = "0.3", features = ["CAAnimation", "CALayer", "CAMediaTiming", "objc2-core-graphics"] }
 regex           = "1"
+notify          = "8"
 
 [profile.release]
 opt-level = "z"

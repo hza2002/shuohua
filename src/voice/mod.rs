@@ -7,3 +7,10 @@
 pub mod dispatch;
 pub mod finish;
 pub mod recorder;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionControl {
+    Idle,
+    Stop,
+    Cancel,
+}

@@ -634,7 +634,59 @@ language = "auto"        # auto | zh-CN | en-US
 
 #### 热重载
 
-`ui.language` 配置项跟随 config.toml 整体热重载（`notify` 监听）。语言切换瞬时生效，无需重启 daemon。
+`ui.language` 改完保存即时生效（字典换 + overlay 当前 state label 重译）。机制走 [§2.12 reload 模块](#212-配置热重载reload-模块)，subscriber 是 `reload::spawn_i18n`。
+
+---
+
+### 2.12 配置热重载（reload 模块）
+
+> M3.f 已实现完整机制；M5 收口只补 ⏸ 项。
+
+#### 模块边界
+
+独立文件 `src/reload.rs`，单向依赖 config / overlay / i18n / hotkey 暴露的对外 API（`OverlayHandle`、`i18n::init`、`hotkey::parse::parse`），**不被这些模块反向 import**。等于一个集中放置的"翻译层"——watcher 这边一个 source，subscriber 这边 N 个 sink。
+
+```
+reload.rs
+├── pub fn watch(path) -> Result<Rx>           ── notify watcher（专用 std::thread）
+├── pub fn spawn_overlay(rx, OverlayHandle)    ── [overlay] 段 diff → OverlayCmd::ReloadConfig
+├── pub fn spawn_i18n(rx, OverlayHandle)       ── ui.language diff → i18n::init + OverlayCmd::Relabel
+└── pub fn spawn_hotkey(rx, mpsc::Sender<u16>) ── [hotkey].trigger diff → 主循环 swap Tracker
+```
+
+`Rx = tokio::sync::watch::Receiver<Arc<Config>>`，跟 [§2.5](#25-去掉-plugin-抽象) 里"配置变化通过 watch 广播"对上。
+
+#### 实现要点
+
+- **监听目录而非文件**（[§5 不变量 #4](#5-不变量与历史教训必读)）：编辑器保存常做 atomic rename（inode 替换），监听文件本身会丢事件
+- **150ms debounce**：编辑器一次保存常触发 2-3 条事件，合并掉
+- **parse 失败保留旧值**：只打日志 `[reload] parse failed, keeping previous: ...`，不让 watch::Sender 发空值
+- **subscriber 自带 diff**：每个 subscriber 缓存 `prev`，只在自己关心的字段变化时才动作，避免无关字段保存导致的视觉抖动
+
+#### 字段覆盖矩阵
+
+| 字段 | 生效时机 | 走哪条路径 | 状态 |
+|---|---|---|---|
+| `[overlay].*` 所有字段 | 立即（next render） | `spawn_overlay` → `rebuild_chrome` | ✓ |
+| `ui.language` | 立即（重译 state label） | `spawn_i18n` → `i18n::init` + `Relabel` | ✓ |
+| `[hotkey].trigger` | 立即（下次按键判定） | `spawn_hotkey` → mpsc → `tokio::select!` 换 Tracker | ✓ |
+| `[voice].*` 全部 | 下次起 session | daemon 主循环 `cfg_rx.borrow()` 取最新快照 | ✓ |
+| `[asr].hotwords` | 下次起 session | 同上 | ✓ |
+| `[asr].provider` | 需重启 | 涉及 trait object 重建 + cancel 当前 session | ⏸ M5 |
+| 手动触发 `{"op":"reload_config"}` | 立即 | 走 UDS server | ⏸ 依赖 M4 |
+
+#### Hotkey trigger 特别说明
+
+`CGEventTap` 在 OS 层捕获所有键盘事件、不过滤——trigger 的切换只影响 `Tracker.on_raw()` 的判定。所以重置成本是"主循环里 `tokio::select` 收到新 keycode → `tracker = Tracker::new(new_code)`"，不需要拆 CGEventTap。`Tracker::new` 会把 `trigger_pressed` 归零，避免旧 trigger 半按状态串到新 trigger。
+
+parse 失败（非法 trigger 字符串）只打日志保留旧 trigger，不向主循环发新 keycode。
+
+#### M5 收口检查清单
+
+- [ ] `[asr].provider` 切换：需要 cancel 当前 session、重建 `Arc<dyn AsrProvider>`、重连 WebSocket。建议加 `OverlayCmd::Toast` 通知用户切换中
+- [ ] UDS `{"op":"reload_config"}` op：M4 的 UDS server 起来后，加一条 op 直接重 parse + 走和 watcher 同样的 broadcast 路径（不要绕过 watch::Sender，否则订阅者会漏触发）
+- [ ] `shuo doctor`：打印 `effective config`（`cfg_rx.borrow()` 快照），校验 + 提示哪些字段不支持热重载
+- [ ] launchd 自启：跟 reload 无关，纯独立 feature
 
 ---
 
@@ -681,7 +733,8 @@ shuohua/
 │   └── CLI.md
 ├── src/
 │   ├── main.rs                 # CLI 入口（clap 子命令分发 → daemon / TUI / install / doctor 等）
-│   ├── config.rs               # serde TOML + 热键字符串解析
+│   ├── config.rs               # serde TOML + 热键字符串解析（纯类型，无 I/O）
+│   ├── reload.rs               # notify watcher + overlay/i18n/hotkey subscribers（M3.f）
 │   ├── doctor.rs               # 终端识别 + AX/麦克风权限检查
 │   ├── hotkey/
 │   │   ├── mod.rs              # Combo / Modifier / KeyCode 类型

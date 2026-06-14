@@ -87,8 +87,8 @@ pub fn load_config() -> anyhow::Result<DoubaoConfig> {
             path.display(),
         )
     })?;
-    let cfg: DoubaoConfig = toml::from_str(&body)
-        .map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))?;
+    let cfg: DoubaoConfig =
+        toml::from_str(&body).map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))?;
     if cfg.app_key.trim().is_empty() || cfg.access_key.trim().is_empty() {
         anyhow::bail!(
             "{}: app_key / access_key 为空。从 console.volcengine.com/speech 拿一对填进去",
@@ -108,7 +108,9 @@ pub struct DoubaoProvider {
 
 impl DoubaoProvider {
     pub fn new() -> anyhow::Result<Self> {
-        Ok(Self { config: load_config()? })
+        Ok(Self {
+            config: load_config()?,
+        })
     }
 }
 
@@ -119,7 +121,11 @@ impl AsrProvider for DoubaoProvider {
     }
 
     fn caps(&self) -> Caps {
-        Caps { hotwords: true, max_session_secs: None, multilingual: true }
+        Caps {
+            hotwords: true,
+            max_session_secs: None,
+            multilingual: true,
+        }
     }
 
     async fn open(
@@ -148,7 +154,9 @@ impl AsrProvider for DoubaoProvider {
             }
         }
 
-        let (mut ws, resp) = tokio_tungstenite::connect_async(req).await.map_err(connect_err)?;
+        let (mut ws, resp) = tokio_tungstenite::connect_async(req)
+            .await
+            .map_err(connect_err)?;
 
         // X-Tt-Logid: 服务端日志对账 id，断网/识别异常时拿这个去问火山
         let logid = resp
@@ -164,7 +172,9 @@ impl AsrProvider for DoubaoProvider {
         let payload_bytes = serde_json::to_vec(&payload)
             .map_err(|e| AsrError::Protocol(format!("encode init payload: {e}")))?;
         let frame = encode_full_client_request(&payload_bytes);
-        ws.send(Message::Binary(frame.into())).await.map_err(send_err)?;
+        ws.send(Message::Binary(frame.into()))
+            .await
+            .map_err(send_err)?;
 
         // 启动 session task
         let (cmd_tx, cmd_rx) = mpsc::channel::<PcmCmd>(64);
@@ -331,8 +341,14 @@ async fn handle_response(
     };
 
     if frame.msg_type == SRV_MSG_ERROR {
-        let msg = std::str::from_utf8(&frame.payload).unwrap_or("<non-utf8>").to_string();
-        let _ = evt_tx.send(AsrEvent::Error { err: AsrError::Server(msg) }).await;
+        let msg = std::str::from_utf8(&frame.payload)
+            .unwrap_or("<non-utf8>")
+            .to_string();
+        let _ = evt_tx
+            .send(AsrEvent::Error {
+                err: AsrError::Server(msg),
+            })
+            .await;
         return ResponseAction::Errored;
     }
     if frame.msg_type != SRV_MSG_FULL_RESPONSE {
@@ -344,7 +360,9 @@ async fn handle_response(
         Ok(p) => p,
         Err(e) => {
             let _ = evt_tx
-                .send(AsrEvent::Error { err: AsrError::Protocol(format!("decode JSON: {e}")) })
+                .send(AsrEvent::Error {
+                    err: AsrError::Protocol(format!("decode JSON: {e}")),
+                })
                 .await;
             return ResponseAction::Errored;
         }
@@ -371,7 +389,10 @@ async fn handle_response(
         if !result.text.is_empty() {
             *seq += 1;
             let _ = evt_tx
-                .send(AsrEvent::Partial { text: result.text, seq: *seq })
+                .send(AsrEvent::Partial {
+                    text: result.text,
+                    seq: *seq,
+                })
                 .await;
         }
     }
@@ -399,7 +420,12 @@ const SRV_MSG_ERROR: u8 = 0x0F; // 0b1111
 
 fn encode_full_client_request(payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(8 + payload.len());
-    out.extend_from_slice(&[HDR_BYTE0, MSG_FULL_CLIENT_REQ, SERIALIZE_JSON_NO_COMPRESS, 0x00]);
+    out.extend_from_slice(&[
+        HDR_BYTE0,
+        MSG_FULL_CLIENT_REQ,
+        SERIALIZE_JSON_NO_COMPRESS,
+        0x00,
+    ]);
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     out.extend_from_slice(payload);
     out
@@ -408,7 +434,12 @@ fn encode_full_client_request(payload: &[u8]) -> Vec<u8> {
 fn encode_audio_frame(pcm: &[u8], is_last: bool) -> Vec<u8> {
     let flags = if is_last { AUDIO_FLAG_LAST } else { 0 };
     let mut out = Vec::with_capacity(8 + pcm.len());
-    out.extend_from_slice(&[HDR_BYTE0, MSG_AUDIO_ONLY | flags, SERIALIZE_RAW_NO_COMPRESS, 0x00]);
+    out.extend_from_slice(&[
+        HDR_BYTE0,
+        MSG_AUDIO_ONLY | flags,
+        SERIALIZE_RAW_NO_COMPRESS,
+        0x00,
+    ]);
     out.extend_from_slice(&(pcm.len() as u32).to_be_bytes());
     out.extend_from_slice(pcm);
     out
@@ -423,7 +454,10 @@ struct ResponseFrame {
 
 fn parse_response_frame(data: &[u8]) -> Result<ResponseFrame, AsrError> {
     if data.len() < 4 {
-        return Err(AsrError::Protocol(format!("frame too short: {} bytes", data.len())));
+        return Err(AsrError::Protocol(format!(
+            "frame too short: {} bytes",
+            data.len()
+        )));
     }
     let msg_type = (data[1] >> 4) & 0x0F;
     let flags = data[1] & 0x0F;
@@ -448,7 +482,11 @@ fn parse_response_frame(data: &[u8]) -> Result<ResponseFrame, AsrError> {
             data.len() - offset
         )));
     }
-    Ok(ResponseFrame { msg_type, is_last, payload: data[offset..offset + size].to_vec() })
+    Ok(ResponseFrame {
+        msg_type,
+        is_last,
+        payload: data[offset..offset + size].to_vec(),
+    })
 }
 
 // ============================================================
@@ -601,7 +639,7 @@ mod tests {
     #[test]
     fn parse_rejects_truncated() {
         assert!(parse_response_frame(&[0x11, 0x90]).is_err()); // too short
-        // header OK but payload truncated
+                                                               // header OK but payload truncated
         let mut data = vec![0x11, 0x90, 0x10, 0x00];
         data.extend_from_slice(&100u32.to_be_bytes()); // claims 100 bytes
         data.extend_from_slice(b"only-a-few"); // but supplies few
@@ -610,7 +648,12 @@ mod tests {
 
     #[test]
     fn hotwords_context_dedup_and_format() {
-        let words = vec!["Rust".to_string(), "tokio".into(), "Rust".into(), "  ".into()];
+        let words = vec![
+            "Rust".to_string(),
+            "tokio".into(),
+            "Rust".into(),
+            "  ".into(),
+        ];
         let s = build_hotwords_context(&words);
         // 期望 dedupe + 跳过空白
         assert!(s.contains(r#""word":"Rust""#));

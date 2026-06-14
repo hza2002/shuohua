@@ -137,7 +137,7 @@
 | **M2.5** | 客户端 VAD + 多段 session + RuleBased 去口语词 | 思考几分钟不计费；段间空格拼接；嗯/啊正则去除 |
 | **M3** | StateStore + history.jsonl + Overlay 同进程渲染（**两排布局 + 动画 + Toast**） | 录音 → history 一行 jsonl，含 ASR sessions + pipeline；overlay 状态点+文字+时长+字数+app+chain 全部正确切换；Liquid Glass toast 可弹 |
 | **M4** | UDS server + `shuo` 智能 fallback 进 TUI 客户端 | 裸跑 `shuo` 连上 daemon 看实时 partial/pipeline_step、滚动历史；关掉 TUI 不影响 daemon |
-| **M5** | Doctor + 配置热重载 + launchd 自启 | `shuo install` 写 plist + start，重启后自动起；`shuo doctor` 报权限/配置/ASR 连通 |
+| **M5** | Doctor + launchd 自启 + 配置热重载收口 | `shuo install` 写 plist + start，重启后自动起；`shuo doctor` 报权限/配置/ASR 连通。**热重载机制已在 M3.f 落地（见 [docs/DESIGN.md §2.12](docs/DESIGN.md#212-配置热重载reload-模块)），M5 只补 ⏸ 项：asr.provider 切换 + UDS `reload_config` op** |
 | **M6** | Suppress 真实生效 + proptest 覆盖 tracker | 跟 Go 版 perf 对比 |
 | **M7** | LLM 后处理（Claude Haiku / GPT-4o-mini）+ App context + per-app 配置文件 | 按当前 App 自动选链路（找不到 fall back default）；失败/超时跳过 + toast 提示；history 记 chain trace |
 | **M8** | WhisperCppProvider（whisper-rs，本地离线） | 验证 trait 接口正确；不动 trait |

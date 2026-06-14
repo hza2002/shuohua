@@ -9,8 +9,7 @@
 use anyhow::{anyhow, Result};
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
-    CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
-    EventField,
+    CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType, EventField,
 };
 use os_pipe::PipeWriter;
 use std::io::Write;
@@ -32,8 +31,7 @@ pub fn run(writer: PipeWriter) -> Result<()> {
         CGEventTapOptions::ListenOnly,
         vec![CGEventType::KeyDown, CGEventType::KeyUp],
         move |_proxy, event_type, event| {
-            let raw_code =
-                event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+            let raw_code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
             let down = matches!(event_type, CGEventType::KeyDown);
             let buf = RawKey::encode(down, raw_code);
             if let Ok(mut w) = writer.lock() {

@@ -29,7 +29,11 @@ fn resolve_lang_with_env(cfg_lang: &str, env_lang: Option<&str>) -> Lang {
         "zh-CN" => Lang::ZhCN,
         "en-US" => Lang::EnUS,
         "auto" => {
-            if env_lang.unwrap_or_default().to_ascii_lowercase().starts_with("zh") {
+            if env_lang
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .starts_with("zh")
+            {
                 Lang::ZhCN
             } else {
                 Lang::EnUS
@@ -44,7 +48,11 @@ pub fn tr(key: &str, vars: &[(&str, String)]) -> String {
         .get()
         .map(|lock| lock.read().expect("i18n dict lock poisoned").clone())
         .unwrap_or_else(|| Arc::new(load_dict(Lang::EnUS)));
-    let template = dict.entries.get(key).cloned().unwrap_or_else(|| key.to_string());
+    let template = dict
+        .entries
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| key.to_string());
     vars.iter().fold(template, |acc, (name, value)| {
         acc.replace(&format!("{{{name}}}"), value)
     })
@@ -71,18 +79,25 @@ fn load_dict(lang: Lang) -> Dict {
         Lang::ZhCN => include_str!("../../assets/i18n/zh-CN.toml"),
         Lang::EnUS => include_str!("../../assets/i18n/en-US.toml"),
     };
-    Dict { lang, entries: flatten_toml(body) }
+    Dict {
+        lang,
+        entries: flatten_toml(body),
+    }
 }
 
 fn flatten_toml(body: &str) -> HashMap<String, String> {
-    let value = body.parse::<toml::Value>().expect("embedded i18n TOML must parse");
+    let value = body
+        .parse::<toml::Value>()
+        .expect("embedded i18n TOML must parse");
     let mut out = HashMap::new();
     flatten_value(None, &value, &mut out);
     out
 }
 
 fn flatten_value(prefix: Option<&str>, value: &toml::Value, out: &mut HashMap<String, String>) {
-    let Some(table) = value.as_table() else { return };
+    let Some(table) = value.as_table() else {
+        return;
+    };
     for (key, value) in table {
         let full_key = match prefix {
             Some(prefix) => format!("{prefix}.{key}"),
@@ -109,7 +124,10 @@ mod tests {
     fn resolves_auto_language_from_lang_env() {
         assert_eq!(resolve_lang("zh-CN"), Lang::ZhCN);
         assert_eq!(resolve_lang("en-US"), Lang::EnUS);
-        assert_eq!(resolve_lang_with_env("auto", Some("zh_CN.UTF-8")), Lang::ZhCN);
+        assert_eq!(
+            resolve_lang_with_env("auto", Some("zh_CN.UTF-8")),
+            Lang::ZhCN
+        );
         assert_eq!(resolve_lang_with_env("auto", Some("C")), Lang::EnUS);
     }
 

@@ -22,16 +22,31 @@ pub struct StateSnapshot {
 
 impl Default for StateSnapshot {
     fn default() -> Self {
-        Self { state: DaemonState::Idle, recording_id: None, partial: String::new() }
+        Self {
+            state: DaemonState::Idle,
+            recording_id: None,
+            partial: String::new(),
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum StateEvent {
-    StateChanged { state: DaemonState, recording_id: Option<String> },
-    Partial { recording_id: String, text: String },
-    PipelineStep { recording_id: String, step: PipelineStepHistory },
-    HistoryAppended { record: Box<HistoryRecord> },
+    StateChanged {
+        state: DaemonState,
+        recording_id: Option<String>,
+    },
+    Partial {
+        recording_id: String,
+        text: String,
+    },
+    PipelineStep {
+        recording_id: String,
+        step: PipelineStepHistory,
+    },
+    HistoryAppended {
+        record: Box<HistoryRecord>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -43,7 +58,10 @@ pub struct StateStore {
 impl StateStore {
     pub fn new() -> Self {
         let (tx, _rx) = broadcast::channel(128);
-        Self { snapshot: Arc::new(RwLock::new(StateSnapshot::default())), tx }
+        Self {
+            snapshot: Arc::new(RwLock::new(StateSnapshot::default())),
+            tx,
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<StateEvent> {
@@ -51,7 +69,10 @@ impl StateStore {
     }
 
     pub fn snapshot(&self) -> StateSnapshot {
-        self.snapshot.read().expect("state snapshot lock poisoned").clone()
+        self.snapshot
+            .read()
+            .expect("state snapshot lock poisoned")
+            .clone()
     }
 
     pub fn set_recording(&self, recording_id: String) {
@@ -71,16 +92,23 @@ impl StateStore {
     }
 
     pub fn partial(&self, recording_id: String, text: String) {
-        self.snapshot.write().expect("state snapshot lock poisoned").partial = text.clone();
+        self.snapshot
+            .write()
+            .expect("state snapshot lock poisoned")
+            .partial = text.clone();
         let _ = self.tx.send(StateEvent::Partial { recording_id, text });
     }
 
     pub fn pipeline_step(&self, recording_id: String, step: PipelineStepHistory) {
-        let _ = self.tx.send(StateEvent::PipelineStep { recording_id, step });
+        let _ = self
+            .tx
+            .send(StateEvent::PipelineStep { recording_id, step });
     }
 
     pub fn history_appended(&self, record: HistoryRecord) {
-        let _ = self.tx.send(StateEvent::HistoryAppended { record: Box::new(record) });
+        let _ = self.tx.send(StateEvent::HistoryAppended {
+            record: Box::new(record),
+        });
     }
 
     fn set_state(&self, state: DaemonState, recording_id: Option<String>) {
@@ -92,7 +120,10 @@ impl StateStore {
                 snapshot.partial.clear();
             }
         }
-        let _ = self.tx.send(StateEvent::StateChanged { state, recording_id });
+        let _ = self.tx.send(StateEvent::StateChanged {
+            state,
+            recording_id,
+        });
     }
 }
 
@@ -120,7 +151,10 @@ mod tests {
         assert_eq!(snapshot.partial, "hello");
 
         match rx.try_recv().unwrap() {
-            StateEvent::StateChanged { state, recording_id } => {
+            StateEvent::StateChanged {
+                state,
+                recording_id,
+            } => {
                 assert_eq!(state, DaemonState::Recording);
                 assert_eq!(recording_id.as_deref(), Some("01HXYZ"));
             }

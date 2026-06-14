@@ -23,14 +23,14 @@ use crate::app_context_darwin;
 use crate::asr::types::{AsrEvent, AsrProvider, AsrSession, LanguageMode, SessionCtx};
 use crate::overlay::{OverlayCmd, OverlayHandle, OverlayState, TextKind, ToastLevel};
 use crate::post::{self, PipelineStepStatus, PipelineText, RuleBasedFiller};
-use crate::state::StateStore;
 use crate::state::history::{
     self, AsrHistory, AsrSessionHistory, HistoryError, HistoryRecord, HistoryStatus,
     PipelineStepHistory, PipelineStepStatus as HistoryPipelineStepStatus,
 };
-use crate::voice::{dispatch, recorder};
+use crate::state::StateStore;
+use crate::voice::{dispatch, recorder, SessionControl};
 use std::path::PathBuf;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, watch};
 use tokio::time::sleep_until;
 
 pub struct SessionParams {
@@ -46,7 +46,7 @@ pub struct SessionParams {
 pub async fn run_recording(
     provider: &dyn AsrProvider,
     params: SessionParams,
-    stop_rx: oneshot::Receiver<()>,
+    mut control_rx: watch::Receiver<SessionControl>,
 ) {
     let recording_id = ulid::Ulid::new().to_string();
     let recording_started_at = time::OffsetDateTime::now_utc();
@@ -54,7 +54,12 @@ pub async fn run_recording(
     eprintln!("[shuo] ▶ recording id={recording_id}");
     params.state.set_recording(recording_id.clone());
     let mut app_context = app_context_darwin::frontmost_app();
-    overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Connecting });
+    overlay_send(
+        &params,
+        OverlayCmd::SetState {
+            state: OverlayState::Connecting,
+        },
+    );
     overlay_send(
         &params,
         OverlayCmd::SetApp {
@@ -88,7 +93,9 @@ pub async fn run_recording(
     };
 
     let ctx = SessionCtx {
-        language: LanguageMode::Multilingual { hint: vec!["zh-CN".into(), "en-US".into()] },
+        language: LanguageMode::Multilingual {
+            hint: vec!["zh-CN".into(), "en-US".into()],
+        },
         hotwords: params.hotwords.clone(),
     };
     let (mut session, mut events) = match provider.open(ctx).await {
@@ -97,7 +104,12 @@ pub async fn run_recording(
             eprintln!("[shuo] ❌ ASR open failed: {err}");
             rec.stop();
             params.state.set_error(Some(recording_id));
-            overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Error });
+            overlay_send(
+                &params,
+                OverlayCmd::SetState {
+                    state: OverlayState::Error,
+                },
+            );
             overlay_send(
                 &params,
                 OverlayCmd::Toast {
@@ -109,19 +121,33 @@ pub async fn run_recording(
             return;
         }
     };
-    overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Recording });
+    overlay_send(
+        &params,
+        OverlayCmd::SetState {
+            state: OverlayState::Recording,
+        },
+    );
 
-    let mut stop_rx = stop_rx;
     let mut pending_segments: Vec<SegmentCapture> = Vec::new();
     let mut audio_samples_sent: u64 = 0;
     let mut stop_requested = false;
+    let mut cancel_requested = false;
     let mut terminal_error: Option<HistoryError> = None;
 
     loop {
         tokio::select! {
             biased;
-            _ = &mut stop_rx, if !stop_requested => {
-                stop_requested = true;
+            _ = control_rx.changed() => {
+                match *control_rx.borrow_and_update() {
+                    SessionControl::Stop => {
+                        stop_requested = true;
+                    }
+                    SessionControl::Cancel => {
+                        cancel_requested = true;
+                        break;
+                    }
+                    SessionControl::Idle => {}
+                }
             }
             pcm = rec.recv(), if !stop_requested => {
                 match pcm {
@@ -210,6 +236,9 @@ pub async fn run_recording(
             }
         }
 
+        if cancel_requested {
+            break;
+        }
         if stop_requested {
             app_context = app_context_darwin::frontmost_app();
             overlay_send(
@@ -220,7 +249,12 @@ pub async fn run_recording(
                     chain_summary: "filler".to_string(),
                 },
             );
-            overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Stopping });
+            overlay_send(
+                &params,
+                OverlayCmd::SetState {
+                    state: OverlayState::Stopping,
+                },
+            );
             params.state.set_stopping(recording_id.clone());
             finish(
                 &mut rec,
@@ -228,12 +262,20 @@ pub async fn run_recording(
                 &mut events,
                 &mut pending_segments,
                 params.stop_delay_ms,
+                &mut control_rx,
                 &mut audio_samples_sent,
                 &mut terminal_error,
             )
             .await;
+            if terminal_error.is_none() && control_rx.borrow().eq(&SessionControl::Cancel) {
+                cancel_requested = true;
+            }
             break;
         }
+    }
+
+    if cancel_requested {
+        cancel_session(&mut rec, &mut session, &mut audio_samples_sent).await;
     }
 
     let _ = session.close().await;
@@ -243,31 +285,81 @@ pub async fn run_recording(
         .map(|s| s.text.as_str())
         .collect::<Vec<_>>()
         .join(&params.segment_separator);
-    let (pipeline, status, error) =
-        dispatch_with_filler(
-            &pending_segments,
-            &params.segment_separator,
-            params.auto_paste,
-            &app_context,
-        )
-            .await
-            .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)));
+    if cancel_requested {
+        eprintln!("[shuo] ✖ recording canceled");
+        app_context = app_context_darwin::frontmost_app();
+        params.state.set_idle();
+        overlay_send(
+            &params,
+            OverlayCmd::SetState {
+                state: OverlayState::Idle,
+            },
+        );
+        overlay_send(&params, OverlayCmd::Hide);
+        if let Some(record) = append_history(HistoryInput {
+            id: recording_id,
+            provider: provider_name,
+            started_at: recording_started_at,
+            ended_at: time::OffsetDateTime::now_utc(),
+            started_instant: recording_started_instant,
+            raw_text,
+            segments: pending_segments,
+            pipeline: Vec::new(),
+            audio_ms: samples_to_ms(audio_samples_sent),
+            app: app_context.bundle_id,
+            status: HistoryStatus::Canceled,
+            error: None,
+        }) {
+            params.state.history_appended(record);
+        }
+        return;
+    }
+    let (pipeline, status, error) = dispatch_with_filler(
+        &pending_segments,
+        &params.segment_separator,
+        params.auto_paste,
+        &app_context,
+    )
+    .await
+    .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)));
     if let Some(last_text) = pipeline.iter().rev().find_map(|step| step.text.clone()) {
-        overlay_send(&params, OverlayCmd::SetText { text: last_text, kind: TextKind::Final });
+        overlay_send(
+            &params,
+            OverlayCmd::SetText {
+                text: last_text,
+                kind: TextKind::Final,
+            },
+        );
     }
     for step in &pipeline {
-        params.state.pipeline_step(recording_id.clone(), step.clone());
+        params
+            .state
+            .pipeline_step(recording_id.clone(), step.clone());
     }
     if let Some(err) = terminal_error.as_ref().or(error.as_ref()) {
         params.state.set_error(Some(recording_id.clone()));
-        overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Error });
         overlay_send(
             &params,
-            OverlayCmd::Toast { text: err.msg.clone(), level: ToastLevel::Error, ttl_ms: 1500 },
+            OverlayCmd::SetState {
+                state: OverlayState::Error,
+            },
+        );
+        overlay_send(
+            &params,
+            OverlayCmd::Toast {
+                text: err.msg.clone(),
+                level: ToastLevel::Error,
+                ttl_ms: 1500,
+            },
         );
     } else {
         params.state.set_idle();
-        overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Idle });
+        overlay_send(
+            &params,
+            OverlayCmd::SetState {
+                state: OverlayState::Idle,
+            },
+        );
         overlay_send(&params, OverlayCmd::Hide);
     }
     let ended_at = time::OffsetDateTime::now_utc();
@@ -298,9 +390,10 @@ async fn finish(
     events: &mut mpsc::Receiver<AsrEvent>,
     pending_segments: &mut Vec<SegmentCapture>,
     stop_delay_ms: u32,
+    control_rx: &mut watch::Receiver<SessionControl>,
     audio_samples_sent: &mut u64,
     terminal_error: &mut Option<HistoryError>,
-) {
+) -> bool {
     let drain_until = Instant::now() + Duration::from_millis(stop_delay_ms as u64);
     loop {
         let now = Instant::now();
@@ -310,6 +403,12 @@ async fn finish(
         let deadline = tokio::time::Instant::from_std(drain_until);
         tokio::select! {
             biased;
+            _ = control_rx.changed() => {
+                if matches!(*control_rx.borrow_and_update(), SessionControl::Cancel) {
+                    cancel_session(rec, session, audio_samples_sent).await;
+                    return true;
+                }
+            }
             _ = sleep_until(deadline) => break,
             pcm = rec.recv() => {
                 match pcm {
@@ -355,7 +454,7 @@ async fn finish(
             kind: "asr_send_last".to_string(),
             msg: e.to_string(),
         });
-        return;
+        return false;
     }
 
     let timeout = tokio::time::sleep(Duration::from_secs(5));
@@ -363,18 +462,24 @@ async fn finish(
     loop {
         tokio::select! {
             biased;
+            _ = control_rx.changed() => {
+                if matches!(*control_rx.borrow_and_update(), SessionControl::Cancel) {
+                    cancel_session(rec, session, audio_samples_sent).await;
+                    return true;
+                }
+            }
             _ = &mut timeout => {
                 eprintln!("[shuo] ⚠ 识别 final 超时 5s");
                 *terminal_error = Some(HistoryError {
                     kind: "asr_timeout".to_string(),
                     msg: "timeout waiting final".to_string(),
                 });
-                return;
+                return false;
             }
             ev = events.recv() => {
                 match ev {
-                    None => return,
-                    Some(AsrEvent::Done) => return,
+                    None => return false,
+                    Some(AsrEvent::Done) => return false,
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                         eprintln!("[shuo]   segment (final): {text}");
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
@@ -395,12 +500,31 @@ async fn finish(
     }
 }
 
+async fn cancel_session(
+    rec: &mut recorder::RecordingStream,
+    session: &mut Box<dyn AsrSession>,
+    audio_samples_sent: &mut u64,
+) {
+    rec.stop();
+    while let Some(samples) = rec.try_recv() {
+        let _ = session.send_pcm(&samples, false).await;
+        *audio_samples_sent += samples.len() as u64;
+    }
+}
+
 async fn dispatch_with_filler(
     segments: &[SegmentCapture],
     sep: &str,
     auto_paste: bool,
     app_context: &post::AppContext,
-) -> Result<(Vec<PipelineStepHistory>, HistoryStatus, Option<HistoryError>), HistoryError> {
+) -> Result<
+    (
+        Vec<PipelineStepHistory>,
+        HistoryStatus,
+        Option<HistoryError>,
+    ),
+    HistoryError,
+> {
     let segment_texts: Vec<String> = segments.iter().map(|s| s.text.clone()).collect();
     let raw_text = segment_texts.join(sep);
     if raw_text.is_empty() {
@@ -410,8 +534,7 @@ async fn dispatch_with_filler(
     let chain: Vec<Box<dyn post::PostProcessor>> =
         vec![Box::new(RuleBasedFiller::default_patterns())];
     let initial = PipelineText::new(raw_text, segment_texts);
-    let (out, steps) =
-        post::run_chain(&chain, initial, app_context, Duration::from_secs(2)).await;
+    let (out, steps) = post::run_chain(&chain, initial, app_context, Duration::from_secs(2)).await;
     eprintln!("[shuo] ✓ 最终: {}", out.text);
     let pipeline = steps.into_iter().map(PipelineStepHistory::from).collect();
     if let Err(e) = dispatch::dispatch(&out.text, auto_paste) {
@@ -419,7 +542,10 @@ async fn dispatch_with_filler(
         return Ok((
             pipeline,
             HistoryStatus::Error,
-            Some(HistoryError { kind: "dispatch".to_string(), msg: format!("{e:#}") }),
+            Some(HistoryError {
+                kind: "dispatch".to_string(),
+                msg: format!("{e:#}"),
+            }),
         ));
     }
     Ok((pipeline, HistoryStatus::Submitted, None))
@@ -429,8 +555,7 @@ fn prepare_audio_path(recording_id: &str) -> anyhow::Result<PathBuf> {
     let base = if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
         PathBuf::from(xdg).join("shuohua/audio")
     } else {
-        PathBuf::from(std::env::var("HOME").unwrap_or_default())
-            .join(".local/state/shuohua/audio")
+        PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/state/shuohua/audio")
     };
     std::fs::create_dir_all(&base)?;
     Ok(base.join(format!("{recording_id}.wav")))
@@ -470,7 +595,9 @@ fn append_history(input: HistoryInput) -> Option<HistoryRecord> {
         id: input.id,
         started_at: input.started_at,
         ended_at: input.ended_at,
-        duration_ms: (input.ended_at - input.started_at).whole_milliseconds().max(0) as u64,
+        duration_ms: (input.ended_at - input.started_at)
+            .whole_milliseconds()
+            .max(0) as u64,
         status: input.status,
         app: input.app,
         asr: AsrHistory {

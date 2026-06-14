@@ -99,7 +99,12 @@ mod tests {
 
     #[test]
     fn wire_roundtrip() {
-        for (down, code) in [(true, 0x6Au16), (false, 0x6A), (true, 0x00), (false, 0xFFFF)] {
+        for (down, code) in [
+            (true, 0x6Au16),
+            (false, 0x6A),
+            (true, 0x00),
+            (false, 0xFFFF),
+        ] {
             let buf = RawKey::encode(down, code);
             let decoded = RawKey::decode(buf);
             assert_eq!(decoded, RawKey { down, code });

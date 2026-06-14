@@ -1,4 +1,5 @@
 use std::cell::{OnceCell, RefCell};
+use std::ffi::{c_char, c_int, c_void};
 use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
@@ -6,10 +7,12 @@ use objc2::runtime::{AnyClass, AnyObject, NSObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSAutoresizingMaskOptions,
-    NSBackingStoreType, NSColor, NSFont, NSImage, NSImageSymbolConfiguration, NSImageSymbolScale,
-    NSImageView, NSLineBreakMode, NSPanel, NSScreen, NSTextAlignment, NSTextField, NSView,
+    NSBackingStoreType, NSColor, NSFont, NSFontWeightBold, NSGlassEffectView,
+    NSGlassEffectViewStyle, NSImage, NSImageAlignment, NSImageFrameStyle, NSImageScaling,
+    NSImageSymbolConfiguration, NSImageSymbolScale, NSImageView, NSLineBreakMode, NSPanel,
+    NSScreen, NSStatusWindowLevel, NSTextAlignment, NSTextField, NSView,
     NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
-    NSWindowCollectionBehavior, NSWindowStyleMask, NSStatusWindowLevel,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{
     ns_string, MainThreadMarker, NSNotification, NSObjectProtocol, NSPoint, NSRect, NSSize,
@@ -18,8 +21,11 @@ use objc2_foundation::{
 use objc2_quartz_core::{kCATransitionFade, CAMediaTiming, CATransition};
 use tokio::sync::mpsc;
 
-use crate::config::{OverlayCfg, OverlayPosition};
-use crate::overlay::{OverlayCmd, OverlayModel, OverlayState, TextKind, ToastLevel};
+use crate::config::{GlassStyle, OverlayCfg, OverlayPosition};
+use crate::overlay::{
+    OverlayCmd, OverlayModel, OverlayState, TextKind, Toast, ToastLevel, COLOR_PRIMARY_TEXT,
+    COLOR_SECONDARY_TEXT, COLOR_TOAST_ERROR, COLOR_TOAST_WARN,
+};
 
 const WIDTH: f64 = 540.0;
 const HEIGHT: f64 = 86.0;
@@ -27,6 +33,10 @@ const TEXT_WIDTH: f64 = 500.0;
 const CHARS_PER_LINE: usize = 34;
 const TEXT_LINE_HEIGHT: f64 = 22.0;
 const WINDOW_MARGIN: f64 = 16.0;
+const ICON_SYMBOL_POINT: f64 = 20.0;
+const STATUS_FONT_POINT: f64 = 15.0;
+const FIRST_ROW_Y: f64 = 56.0;
+const FIRST_ROW_H: f64 = 24.0;
 
 #[derive(Default)]
 struct DelegateIvars {
@@ -112,11 +122,15 @@ struct OverlayView {
     cfg: OverlayCfg,
     model: OverlayModel,
     panel: Retained<NSPanel>,
-    root: Retained<NSView>,
-    glass: Retained<NSView>,
-    scrim: Retained<NSView>,
+    /// 装文字 / icon 的容器：glass 路径下 = `glass.contentView`；fallback 路径下 = 直接挂在 panel 的 visualEffect。
+    container: Retained<NSView>,
+    /// `Some` 表示拿到了真正的 `NSGlassEffectView`；`None` 表示走 NSVisualEffectView fallback。
+    glass: Option<Retained<NSGlassEffectView>>,
+    background: Retained<NSView>,
     state_icon: Retained<NSImageView>,
     status: Retained<NSTextField>,
+    duration: Retained<NSTextField>,
+    chars: Retained<NSTextField>,
     meta: Retained<NSTextField>,
     text: Retained<NSTextField>,
     toast: Retained<NSTextField>,
@@ -126,76 +140,64 @@ struct OverlayView {
     last_panel_frame: Option<NSRect>,
     last_visible_text: String,
     last_status_text: String,
+    last_duration_text: String,
     last_meta_text: String,
     peak_text_lines: usize,
+    /// chrome 初始化 / 热重载时检测到不可用的 SPI / fallback 走人 → 等首次可见时塞 error toast。
+    pending_chrome_error: Option<String>,
 }
 
 impl OverlayView {
     fn new(mtm: MainThreadMarker, cfg: OverlayCfg) -> Self {
-        let frame = NSRect::new(NSPoint::new(80.0, 860.0), NSSize::new(WIDTH, HEIGHT));
-        let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
-            NSPanel::alloc(mtm),
-            frame,
-            NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
-            NSBackingStoreType::Buffered,
+        let initial_frame = NSRect::new(NSPoint::new(80.0, 860.0), NSSize::new(WIDTH, HEIGHT));
+        let panel = make_panel(mtm, initial_frame);
+        apply_panel_background_blur(&panel, cfg.background_blur_radius);
+
+        let (container, glass, background, pending_chrome_error) = build_chrome(mtm, &cfg);
+
+        let row = first_row_frames(0.0);
+        let state_icon = make_state_icon(mtm, COLOR_PRIMARY_TEXT);
+        state_icon.setFrame(row.icon);
+        let status = label(mtm, row.status, STATUS_FONT_POINT, true, COLOR_PRIMARY_TEXT);
+        let duration = label(mtm, row.duration, 12.0, false, COLOR_SECONDARY_TEXT);
+        duration.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(
+            12.0, 0.0,
+        )));
+        let chars = label(mtm, row.chars, 12.0, false, COLOR_SECONDARY_TEXT);
+        chars.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(
+            12.0, 0.0,
+        )));
+        let meta = label(mtm, row.meta, 12.0, false, COLOR_SECONDARY_TEXT);
+        meta.setAlignment(NSTextAlignment::Right);
+        let text = label(
+            mtm,
+            NSRect::new(NSPoint::new(18.0, 18.0), NSSize::new(TEXT_WIDTH, 24.0)),
+            15.0,
             false,
+            COLOR_PRIMARY_TEXT,
         );
-        unsafe { panel.setReleasedWhenClosed(false) };
-        panel.setOpaque(false);
-        panel.setBackgroundColor(Some(&NSColor::clearColor()));
-        panel.setHasShadow(false);
-        panel.setIgnoresMouseEvents(true);
-        panel.setLevel(NSStatusWindowLevel);
-        panel.setCollectionBehavior(
-            NSWindowCollectionBehavior::CanJoinAllSpaces
-                | NSWindowCollectionBehavior::FullScreenAuxiliary,
-        );
-
-        let root = NSView::new(mtm);
-        root.setFrame(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(WIDTH, HEIGHT)));
-        root.setWantsLayer(true);
-        if let Some(layer) = root.layer() {
-            layer.setCornerRadius(18.0);
-            layer.setMasksToBounds(true);
-        }
-
-        let glass = make_glass_view(mtm, cfg.glass_variant);
-        set_glass_tint(&glass, cfg.background_rgb, cfg.background_alpha);
-        glass.setFrame(root_frame());
-        glass.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable
-                | NSAutoresizingMaskOptions::ViewHeightSizable,
-        );
-        root.addSubview(&glass);
-
-        let scrim = NSView::new(mtm);
-        scrim.setFrame(root_frame());
-        scrim.setWantsLayer(true);
-        if let Some(layer) = scrim.layer() {
-            let color = color_from_rgb_alpha(cfg.background_rgb, cfg.background_alpha);
-            layer.setBackgroundColor(Some(&color.CGColor()));
-        }
-        root.addSubview(&scrim);
-
-        let state_icon = make_state_icon(mtm);
-        state_icon.setFrame(NSRect::new(
-            NSPoint::new(16.0, 44.0),
-            NSSize::new(20.0, 20.0),
-        ));
-        let status = label(mtm, 44.0, 48.0, 274.0, 22.0, 13.0, true);
-        let meta = label(mtm, 320.0, 48.0, 190.0, 22.0, 12.0, false);
-        let text = label(mtm, 18.0, 18.0, TEXT_WIDTH, 24.0, 15.0, false);
         text.setUsesSingleLineMode(false);
         text.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
-        let toast = label(mtm, 150.0, -30.0, 240.0, 24.0, 12.0, false);
+        let toast = label(
+            mtm,
+            NSRect::new(NSPoint::new(150.0, -30.0), NSSize::new(240.0, 24.0)),
+            12.0,
+            false,
+            COLOR_PRIMARY_TEXT,
+        );
         toast.setHidden(true);
 
-        root.addSubview(&state_icon);
-        root.addSubview(&status);
-        root.addSubview(&meta);
-        root.addSubview(&text);
-        root.addSubview(&toast);
-        panel.setContentView(Some(&root));
+        // labels 后 addSubview = z-order 在前。glass 在 build_chrome 里已经先进 container 当底色，
+        // 这里追加 labels 自然叠在 glass 上面。
+        container.addSubview(&state_icon);
+        container.addSubview(&status);
+        container.addSubview(&duration);
+        container.addSubview(&chars);
+        container.addSubview(&meta);
+        container.addSubview(&text);
+        container.addSubview(&toast);
+
+        panel.setContentView(Some(&container));
         panel.orderOut(None);
 
         Self {
@@ -203,11 +205,13 @@ impl OverlayView {
             cfg,
             model: OverlayModel::default(),
             panel,
-            root,
+            container,
             glass,
-            scrim,
+            background,
             state_icon,
             status,
+            duration,
+            chars,
             meta,
             text,
             toast,
@@ -217,12 +221,25 @@ impl OverlayView {
             last_panel_frame: None,
             last_visible_text: String::new(),
             last_status_text: String::new(),
+            last_duration_text: String::new(),
             last_meta_text: String::new(),
             peak_text_lines: 1,
+            pending_chrome_error,
         }
     }
 
     fn apply(&mut self, cmd: OverlayCmd) {
+        if let OverlayCmd::ReloadConfig { cfg } = cmd {
+            self.rebuild_chrome(cfg);
+            return;
+        }
+        if matches!(cmd, OverlayCmd::Relabel) {
+            // Force render() to push new translated status text.
+            self.last_status_text.clear();
+            self.model.apply(cmd);
+            self.render();
+            return;
+        }
         match &cmd {
             OverlayCmd::SetState { state } => match state {
                 OverlayState::Recording => {
@@ -261,7 +278,10 @@ impl OverlayView {
         if let Some(started) = self.recording_started {
             self.model.dur_ms = started.elapsed().as_millis() as u64;
         }
-        if self.toast_until.is_some_and(|until| Instant::now() >= until) {
+        if self
+            .toast_until
+            .is_some_and(|until| Instant::now() >= until)
+        {
             self.model.toast = None;
             self.toast_until = None;
         }
@@ -270,6 +290,19 @@ impl OverlayView {
 
     fn render(&mut self) {
         if self.model.visible {
+            // 首次可见时，把 chrome 初始化 / 热重载攒下的错误用 toast 抛出来
+            if self.model.toast.is_none() {
+                if let Some(err) = self.pending_chrome_error.take() {
+                    let ttl_ms: u32 = 5000;
+                    self.model.toast = Some(Toast {
+                        text: err,
+                        level: ToastLevel::Error,
+                        ttl_ms,
+                    });
+                    self.toast_until = Some(Instant::now() + Duration::from_millis(ttl_ms as u64));
+                }
+            }
+
             let full_text = self.model.display_text();
             let (_, current_lines) =
                 display_text_plan(&full_text, self.cfg.max_text_lines, CHARS_PER_LINE);
@@ -282,10 +315,10 @@ impl OverlayView {
             let height = HEIGHT + (lines.saturating_sub(1) as f64 * TEXT_LINE_HEIGHT);
             self.layout(height, lines);
             self.place(height);
-            self.panel.setAlphaValue(0.96);
             self.panel.makeKeyAndOrderFront(None);
         } else {
             self.panel.orderOut(None);
+            self.last_panel_frame = None;
             return;
         }
 
@@ -294,48 +327,62 @@ impl OverlayView {
             display_text_plan(&full_text, self.cfg.max_text_lines, CHARS_PER_LINE);
         let (state, label, color_rgb) = self.effective_state();
         let dur = format_duration(self.model.dur_ms);
-        let status = format!("{label} · {dur} · {}字", full_text.chars().count());
-        self.render_state_icon(state, color_rgb);
-        if self.last_status_text != status {
-            fade_view(&self.status, 0.16);
-            self.status.setStringValue(&NSString::from_str(&status));
-            self.last_status_text = status;
-        }
-
         let app = self
             .model
             .app_name
             .as_deref()
             .or(self.model.bundle_id.as_deref())
             .unwrap_or("");
-        let meta = if self.model.chain_summary.is_empty() {
-            app.to_string()
-        } else if app.is_empty() {
-            self.model.chain_summary.clone()
-        } else {
-            format!("{app}  ·  {}", self.model.chain_summary)
-        };
-        if self.last_meta_text != meta {
+        let header = header_parts(
+            &label,
+            &dur,
+            full_text.chars().count() as u32,
+            app,
+            &self.model.chain_summary,
+        );
+        self.render_state_icon(state, color_rgb);
+        if self.last_status_text != header.state {
+            fade_view(&self.status, 0.16);
+            self.status
+                .setStringValue(&NSString::from_str(&header.state));
+            self.status
+                .setTextColor(Some(&color_from_rgb_alpha(color_rgb, 1.0)));
+            self.last_status_text = header.state;
+        }
+
+        if self.last_duration_text != header.duration {
+            self.duration
+                .setStringValue(&NSString::from_str(&header.duration));
+            self.duration
+                .setTextColor(Some(&color_from_rgb_alpha(COLOR_SECONDARY_TEXT, 1.0)));
+            self.last_duration_text = header.duration;
+        }
+        self.chars
+            .setStringValue(&NSString::from_str(&header.chars));
+        self.chars
+            .setTextColor(Some(&color_from_rgb_alpha(COLOR_SECONDARY_TEXT, 1.0)));
+
+        if self.last_meta_text != header.meta {
             fade_view(&self.meta, 0.16);
-            self.meta.setStringValue(&NSString::from_str(&meta));
-            self.last_meta_text = meta;
+            self.meta.setStringValue(&NSString::from_str(&header.meta));
+            self.meta
+                .setTextColor(Some(&color_from_rgb_alpha(COLOR_SECONDARY_TEXT, 1.0)));
+            self.last_meta_text = header.meta;
         }
         if self.last_visible_text != display_text {
             fade_view(&self.text, 0.10);
             self.text.setStringValue(&NSString::from_str(&display_text));
+            self.text
+                .setTextColor(Some(&color_from_rgb_alpha(COLOR_PRIMARY_TEXT, 1.0)));
             self.last_visible_text = display_text;
         }
 
         if let Some(toast) = &self.model.toast {
             self.toast.setStringValue(&NSString::from_str(&toast.text));
             let color = match toast.level {
-                ToastLevel::Info => NSColor::labelColor(),
-                ToastLevel::Warn => {
-                    NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.76, 0.0, 1.0)
-                }
-                ToastLevel::Error => {
-                    NSColor::colorWithSRGBRed_green_blue_alpha(1.0, 0.23, 0.19, 1.0)
-                }
+                ToastLevel::Info => color_from_rgb_alpha(COLOR_PRIMARY_TEXT, 1.0),
+                ToastLevel::Warn => color_from_rgb_alpha(COLOR_TOAST_WARN, 1.0),
+                ToastLevel::Error => color_from_rgb_alpha(COLOR_TOAST_ERROR, 1.0),
             };
             self.toast.setTextColor(Some(&color));
             self.toast.setHidden(false);
@@ -388,41 +435,39 @@ impl OverlayView {
         if let Some(image) = symbol_image(symbol, value, state == OverlayState::Recording) {
             self.state_icon.setImage(Some(&image));
         }
-        let config = NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Large);
+        let bold = unsafe { NSFontWeightBold };
+        let config = NSImageSymbolConfiguration::configurationWithPointSize_weight_scale(
+            ICON_SYMBOL_POINT,
+            bold,
+            NSImageSymbolScale::Large,
+        );
         self.state_icon.setSymbolConfiguration(Some(&config));
+        self.state_icon
+            .setImageAlignment(NSImageAlignment::AlignCenter);
+        self.state_icon
+            .setImageScaling(NSImageScaling::ScaleProportionallyUpOrDown);
+        self.state_icon.setImageFrameStyle(NSImageFrameStyle::None);
         self.state_icon
             .setContentTintColor(Some(&color_from_rgb_alpha(color_rgb, 1.0)));
     }
 
     fn layout(&mut self, height: f64, lines: usize) {
         let top_offset = height - HEIGHT;
-        self.root.setFrame(NSRect::new(
-            NSPoint::new(0.0, 0.0),
-            NSSize::new(WIDTH, height),
-        ));
-        self.glass.setFrame(NSRect::new(
-            NSPoint::new(0.0, 0.0),
-            NSSize::new(WIDTH, height),
-        ));
-        self.scrim.setFrame(NSRect::new(
-            NSPoint::new(0.0, 0.0),
-            NSSize::new(WIDTH, height),
-        ));
-        self.state_icon.setFrame(NSRect::new(
-            NSPoint::new(16.0, 44.0 + top_offset),
-            NSSize::new(20.0, 20.0),
-        ));
-        self.status.setFrame(NSRect::new(
-            NSPoint::new(44.0, 48.0 + top_offset),
-            NSSize::new(274.0, 22.0),
-        ));
-        self.meta.setFrame(NSRect::new(
-            NSPoint::new(320.0, 48.0 + top_offset),
-            NSSize::new(190.0, 22.0),
-        ));
+        let full = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(WIDTH, height));
+        // panel.contentView (glass 或 fallback) 跟随 panel 自动 resize；container 显式 set 确保 labels 坐标系对齐
+        self.container.setFrame(full);
+        let row = first_row_frames(top_offset);
+        self.state_icon.setFrame(row.icon);
+        self.status.setFrame(row.status);
+        self.duration.setFrame(row.duration);
+        self.chars.setFrame(row.chars);
+        self.meta.setFrame(row.meta);
         self.text.setFrame(NSRect::new(
             NSPoint::new(18.0, 18.0),
-            NSSize::new(TEXT_WIDTH, 24.0 + (lines.saturating_sub(1) as f64 * TEXT_LINE_HEIGHT)),
+            NSSize::new(
+                TEXT_WIDTH,
+                24.0 + (lines.saturating_sub(1) as f64 * TEXT_LINE_HEIGHT),
+            ),
         ));
         self.toast.setFrame(NSRect::new(
             NSPoint::new(150.0, -30.0),
@@ -434,8 +479,8 @@ impl OverlayView {
         let screen = NSScreen::mainScreen(self.mtm)
             .map(|screen| screen.frame())
             .unwrap_or_else(|| NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0)));
-        let anchor =
-            crate::focused_window_darwin::focused_window_frame(screen.size.height).unwrap_or(screen);
+        let anchor = crate::focused_window_darwin::focused_window_frame(screen.size.height)
+            .unwrap_or(screen);
         let frame = panel_frame(anchor, self.cfg.position, WIDTH, height, screen);
         let animate = self.last_panel_frame.is_some();
         if self
@@ -446,29 +491,140 @@ impl OverlayView {
             self.last_panel_frame = Some(frame);
         }
     }
+
+    /// 热重载入口：原地调 setter，不换 view。fallback 路径下 SPI 不可用，整段 noop（已经在 init 时报过错）。
+    fn rebuild_chrome(&mut self, cfg: OverlayCfg) {
+        if cfg == self.cfg {
+            return;
+        }
+        if let Some(glass) = &self.glass {
+            let missing = apply_glass_settings(glass, &cfg);
+            if !missing.is_empty() {
+                self.pending_chrome_error =
+                    Some(format!("glass SPI unavailable: {}", missing.join(", ")));
+            }
+        }
+        apply_panel_background_blur(&self.panel, cfg.background_blur_radius);
+        apply_background_settings(&self.background, &cfg);
+        self.cfg = cfg;
+        // peak_text_lines 用旧上限可能比新 max_text_lines 大，clamp 回去
+        let cap = self.cfg.max_text_lines.clamp(1, 8);
+        if self.peak_text_lines > cap {
+            self.peak_text_lines = cap;
+        }
+        self.render();
+    }
 }
 
 fn root_frame() -> NSRect {
     NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(WIDTH, HEIGHT))
 }
 
+fn make_panel(mtm: MainThreadMarker, frame: NSRect) -> Retained<NSPanel> {
+    let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
+        NSPanel::alloc(mtm),
+        frame,
+        NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
+        NSBackingStoreType::Buffered,
+        false,
+    );
+    unsafe { panel.setReleasedWhenClosed(false) };
+    panel.setOpaque(false);
+    panel.setBackgroundColor(Some(&NSColor::clearColor()));
+    panel.setHasShadow(false);
+    panel.setIgnoresMouseEvents(true);
+    panel.setLevel(NSStatusWindowLevel);
+    panel.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary,
+    );
+    panel
+}
+
+fn apply_panel_background_blur(panel: &NSPanel, radius: i64) {
+    unsafe {
+        let Some(api) = SkyLightBlurApi::load() else {
+            return;
+        };
+        let connection = (api.main_connection_id)();
+        let Ok(window_id) = i32::try_from(panel.windowNumber()) else {
+            return;
+        };
+        let _ = (api.set_window_background_blur_radius)(connection, window_id, radius.max(0));
+    }
+}
+
+struct SkyLightBlurApi {
+    main_connection_id: unsafe extern "C" fn() -> i32,
+    set_window_background_blur_radius: unsafe extern "C" fn(i32, i32, i64) -> i32,
+}
+
+impl SkyLightBlurApi {
+    fn load() -> Option<Self> {
+        unsafe {
+            const RTLD_LAZY: c_int = 0x1;
+            let path = c"/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight";
+            let handle = dlopen(path.as_ptr(), RTLD_LAZY);
+            if handle.is_null() {
+                return None;
+            }
+            let main = dlsym(handle, c"CGSMainConnectionID".as_ptr());
+            let set_blur = dlsym(handle, c"CGSSetWindowBackgroundBlurRadius".as_ptr());
+            if main.is_null() || set_blur.is_null() {
+                return None;
+            }
+            Some(Self {
+                main_connection_id: std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> i32>(
+                    main,
+                ),
+                set_window_background_blur_radius: std::mem::transmute::<
+                    *mut c_void,
+                    unsafe extern "C" fn(i32, i32, i64) -> i32,
+                >(set_blur),
+            })
+        }
+    }
+}
+
+unsafe extern "C" {
+    fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+}
+
+struct FirstRow {
+    icon: NSRect,
+    status: NSRect,
+    duration: NSRect,
+    chars: NSRect,
+    meta: NSRect,
+}
+
+fn first_row_frames(top_offset: f64) -> FirstRow {
+    let y = FIRST_ROW_Y + top_offset;
+    FirstRow {
+        icon: NSRect::new(NSPoint::new(16.0, y), NSSize::new(FIRST_ROW_H, FIRST_ROW_H)),
+        status: NSRect::new(NSPoint::new(48.0, y), NSSize::new(116.0, FIRST_ROW_H)),
+        duration: NSRect::new(NSPoint::new(170.0, y), NSSize::new(56.0, FIRST_ROW_H)),
+        chars: NSRect::new(NSPoint::new(232.0, y), NSSize::new(56.0, FIRST_ROW_H)),
+        meta: NSRect::new(NSPoint::new(294.0, y), NSSize::new(230.0, FIRST_ROW_H)),
+    }
+}
+
 fn label(
     mtm: MainThreadMarker,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
+    frame: NSRect,
     font_size: f64,
     bold: bool,
+    color_rgb: u32,
 ) -> Retained<NSTextField> {
     let field = NSTextField::labelWithString(ns_string!(""), mtm);
-    field.setFrame(NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)));
+    field.setFrame(frame);
     field.setDrawsBackground(false);
     field.setBezeled(false);
     field.setEditable(false);
     field.setSelectable(false);
     field.setWantsLayer(true);
-    field.setTextColor(Some(&NSColor::labelColor()));
+    field.setTextColor(Some(&color_from_rgb_alpha(color_rgb, 1.0)));
     let font = if bold {
         NSFont::boldSystemFontOfSize(font_size)
     } else {
@@ -479,12 +635,50 @@ fn label(
     field
 }
 
-fn make_glass_view(mtm: MainThreadMarker, variant: i64) -> Retained<NSView> {
-    if let Some(cls) = AnyClass::get(c"NSGlassEffectView") {
-        let glass: Retained<NSView> =
-            unsafe { msg_send![msg_send![cls, alloc], initWithFrame: root_frame()] };
-        set_glass_variant(&glass, variant);
-        return glass;
+/// 构造 chrome。返回 (labels 容器, glass 句柄或 None, 可控色层, 初始化期错误).
+///
+/// 关键认知（v2 调整）：`NSGlassEffectView.contentView` 是 **"嵌在 glass 里"** 的语义 ——
+/// 像琥珀封蝇，contentView 视觉上**在 glass 材质后面**，会被材质遮罩/模糊。所以 labels
+/// **不能**塞进 glass.contentView，否则人眼看像在 glass 下面。
+///
+/// 正确做法：panel.contentView = 一个普通 root NSView；root 里 **glass 在底层**（先 addSubview），
+/// labels 是 glass 的**兄弟**（后 addSubview，z-order 自然在上）。Apple 的 "arbitrary subviews
+/// 行为未定" 警告只针对**直接 addSubview 到 glass**，不针对 glass 的兄弟。
+fn build_chrome(
+    mtm: MainThreadMarker,
+    cfg: &OverlayCfg,
+) -> (
+    Retained<NSView>,
+    Option<Retained<NSGlassEffectView>>,
+    Retained<NSView>,
+    Option<String>,
+) {
+    let container = NSView::new(mtm);
+    container.setFrame(root_frame());
+    let background = make_background_layer(mtm, cfg);
+
+    if AnyClass::get(c"NSGlassEffectView").is_some() {
+        let glass = NSGlassEffectView::initWithFrame(NSGlassEffectView::alloc(mtm), root_frame());
+        #[cfg(debug_assertions)]
+        {
+            crate::overlay::debug::dump_glass_selectors(&glass);
+            crate::overlay::debug::probe_glass_state_ranges(&glass);
+        }
+        let missing = apply_glass_settings(&glass, cfg);
+        glass.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        // glass 负责系统材质；background 负责稳定可控的色彩/深浅；labels 后续叠在最上面。
+        container.addSubview(&glass);
+        container.addSubview(&background);
+
+        let err = if missing.is_empty() {
+            None
+        } else {
+            Some(format!("glass SPI unavailable: {}", missing.join(", ")))
+        };
+        return (container, Some(glass), background, err);
     }
 
     let visual = NSVisualEffectView::new(mtm);
@@ -492,42 +686,125 @@ fn make_glass_view(mtm: MainThreadMarker, variant: i64) -> Retained<NSView> {
     visual.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
     visual.setMaterial(NSVisualEffectMaterial::HUDWindow);
     visual.setState(NSVisualEffectState::Active);
-    visual.into_super()
+    visual.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    container.addSubview(&visual);
+    container.addSubview(&background);
+    (
+        container,
+        None,
+        background,
+        Some("NSGlassEffectView unavailable — falling back to HUD material".to_string()),
+    )
 }
 
-fn set_glass_tint(view: &NSView, rgb: u32, alpha: f64) {
+/// 把 cfg 里所有 chrome 旋钮拍到 glass 上。返回检测到不可用的 SPI 列表（私有 selector 没 respond）。
+/// 公开 API（cornerRadius/style）由 typed binding 保证存在，不进 missing 列表。
+fn apply_glass_settings(glass: &NSGlassEffectView, cfg: &OverlayCfg) -> Vec<&'static str> {
+    glass.setCornerRadius(cfg.corner_radius);
+    let style = match cfg.glass_style {
+        GlassStyle::Clear => NSGlassEffectViewStyle::Regular,
+        GlassStyle::Blur => NSGlassEffectViewStyle::Clear,
+    };
+    glass.setStyle(style);
+
+    let mut missing = Vec::new();
+    if !try_set_long(glass, c"set_variant:", c"setVariant:", cfg.glass_variant) {
+        missing.push("variant");
+    }
+    if !try_set_long(
+        glass,
+        c"set_subduedState:",
+        c"setSubduedState:",
+        cfg.subdued,
+    ) && cfg.subdued != 0
+    {
+        missing.push("subdued");
+    }
+    missing
+}
+
+fn make_background_layer(mtm: MainThreadMarker, cfg: &OverlayCfg) -> Retained<NSView> {
+    let background = NSView::new(mtm);
+    background.setFrame(root_frame());
+    background.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    background.setWantsLayer(true);
+    apply_background_settings(&background, cfg);
+    background
+}
+
+fn apply_background_settings(background: &NSView, cfg: &OverlayCfg) {
     unsafe {
-        let obj: &AnyObject = msg_send![view, self];
-        let sel = sel!(setTintColor:);
-        let responds: bool = msg_send![obj, respondsToSelector: sel];
-        if responds {
-            let color = color_from_rgb_alpha(rgb, alpha.clamp(0.0, 1.0));
-            let _: () = msg_send![obj, setTintColor: &*color];
-        }
+        let layer: *mut AnyObject = msg_send![background, layer];
+        let color = color_from_rgb_alpha(cfg.background_rgb, cfg.background_alpha).CGColor();
+        let _: () = msg_send![layer, setBackgroundColor: &*color];
+        let _: () = msg_send![layer, setCornerRadius: cfg.corner_radius];
+        let _: () = msg_send![layer, setMasksToBounds: true];
     }
 }
 
-fn set_glass_variant(view: &NSView, variant: i64) {
+/// 私有 SPI setter 通道。先试 `set_<key>:` 私有名，再退到 `setKey:` 公有名 ——
+/// 顺序和参数 ABI（i64）都参考 electron-liquid-glass `glass_effect.mm::ResolveSetter`。
+/// 私有 selector 在每个 macOS 版本可能改名/消失，所以两步 `respondsToSelector:` 验过再发。
+///
+/// 注意：subdued 看起来像 BOOL，但 runtime 实际期望 `NSInteger` (i64)。
+/// 错传 BOOL 就调用静默无效果。
+fn try_set_long(
+    glass: &NSGlassEffectView,
+    private_name: &core::ffi::CStr,
+    public_name: &core::ffi::CStr,
+    value: i64,
+) -> bool {
+    use objc2::runtime::{MessageReceiver, Sel};
     unsafe {
-        let obj: &AnyObject = msg_send![view, self];
-        let private_sel = sel!(set_variant:);
-        let public_sel = sel!(setVariant:);
-        let responds_private: bool = msg_send![obj, respondsToSelector: private_sel];
-        let responds_public: bool = msg_send![obj, respondsToSelector: public_sel];
-        if responds_private {
-            let _: () = msg_send![obj, set_variant: variant];
-        } else if responds_public {
-            let _: () = msg_send![obj, setVariant: variant];
+        let obj: &AnyObject = msg_send![glass, self];
+        let private = Sel::register(private_name);
+        if msg_send![obj, respondsToSelector: private] {
+            let _: () = obj.send_message(private, (value,));
+            #[cfg(debug_assertions)]
+            crate::overlay::debug::trace(format!(
+                "dispatched {} <- {value}",
+                private_name.to_string_lossy()
+            ));
+            return true;
         }
+        let public = Sel::register(public_name);
+        if msg_send![obj, respondsToSelector: public] {
+            let _: () = obj.send_message(public, (value,));
+            #[cfg(debug_assertions)]
+            crate::overlay::debug::trace(format!(
+                "dispatched {} <- {value}",
+                public_name.to_string_lossy()
+            ));
+            return true;
+        }
+        #[cfg(debug_assertions)]
+        crate::overlay::debug::trace(format!(
+            "missing {} / {}",
+            private_name.to_string_lossy(),
+            public_name.to_string_lossy()
+        ));
     }
+    false
 }
 
-fn make_state_icon(mtm: MainThreadMarker) -> Retained<NSImageView> {
+fn make_state_icon(mtm: MainThreadMarker, color_rgb: u32) -> Retained<NSImageView> {
     let image = symbol_image("circle.fill", 1.0, false).expect("system symbol should exist");
     let view = NSImageView::imageViewWithImage(&image, mtm);
-    let config = NSImageSymbolConfiguration::configurationWithScale(NSImageSymbolScale::Large);
+    let bold = unsafe { NSFontWeightBold };
+    let config = NSImageSymbolConfiguration::configurationWithPointSize_weight_scale(
+        ICON_SYMBOL_POINT,
+        bold,
+        NSImageSymbolScale::Large,
+    );
     view.setSymbolConfiguration(Some(&config));
-    view.setContentTintColor(Some(&NSColor::labelColor()));
+    view.setImageAlignment(NSImageAlignment::AlignCenter);
+    view.setImageScaling(NSImageScaling::ScaleProportionallyUpOrDown);
+    view.setImageFrameStyle(NSImageFrameStyle::None);
+    view.setContentTintColor(Some(&color_from_rgb_alpha(color_rgb, 1.0)));
     view
 }
 
@@ -571,6 +848,30 @@ fn display_text_plan(text: &str, max_lines: usize, chars_per_line: usize) -> (St
         .rev()
         .collect();
     (format!("…{tail}"), max_lines)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct HeaderParts {
+    state: String,
+    duration: String,
+    chars: String,
+    meta: String,
+}
+
+fn header_parts(state: &str, duration: &str, chars: u32, app: &str, chain: &str) -> HeaderParts {
+    let meta = if chain.is_empty() {
+        app.to_string()
+    } else if app.is_empty() {
+        chain.to_string()
+    } else {
+        format!("{app}  ·  {chain}")
+    };
+    HeaderParts {
+        state: state.to_string(),
+        duration: duration.to_string(),
+        chars: format!("{chars}字"),
+        meta,
+    }
 }
 
 fn panel_frame(
@@ -623,11 +924,7 @@ fn fade_view(view: &NSView, duration_s: f64) {
 }
 
 fn format_duration(ms: u64) -> String {
-    if ms < 10_000 {
-        format!("{:.1}s", ms as f64 / 1000.0)
-    } else {
-        format!("{:02}:{:02}", ms / 60_000, (ms / 1000) % 60)
-    }
+    format!("{:02}:{:02}", ms / 60_000, (ms / 1000) % 60)
 }
 
 #[cfg(test)]
@@ -650,6 +947,15 @@ mod tests {
         assert!(visible.starts_with('…'));
         assert!(visible.ends_with(&"后".repeat(20)));
         assert!(!visible.contains(&"前".repeat(120)));
+    }
+
+    #[test]
+    fn header_parts_keep_state_duration_and_meta_separate() {
+        let parts = header_parts("Recording", "00:03", 84, "Xcode", "filler");
+        assert_eq!(parts.state, "Recording");
+        assert_eq!(parts.duration, "00:03");
+        assert_eq!(parts.chars, "84字");
+        assert_eq!(parts.meta, "Xcode  ·  filler");
     }
 
     #[test]

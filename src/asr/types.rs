@@ -66,7 +66,11 @@ pub enum AsrEvent {
     /// 当前 utterance 最新猜测全文。会被后续 Partial 覆盖。
     Partial { text: String, seq: u64 },
     /// 句末（server VAD / definite=true / is_last 收尾）—— 不再变。
-    Segment { text: String, started_at: Instant, ended_at: Instant },
+    Segment {
+        text: String,
+        started_at: Instant,
+        ended_at: Instant,
+    },
     /// 非取消类错误。voice 模块决定降级策略。
     Error { err: AsrError },
     /// session 终结：is_last + 最后一段已发完。channel 应在此之后关闭。

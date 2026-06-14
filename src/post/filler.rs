@@ -64,7 +64,11 @@ mod tests {
 
     async fn run(filler: &RuleBasedFiller, input: &str) -> String {
         let pt = PipelineText::new(input.into(), vec![input.into()]);
-        filler.process(pt, &AppContext::default()).await.unwrap().text
+        filler
+            .process(pt, &AppContext::default())
+            .await
+            .unwrap()
+            .text
     }
 
     #[tokio::test]
@@ -95,7 +99,10 @@ mod tests {
     #[tokio::test]
     async fn preserves_english_and_punctuation() {
         let f = RuleBasedFiller::default_patterns();
-        assert_eq!(run(&f, "I use Rust, tokio and macOS.").await, "I use Rust, tokio and macOS.");
+        assert_eq!(
+            run(&f, "I use Rust, tokio and macOS.").await,
+            "I use Rust, tokio and macOS."
+        );
     }
 
     #[tokio::test]

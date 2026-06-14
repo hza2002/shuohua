@@ -112,7 +112,8 @@ pub fn append_record(path: &Path, record: &HistoryRecord) -> Result<()> {
         .with_context(|| format!("open history {}", path.display()))?;
     serde_json::to_writer(&mut file, record)
         .with_context(|| format!("serialize history record {}", record.id))?;
-    file.write_all(b"\n").with_context(|| format!("write history {}", path.display()))?;
+    file.write_all(b"\n")
+        .with_context(|| format!("write history {}", path.display()))?;
     Ok(())
 }
 
@@ -168,7 +169,10 @@ mod tests {
         assert_eq!(json["started_at"], "2026-06-13T12:00:00Z");
         assert_eq!(json["ended_at"], "2026-06-13T12:00:08Z");
         assert_eq!(json["status"], "submitted");
-        assert_eq!(json["asr"]["sessions"][0]["started_at"], "2026-06-13T12:00:00Z");
+        assert_eq!(
+            json["asr"]["sessions"][0]["started_at"],
+            "2026-06-13T12:00:00Z"
+        );
         assert_eq!(json["pipeline"][0]["status"], "ok");
 
         let _ = fs::remove_dir_all(dir);

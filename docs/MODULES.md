@@ -39,12 +39,14 @@ src/
 | M | 新增路径 | 主要新依赖 |
 |---|---|---|
 | **M2.5** | — | — |
-| **M3** | `state/{mod,history}.rs`, `overlay/{mod,view,animations}.rs`, `i18n/mod.rs`, `assets/i18n/*.toml`, `build.rs` 链接 frameworks | objc2-quartz-core, serde_json, ulid, time |
+| **M3** | `state/{mod,history}.rs`, `overlay/{mod,view,animations}.rs`, `overlay/debug.rs`（`#[cfg(debug_assertions)]`，NSGlassEffectView SPI 探针），`i18n/mod.rs`, `assets/i18n/*.toml`, `build.rs` 链接 frameworks；**M3.f 提前实现：`reload.rs`**（参见 [DESIGN.md §2.12](DESIGN.md#212-配置热重载reload-模块)） | objc2-quartz-core, serde_json, ulid, time, **notify**（M3.f 提前引入） |
 | **M4** | `ipc/{mod,protocol}.rs`, `tui/{mod,panes,keybindings}.rs` | ratatui, crossterm |
-| **M5** | `cli/{mod,doctor,service,smart}.rs`, `doctor.rs` | clap, notify |
+| **M5** | `cli/{mod,doctor,service,smart}.rs`, `doctor.rs` | clap |
 | **M6** | 扩 `hotkey/`（无新路径） | proptest (dev) |
 | **M7** | `post/{llm,app_context}.rs` | reqwest |
 | **M8** | `asr/providers/whisper_cpp.rs` | whisper-rs (feature flag) |
 | **M9** | `asr/providers/apple_speech.rs` | objc2-speech |
+
+**M5 收口时只需 review `reload.rs`**：检查 [DESIGN.md §2.12](DESIGN.md#212-配置热重载reload-模块) 表里列的"已实现 / 待补"两栏，把 ⏸ 项目（asr.provider 切换 + UDS reload_config + doctor + launchd）补完即可，不用重做 reload 机制本身。
 
 每条路径的详细职责见 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)；关键设计决策见 [DESIGN.md §2](DESIGN.md#2-关键设计决策)。

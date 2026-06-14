@@ -16,7 +16,7 @@ clap            = { version = "4", features = ["derive"] }
 cpal            = "0.18"
 hound           = "3"
 os_pipe         = "1"
-core-graphics   = "0.24"
+core-graphics   = "0.25"
 core-foundation = "0.10"
 tokio           = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 tokio-util      = { version = "0.7", features = ["rt"] }
@@ -71,6 +71,9 @@ ratatui         = "0.30"
 crossterm       = "0.29"
 libc            = "0.2"
 unicode-segmentation = "1.13"
+
+[dev-dependencies]
+proptest = "1"
 
 [profile.release]
 opt-level = "z"

@@ -36,11 +36,11 @@ use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hotkey::{HotkeyEvent, RawKey, Tracker};
+use hotkey::{HotkeyEvent, RawKey, Suppressor, Tracker};
 use overlay::OverlayHandle;
 use state::StateStore;
 use voice::finish::SessionParams;
@@ -220,10 +220,17 @@ async fn run_daemon(
 
     let (pipe_reader, pipe_writer) = os_pipe::pipe().context("create hotkey pipe")?;
 
+    // Suppressor is shared between the CGEventTap callback (decides whether to
+    // drop the event for the foreground app) and the daemon main loop (updates
+    // the trigger code on `[hotkey].trigger` reload). Lock contention is
+    // human-rate; std Mutex is fine.
+    let suppressor = Arc::new(Mutex::new(Suppressor::new(initial_trigger_code)));
+    let suppressor_for_tap = suppressor.clone();
+
     thread::Builder::new()
         .name("hotkey-eventtap".into())
         .spawn(move || {
-            if let Err(e) = hotkey::provider_darwin::run(pipe_writer) {
+            if let Err(e) = hotkey::provider_darwin::run(pipe_writer, suppressor_for_tap) {
                 eprintln!("[hotkey] event tap exited: {e:#}");
                 std::process::exit(2);
             }
@@ -253,8 +260,13 @@ async fn run_daemon(
     loop {
         tokio::select! {
             Some(new_code) = trigger_rx.recv() => {
-                // 重 trigger：换 Tracker（pressed 状态归零），CGEventTap 不动——它本来就抓所有键。
+                // 重 trigger：换 Tracker（pressed 状态归零）+ 同步给 CGEventTap callback
+                // 里的 Suppressor。CGEventTap 不动——它本来就抓所有键。Suppressor 的
+                // `held` 不清，旧 trigger 已按下的物理键 keyup 仍会被正确吞掉（§5 不变量 8）。
                 tracker = Tracker::new(new_code);
+                if let Ok(mut s) = suppressor.lock() {
+                    s.set_trigger(new_code);
+                }
                 continue;
             }
             maybe_raw = raw_rx.recv() => {

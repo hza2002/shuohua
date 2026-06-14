@@ -9,8 +9,13 @@
 
 pub mod parse;
 pub mod provider_darwin;
+pub mod suppressor;
 pub mod tracker;
 
+#[cfg(test)]
+mod proptests;
+
+pub use suppressor::Suppressor;
 pub use tracker::Tracker;
 
 /// A keyboard event after CGEventTap → pipe decode.

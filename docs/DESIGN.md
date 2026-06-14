@@ -170,7 +170,11 @@ fn dispatch(token: OutputToken, text: String) { /* 消费掉 */ }
 
 ### 2.4 真正实现热键 Suppress
 
-CGEventTap C 回调里通过 `arc_swap::ArcSwap<RegisteredCombos>` 读注册表的不可变快照（无锁、无分配），决定 `return null` 还是 `return event`。toggle 模式下也可以真正吞掉热键的 keydown，避免泄漏给前台 App（见 §5 不变量 down/up 配对吞）。
+CGEventTap 装在 `CGEventTapOptions::Default` 模式（不是 ListenOnly）下，回调里读注册表决定 `CallbackResult::Drop` 还是 `Keep` —— `Drop` 在 `core-graphics ≥ 0.25` 的 safe wrapper 里真返回 NULL 给系统，事件就不会到前台 App。toggle 模式下也可以真正吞掉热键的 keydown 跟配对的 keyup，避免泄漏（见 §5 不变量 down/up 配对吞）。
+
+> **依赖红线**：suppress 落地依赖 `core-graphics ≥ 0.25` 的 `CallbackResult` API。0.24 的 safe wrapper 没有返 NULL 的路径，回滚版本 = suppress 静默失效。
+>
+> **当前实现（M6 part 1）**：注册表是单 trigger keycode，包在 `std::sync::Mutex<Suppressor>` 里跟 daemon 主循环共享。callback 频率远低于 Mutex 竞争阈值（人工按键 ≪ ns 级锁开销）。M6 part 2 引入修饰键组合 / 双击后可视情况换 `ArcSwap` 做无锁快照。
 
 ### 2.5 去掉 Plugin 抽象
 
@@ -734,7 +738,7 @@ shuohua 是 launchd 后台 daemon。release binary 跑起来时 stderr 会被 la
 | 用途 | crate | 理由 |
 |---|---|---|
 | Objective-C 互操作 | `objc2` 0.6 + `objc2-app-kit` 0.3 + `objc2-foundation` 0.3 | 现役标准，活跃维护 |
-| Core Graphics / CGEventTap | `core-graphics`, `core-foundation` | CGEventTap pipe 桥的基础 |
+| Core Graphics / CGEventTap | `core-graphics` (≥ 0.25), `core-foundation` | CGEventTap pipe 桥的基础。0.25 的 `CallbackResult::Drop` 是 suppress 落地依赖（见 §2.4） |
 | 录音 | `cpal`（首选）/ `coreaudio-rs`（备选） | cpal 简单，coreaudio-rs 控制更细。先用 cpal |
 | VAD（未来） | `webrtc-vad`（libfvad）- 试过，误判率高，不推荐 | 后续用 Silero VAD ONNX（M9）或更好的模型 |
 | PCM 通道（callback→consumer） | `tokio::sync::mpsc::unbounded` | M2 已验稳定；Go 版 syscall pipe 都稳跑，mpsc 更轻 |

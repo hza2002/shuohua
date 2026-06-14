@@ -1,61 +1,79 @@
-//! CGEventTap → pipe bridge.
+//! CGEventTap → pipe bridge + foreground-app suppress.
 //!
-//! docs/DESIGN.md §5 invariant 2: C → Rust events go over a pipe, not a direct
-//! callback to higher layers. The CGEventTap callback runs on the CFRunLoop
-//! thread; we keep it allocation-light by only locking a Mutex<PipeWriter>
-//! and doing one pipe write per keydown/keyup. At M1's human-rate keypress
-//! frequency, Mutex contention is non-existent.
+//! docs/DESIGN.md §2.4 + §5 invariant 8: the tap runs in `Default` mode so the
+//! callback can decide to *drop* an event (return `CallbackResult::Drop` → the
+//! safe wrapper returns NULL → the OS does not forward the event to other
+//! consumers). We always also write the event to the pipe so the tokio-side
+//! `Tracker` keeps seeing every keypress, regardless of suppression.
+//!
+//! Suppress decisions live in [`Suppressor`] — a pure state machine that
+//! tracks the "physical keys we've eaten so far" so the matching KeyUp is
+//! suppressed even when the trigger is re-bound mid-hold.
 
 use anyhow::{anyhow, Result};
-use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+use core_foundation::runloop::CFRunLoop;
 use core_graphics::event::{
-    CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType, EventField,
+    CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
+    CallbackResult, EventField,
 };
 use os_pipe::PipeWriter;
 use std::io::Write;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use super::RawKey;
+use super::{RawKey, Suppressor};
 
-/// Block forever running a CGEventTap on the current thread's CFRunLoop.
-/// Writes a 4-byte RawKey frame to `writer` for every observed keydown/keyup.
-pub fn run(writer: PipeWriter) -> Result<()> {
-    let writer = Mutex::new(writer);
+/// Install a CGEventTap on the current thread's CFRunLoop and block until the
+/// runloop stops. Every observed KeyDown/KeyUp is encoded to the pipe.
+/// Suppression is delegated to `suppressor` (shared with daemon main loop so
+/// `[hotkey].trigger` reloads can update the trigger code without restarting
+/// the tap).
+pub fn run(writer: PipeWriter, suppressor: Arc<Mutex<Suppressor>>) -> Result<()> {
+    let pipe = Mutex::new(writer);
 
-    // Session level is the conventional choice for listening to keyboard
-    // events; HID-level taps require the process to be a trusted Accessibility
-    // client even in ListenOnly mode, which we don't need at M1.
-    let tap = CGEventTap::new(
+    CGEventTap::with_enabled(
+        // Session level matches our M1 design. HID-level taps need stronger
+        // entitlements and aren't needed here.
         CGEventTapLocation::Session,
         CGEventTapPlacement::HeadInsertEventTap,
-        CGEventTapOptions::ListenOnly,
+        // Default = active filter: callback's return value decides whether
+        // the event continues to other consumers. ListenOnly would ignore it.
+        CGEventTapOptions::Default,
         vec![CGEventType::KeyDown, CGEventType::KeyUp],
-        move |_proxy, event_type, event| {
-            let raw_code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
-            let down = matches!(event_type, CGEventType::KeyDown);
-            let buf = RawKey::encode(down, raw_code);
-            if let Ok(mut w) = writer.lock() {
+        move |_proxy, etype, event| {
+            let down = matches!(etype, CGEventType::KeyDown);
+            let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+
+            // Forward unconditionally — the Tracker on the tokio side must see
+            // every event, including ones we eat for the foreground app.
+            let buf = RawKey::encode(down, code);
+            if let Ok(mut w) = pipe.lock() {
                 let _ = w.write_all(&buf);
             }
-            None
+
+            let drop_event = match suppressor.lock() {
+                Ok(mut s) => s.on_raw(RawKey { down, code }),
+                // Poisoned mutex means a panic happened on a Suppressor user;
+                // safer to let events through than to silently eat them.
+                Err(_) => false,
+            };
+
+            if drop_event {
+                CallbackResult::Drop
+            } else {
+                CallbackResult::Keep
+            }
+        },
+        || {
+            CFRunLoop::run_current();
         },
     )
     .map_err(|_| {
         anyhow!(
-            "CGEventTap::new failed. Grant Accessibility (or Input Monitoring) to \
-             the terminal running `shuo` in System Settings → Privacy & Security."
+            "CGEventTapCreate failed. Default-mode taps require Accessibility \
+             permission — grant it to the terminal running `shuo` in System \
+             Settings → Privacy & Security → Accessibility."
         )
     })?;
-
-    unsafe {
-        let source = tap
-            .mach_port
-            .create_runloop_source(0)
-            .map_err(|_| anyhow!("create_runloop_source failed"))?;
-        CFRunLoop::get_current().add_source(&source, kCFRunLoopCommonModes);
-        tap.enable();
-        CFRunLoop::run_current();
-    }
 
     Ok(())
 }

@@ -20,7 +20,8 @@ pub struct Config {
     pub overlay: OverlayCfg,
     #[serde(default)]
     pub post: PostCfg,
-    pub asr: AsrCfg,
+    #[serde(default)]
+    pub apps: AppsCfg,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,10 +83,21 @@ fn default_post_timeout_ms() -> u64 {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct AsrCfg {
-    pub provider: String,
-    #[serde(default)]
-    pub hotwords: Vec<String>,
+pub struct AppsCfg {
+    #[serde(default = "default_apps_dir")]
+    pub dir: PathBuf,
+}
+
+impl Default for AppsCfg {
+    fn default() -> Self {
+        Self {
+            dir: default_apps_dir(),
+        }
+    }
+}
+
+fn default_apps_dir() -> PathBuf {
+    crate::app_profile::default_dir()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -212,7 +224,8 @@ pub fn load_from(path: &Path) -> Result<Config> {
     let body = std::fs::read_to_string(path).with_context(|| {
         format!(
             "config not found at {}\nhint: cp examples/config/config.toml \
-             ~/.config/shuohua/ and edit; also create ~/.config/shuohua/asr/<provider>.toml",
+             ~/.config/shuohua/ and edit; also create ~/.config/shuohua/apps/default.toml \
+             plus ~/.config/shuohua/asr/<provider>.toml",
             path.display()
         )
     })?;
@@ -232,20 +245,16 @@ mod tests {
         let body = r#"
 [hotkey]
 trigger = "f16"
-
-[asr]
-provider = "doubao"
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.hotkey.trigger, "f16");
-        assert_eq!(cfg.asr.provider, "doubao");
-        assert!(cfg.asr.hotwords.is_empty());
         assert_eq!(cfg.voice.stop_delay_ms, 800);
         assert!(!cfg.voice.record_audio);
         assert!(cfg.voice.auto_paste);
         assert_eq!(cfg.ui.language, "auto");
         assert_eq!(cfg.post.timeout_ms, 2000);
         assert!(cfg.post.dir.ends_with("shuohua/post"));
+        assert!(cfg.apps.dir.ends_with("shuohua/apps"));
         assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
         assert_eq!(cfg.overlay.glass_variant, 19);
         assert_eq!(cfg.overlay.glass_style, GlassStyle::Clear);
@@ -259,7 +268,7 @@ provider = "doubao"
     }
 
     #[test]
-    fn parses_with_voice_overrides_and_hotwords() {
+    fn parses_with_voice_overrides() {
         let body = r#"
 [hotkey]
 trigger = "f16"
@@ -268,16 +277,11 @@ trigger = "f16"
 stop_delay_ms = 1200
 record_audio  = true
 auto_paste    = false
-
-[asr]
-provider = "doubao"
-hotwords = ["Rust", "tokio"]
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.voice.stop_delay_ms, 1200);
         assert!(cfg.voice.record_audio);
         assert!(!cfg.voice.auto_paste);
-        assert_eq!(cfg.asr.hotwords, vec!["Rust", "tokio"]);
     }
 
     #[test]
@@ -285,9 +289,6 @@ hotwords = ["Rust", "tokio"]
         let body = r#"
 [hotkey]
 trigger = "f16"
-
-[asr]
-provider = "doubao"
 "#;
         let cfg = parse(body).unwrap();
         assert!(
@@ -299,8 +300,8 @@ provider = "doubao"
     #[test]
     fn missing_required_section_errors() {
         let body = r#"
-[hotkey]
-trigger = "f16"
+[voice]
+stop_delay_ms = 800
 "#;
         assert!(parse(body).is_err());
     }
@@ -313,9 +314,6 @@ trigger = "f16"
 
 [ui]
 language = "zh-CN"
-
-[asr]
-provider = "doubao"
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.ui.language, "zh-CN");
@@ -338,9 +336,6 @@ corner_radius     = 22.0
 subdued           = 1
 max_text_lines    = 6
 thinking_delay_ms = 900
-
-[asr]
-provider = "doubao"
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.overlay.position, OverlayPosition::Top);
@@ -365,11 +360,12 @@ trigger = "f16"
 dir = "/tmp/shuohua-post"
 timeout_ms = 3500
 
-[asr]
-provider = "doubao"
+[apps]
+dir = "/tmp/shuohua-apps"
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.post.dir, PathBuf::from("/tmp/shuohua-post"));
         assert_eq!(cfg.post.timeout_ms, 3500);
+        assert_eq!(cfg.apps.dir, PathBuf::from("/tmp/shuohua-apps"));
     }
 }

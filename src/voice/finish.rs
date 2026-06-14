@@ -37,7 +37,8 @@ pub struct SessionParams {
     pub record_audio: bool,
     pub stop_delay_ms: u32,
     pub hotwords: Vec<String>,
-    pub post_dir: PathBuf,
+    pub start_app_context: post::AppContext,
+    pub post_chain: post::config::PostChain,
     pub post_timeout_ms: u64,
     pub overlay: Option<OverlayHandle>,
     pub state: StateStore,
@@ -52,8 +53,7 @@ pub async fn run_recording(
     let recording_started_at = time::OffsetDateTime::now_utc();
     let recording_started_instant = Instant::now();
     crate::debug_println!("[shuo] ▶ recording id={recording_id}");
-    let mut app_context = post::app_context::AppContext::default();
-    let mut post_chain: Option<post::config::PostChain> = None;
+    let mut app_context = params.start_app_context.clone();
     params
         .state
         .set_recording(recording_id.clone(), recording_started_at);
@@ -71,7 +71,7 @@ pub async fn run_recording(
         OverlayCmd::SetApp {
             bundle_id: app_context.bundle_id.clone(),
             app_name: app_context.app_name.clone(),
-            chain_summary: "filler".to_string(),
+            chain_summary: params.post_chain.name.clone(),
         },
     );
 
@@ -266,28 +266,6 @@ pub async fn run_recording(
         }
         if stop_requested {
             app_context = post::app_context::frontmost_app();
-            let loaded_chain = post::config::load_for_app(
-                &params.post_dir,
-                &app_context,
-                Duration::from_millis(params.post_timeout_ms),
-            )
-            .map_err(|e| {
-                eprintln!("[post] load chain failed, fallback to filler: {e:#}");
-                e
-            })
-            .unwrap_or_else(|e| {
-                overlay_send(
-                    &params,
-                    OverlayCmd::Toast {
-                        text: format!("post config failed, using filler: {e:#}"),
-                        level: ToastLevel::Warn,
-                        ttl_ms: 1500,
-                    },
-                );
-                post::config::PostChain::builtin_filler()
-            });
-            let chain_summary = loaded_chain.name.clone();
-            post_chain = Some(loaded_chain);
             params
                 .state
                 .app(app_context.bundle_id.clone(), app_context.app_name.clone());
@@ -296,7 +274,7 @@ pub async fn run_recording(
                 OverlayCmd::SetApp {
                     bundle_id: app_context.bundle_id.clone(),
                     app_name: app_context.app_name.clone(),
-                    chain_summary,
+                    chain_summary: params.post_chain.name.clone(),
                 },
             );
             overlay_send(
@@ -364,15 +342,10 @@ pub async fn run_recording(
         }
         return;
     }
-    let (pipeline, status, error) = dispatch_with_post_chain(
-        &pending_segments,
-        params.auto_paste,
-        &app_context,
-        &params,
-        post_chain.unwrap_or_else(post::config::PostChain::builtin_filler),
-    )
-    .await
-    .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)));
+    let (pipeline, status, error) =
+        dispatch_with_post_chain(&pending_segments, params.auto_paste, &app_context, &params)
+            .await
+            .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)));
     if let Some(last_text) = pipeline.iter().rev().find_map(|step| step.text.clone()) {
         overlay_send(
             &params,
@@ -572,7 +545,6 @@ async fn dispatch_with_post_chain(
     auto_paste: bool,
     app_context: &post::AppContext,
     params: &SessionParams,
-    chain: post::config::PostChain,
 ) -> Result<
     (
         Vec<PipelineStepHistory>,
@@ -595,7 +567,7 @@ async fn dispatch_with_post_chain(
         },
     );
     let (out, steps) = post::run_chain(
-        &chain.processors,
+        &params.post_chain.processors,
         initial,
         app_context,
         Duration::from_millis(params.post_timeout_ms),

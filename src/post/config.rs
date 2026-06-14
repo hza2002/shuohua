@@ -1,15 +1,20 @@
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use super::llm::{LlmCleanup, LlmCleanupConfig, ProviderFormat};
-use super::{AppContext, PostProcessor, RuleBasedFiller};
+use super::{PostProcessor, RuleBasedFiller};
 
 pub struct PostChain {
     pub name: String,
     pub processors: Vec<Box<dyn PostProcessor>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PostDirs {
+    pub rules: PathBuf,
+    pub llm: PathBuf,
 }
 
 pub fn default_dir() -> PathBuf {
@@ -19,53 +24,31 @@ pub fn default_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/shuohua/post")
 }
 
-pub fn load_for_app(dir: &Path, ctx: &AppContext, _timeout: Duration) -> Result<PostChain> {
-    let Some(path) = chain_path(dir, ctx) else {
-        return Ok(PostChain::builtin_filler());
+pub fn load_components(chain: &[String], dirs: &PostDirs) -> Result<PostChain> {
+    let mut processors = Vec::with_capacity(chain.len());
+    for id in chain {
+        processors.push(load_component(id, dirs)?);
+    }
+    Ok(PostChain {
+        name: chain.join(" → "),
+        processors,
+    })
+}
+
+fn load_component(id: &str, dirs: &PostDirs) -> Result<Box<dyn PostProcessor>> {
+    let (kind, name) = id
+        .split_once(':')
+        .with_context(|| format!("post chain item {id:?} must be kind:name"))?;
+    let path = match kind {
+        "rule" => dirs.rules.join(format!("{name}.toml")),
+        "llm" => dirs.llm.join(format!("{name}.toml")),
+        other => anyhow::bail!("unknown post component kind {other:?} in {id:?}"),
     };
-    load_from(&path)
-}
-
-fn chain_path(dir: &Path, ctx: &AppContext) -> Option<PathBuf> {
-    if let Some(bundle_id) = ctx.bundle_id.as_deref() {
-        let app_path = dir.join(format!("{bundle_id}.toml"));
-        if app_path.exists() {
-            return Some(app_path);
-        }
-    }
-    let default_path = dir.join("default.toml");
-    default_path.exists().then_some(default_path)
-}
-
-impl PostChain {
-    pub fn builtin_filler() -> Self {
-        Self {
-            name: "filler".to_string(),
-            processors: vec![Box::new(RuleBasedFiller::default_patterns())],
-        }
-    }
-}
-
-pub fn load_from(path: &Path) -> Result<PostChain> {
-    let body = std::fs::read_to_string(path)
-        .with_context(|| format!("read post chain {}", path.display()))?;
-    let cfg: ChainFile =
-        toml::from_str(&body).with_context(|| format!("parse post chain {}", path.display()))?;
-    cfg.into_chain()
-}
-
-#[derive(Debug, Deserialize)]
-struct ChainFile {
-    #[serde(default = "default_chain_name")]
-    name: String,
-    #[serde(default)]
-    chain: Vec<String>,
-    #[serde(default)]
-    processors: std::collections::BTreeMap<String, ProcessorCfg>,
-}
-
-fn default_chain_name() -> String {
-    "post".to_string()
+    let body = std::fs::read_to_string(&path)
+        .with_context(|| format!("read post component {}", path.display()))?;
+    let cfg: ProcessorCfg = toml::from_str(&body)
+        .with_context(|| format!("parse post component {}", path.display()))?;
+    cfg.build(id)
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,23 +80,6 @@ enum ProviderFormatCfg {
 
 fn default_format() -> ProviderFormatCfg {
     ProviderFormatCfg::Openai
-}
-
-impl ChainFile {
-    fn into_chain(self) -> Result<PostChain> {
-        let mut processors: Vec<Box<dyn PostProcessor>> = Vec::with_capacity(self.chain.len());
-        for id in &self.chain {
-            let cfg = self
-                .processors
-                .get(id)
-                .with_context(|| format!("post processor {id:?} missing config"))?;
-            processors.push(cfg.build(id)?);
-        }
-        Ok(PostChain {
-            name: self.name,
-            processors,
-        })
-    }
 }
 
 impl ProcessorCfg {
@@ -175,71 +141,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_per_app_and_default_falls_back_to_builtin_filler() {
-        let dir = temp_dir();
-        let ctx = AppContext {
-            bundle_id: Some("com.example.App".to_string()),
-            app_name: Some("Example".to_string()),
-        };
-
-        let chain = load_for_app(&dir, &ctx, Duration::from_secs(2)).unwrap();
-
-        assert_eq!(chain.name, "filler");
-        assert_eq!(chain.processors.len(), 1);
-        assert_eq!(chain.processors[0].name(), "filler");
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn per_app_file_wins_over_default_file() {
-        let dir = temp_dir();
-        fs::write(
-            dir.join("default.toml"),
-            r#"
-name = "default"
-chain = ["filler"]
-
-[processors.filler]
-type = "rule"
-patterns = ["default"]
-"#,
-        )
-        .unwrap();
-        fs::write(
-            dir.join("com.example.App.toml"),
-            r#"
-name = "app"
-chain = ["custom"]
-
-[processors.custom]
-type = "rule"
-patterns = ["app"]
-"#,
-        )
-        .unwrap();
-        let ctx = AppContext {
-            bundle_id: Some("com.example.App".to_string()),
-            app_name: None,
-        };
-
-        let chain = load_for_app(&dir, &ctx, Duration::from_secs(2)).unwrap();
-
-        assert_eq!(chain.name, "app");
-        assert_eq!(chain.processors[0].name(), "custom");
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
     fn parses_openai_and_anthropic_llm_processors() {
         let dir = temp_dir();
-        let path = dir.join("default.toml");
+        let llm = dir.join("llm");
+        fs::create_dir_all(&llm).unwrap();
         fs::write(
-            &path,
+            llm.join("openai_cleanup.toml"),
             r#"
-name = "llm chain"
-chain = ["openai_cleanup", "anthropic_cleanup"]
-
-[processors.openai_cleanup]
 type = "llm"
 format = "openai"
 name = "deepseek"
@@ -248,8 +156,12 @@ api_key = "sk-test"
 model = "deepseek-chat"
 system_prompt = "clean speech"
 prompt = "app={{app_name}} text={{text}}"
-
-[processors.anthropic_cleanup]
+"#,
+        )
+        .unwrap();
+        fs::write(
+            llm.join("anthropic_cleanup.toml"),
+            r#"
 type = "llm"
 format = "anthropic"
 name = "anthropic"
@@ -259,13 +171,66 @@ prompt = "{{text}}"
 "#,
         )
         .unwrap();
+        let dirs = PostDirs {
+            rules: dir.join("rules"),
+            llm,
+        };
 
-        let chain = load_from(&path).unwrap();
+        let chain = load_components(
+            &[
+                "llm:openai_cleanup".to_string(),
+                "llm:anthropic_cleanup".to_string(),
+            ],
+            &dirs,
+        )
+        .unwrap();
 
-        assert_eq!(chain.name, "llm chain");
+        assert_eq!(chain.name, "llm:openai_cleanup → llm:anthropic_cleanup");
         assert_eq!(chain.processors.len(), 2);
-        assert_eq!(chain.processors[0].name(), "openai_cleanup");
-        assert_eq!(chain.processors[1].name(), "anthropic_cleanup");
+        assert_eq!(chain.processors[0].name(), "llm:openai_cleanup");
+        assert_eq!(chain.processors[1].name(), "llm:anthropic_cleanup");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn loads_rule_and_llm_components_from_post_dirs() {
+        let dir = temp_dir();
+        let rules = dir.join("rules");
+        let llm = dir.join("llm");
+        fs::create_dir_all(&rules).unwrap();
+        fs::create_dir_all(&llm).unwrap();
+        fs::write(
+            rules.join("filler.toml"),
+            r#"
+type = "rule"
+patterns = ["嗯", "啊"]
+"#,
+        )
+        .unwrap();
+        fs::write(
+            llm.join("deepseek.toml"),
+            r#"
+type = "llm"
+format = "openai"
+name = "deepseek"
+api_key = "sk-test"
+model = "deepseek-chat"
+prompt = "{{text}}"
+"#,
+        )
+        .unwrap();
+        let dirs = PostDirs { rules, llm };
+
+        let chain = load_components(
+            &["rule:filler".to_string(), "llm:deepseek".to_string()],
+            &dirs,
+        )
+        .unwrap();
+
+        assert_eq!(chain.name, "rule:filler → llm:deepseek");
+        assert_eq!(chain.processors.len(), 2);
+        assert_eq!(chain.processors[0].name(), "rule:filler");
+        assert_eq!(chain.processors[1].name(), "llm:deepseek");
         let _ = fs::remove_dir_all(dir);
     }
 }

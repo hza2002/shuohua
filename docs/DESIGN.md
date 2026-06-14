@@ -327,7 +327,15 @@ pub enum AsrError {
 
 ```
 ~/.config/shuohua/
-├── config.toml              # 全局：hotkey / voice / provider 选择 / 共享 hotwords
+├── config.toml              # 全局：hotkey / voice / apps/post 目录指路
+├── apps/
+│   ├── default.toml         # 默认 app profile：选择 ASR + post_chain
+│   └── com.mitchellh.ghostty.toml
+├── post/
+│   ├── rules/
+│   │   └── filler.toml      # 后处理组件定义：规则
+│   └── llm/
+│       └── deepseek.toml    # 后处理组件定义：LLM provider/model/prompt
 └── asr/
     ├── doubao.toml          # ← 文件名 == provider 名
     ├── whisper_cpp.toml     # 未来 M8
@@ -344,9 +352,21 @@ trigger = "f16"
 stop_delay_ms = 800
 record_audio  = false                        # ← 见 §7
 
-[asr]
-provider = "doubao"                          # → 加载 asr/doubao.toml
-hotwords = ["Rust", "tokio", "Kubernetes"]   # 所有 provider 共用；不支持的 provider 静默忽略
+[apps]
+dir = "~/.config/shuohua/apps"
+
+[post]
+dir = "~/.config/shuohua/post"
+timeout_ms = 2000
+```
+
+`apps/default.toml`（app profile，负责组合）：
+
+```toml
+name = "Default"
+asr = "doubao"                               # → 加载 asr/doubao.toml
+hotwords = ["Rust", "tokio", "Kubernetes"]   # provider 自由解释；不支持的 provider 静默忽略
+post_chain = ["rule:filler", "llm:deepseek"]
 ```
 
 `asr/doubao.toml`（provider 私有，voice 模块永远不见）：
@@ -370,7 +390,7 @@ threads        = 4
 initial_prompt = "以下文本包含 Rust、tokio、Kubernetes 等技术术语"   # provider 自家可选字段
 ```
 
-provider 之间**完全不共享 schema**。每个 provider impl 自己 deserialize 自家文件。共享 hotwords 由 voice 模块从 `config.toml` 读取后塞进 `SessionCtx`。
+provider 之间**完全不共享 schema**。每个 provider impl 自己 deserialize 自家文件。hotwords 由 app profile 选择后塞进 `SessionCtx`。
 
 ### 2.9 客户端 VAD + 多段 session（"思考不计费"机制）
 
@@ -504,52 +524,67 @@ pub struct PipelineStep {
 - **失败/超时都推 toast**：用户看得见，但流程不阻塞
 - 所有失败 + 时延都写进 `pipeline[]`，进 history.jsonl + UDS 事件
 
-#### 按 App 分离的配置（文件树）
+#### App Profile 与 Post Components
 
 ```
 ~/.config/shuohua/
-├── config.toml                          # 全局
+├── config.toml                          # 全局，只指路
+├── apps/
+│   ├── default.toml                     # 默认 profile
+│   ├── com.apple.dt.Xcode.toml          # Xcode 专属 profile
+│   └── com.mitchellh.ghostty.toml
 └── post/
-    ├── default.toml                     # 默认链
-    ├── com.apple.dt.Xcode.toml          # Xcode 专属
-    ├── com.tinyspeck.slackmacgap.toml
-    ├── com.microsoft.VSCode.toml
-    └── ...                              # 用户随时新增
+    ├── rules/
+    │   └── filler.toml
+    ├── llm/
+    │   └── deepseek.toml
+    └── scripts/                         # 预留；M7 不执行用户脚本
 ```
 
-匹配逻辑：toggle OFF 时取 `frontmost_bundle_id`，去 `post/<bundle_id>.toml` 找；找到就用，找不到 fall back 到 `post/default.toml`。`notify` watch 这个目录，新增/删除/修改实时生效。bundle_id 自带 `.` 分隔，跟 `default.toml` 文件名视觉上不冲突，扁平即可。
+匹配逻辑：toggle ON 时取一次 `frontmost_bundle_id`，去 `apps/<bundle_id>.toml` 找；找到就用，找不到 fall back 到 `apps/default.toml`。该 profile 决定本次录音的 ASR provider、hotwords 和 post_chain。toggle OFF 时只再取一次 AppContext 作为 prompt 变量，**不重新选择 profile**，避免录音中切 App 导致 ASR/post 配置中途变化。
 
-主 config.toml 只指路：
+主 `config.toml` 只指路：
 
 ```toml
+[apps]
+dir = "~/.config/shuohua/apps"
+
 [post]
 dir        = "~/.config/shuohua/post/"
 timeout_ms = 2000     # 单步 processor 超时
 ```
 
-每份链文件长这样（示例：Slack）：
+app profile 长这样：
 
 ```toml
-# post/com.tinyspeck.slackmacgap.toml
-name  = "Slack 偏 casual"
-chain = ["filler", "llm_casual"]
+# apps/com.mitchellh.ghostty.toml
+name = "Ghostty"
+asr = "doubao"
+hotwords = ["Rust", "tokio", "Kubernetes"]
+post_chain = ["rule:filler", "llm:deepseek_ghostty"]
+```
 
-[processors.filler]
+Post component 长这样：
+
+```toml
+# post/rules/filler.toml
 type     = "rule"
 patterns = ["嗯", "啊", "呃", "那个", "就是"]
-collapse_repeats = true
+```
 
-[processors.llm_casual]
+```toml
+# post/llm/deepseek_ghostty.toml
 type        = "llm"
-format      = "anthropic"          # anthropic | openai
-name        = "anthropic"          # provider display/default routing name
-model       = "claude-haiku-4-5"
-api_key     = "sk-ant-..."
-system_prompt = "你是语音输入清洗器，只输出清洗后的文本。"
+format      = "openai"             # anthropic | openai
+name        = "deepseek"           # provider display/default routing name
+base_url    = "https://api.deepseek.com"
+model       = "deepseek-chat"
+api_key     = "sk-..."
+system_prompt = "你是终端语音输入清洗器，只输出清洗后的文本。"
 prompt = """
 当前 App: {{app_name}} ({{bundle_id}})
 原始文本: {{text}}
-清洗成 Slack 聊天风格的中文/英文混合文本。保留口语化。
+清洗成适合终端输入的文本。
 只输出清洗后的文本，不要解释。
 """
 ```
@@ -729,8 +764,8 @@ reload.rs
 | `ui.language` | 立即（重译 state label） | `spawn_i18n` → `i18n::init` + `Relabel` | ✓ |
 | `[hotkey].trigger` | 立即（下次按键判定） | `spawn_hotkey` → mpsc<Combo> → `tokio::select!` 换 Tracker + Suppressor | ✓ |
 | `[voice].*` 全部 | 下次起 session | daemon 主循环 `cfg_rx.borrow()` 取最新快照 | ✓ |
-| `[asr].hotwords` | 下次起 session | 同上 | ✓ |
-| `[asr].provider` | 下次起 session | daemon 主循环重新构建 provider | ✓ |
+| `apps/*.toml` 的 `asr` / `hotwords` / `post_chain` | 下次起 session | daemon 主循环按 toggle ON 的 App profile 选择 | ✓ |
+| `post/rules/*.toml` / `post/llm/*.toml` | 下次起 session | app profile 的 `post_chain` 引用组件 | ✓ |
 | 手动触发 `{"op":"reload_config"}` | 立即 | 走 UDS server | ✓ |
 
 #### Hotkey trigger 特别说明
@@ -744,7 +779,7 @@ parse 失败（非法 trigger 字符串）只打日志保留旧 trigger，不向
 - `shuo doctor` 已实现：打印 `effective config`，校验主 config、hotkey、Doubao 配置、UDS 状态、launchd plist 和权限状态
 - `shuo install/uninstall/start/stop/restart/status` 已实现：launchd plist 使用当前 `shuo` 绝对路径，状态优先走 UDS `daemon_status`
 - `UDS {"op":"reload_config"}` 已接入：走 watcher 同一路径 parse + broadcast，不绕过 `watch::Sender`
-- `[asr].provider` 已按配置在下一次录音开始时重建，不在录音中途热替换 session
+- app profile 的 `asr` 已按配置在下一次录音开始时重建，不在录音中途热替换 session
 
 ---
 
@@ -767,7 +802,7 @@ shuohua 是 launchd 后台 daemon。release binary 跑起来时 stderr 会被 la
 | 这条日志的内容是 | 归层 |
 |---|---|
 | 错误 / 异常 (`❌`)、警告 (`⚠`) | `eprintln!`（release） |
-| 启动一次性信息（"daemon ready"、配置摘要、hotwords 数）| `eprintln!`（release） |
+| 启动一次性信息（"daemon ready"、配置摘要、apps/post 目录）| `eprintln!`（release） |
 | 单 session 内逐步 narration（"▶ recording"、"partial#N"、"segment"、"✓ 剪贴板已写入"）| `debug_println!` |
 | 探针 / 内省（drift、glass probe、协议帧 dump）| `debug_println!`（或整个模块 `#[cfg(debug_assertions)]`）|
 | history.jsonl 里**已经记录**的内容（pipeline 步骤耗时、最终文本、recording id）| `debug_println!` |

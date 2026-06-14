@@ -13,6 +13,7 @@
 //!     上跑 notify；各 subscriber 自取所需。
 
 mod app_context_darwin;
+mod app_profile;
 mod asr;
 mod autotype_darwin;
 mod cli;
@@ -146,23 +147,21 @@ fn run_daemon_process() -> Result<()> {
     let trigger = hotkey::parse::parse(&cfg.hotkey.trigger)
         .with_context(|| format!("parse [hotkey] trigger = {:?}", cfg.hotkey.trigger))?;
 
-    let provider = build_provider(&cfg.asr.provider)?;
-
     eprintln!(
         "[shuo] config {} loaded:\n         trigger={} (parsed={})\n         \
-         asr.provider={} (caps multilingual={})\n         voice.auto_paste={}  \
-         voice.record_audio={}  voice.stop_delay_ms={}  ui.language={}",
+         apps.dir={}\n         post.dir={}  post.timeout_ms={}\n         \
+         voice.auto_paste={}  voice.record_audio={}  voice.stop_delay_ms={}  ui.language={}",
         cfg_path.display(),
         cfg.hotkey.trigger,
         trigger,
-        provider.name(),
-        provider.caps().multilingual,
+        cfg.apps.dir.display(),
+        cfg.post.dir.display(),
+        cfg.post.timeout_ms,
         cfg.voice.auto_paste,
         cfg.voice.record_audio,
         cfg.voice.stop_delay_ms,
         cfg.ui.language,
     );
-    eprintln!("[shuo] {} hotwords loaded", cfg.asr.hotwords.len());
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let state_store = StateStore::new();
 
@@ -288,9 +287,35 @@ async fn run_daemon(
                 }
                 match active.as_ref() {
                     None => {
-                        // 新 session 起来时从 cfg_rx 取最新 voice/asr 配置。
+                        // 新 session 起来时从 cfg_rx 取最新 voice/apps/post 配置。
                         let cfg = cfg_rx.borrow().clone();
-                        let provider = match build_provider(&cfg.asr.provider) {
+                        let start_app_context = post::app_context::frontmost_app();
+                        let profile = match app_profile::load_for_app(
+                            &cfg.apps.dir,
+                            start_app_context.bundle_id.as_deref(),
+                        ) {
+                            Ok(profile) => profile,
+                            Err(e) => {
+                                eprintln!("[app] profile load failed: {e:#}");
+                                state_store.set_error(None);
+                                continue;
+                            }
+                        };
+                        let post_chain = match post::config::load_components(
+                            &profile.post_chain,
+                            &post::config::PostDirs {
+                                rules: cfg.post.dir.join("rules"),
+                                llm: cfg.post.dir.join("llm"),
+                            },
+                        ) {
+                            Ok(chain) => chain,
+                            Err(e) => {
+                                eprintln!("[post] chain load failed: {e:#}");
+                                state_store.set_error(None);
+                                continue;
+                            }
+                        };
+                        let provider = match build_provider(&profile.asr) {
                             Ok(provider) => provider,
                             Err(e) => {
                                 eprintln!("[asr] provider init failed: {e:#}");
@@ -303,8 +328,9 @@ async fn run_daemon(
                             auto_paste: cfg.voice.auto_paste,
                             record_audio: cfg.voice.record_audio,
                             stop_delay_ms: cfg.voice.stop_delay_ms,
-                            hotwords: cfg.asr.hotwords.clone(),
-                            post_dir: cfg.post.dir.clone(),
+                            hotwords: profile.hotwords.clone(),
+                            start_app_context,
+                            post_chain,
                             post_timeout_ms: cfg.post.timeout_ms,
                             overlay: Some(overlay.clone()),
                             state: state_store.clone(),

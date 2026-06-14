@@ -91,7 +91,7 @@
 | **删 hold 模式** | 只保留 toggle。dictation 按几十秒不现实；忘按用 `auto_stop_silence_ms` 兜底 |
 | ASR 流式 partial | **硬契约必需**。不支持流式 partial 的 provider 不入选；本地批量推理通过 wrapper 满足契约可入选 |
 | **ASR 单事件流** | `AsrEvent` enum 单 channel，voice 模块只 select 一臂。删除 `server_side_vad` cap，统一行为 |
-| **ASR Hotwords** | `Vec<String>` inline 写在 `config.toml` 的 `[asr].hotwords`；不分级、无 boost 字段。理由：路线图上无 provider 支持 per-word boost（Doubao 接词列表、Whisper 拼 `initial_prompt`、Apple Speech 用 `contextualStrings`）。provider 自由解释，不支持的 caps 标 `hotwords=false`、doctor 提示 |
+| **ASR Hotwords** | `Vec<String>` 写在 app profile（`apps/default.toml` 或 `apps/<bundle_id>.toml`）；不分级、无 boost 字段。理由：路线图上无 provider 支持 per-word boost（Doubao 接词列表、Whisper 拼 `initial_prompt`、Apple Speech 用 `contextualStrings`）。provider 自由解释，不支持的 caps 标 `hotwords=false`、doctor 提示 |
 | ASR 多段 session 模型 | 同一次 Recording 内 client VAD 自动开关 ASR；段间文本累积；段间分隔符可配 |
 | **ASR 省钱机制** | A 方案（关 session）v1 选；B 方案（保 session 暂停喂）M3+ 评估 |
 | **VAD 实现** | WebRTC VAD（`webrtc-vad` crate）+ 500ms ring buffer pre-roll；RMS 降级；Silero M9 备选 |
@@ -102,7 +102,7 @@
 | **PostProcessor 失败/超时** | 跳过该步，链路继续（**不假设后面会补**）；推 toast 通知；写 pipeline trace 进 history |
 | PostProcessor 内容审查 | 不做。该层只清洗，不审查 |
 | per-app 配置粒度 | 到 bundle_id 为止，不再细分 URL / input 字段 |
-| per-app 配置文件组织 | 一个 app 一个文件：`post/app/<bundle_id>.toml`；找不到 fall back 到 `post/default.toml` |
+| per-app 配置文件组织 | 一个 app profile 一个文件：`apps/<bundle_id>.toml`；找不到 fall back 到 `apps/default.toml`。profile 只组合 ASR provider 和 post components |
 | **TUI 显示策略** | 默认完整流水线（raw → 每步 output → 最终），不切换模式 |
 | **Toast UI 风格** | 与主 Liquid Glass 胶囊同款，底部弹小胶囊，1.5s 自消，不另开 NSPanel |
 | Overlay 布局 | 两排：状态/统计/app/chain（第 1 排）+ ASR 实时文字（第 2 排）+ 底部 toast |
@@ -110,13 +110,13 @@
 | **删 `shuo config` 子命令** | `lazyvim` 类编辑器直接编辑文件即可。`validate` 折进 `shuo doctor` |
 | **i18n** | 双语 zh-CN/en-US，手写 `t!()` 宏，不引第三方 crate |
 | **launchd plist Label** | `com.hza2002.shuohua`（reverse-DNS，参考 yabai `com.koekeishiya.yabai`）|
-| **ASR provider 私有配置** | 每个 provider 一份独立 TOML：`~/.config/shuohua/asr/<provider>.toml`，文件名 == provider 名。voice 模块永远不见 provider 私有字段（app_key / language / 厂商特有 flag）。`config.toml` 只写 `[asr] provider = "doubao"` 指路 |
+| **ASR provider 私有配置** | 每个 provider 一份独立 TOML：`~/.config/shuohua/asr/<provider>.toml`，文件名 == provider 名。voice 模块永远不见 provider 私有字段（app_key / language / 厂商特有 flag）。App profile 写 `asr = "doubao"` 指路 |
 | **ASR 音频 codec** | 由 provider 实现写死，**不暴露给用户**。codec 是工程权衡（CPU/带宽/server 兼容性），用户没足够信息做决定。M2 DoubaoProvider 硬编码 raw PCM；未来若 benchmark 出 opus 显著更优则改 impl，不动配置 |
 | **ASR 错误处理** | `AsrError` thiserror enum（`Auth / Network / Quota / Protocol / Timeout / Server / Canceled`），M3+ overlay match enum 分发 toast 样式。**M2 不自动重试**，用户操作可见可重复。Stopping 等 final 超时 5s 后跳过 dispatch + 提示。`Canceled` 静默处理 |
 | **Dispatch 触发条件** | 剪贴板 + Cmd+V 只在 `Final`/最后 `Segment` 拼完之后执行。没收到末段就不上屏（部分识别上屏视作 bug）|
 | **取消令牌** | `tokio_util::sync::CancellationToken`，Recording 根 token + `.child_token()` 派生子树。Stop 时调一次 root.cancel() 全员收。Go 版 `context.WithCancel` 的 Rust 等价物，DESIGN §2.3 不变量 |
 | **音频留存** | `voice.record_audio = false` 默认。开启时落 `~/.local/state/shuohua/audio/<recording_id>.wav`（跟 history.jsonl 同 state dir），文件名 = recording ULID。一次 recording = 一个 wav，多 session 边界从 history.jsonl 时间戳切。不用 `/tmp`/`~/.cache`（语义错位）|
-| **Post 路径扁平化** | `~/.config/shuohua/post/<bundle_id>.toml`，去掉原 `app/` 子目录。bundle_id 含 `.` 跟 `default.toml` 视觉不冲突 |
+| **Post / App 配置分离** | `~/.config/shuohua/post/` 只放后处理组件定义（rules/llm/scripts 预留）；`~/.config/shuohua/apps/` 放 app profile（default + bundle_id）负责组合 ASR provider 和 post pipeline |
 
 ### 仍开放（战术，可在对应里程碑时决定）
 
@@ -137,7 +137,7 @@
 | **M2.5** | 客户端 VAD + 多段 session + RuleBased 去口语词 | 思考几分钟不计费；段间空格拼接；嗯/啊正则去除 |
 | **M3** | StateStore + history.jsonl + Overlay 同进程渲染（**两排布局 + 动画 + Toast**） | 录音 → history 一行 jsonl，含 ASR sessions + pipeline；overlay 状态点+文字+时长+字数+app+chain 全部正确切换；Liquid Glass toast 可弹 |
 | **M4** | UDS server + `shuo` 智能 fallback 进 TUI 客户端 | 裸跑 `shuo` 连上 daemon 看实时 partial/pipeline_step、滚动历史；关掉 TUI 不影响 daemon |
-| **M5** | Doctor + launchd 自启 + 配置热重载收口 | `shuo install` 写 plist + start，重启后自动起；`shuo doctor` 报权限/配置/ASR 连通；UDS `reload_config` 复用 watcher 的 parse + broadcast 路径；`asr.provider` 在下一次录音开始时按最新配置重建 |
+| **M5** | Doctor + launchd 自启 + 配置热重载收口 | `shuo install` 写 plist + start，重启后自动起；`shuo doctor` 报权限/配置/ASR 连通；UDS `reload_config` 复用 watcher 的 parse + broadcast 路径；profile 里的 ASR/post 组合在下一次录音开始时按最新配置读取 |
 | **M6** | Suppress 真实生效 + 完整 hotkey 语法（modifier 组合 / 单按 / 双击）+ proptest 覆盖 tracker | F16 / cmd+`;` / right_shift / right_shift:double 等全验过；前台 App 不漏 trigger；非 trigger 键不误吞 |
 | **M7** | LLM 后处理（Claude Haiku / GPT-4o-mini）+ App context + per-app 配置文件 | 按当前 App 自动选链路（找不到 fall back default）；失败/超时跳过 + toast 提示；history 记 chain trace |
 | **M8** | WhisperCppProvider（whisper-rs，本地离线） | 验证 trait 接口正确；不动 trait |

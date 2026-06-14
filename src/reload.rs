@@ -10,7 +10,7 @@
 //! handle / sender 跟人家通信，不反向 import 业务逻辑。
 //!
 //! 显式不在范围内：
-//!   - `[asr].provider` 切换（要重建 trait object，跟 ASR session 生命周期耦合）
+//!   - app profile 的 ASR/post 组合切换（下次录音开始时读取）
 //!   - UDS `{"op":"reload_config"}` 手动触发（依赖 M4 的 UDS server）
 //!   - `shuo doctor` / launchd 自启（M5 同包的另两个 feature，跟 reload 无关）
 

@@ -43,7 +43,7 @@ pub struct Caps {
 #[derive(Debug, Clone)]
 pub struct SessionCtx {
     pub language: LanguageMode,
-    /// 共享 hotwords，来自 `[asr] hotwords`。
+    /// 当前 app profile 选择的 hotwords。
     /// provider 自由解释：Doubao 直接塞 `corpus.context.hotwords`、
     /// Whisper 拼 `initial_prompt`、Apple SpeechAnalyzer 用 `contextualStrings`。
     pub hotwords: Vec<String>,

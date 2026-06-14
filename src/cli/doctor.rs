@@ -37,8 +37,9 @@ fn check_config() {
             println!("config: OK {}", path.display());
             println!("effective config:");
             println!("  hotkey.trigger = {:?}", cfg.hotkey.trigger);
-            println!("  asr.provider = {:?}", cfg.asr.provider);
-            println!("  asr.hotwords = {} entries", cfg.asr.hotwords.len());
+            println!("  apps.dir = {}", cfg.apps.dir.display());
+            println!("  post.dir = {}", cfg.post.dir.display());
+            println!("  post.timeout_ms = {}", cfg.post.timeout_ms);
             println!("  voice.stop_delay_ms = {}", cfg.voice.stop_delay_ms);
             println!("  voice.record_audio = {}", cfg.voice.record_audio);
             println!("  voice.auto_paste = {}", cfg.voice.auto_paste);
@@ -70,13 +71,21 @@ fn check_asr_provider() {
         Ok(cfg) => cfg,
         Err(_) => return,
     };
-    match cfg.asr.provider.as_str() {
+    let profile = match crate::app_profile::load_for_app(&cfg.apps.dir, None) {
+        Ok(profile) => profile,
+        Err(e) => {
+            println!("asr: ERROR default app profile unreadable: {e:#}");
+            println!("hint: edit {}", cfg.apps.dir.join("default.toml").display());
+            return;
+        }
+    };
+    match profile.asr.as_str() {
         "doubao" => match crate::asr::providers::doubao::DoubaoProvider::new() {
             Ok(provider) => {
                 let caps = provider.caps();
                 println!(
-                    "asr.doubao: OK config readable (hotwords={}, multilingual={})",
-                    caps.hotwords, caps.multilingual
+                    "asr.doubao: OK config readable (profile={:?}, hotwords={}, multilingual={})",
+                    profile.name, caps.hotwords, caps.multilingual
                 );
                 println!("asr.doubao: network/auth handshake not run; no PCM sent");
             }
@@ -90,7 +99,7 @@ fn check_asr_provider() {
         },
         other => {
             println!("asr: ERROR unsupported provider {other:?}");
-            println!("hint: M5 supports provider = \"doubao\"");
+            println!("hint: M7 supports app profile asr = \"doubao\"");
         }
     }
 }

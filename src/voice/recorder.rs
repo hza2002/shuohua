@@ -13,7 +13,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, StreamConfig};
+use cpal::{SampleFormat, SupportedStreamConfig};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -24,6 +24,32 @@ pub struct RecordingStream {
     pcm_rx: mpsc::UnboundedReceiver<Vec<i16>>,
     /// drop 这边就告诉 cpal 线程退出。
     stop: Option<std::sync::mpsc::Sender<()>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InputDeviceInfo {
+    pub name: Option<String>,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub sample_format: SampleFormat,
+}
+
+pub fn probe_default_input() -> Result<InputDeviceInfo> {
+    let host = cpal::default_host();
+    let device = host
+        .default_input_device()
+        .ok_or_else(|| anyhow!("no default input device"))?;
+    let name = Some(device.to_string());
+    let supported = device
+        .default_input_config()
+        .context("query default input config")?;
+    validate_supported_config(&supported)?;
+    Ok(InputDeviceInfo {
+        name,
+        sample_rate: supported.sample_rate(),
+        channels: supported.channels(),
+        sample_format: supported.sample_format(),
+    })
 }
 
 impl RecordingStream {
@@ -56,15 +82,21 @@ impl Drop for RecordingStream {
 pub fn start(audio_wav_path: Option<PathBuf>) -> Result<RecordingStream> {
     let (pcm_tx, pcm_rx) = mpsc::unbounded_channel::<Vec<i16>>();
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
 
     std::thread::Builder::new()
         .name("cpal-recorder".into())
         .spawn(move || {
-            if let Err(e) = run_recorder(pcm_tx, stop_rx, audio_wav_path) {
+            if let Err(e) = run_recorder(pcm_tx, stop_rx, audio_wav_path, ready_tx) {
                 eprintln!("[recorder] {e:#}");
             }
         })
         .context("spawn recorder thread")?;
+
+    ready_rx
+        .recv()
+        .context("wait for recorder startup")?
+        .context("start recorder")?;
 
     Ok(RecordingStream {
         pcm_rx,
@@ -76,7 +108,38 @@ fn run_recorder(
     pcm_tx: mpsc::UnboundedSender<Vec<i16>>,
     stop_rx: std::sync::mpsc::Receiver<()>,
     audio_wav_path: Option<PathBuf>,
+    ready_tx: std::sync::mpsc::Sender<Result<()>>,
 ) -> Result<()> {
+    let startup = build_recorder_stream(pcm_tx, audio_wav_path);
+    match startup {
+        Ok((stream, wav)) => {
+            let _ = ready_tx.send(Ok(()));
+            // 阻塞等 stop_tx 发信号或被 drop。cpal callback 同时在另一个 cpal 内部线程跑。
+            let _ = stop_rx.recv();
+            drop(stream); // cpal drain & close
+
+            if let Ok(mut guard) = wav.lock() {
+                if let Some(w) = guard.take() {
+                    w.finalize().context("finalize wav")?;
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            let msg = format!("{e:#}");
+            let _ = ready_tx.send(Err(anyhow!(msg)));
+            Err(e)
+        }
+    }
+}
+
+type WavWriter = hound::WavWriter<std::io::BufWriter<std::fs::File>>;
+type SharedWav = Arc<Mutex<Option<WavWriter>>>;
+
+fn build_recorder_stream(
+    pcm_tx: mpsc::UnboundedSender<Vec<i16>>,
+    audio_wav_path: Option<PathBuf>,
+) -> Result<(cpal::Stream, SharedWav)> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -84,19 +147,15 @@ fn run_recorder(
     let supported = device
         .default_input_config()
         .context("query default input config")?;
+    validate_supported_config(&supported)?;
     let src_rate = supported.sample_rate();
     let channels = supported.channels() as usize;
-    let sample_format = supported.sample_format();
-    if sample_format != SampleFormat::F32 {
-        bail!("recorder requires F32 input, got {sample_format:?}");
-    }
     crate::debug_println!("[recorder] {src_rate}Hz × {channels}ch F32 → 16k mono s16le");
 
-    let wav: Arc<Mutex<Option<hound::WavWriter<std::io::BufWriter<std::fs::File>>>>> =
-        Arc::new(Mutex::new(open_wav(audio_wav_path.as_deref())?));
+    let wav = Arc::new(Mutex::new(open_wav(audio_wav_path.as_deref())?));
     let wav_cb = wav.clone();
 
-    let config: StreamConfig = supported.into();
+    let config = supported.into();
     let stream = device
         .build_input_stream(
             config,
@@ -122,21 +181,21 @@ fn run_recorder(
         .context("build input stream")?;
 
     stream.play().context("start input stream")?;
-    // 阻塞等 stop_tx 发信号或被 drop。cpal callback 同时在另一个 cpal 内部线程跑。
-    let _ = stop_rx.recv();
-    drop(stream); // cpal drain & close
+    Ok((stream, wav))
+}
 
-    if let Ok(mut guard) = wav.lock() {
-        if let Some(w) = guard.take() {
-            w.finalize().context("finalize wav")?;
-        }
+fn validate_supported_config(supported: &SupportedStreamConfig) -> Result<()> {
+    let sample_format = supported.sample_format();
+    if sample_format != SampleFormat::F32 {
+        bail!("recorder requires F32 input, got {sample_format:?}");
+    }
+    if supported.channels() == 0 {
+        bail!("default input device reports 0 channels");
     }
     Ok(())
 }
 
-fn open_wav(
-    path: Option<&Path>,
-) -> Result<Option<hound::WavWriter<std::io::BufWriter<std::fs::File>>>> {
+fn open_wav(path: Option<&Path>) -> Result<Option<WavWriter>> {
     let Some(path) = path else { return Ok(None) };
     let spec = hound::WavSpec {
         channels: 1,

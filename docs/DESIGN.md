@@ -75,17 +75,26 @@ view model 字段如下（用 `tokio::sync::mpsc` 把变化推到主线程，App
 
 ```rust
 enum OverlayCmd {
-    SetState  { state: OverlayState, color: u32, label: String },
+    SetState  { state: OverlayState },                            // 状态字 + icon + 颜色
     SetStats  { dur_ms: u64, chars: u32 },
-    SetApp    { bundle_id: Option<String>, chain_summary: String },
-    SetText   { text: String, kind: TextKind },     // Partial / Final
+    SetApp    { bundle_id, app_name, chain_summary },
+    SetText   { text: String, kind: TextKind },                   // Partial / Final / Error
     AppendSegment { text: String },
-    Toast     { text: String, level: ToastLevel, ttl_ms: u32 },
-    Hide,
+    Notice    { text: String, ttl_ms: u32 },                      // meta 行临时黄字
+    Hide,                                                          // notice 活着时延期到 ttl 到期再隐藏
+    Dismiss,                                                       // ESC 专用：跳过延期立即关
+    ReloadConfig { cfg: OverlayCfg },
+    Relabel,                                                       // i18n 热切语言后让 view 重新翻译当前 label
 }
 ```
 
-**Toast UI**：用 Liquid Glass 同款样式（同变体、同圆角、同字体）的一条小胶囊，**底部弹出**（不覆盖第 2 排的 ASR 文字），1.5s 自动消。和主胶囊浮在同一窗口，避免另开 NSPanel。用来报 PostProcessor 失败、网络重连这类不影响主流程的事件。
+**Overlay 反馈通道**（M7 重构后）：不开第二个 NSPanel，两条通道全部复用主 panel：
+
+- **Notice**：`OverlayCmd::Notice { text, ttl_ms }` → meta 行（panel 右上角，平时显示 `app · chain`）临时换成黄字 warn 文案，TTL 到点自动恢复 `chain_summary`。用于非阻断 warn（PostProcessor step 失败 / 超时跳过）。默认 `NOTICE_TTL_MS = 3000`。
+- **Error**：`OverlayCmd::SetText { kind: TextKind::Error, text }` → text 区（第 2 排，平时显示 partial/final）换成红字错误文案，盖住 partial/final（`display_text()` 优先级 error > final > segments+partial）。`SetText{Error}` 也驱动 view 内部的 `error_until` 倒计时，到点自动 hide。`ERROR_TTL_MS = 5000`，比 notice 长是因为错误文案需要用户读完决定要不要重试。
+- **延期 Hide**：当成功路径发 `Hide` 时若 notice 还活着，view 设 `pending_hide=true`，等 notice 到期 tick 再真正隐藏；新 session 的 `SetState{Connecting}` 抢断 lingering（清 notice/error/pending_hide）；ESC 走 `Dismiss` 强制立刻关。
+
+这个设计避免了"warn 一闪就被 dispatch 后的 Hide 吞掉"的问题，也让 Error 不被自动粘贴流程截胡。
 
 ### 1.3 进程模型
 
@@ -310,7 +319,7 @@ pub enum AsrError {
 - **M2 不自动重试**。用户操作可见可重复（再按一次 F16），自动重试反而隐藏失败、增加调试难度
 - **dispatch 只在 `Final`/`Segment` 拼完才写剪贴板**，没收到末段就不上屏（部分识别上屏是 bug）
 - **Stopping 等 final 超时 5s**（M2 单 session 场景；正常 final 应在 send last 后 < 1s）
-- **`AsrError::Canceled` 静默处理**，voice 模块不报 stderr、不发 toast
+- **`AsrError::Canceled` 静默处理**，voice 模块不报 stderr、不发 error overlay
 
 #### 各 provider 怎么映射
 
@@ -484,8 +493,6 @@ async fn run_chain(
     initial: PipelineText,
     ctx: &AppContext,
     timeout: Duration,
-    toast_tx: &mpsc::Sender<ToastEvent>,
-    step_tx: &mpsc::Sender<PipelineStep>,   // 实时推 UDS pipeline_step 事件
 ) -> (PipelineText, Vec<PipelineStep>) {
     let mut current = initial;
     let mut steps  = vec![];
@@ -497,20 +504,15 @@ async fn run_chain(
                 current = out;
                 s
             }
-            Ok(Err(e)) => {
-                let _ = toast_tx.send(ToastEvent::warn(format!("{} failed, skipped", p.name())));
-                PipelineStep::err(p.name(), started.elapsed(), e.to_string())
-            }
-            Err(_) => {
-                let _ = toast_tx.send(ToastEvent::warn(format!("{} timed out, skipped", p.name())));
-                PipelineStep::timeout(p.name(), started.elapsed())
-            }
+            Ok(Err(e)) => PipelineStep::err(p.name(), started.elapsed(), e.to_string()),
+            Err(_)     => PipelineStep::timeout(p.name(), started.elapsed()),
         };
-        let _ = step_tx.send(step.clone());
         steps.push(step);
     }
     (current, steps)
 }
+// caller（finish.rs）拿到 steps 后再统一对 Error/Timeout 推
+// OverlayCmd::Notice，把"什么 step 失败"的 UI 决策跟 chain 执行解耦。
 
 /// 对应 history.jsonl 里 pipeline[] 的每一项，也对应 UDS pipeline_step 事件。
 #[derive(Clone)]
@@ -525,7 +527,7 @@ pub struct PipelineStep {
 
 **两条规则**：
 - **链不阻塞，最差是 raw**：失败/超时跳过该步，下一个继续用 upstream 的 text。不假设"后面会补"——后面的 processor 各干各的活，跳过的工作就是丢了。链路始终产出（最差等于 raw）
-- **失败/超时都推 toast**：用户看得见，但流程不阻塞
+- **失败/超时都推 notice**：caller 遍历 steps，对每个非 Ok/Skipped 状态发 `OverlayCmd::Notice { text, ttl_ms }`，meta 行黄字 3s。Hide 看到 notice 活着会自动延期，避免 dispatch 后 hide 一次性把 warn 吞掉
 - 所有失败 + 时延都写进 `pipeline[]`，进 history.jsonl + UDS 事件
 
 #### App Profile 与 Post Components
@@ -620,7 +622,7 @@ thinking = { type = "disabled" }     # DeepSeek 专属；不是 OpenAI 通用默
 - **链路进行中**：每完成一步 processor，daemon 推一条 `pipeline_step` 事件到 UDS。TUI 实时显示每步 status + duration + text。
 - **链路结束 + dispatch 完成**：daemon 把整条 `HistoryRecord`（schema 见 [SCHEMA.md](./SCHEMA.md)）append 到 history.jsonl，同时推一条 `history_appended` 事件。**不再有独立的 `final` 事件**——会话完成即 history_appended。
 - **TUI 默认显示完整流水线**：raw → 每个 processor 的 output → 最终上屏文本。不切换模式，全可见，方便观测整条链。
-- **Overlay 只显示最终上屏文本**（chain 最后一项的 text；chain 空则 = raw），失败/超时通过 toast 通知。
+- **Overlay 只显示最终上屏文本**（chain 最后一项的 text；chain 空则 = raw），单步失败/超时通过 meta 行 notice 通知；致命错误（ASR 中断 / 剪贴板失败 / mic watchdog）通过 text 区 error 红字反馈，并跳过 dispatch。
 
 #### 不做的事（v1）
 
@@ -649,14 +651,18 @@ state_connecting = "连接中"
 state_thinking   = "思考中"
 state_stopping   = "收尾"
 state_error      = "错误"
+word_count       = "{n}字"
 
-[doctor]
-ok_accessibility = "Accessibility 权限：OK"
-err_microphone   = "Microphone 权限：缺失，请到系统设置 → 隐私 → 麦克风 中授权"
+[notice]                                  # meta 行 warn（非阻断）
+step_timeout     = "{name} 超时，已跳过"   # 支持 {var} 占位符
+step_failed      = "{name} 失败，已跳过"
 
-[toast]
-asr_timeout      = "ASR 超时，已跳过"
-llm_failed       = "{name} 失败，已跳过"   # 支持 {var} 占位符
+[error]                                   # text 区致命错误（5s 自动 hide / ESC 立即关）
+no_audio         = "没有收到麦克风音频，请检查输入设备"
+recorder_start   = "录音启动失败"
+asr_open         = "ASR 连接失败"
+asr_runtime      = "ASR 中断，本次录音未保存到剪贴板"
+dispatch         = "粘贴失败，可在历史里找回"
 ```
 
 ```toml
@@ -668,14 +674,18 @@ state_connecting = "Connecting"
 state_thinking   = "Thinking"
 state_stopping   = "Stopping"
 state_error      = "Error"
+word_count       = "{n} words"
 
-[doctor]
-ok_accessibility = "Accessibility permission: OK"
-err_microphone   = "Microphone permission: missing. Grant in System Settings → Privacy → Microphone"
+[notice]
+step_timeout     = "{name} timed out, skipped"
+step_failed      = "{name} failed, skipped"
 
-[toast]
-asr_timeout      = "ASR timeout, skipped"
-llm_failed       = "{name} failed, skipped"
+[error]
+no_audio         = "No microphone audio — check input device"
+recorder_start   = "Failed to start recording"
+asr_open         = "ASR connection failed"
+asr_runtime      = "ASR interrupted — nothing pasted"
+dispatch         = "Paste failed — text saved in history"
 ```
 
 #### 实现（约 80 行）
@@ -702,7 +712,7 @@ pub fn init(cfg_lang: &str) {
 }
 
 /// t!("overlay.state_recording") → "录音中" / "Recording"
-/// t!("toast.llm_failed", name = "filler") → "filler failed, skipped"
+/// t!("notice.step_failed", name = "filler") → "filler failed, skipped"
 #[macro_export]
 macro_rules! t {
     ($key:expr) => { $crate::i18n::tr($key, &[]) };
@@ -734,7 +744,7 @@ language = "auto"        # auto | zh-CN | en-US
 
 | 出口 | 是否走 i18n |
 |---|---|
-| Overlay 文本（状态点 label、toast） | ✓ |
+| Overlay 文本（状态点 label、notice、error、字数单位） | ✓ |
 | TUI 全部文本 | ✓ |
 | Doctor 输出 | ✓ |
 | `shuo help` / clap 自动文案 | 默认 en-US（clap 自带不易换；help 实际上是英文用户也能看懂的） |
@@ -792,7 +802,7 @@ parse 失败（非法 trigger 字符串）只打日志保留旧 trigger，不向
 
 #### M5 收口结果
 
-- `shuo doctor` 已实现：打印 `effective config`，校验主 config、hotkey、Doubao 配置、UDS 状态、launchd plist 和权限状态
+- `shuo doctor` 已实现：打印 `effective config`，校验主 config、hotkey、默认麦克风输入、Doubao 配置、UDS 状态、launchd plist 和权限状态
 - `shuo install/uninstall/start/stop/restart/status` 已实现：launchd plist 使用当前 `shuo` 绝对路径，状态优先走 UDS `daemon_status`
 - `UDS {"op":"reload_config"}` 已接入：走 watcher 同一路径 parse + broadcast，不绕过 `watch::Sender`
 - app profile 的 `asr` 已按配置在下一次录音开始时重建，不在录音中途热替换 session
@@ -958,6 +968,8 @@ shuohua/
     - daemon 启动 bind：bind 失败时尝试 `connect()`；连得通 = 已有 daemon 在跑，本进程退出；连不通 = stale socket → `unlink()` 后重新 bind
     - `shuo` 智能 fallback connect：`ECONNREFUSED` / `ENOENT` 都视作 daemon 不在，进入 fork 路径前 `unlink()` 一次
 12. **Voice::Idle 时不持 cpal stream**：满足 <0.5% 空闲 CPU + 避免 always-recording 隐私问题。F9 触发时 ~50ms 启动延迟可接受（用户反应时间 200ms+ 覆盖）
+13. **麦克风可用性靠运行时 watchdog，不靠预检**：macOS 没有可靠的事前探测（`AppleClamshellState` + 设备名特判是过度脆弱的 workaround，合盖时 cpal 仍 callback 全 0 帧）。`recorder::start()` 同步段只校验 cpal build/play 失败；可用性的真相 = 主 select 里的 1s 首帧 watchdog：cpal stream play 成功后 `FIRST_AUDIO_TIMEOUT_MS = 1000ms` 内若所有 PCM 样本都 ≤ `MIN_NONZERO_AMPLITUDE = 8`（约 -72 dBFS，严格高于精确 0 silence，严格低于消费级 ADC 本底噪声），判定设备不可用并走 error overlay。阈值不进配置——超过这个时间几乎是设备问题，不是用户该调的旋钮
+14. **Error 路径不上屏不写剪贴板**：录音 / ASR 中途崩溃（`terminal_error` 任意 setter）→ 跳过 post chain → 跳过 `dispatch::dispatch` → history 写 status=Error 含累积 segments。理由：半成品上屏会误导（用户以为成功），auto_paste 还可能粘到用户已切走的应用，silent 覆盖剪贴板更糟。需要回捞的用户从 TUI history 翻一行（j/k + Enter copy）。`auto_paste` 永远只在成功路径生效
 
 ---
 

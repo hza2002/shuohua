@@ -23,6 +23,7 @@ pub fn run(args: DoctorArgs) -> Result<()> {
 
     check_config();
     check_hotkey();
+    check_microphone_input();
     check_asr_provider();
     check_uds();
     check_launchd();
@@ -48,6 +49,22 @@ fn check_config() {
         Err(e) => {
             println!("config: ERROR {e:#}");
             println!("hint: edit {}", path.display());
+        }
+    }
+}
+
+fn check_microphone_input() {
+    match crate::voice::recorder::probe_default_input() {
+        Ok(info) => {
+            let name = info.name.unwrap_or_else(|| "<unknown>".to_string());
+            println!(
+                "microphone.input: OK {name} ({}Hz, {}ch, {:?})",
+                info.sample_rate, info.channels, info.sample_format
+            );
+        }
+        Err(e) => {
+            println!("microphone.input: ERROR {e:#}");
+            println!("hint: connect or select a default microphone in System Settings → Sound");
         }
     }
 }

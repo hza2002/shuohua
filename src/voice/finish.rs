@@ -20,7 +20,7 @@
 use std::time::{Duration, Instant};
 
 use crate::asr::types::{AsrEvent, AsrProvider, AsrSession, LanguageMode, SessionCtx};
-use crate::overlay::{OverlayCmd, OverlayHandle, OverlayState, TextKind, ToastLevel};
+use crate::overlay::{OverlayCmd, OverlayHandle, OverlayState, TextKind};
 use crate::post::{self, PipelineStepStatus, PipelineText};
 use crate::state::history::{
     self, AsrHistory, AsrSessionHistory, HistoryError, HistoryRecord, HistoryStatus,
@@ -30,7 +30,55 @@ use crate::state::StateStore;
 use crate::voice::{dispatch, recorder, SessionControl};
 use std::path::PathBuf;
 use tokio::sync::{mpsc, watch};
-use tokio::time::sleep_until;
+use tokio::time::{sleep_until, Instant as TokioInstant};
+
+/// 录音开始后等"非零样本"出现的硬上限。
+///
+/// macOS 没有可靠的"麦克风一定能产生数据"的预检（合盖、被其他进程独占、
+/// 设备名匹配 builtin 但其实是别的，都会假阳/假阴）。所以放弃事前探测，
+/// 改成运行时 watchdog：开了 cpal 之后 1s 内没看见任何**非零** PCM 样本
+/// 就当作不可用。
+///
+/// 为什么不是"任意一帧"：合盖时 macOS 仍然驱动 AudioQueue 推 callback，
+/// 只是塞 0 帧（默认输入设备被屏蔽）。所以 has-any-frame 检测不到合盖，
+/// 必须看样本值本身。
+///
+/// 阈值故意不进配置：超过这个时间几乎可以确定是设备问题，不是用户该调的旋钮。
+const FIRST_AUDIO_TIMEOUT_MS: u64 = 1000;
+
+/// 区分"真静音"和"真信号"的样本振幅门槛。约 -72 dBFS，远低于消费级麦克风
+/// 在安静房间的本底噪声（约 -50 ~ -60 dBFS，对应 i16 ≈ 32~100），同时严格
+/// 大于"完美零"（合盖 / 设备被屏蔽时的 silence buffer 是精确 0）。
+const MIN_NONZERO_AMPLITUDE: i16 = 8;
+
+/// 当前 PCM 帧里是否至少有一个样本超过静音阈值。
+fn frame_has_signal(samples: &[i16]) -> bool {
+    samples
+        .iter()
+        .any(|s| s.unsigned_abs() > MIN_NONZERO_AMPLITUDE as u16)
+}
+
+/// 非阻断 warn 在 meta 行上显示多久。跟 overlay 的 ERROR_TTL_MS 对齐，
+/// 心智一致：错误/警告都 3s。
+const NOTICE_TTL_MS: u32 = 3000;
+
+/// 把 overlay 切到 Error 终态：状态字红色 icon + text 区显示错误文案（红字）。
+/// view 的 tick 会在 ERROR_TTL_MS 后自动 hide。所有 error 路径走这一条。
+fn send_error_overlay(params: &SessionParams, message: String) {
+    overlay_send(
+        params,
+        OverlayCmd::SetState {
+            state: OverlayState::Error,
+        },
+    );
+    overlay_send(
+        params,
+        OverlayCmd::SetText {
+            text: message,
+            kind: TextKind::Error,
+        },
+    );
+}
 
 pub struct SessionParams {
     pub auto_paste: bool,
@@ -94,9 +142,17 @@ pub async fn run_recording(
         Ok(r) => r,
         Err(e) => {
             eprintln!("[shuo] ❌ 录音启动失败: {e:#}");
+            params.state.set_error(Some(recording_id));
+            send_error_overlay(&params, crate::t!("error.recorder_start"));
             return;
         }
     };
+    // deadline 从 cpal stream play 成功这一刻起算。ASR open 期间 cpal callback
+    // 已经在底层线程往 mpsc 推帧，所以这个倒计时跟 provider.open() 真正并行：
+    // 正常麦克风的话，进 select 时帧早就在 channel 里，pcm 分支会先 ready；
+    // 没声音的话，1s 后 sleep_until 分支 fire 并退出。
+    let first_audio_deadline = TokioInstant::now() + Duration::from_millis(FIRST_AUDIO_TIMEOUT_MS);
+    let mut first_audio_seen = false;
 
     let ctx = SessionCtx {
         language: LanguageMode::Multilingual {
@@ -110,20 +166,7 @@ pub async fn run_recording(
             eprintln!("[shuo] ❌ ASR open failed: {err}");
             rec.stop();
             params.state.set_error(Some(recording_id));
-            overlay_send(
-                &params,
-                OverlayCmd::SetState {
-                    state: OverlayState::Error,
-                },
-            );
-            overlay_send(
-                &params,
-                OverlayCmd::Toast {
-                    text: err.to_string(),
-                    level: ToastLevel::Error,
-                    ttl_ms: 1500,
-                },
-            );
+            send_error_overlay(&params, crate::t!("error.asr_open"));
             return;
         }
     };
@@ -158,6 +201,9 @@ pub async fn run_recording(
             pcm = rec.recv(), if !stop_requested => {
                 match pcm {
                     Some(samples) => {
+                        if !first_audio_seen && frame_has_signal(&samples) {
+                            first_audio_seen = true;
+                        }
                         if let Err(e) = session.send_pcm(&samples, false).await {
                             eprintln!("[shuo] ❌ ASR send_pcm failed: {e}");
                             terminal_error = Some(HistoryError {
@@ -173,6 +219,16 @@ pub async fn run_recording(
                         stop_requested = true;
                     }
                 }
+            }
+            _ = sleep_until(first_audio_deadline), if !first_audio_seen => {
+                eprintln!(
+                    "[shuo] ❌ {FIRST_AUDIO_TIMEOUT_MS}ms 内未收到麦克风音频，疑似设备不可用"
+                );
+                rec.stop();
+                let _ = session.close().await;
+                params.state.set_error(Some(recording_id));
+                send_error_overlay(&params, crate::t!("error.no_audio"));
+                return;
             }
             ev = events.recv() => {
                 match ev {
@@ -220,15 +276,7 @@ pub async fn run_recording(
                     Some(AsrEvent::Error { err }) => {
                         eprintln!("[shuo] ❌ ASR error: {err}");
                         params.state.set_error(Some(recording_id.clone()));
-                        overlay_send(&params, OverlayCmd::SetState { state: OverlayState::Error });
-                        overlay_send(
-                            &params,
-                            OverlayCmd::Toast {
-                                text: err.to_string(),
-                                level: ToastLevel::Error,
-                                ttl_ms: 1500,
-                            },
-                        );
+                        send_error_overlay(&params, crate::t!("error.asr_runtime"));
                         rec.stop();
                         let _ = session.close().await;
                         let ended_at = time::OffsetDateTime::now_utc();
@@ -317,12 +365,6 @@ pub async fn run_recording(
     if cancel_requested {
         crate::debug_println!("[shuo] ✖ recording canceled");
         params.state.set_idle();
-        overlay_send(
-            &params,
-            OverlayCmd::SetState {
-                state: OverlayState::Idle,
-            },
-        );
         overlay_send(&params, OverlayCmd::Hide);
         if let Some(record) = append_history(HistoryInput {
             id: recording_id,
@@ -342,48 +384,44 @@ pub async fn run_recording(
         }
         return;
     }
-    let (pipeline, status, error) =
+    // terminal_error 路径：录音 / ASR 中途崩溃 → 不跑 post chain、不写剪贴板。
+    // 理由（M7 决策）：半成品上屏会误导（用户以为成功），auto_paste 还可能粘到
+    // 已经切走的应用；history.jsonl 保留所有 segments，需要的用户从 TUI 回捞。
+    let (pipeline, status, error) = if terminal_error.is_some() {
+        (Vec::new(), HistoryStatus::Error, None)
+    } else {
         dispatch_with_post_chain(&pending_segments, params.auto_paste, &app_context, &params)
             .await
-            .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)));
-    if let Some(last_text) = pipeline.iter().rev().find_map(|step| step.text.clone()) {
-        overlay_send(
-            &params,
-            OverlayCmd::SetText {
-                text: last_text,
-                kind: TextKind::Final,
-            },
-        );
-    }
+            .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)))
+    };
     for step in &pipeline {
         params
             .state
             .pipeline_step(recording_id.clone(), step.clone());
     }
-    if let Some(err) = terminal_error.as_ref().or(error.as_ref()) {
+    if terminal_error.is_some() || error.is_some() {
+        // dispatch 失败 vs 录音中途失败用不同文案；剪贴板失败明确告知用户。
+        let msg = if terminal_error.is_some() {
+            crate::t!("error.asr_runtime")
+        } else {
+            crate::t!("error.dispatch")
+        };
         params.state.set_error(Some(recording_id.clone()));
-        overlay_send(
-            &params,
-            OverlayCmd::SetState {
-                state: OverlayState::Error,
-            },
-        );
-        overlay_send(
-            &params,
-            OverlayCmd::Toast {
-                text: err.msg.clone(),
-                level: ToastLevel::Error,
-                ttl_ms: 1500,
-            },
-        );
+        send_error_overlay(&params, msg);
     } else {
+        if let Some(last_text) = pipeline.iter().rev().find_map(|step| step.text.clone()) {
+            overlay_send(
+                &params,
+                OverlayCmd::SetText {
+                    text: last_text,
+                    kind: TextKind::Final,
+                },
+            );
+        }
         params.state.set_idle();
-        overlay_send(
-            &params,
-            OverlayCmd::SetState {
-                state: OverlayState::Idle,
-            },
-        );
+        // 不发 SetState{Idle}：它会让 model.visible=false，渲染时立刻 orderOut
+        // panel，把 notice 在显示前就关掉。Hide 内部已经把 state 切回 Idle，
+        // 而且 notice 活着时会延期到 ttl 到点再真隐藏。
         overlay_send(&params, OverlayCmd::Hide);
     }
     let ended_at = time::OffsetDateTime::now_utc();
@@ -577,15 +615,16 @@ async fn dispatch_with_post_chain(
         match step.status {
             PipelineStepStatus::Error | PipelineStepStatus::Timeout => {
                 let text = match step.status {
-                    PipelineStepStatus::Timeout => format!("{} timed out, skipped", step.name),
-                    _ => format!("{} failed, skipped", step.name),
+                    PipelineStepStatus::Timeout => {
+                        crate::t!("notice.step_timeout", name = step.name)
+                    }
+                    _ => crate::t!("notice.step_failed", name = step.name),
                 };
                 overlay_send(
                     params,
-                    OverlayCmd::Toast {
+                    OverlayCmd::Notice {
                         text,
-                        level: ToastLevel::Warn,
-                        ttl_ms: 1500,
+                        ttl_ms: NOTICE_TTL_MS,
                     },
                 );
             }
@@ -723,5 +762,37 @@ impl From<post::PipelineStep> for PipelineStepHistory {
             text: step.text,
             error: step.error,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_zero_frame_is_silence() {
+        assert!(!frame_has_signal(&[0; 480]));
+    }
+
+    #[test]
+    fn frame_with_sub_threshold_samples_is_silence() {
+        // 全部样本 |s| <= MIN_NONZERO_AMPLITUDE 视为静音
+        assert!(!frame_has_signal(&[1, -2, 3, -4, 5, -6, 7, -8, 8, -8]));
+    }
+
+    #[test]
+    fn frame_with_one_above_threshold_sample_has_signal() {
+        let mut samples = vec![0i16; 480];
+        samples[100] = MIN_NONZERO_AMPLITUDE + 1;
+        assert!(frame_has_signal(&samples));
+    }
+
+    #[test]
+    fn realistic_noise_floor_passes() {
+        // 真实安静房间本底噪声约 -50 dBFS，对应 i16 ≈ 100。务必不能误判为静音。
+        let samples: Vec<i16> = (0..480)
+            .map(|i| if i % 7 == 0 { 80 } else { -50 })
+            .collect();
+        assert!(frame_has_signal(&samples));
     }
 }

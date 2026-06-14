@@ -10,8 +10,8 @@ pub mod view;
 // 想换主题改这里。
 pub const COLOR_PRIMARY_TEXT: u32 = 0xFBF1C7; // fg0 / light0
 pub const COLOR_SECONDARY_TEXT: u32 = 0xBDAE93; // fg3
-pub const COLOR_TOAST_WARN: u32 = 0xFABD2F; // bright_yellow
-pub const COLOR_TOAST_ERROR: u32 = 0xFB4934; // bright_red
+pub const COLOR_NOTICE: u32 = 0xFABD2F; // bright_yellow, meta 行临时 warn 用
+pub const COLOR_ERROR_TEXT: u32 = 0xFB4934; // bright_red, text 区 error 用
 
 #[derive(Debug, Clone)]
 pub enum OverlayCmd {
@@ -34,11 +34,16 @@ pub enum OverlayCmd {
     AppendSegment {
         text: String,
     },
-    Toast {
+    /// 非阻断提示，进 meta 行黄字，ttl 到点自动恢复 chain_summary。
+    /// 替代以前的 toast warn 用法。
+    Notice {
         text: String,
-        level: ToastLevel,
         ttl_ms: u32,
     },
+    /// 立即关闭 overlay，跳过所有延期逻辑。ESC 专用。
+    Dismiss,
+    /// 正常隐藏。如果当前有活跃 notice（warn 还没自动消失），延期到 notice
+    /// 到期再真正隐藏，让用户有机会看到 warn。
     Hide,
     /// 配置热重载：替换 chrome（glass / tint / 文本布局相关参数）。
     /// model 不消费，view 单独处理。
@@ -89,19 +94,13 @@ impl OverlayState {
 pub enum TextKind {
     Partial,
     Final,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToastLevel {
-    Info,
-    Warn,
+    /// 终态错误文本，覆盖 partial/final，红字显示，3s 后随 overlay 自动 hide。
     Error,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Toast {
+pub struct Notice {
     pub text: String,
-    pub level: ToastLevel,
     pub ttl_ms: u32,
 }
 
@@ -134,7 +133,10 @@ pub struct OverlayModel {
     pub segments: Vec<String>,
     pub partial: String,
     pub final_text: String,
-    pub toast: Option<Toast>,
+    /// 终态错误文案；非空时盖住 partial/final，红字显示。
+    pub error_text: String,
+    /// 当前 meta 行的临时 warn；非空时 meta 显示 notice.text 黄字，定时器到点自动恢复。
+    pub notice: Option<Notice>,
     pub visible: bool,
 }
 
@@ -152,7 +154,8 @@ impl Default for OverlayModel {
             segments: Vec::new(),
             partial: String::new(),
             final_text: String::new(),
-            toast: None,
+            error_text: String::new(),
+            notice: None,
             visible: false,
         }
     }
@@ -189,23 +192,19 @@ impl OverlayModel {
                     self.final_text = text;
                     self.partial.clear();
                 }
+                TextKind::Error => {
+                    self.error_text = text;
+                    self.partial.clear();
+                }
             },
             OverlayCmd::AppendSegment { text } => {
                 self.segments.push(text);
                 self.partial.clear();
             }
-            OverlayCmd::Toast {
-                text,
-                level,
-                ttl_ms,
-            } => {
-                self.toast = Some(Toast {
-                    text,
-                    level,
-                    ttl_ms,
-                });
+            OverlayCmd::Notice { text, ttl_ms } => {
+                self.notice = Some(Notice { text, ttl_ms });
             }
-            OverlayCmd::Hide => {
+            OverlayCmd::Dismiss | OverlayCmd::Hide => {
                 self.clear_session();
                 self.visible = false;
                 self.state = OverlayState::Idle;
@@ -227,10 +226,16 @@ impl OverlayModel {
         self.segments.clear();
         self.partial.clear();
         self.final_text.clear();
-        self.toast = None;
+        self.error_text.clear();
+        self.notice = None;
     }
 
     pub fn display_text(&self) -> String {
+        // 优先级：error > final > segments+partial。
+        // error 在录音失败时盖住识别文本；history 已保留所有片段。
+        if !self.error_text.is_empty() {
+            return self.error_text.clone();
+        }
         if !self.final_text.is_empty() {
             return self.final_text.clone();
         }
@@ -247,7 +252,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_applies_state_text_stats_and_toast() {
+    fn model_applies_state_text_stats_and_notice() {
         i18n::init("en-US");
         let mut model = OverlayModel::default();
 
@@ -265,10 +270,9 @@ mod tests {
             text: "今天天气".to_string(),
             kind: TextKind::Partial,
         });
-        model.apply(OverlayCmd::Toast {
-            text: "network reconnecting".to_string(),
-            level: ToastLevel::Warn,
-            ttl_ms: 1500,
+        model.apply(OverlayCmd::Notice {
+            text: "filler skipped".to_string(),
+            ttl_ms: 3000,
         });
 
         assert_eq!(model.state, OverlayState::Recording);
@@ -277,7 +281,21 @@ mod tests {
         assert_eq!(model.chars, 84);
         assert_eq!(model.segments, vec!["今天"]);
         assert_eq!(model.partial, "今天天气");
-        assert_eq!(model.toast.as_ref().unwrap().level, ToastLevel::Warn);
+        assert_eq!(model.notice.as_ref().unwrap().text, "filler skipped");
+    }
+
+    #[test]
+    fn error_text_overrides_partial_and_final_in_display() {
+        i18n::init("en-US");
+        let mut model = OverlayModel::default();
+        model.apply(OverlayCmd::AppendSegment {
+            text: "已识别一半".to_string(),
+        });
+        model.apply(OverlayCmd::SetText {
+            text: "请检查输入设备".to_string(),
+            kind: TextKind::Error,
+        });
+        assert_eq!(model.display_text(), "请检查输入设备");
     }
 
     #[test]
@@ -302,7 +320,8 @@ mod tests {
 
         assert_eq!(model.display_text(), "");
         assert_eq!(model.dur_ms, 0);
-        assert!(model.toast.is_none());
+        assert!(model.notice.is_none());
+        assert!(model.error_text.is_empty());
     }
 
     #[test]

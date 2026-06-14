@@ -14,6 +14,7 @@ shuo --daemon         # 纯 daemon，不开 TUI（launchd plist 用这个）
 
 shuo doctor           # 环境检查：
                       #   - 权限：Accessibility / Microphone 是否授权
+                      #   - 录音输入：默认麦克风设备是否存在、格式是否可用
                       #   - 终端识别：识别当前终端 App，提示授权对象
                       #   - 配置校验：解析主 config.toml + 所有 per-app post/*.toml，
                       #               报 file:line 错误（不跑 daemon）

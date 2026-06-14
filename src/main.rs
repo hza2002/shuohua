@@ -272,9 +272,16 @@ async fn run_daemon(
                     anyhow::bail!("hotkey bridge channel closed");
                 };
                 if matches!(ev.kind, hotkey::EventKind::KeyDown) && ev.code == KEY_ESCAPE {
+                    // 先清掉已经结束的 session，避免对死 watch 发 Cancel。
+                    if active.as_ref().is_some_and(|session| session.join.is_finished()) {
+                        active = None;
+                    }
                     if let Some(session) = active.as_ref() {
                         let _ = session.control.send(SessionControl::Cancel);
                     }
+                    // ESC 也用来快速关掉 error / 残留 notice 的 lingering overlay。
+                    // Dismiss 绕过所有延期，立即 hide。
+                    overlay.send(overlay::OverlayCmd::Dismiss);
                     continue;
                 }
                 if !matches!(tracker.on_event(ev, Instant::now()), Some(HotkeyEvent::TriggerRecord)) {

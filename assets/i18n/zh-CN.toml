@@ -5,10 +5,18 @@ state_connecting = "连接中"
 state_thinking = "思考中"
 state_stopping = "收尾"
 state_error = "错误"
+word_count = "{n}字"
 
-[toast]
-asr_timeout = "ASR 超时，已跳过"
-llm_failed = "{name} 失败，已跳过"
+[notice]
+step_timeout = "{name} 超时，已跳过"
+step_failed = "{name} 失败，已跳过"
+
+[error]
+no_audio = "没有收到麦克风音频，请检查输入设备"
+recorder_start = "录音启动失败"
+asr_open = "ASR 连接失败"
+asr_runtime = "ASR 中断，本次录音未保存到剪贴板"
+dispatch = "粘贴失败，可在历史里找回"
 
 [tui]
 tab_status = "1 状态"

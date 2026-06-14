@@ -5,10 +5,18 @@ state_connecting = "Connecting"
 state_thinking = "Thinking"
 state_stopping = "Stopping"
 state_error = "Error"
+word_count = "{n} words"
 
-[toast]
-asr_timeout = "ASR timeout, skipped"
-llm_failed = "{name} failed, skipped"
+[notice]
+step_timeout = "{name} timed out, skipped"
+step_failed = "{name} failed, skipped"
+
+[error]
+no_audio = "No microphone audio — check input device"
+recorder_start = "Failed to start recording"
+asr_open = "ASR connection failed"
+asr_runtime = "ASR interrupted — nothing pasted"
+dispatch = "Paste failed — text saved in history"
 
 [tui]
 tab_status = "1 Status"

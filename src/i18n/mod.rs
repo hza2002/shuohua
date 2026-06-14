@@ -136,7 +136,7 @@ mod tests {
         init_for_tests(Lang::EnUS);
         assert_eq!(tr("overlay.state_recording", &[]), "Recording");
         assert_eq!(
-            tr("toast.llm_failed", &[("name", "filler".to_string())]),
+            tr("notice.step_failed", &[("name", "filler".to_string())]),
             "filler failed, skipped"
         );
     }

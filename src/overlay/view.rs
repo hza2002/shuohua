@@ -23,9 +23,14 @@ use tokio::sync::mpsc;
 
 use crate::config::{GlassStyle, OverlayCfg, OverlayPosition};
 use crate::overlay::{
-    OverlayCmd, OverlayModel, OverlayState, TextKind, Toast, ToastLevel, COLOR_PRIMARY_TEXT,
-    COLOR_SECONDARY_TEXT, COLOR_TOAST_ERROR, COLOR_TOAST_WARN,
+    OverlayCmd, OverlayModel, OverlayState, TextKind, COLOR_ERROR_TEXT, COLOR_NOTICE,
+    COLOR_PRIMARY_TEXT, COLOR_SECONDARY_TEXT,
 };
+
+/// SetText{Error} 后多久自动 hide overlay。比 NOTICE_TTL_MS 长，因为 error 文案
+/// 用户需要读完并决定是否重试；notice 只是顺手提示，过去就过去。仍然不挂太久，
+/// shuo 是键盘工具，5s 后还没看就靠 ESC 自己关。
+const ERROR_TTL_MS: u64 = 5000;
 
 const WIDTH: f64 = 540.0;
 const HEIGHT: f64 = 86.0;
@@ -133,17 +138,21 @@ struct OverlayView {
     chars: Retained<NSTextField>,
     meta: Retained<NSTextField>,
     text: Retained<NSTextField>,
-    toast: Retained<NSTextField>,
     recording_started: Option<Instant>,
     last_text_update: Option<Instant>,
-    toast_until: Option<Instant>,
+    /// notice（meta 行 warn）到期点：到点 tick 把 meta 恢复成 chain_summary。
+    notice_until: Option<Instant>,
+    /// error 文本（text 区红字）到期点：到点 tick 自动 hide overlay。
+    error_until: Option<Instant>,
+    /// Hide 命令到达时若 notice 还活着就延期；标记 true，待 notice 到期再真隐藏。
+    pending_hide: bool,
     last_panel_frame: Option<NSRect>,
     last_visible_text: String,
     last_status_text: String,
     last_duration_text: String,
     last_meta_text: String,
     peak_text_lines: usize,
-    /// chrome 初始化 / 热重载时检测到不可用的 SPI / fallback 走人 → 等首次可见时塞 error toast。
+    /// chrome 初始化 / 热重载时检测到不可用的 SPI / fallback 走人 → 等首次可见时塞 chrome error。
     pending_chrome_error: Option<String>,
 }
 
@@ -178,14 +187,8 @@ impl OverlayView {
         );
         text.setUsesSingleLineMode(false);
         text.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
-        let toast = label(
-            mtm,
-            NSRect::new(NSPoint::new(150.0, -30.0), NSSize::new(240.0, 24.0)),
-            12.0,
-            false,
-            COLOR_PRIMARY_TEXT,
-        );
-        toast.setHidden(true);
+        // meta 行可能临时承载 notice 文案（warn），长文案安全截断为 "…"。
+        meta.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
 
         // labels 后 addSubview = z-order 在前。glass 在 build_chrome 里已经先进 container 当底色，
         // 这里追加 labels 自然叠在 glass 上面。
@@ -195,7 +198,6 @@ impl OverlayView {
         container.addSubview(&chars);
         container.addSubview(&meta);
         container.addSubview(&text);
-        container.addSubview(&toast);
 
         panel.setContentView(Some(&container));
         panel.orderOut(None);
@@ -214,10 +216,11 @@ impl OverlayView {
             chars,
             meta,
             text,
-            toast,
             recording_started: None,
             last_text_update: None,
-            toast_until: None,
+            notice_until: None,
+            error_until: None,
+            pending_hide: false,
             last_panel_frame: None,
             last_visible_text: String::new(),
             last_status_text: String::new(),
@@ -246,26 +249,57 @@ impl OverlayView {
                     self.recording_started = Some(Instant::now());
                     self.last_text_update = Some(Instant::now());
                 }
-                OverlayState::Idle | OverlayState::Error => {
+                OverlayState::Idle => {
                     self.recording_started = None;
                     self.last_text_update = None;
                     self.peak_text_lines = 1;
                 }
+                OverlayState::Connecting => {
+                    // 新 session 接管：抢断旧 session 留下的 lingering 状态。
+                    self.notice_until = None;
+                    self.error_until = None;
+                    self.pending_hide = false;
+                }
                 _ => {}
             },
-            OverlayCmd::SetText { kind, .. } if *kind == TextKind::Partial => {
-                self.last_text_update = Some(Instant::now());
-            }
+            OverlayCmd::SetText { kind, .. } => match kind {
+                TextKind::Partial => {
+                    self.last_text_update = Some(Instant::now());
+                }
+                TextKind::Error => {
+                    self.error_until = Some(Instant::now() + Duration::from_millis(ERROR_TTL_MS));
+                }
+                TextKind::Final => {}
+            },
             OverlayCmd::AppendSegment { .. } => {
                 self.last_text_update = Some(Instant::now());
             }
-            OverlayCmd::Toast { ttl_ms, .. } => {
-                self.toast_until = Some(Instant::now() + Duration::from_millis(*ttl_ms as u64));
+            OverlayCmd::Notice { ttl_ms, .. } => {
+                self.notice_until = Some(Instant::now() + Duration::from_millis(*ttl_ms as u64));
             }
             OverlayCmd::Hide => {
+                // notice 还活着就延期，等 tick 到点真隐藏，避免 warn 一闪就没。
+                if self
+                    .notice_until
+                    .is_some_and(|until| Instant::now() < until)
+                {
+                    self.pending_hide = true;
+                    return;
+                }
                 self.recording_started = None;
                 self.last_text_update = None;
-                self.toast_until = None;
+                self.notice_until = None;
+                self.error_until = None;
+                self.pending_hide = false;
+                self.peak_text_lines = 1;
+            }
+            OverlayCmd::Dismiss => {
+                // ESC 强制关，绕过 notice / error 延期。
+                self.recording_started = None;
+                self.last_text_update = None;
+                self.notice_until = None;
+                self.error_until = None;
+                self.pending_hide = false;
                 self.peak_text_lines = 1;
             }
             _ => {}
@@ -278,28 +312,39 @@ impl OverlayView {
         if let Some(started) = self.recording_started {
             self.model.dur_ms = started.elapsed().as_millis() as u64;
         }
-        if self
-            .toast_until
-            .is_some_and(|until| Instant::now() >= until)
-        {
-            self.model.toast = None;
-            self.toast_until = None;
+        let now = Instant::now();
+        if self.notice_until.is_some_and(|until| now >= until) {
+            self.model.notice = None;
+            self.notice_until = None;
+            if self.pending_hide {
+                // 等到的就是这一刻——notice 到期，把延期的 Hide 真正执行。
+                self.model.apply(OverlayCmd::Hide);
+                self.recording_started = None;
+                self.last_text_update = None;
+                self.pending_hide = false;
+                self.peak_text_lines = 1;
+            }
+        }
+        if self.error_until.is_some_and(|until| now >= until) {
+            // error 文本到期：自动关 overlay。
+            self.error_until = None;
+            self.model.apply(OverlayCmd::Hide);
+            self.recording_started = None;
+            self.last_text_update = None;
+            self.notice_until = None;
+            self.pending_hide = false;
+            self.peak_text_lines = 1;
         }
         self.render();
     }
 
     fn render(&mut self) {
         if self.model.visible {
-            // 首次可见时，把 chrome 初始化 / 热重载攒下的错误用 toast 抛出来
-            if self.model.toast.is_none() {
+            // 首次可见时，把 chrome 初始化 / 热重载攒下的错误塞进 error 文本区。
+            if self.model.error_text.is_empty() && self.error_until.is_none() {
                 if let Some(err) = self.pending_chrome_error.take() {
-                    let ttl_ms: u32 = 5000;
-                    self.model.toast = Some(Toast {
-                        text: err,
-                        level: ToastLevel::Error,
-                        ttl_ms,
-                    });
-                    self.toast_until = Some(Instant::now() + Duration::from_millis(ttl_ms as u64));
+                    self.model.error_text = err;
+                    self.error_until = Some(Instant::now() + Duration::from_millis(ERROR_TTL_MS));
                 }
             }
 
@@ -333,13 +378,11 @@ impl OverlayView {
             .as_deref()
             .or(self.model.bundle_id.as_deref())
             .unwrap_or("");
-        let header = header_parts(
-            &label,
-            &dur,
-            full_text.chars().count() as u32,
-            app,
-            &self.model.chain_summary,
-        );
+        // 用 text_stats 算 words：CJK 按字、英文按词，跨语言一致。
+        // 文案模板 {n} 字 / {n} words 由 i18n 选；底层数 = words。
+        let words = crate::text_stats::compute(&full_text).words as u32;
+        let chars_text = crate::t!("overlay.word_count", n = words);
+        let header = header_parts(&label, &dur, &chars_text, app, &self.model.chain_summary);
         self.render_state_icon(state, color_rgb);
         if self.last_status_text != header.state {
             fade_view(&self.status, 0.16);
@@ -362,33 +405,33 @@ impl OverlayView {
         self.chars
             .setTextColor(Some(&color_from_rgb_alpha(COLOR_SECONDARY_TEXT, 1.0)));
 
-        if self.last_meta_text != header.meta {
+        // meta 行：notice 活跃时盖住 chain_summary，黄字。
+        let (meta_text, meta_color) = if let Some(notice) = &self.model.notice {
+            (notice.text.clone(), COLOR_NOTICE)
+        } else {
+            (header.meta, COLOR_SECONDARY_TEXT)
+        };
+        if self.last_meta_text != meta_text {
             fade_view(&self.meta, 0.16);
-            self.meta.setStringValue(&NSString::from_str(&header.meta));
-            self.meta
-                .setTextColor(Some(&color_from_rgb_alpha(COLOR_SECONDARY_TEXT, 1.0)));
-            self.last_meta_text = header.meta;
+            self.meta.setStringValue(&NSString::from_str(&meta_text));
+            self.last_meta_text = meta_text;
         }
+        self.meta
+            .setTextColor(Some(&color_from_rgb_alpha(meta_color, 1.0)));
+
+        // text 区：error_text 非空时强制红字，覆盖 partial/final（display_text 已优先返回 error）。
+        let text_color = if !self.model.error_text.is_empty() {
+            COLOR_ERROR_TEXT
+        } else {
+            COLOR_PRIMARY_TEXT
+        };
         if self.last_visible_text != display_text {
             fade_view(&self.text, 0.10);
             self.text.setStringValue(&NSString::from_str(&display_text));
-            self.text
-                .setTextColor(Some(&color_from_rgb_alpha(COLOR_PRIMARY_TEXT, 1.0)));
             self.last_visible_text = display_text;
         }
-
-        if let Some(toast) = &self.model.toast {
-            self.toast.setStringValue(&NSString::from_str(&toast.text));
-            let color = match toast.level {
-                ToastLevel::Info => color_from_rgb_alpha(COLOR_PRIMARY_TEXT, 1.0),
-                ToastLevel::Warn => color_from_rgb_alpha(COLOR_TOAST_WARN, 1.0),
-                ToastLevel::Error => color_from_rgb_alpha(COLOR_TOAST_ERROR, 1.0),
-            };
-            self.toast.setTextColor(Some(&color));
-            self.toast.setHidden(false);
-        } else {
-            self.toast.setHidden(true);
-        }
+        self.text
+            .setTextColor(Some(&color_from_rgb_alpha(text_color, 1.0)));
     }
 
     fn effective_state(&self) -> (OverlayState, String, u32) {
@@ -456,10 +499,6 @@ impl OverlayView {
                 TEXT_WIDTH,
                 24.0 + (lines.saturating_sub(1) as f64 * TEXT_LINE_HEIGHT),
             ),
-        ));
-        self.toast.setFrame(NSRect::new(
-            NSPoint::new(150.0, -30.0),
-            NSSize::new(240.0, 24.0),
         ));
     }
 
@@ -589,12 +628,14 @@ struct FirstRow {
 
 fn first_row_frames(top_offset: f64) -> FirstRow {
     let y = FIRST_ROW_Y + top_offset;
+    // 收紧 status 给 meta 多留 36px——meta 行会临时承载 notice 文案（warn），
+    // 像 "filler timed out, skipped" 也得装下；status 原本 116px 大半是 padding。
     FirstRow {
         icon: NSRect::new(NSPoint::new(16.0, y), NSSize::new(FIRST_ROW_H, FIRST_ROW_H)),
-        status: NSRect::new(NSPoint::new(48.0, y), NSSize::new(116.0, FIRST_ROW_H)),
-        duration: NSRect::new(NSPoint::new(170.0, y), NSSize::new(56.0, FIRST_ROW_H)),
-        chars: NSRect::new(NSPoint::new(232.0, y), NSSize::new(56.0, FIRST_ROW_H)),
-        meta: NSRect::new(NSPoint::new(294.0, y), NSSize::new(230.0, FIRST_ROW_H)),
+        status: NSRect::new(NSPoint::new(48.0, y), NSSize::new(80.0, FIRST_ROW_H)),
+        duration: NSRect::new(NSPoint::new(134.0, y), NSSize::new(56.0, FIRST_ROW_H)),
+        chars: NSRect::new(NSPoint::new(196.0, y), NSSize::new(56.0, FIRST_ROW_H)),
+        meta: NSRect::new(NSPoint::new(258.0, y), NSSize::new(266.0, FIRST_ROW_H)),
     }
 }
 
@@ -846,7 +887,7 @@ struct HeaderParts {
     meta: String,
 }
 
-fn header_parts(state: &str, duration: &str, chars: u32, app: &str, chain: &str) -> HeaderParts {
+fn header_parts(state: &str, duration: &str, chars: &str, app: &str, chain: &str) -> HeaderParts {
     let meta = if chain.is_empty() {
         app.to_string()
     } else if app.is_empty() {
@@ -857,7 +898,7 @@ fn header_parts(state: &str, duration: &str, chars: u32, app: &str, chain: &str)
     HeaderParts {
         state: state.to_string(),
         duration: duration.to_string(),
-        chars: format!("{chars}字"),
+        chars: chars.to_string(),
         meta,
     }
 }
@@ -912,7 +953,17 @@ fn fade_view(view: &NSView, duration_s: f64) {
 }
 
 fn format_duration(ms: u64) -> String {
-    format!("{:02}:{:02}", ms / 60_000, (ms / 1000) % 60)
+    let total_secs = ms / 1000;
+    let h = total_secs / 3600;
+    let m = (total_secs % 3600) / 60;
+    let s = total_secs % 60;
+    if h > 0 {
+        format!("{h}h{m}m{s}s")
+    } else if m > 0 {
+        format!("{m}m{s}s")
+    } else {
+        format!("{s}s")
+    }
 }
 
 #[cfg(test)]
@@ -939,10 +990,10 @@ mod tests {
 
     #[test]
     fn header_parts_keep_state_duration_and_meta_separate() {
-        let parts = header_parts("Recording", "00:03", 84, "Xcode", "filler");
+        let parts = header_parts("Recording", "3s", "84 words", "Xcode", "filler");
         assert_eq!(parts.state, "Recording");
-        assert_eq!(parts.duration, "00:03");
-        assert_eq!(parts.chars, "84字");
+        assert_eq!(parts.duration, "3s");
+        assert_eq!(parts.chars, "84 words");
         assert_eq!(parts.meta, "Xcode  ·  filler");
     }
 

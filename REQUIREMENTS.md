@@ -99,20 +99,20 @@
 | ASR 段编辑/反悔 | v1 不做（属于"编辑能力"，本项目只做显示+上屏） |
 | 中英混合识别 | M2 默认 `Doubao SAUC` + 中英多语模式 + 热词文件（注英文技术词） |
 | LLM 后处理 | M2.5 加规则去口语词；M7 加 LLM 清洗（带 App 上下文） |
-| **PostProcessor 失败/超时** | 跳过该步，链路继续（**不假设后面会补**）；推 toast 通知；写 pipeline trace 进 history |
+| **PostProcessor 失败/超时** | 跳过该步，链路继续（**不假设后面会补**）；overlay meta 行推 notice（黄字 3s）；写 pipeline trace 进 history |
 | PostProcessor 内容审查 | 不做。该层只清洗，不审查 |
 | per-app 配置粒度 | 到 bundle_id 为止，不再细分 URL / input 字段 |
 | per-app 配置文件组织 | 一个 app profile 一个文件：`apps/<bundle_id>.toml`；找不到 fall back 到 `apps/default.toml`。profile 只组合 ASR provider 和 post components |
 | **TUI 显示策略** | 默认完整流水线（raw → 每步 output → 最终），不切换模式 |
-| **Toast UI 风格** | 与主 Liquid Glass 胶囊同款，底部弹小胶囊，1.5s 自消，不另开 NSPanel |
-| Overlay 布局 | 两排：状态/统计/app/chain（第 1 排）+ ASR 实时文字（第 2 排）+ 底部 toast |
+| **Overlay 反馈通道** | 不开第二个 NSPanel。两条通道复用主 panel：**Notice** 临时覆盖 meta 行（黄字 3s 自消），用于非阻断 warn（PostProcessor 跳过等）；**Error** 覆盖 text 区（红字 5s 自消 或 ESC 提前关），用于致命错误（mic / ASR / dispatch 失败） |
+| Overlay 布局 | 两排：状态 / 时长 / 字数 / app·chain（第 1 排，meta 列可临时承载 notice 黄字）+ ASR 实时文字（第 2 排，error 时盖红字） |
 | **API key 存储** | 直接明文写在 TOML，仓库放配置模板。`config.toml` 首次写入时 `chmod 0600` |
 | **删 `shuo config` 子命令** | `lazyvim` 类编辑器直接编辑文件即可。`validate` 折进 `shuo doctor` |
 | **i18n** | 双语 zh-CN/en-US，手写 `t!()` 宏，不引第三方 crate |
 | **launchd plist Label** | `com.hza2002.shuohua`（reverse-DNS，参考 yabai `com.koekeishiya.yabai`）|
 | **ASR provider 私有配置** | 每个 provider 一份独立 TOML：`~/.config/shuohua/asr/<provider>.toml`，文件名 == provider 名。voice 模块永远不见 provider 私有字段（app_key / language / 厂商特有 flag）。App profile 写 `asr = "doubao"` 指路 |
 | **ASR 音频 codec** | 由 provider 实现写死，**不暴露给用户**。codec 是工程权衡（CPU/带宽/server 兼容性），用户没足够信息做决定。M2 DoubaoProvider 硬编码 raw PCM；未来若 benchmark 出 opus 显著更优则改 impl，不动配置 |
-| **ASR 错误处理** | `AsrError` thiserror enum（`Auth / Network / Quota / Protocol / Timeout / Server / Canceled`），M3+ overlay match enum 分发 toast 样式。**M2 不自动重试**，用户操作可见可重复。Stopping 等 final 超时 5s 后跳过 dispatch + 提示。`Canceled` 静默处理 |
+| **ASR 错误处理** | `AsrError` thiserror enum（`Auth / Network / Quota / Protocol / Timeout / Server / Canceled`），M7 起所有错误统一走 `SetText{Error}`（red 文本 + 5s 自动 hide 或 ESC 提前关），不再按 enum 分发不同 UI 样式。**M2 不自动重试**，用户操作可见可重复。Stopping 等 final 超时 5s 后跳过 dispatch + error 反馈。`Canceled` 静默处理 |
 | **Dispatch 触发条件** | 剪贴板 + Cmd+V 只在 `Final`/最后 `Segment` 拼完之后执行。没收到末段就不上屏（部分识别上屏视作 bug）|
 | **取消令牌** | `tokio_util::sync::CancellationToken`，Recording 根 token + `.child_token()` 派生子树。Stop 时调一次 root.cancel() 全员收。Go 版 `context.WithCancel` 的 Rust 等价物，DESIGN §2.3 不变量 |
 | **音频留存** | `voice.record_audio = false` 默认。开启时落 `~/.local/state/shuohua/audio/<recording_id>.wav`（跟 history.jsonl 同 state dir），文件名 = recording ULID。一次 recording = 一个 wav，多 session 边界从 history.jsonl 时间戳切。不用 `/tmp`/`~/.cache`（语义错位）|
@@ -135,11 +135,11 @@
 | **M1** | 骨架穿透 | CGEventTap 收到 F9，cpal 录 3 秒 PCM 落 wav |
 | **M2** | ASR trait + Doubao + 剪贴板 + 上屏（无 VAD） | F9 → DoubaoProvider → 剪贴板 → Cmd+V 完整链路；中英混合 + 热词加载 |
 | **M2.5** | 客户端 VAD + 多段 session + RuleBased 去口语词 | 思考几分钟不计费；段间空格拼接；嗯/啊正则去除 |
-| **M3** | StateStore + history.jsonl + Overlay 同进程渲染（**两排布局 + 动画 + Toast**） | 录音 → history 一行 jsonl，含 ASR sessions + pipeline；overlay 状态点+文字+时长+字数+app+chain 全部正确切换；Liquid Glass toast 可弹 |
+| **M3** | StateStore + history.jsonl + Overlay 同进程渲染（**两排布局 + 动画**） | 录音 → history 一行 jsonl，含 ASR sessions + pipeline；overlay 状态点+文字+时长+字数+app+chain 全部正确切换（注：M3 当时上线的是 Liquid Glass toast，M7 重构为 Notice/Error 双通道）|
 | **M4** | UDS server + `shuo` 智能 fallback 进 TUI 客户端 | 裸跑 `shuo` 连上 daemon 看实时 partial/pipeline_step、滚动历史；关掉 TUI 不影响 daemon |
 | **M5** | Doctor + launchd 自启 + 配置热重载收口 | `shuo install` 写 plist + start，重启后自动起；`shuo doctor` 报权限/配置/ASR 连通；UDS `reload_config` 复用 watcher 的 parse + broadcast 路径；profile 里的 ASR/post 组合在下一次录音开始时按最新配置读取 |
 | **M6** | Suppress 真实生效 + 完整 hotkey 语法（modifier 组合 / 单按 / 双击）+ proptest 覆盖 tracker | F16 / cmd+`;` / right_shift / right_shift:double 等全验过；前台 App 不漏 trigger；非 trigger 键不误吞 |
-| **M7** | LLM 后处理（Claude Haiku / GPT-4o-mini）+ App context + per-app 配置文件 | 按当前 App 自动选链路（找不到 fall back default）；失败/超时跳过 + toast 提示；history 记 chain trace |
+| **M7** | LLM 后处理（Claude Haiku / GPT-4o-mini）+ App context + per-app 配置文件 + overlay 反馈通道重构 | 按当前 App 自动选链路（找不到 fall back default）；失败/超时跳过 + notice/error 反馈；history 记 chain trace；麦克风可用性走运行时首帧非零样本 watchdog；error 路径不上屏不写剪贴板 |
 | **M8** | WhisperCppProvider（whisper-rs，本地离线） | 验证 trait 接口正确；不动 trait |
 | **M9** | AppleSpeechProvider（macOS 26 SpeechAnalyzer） | 评估中文质量；决定是否作为默认替代 |
 

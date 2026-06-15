@@ -140,8 +140,9 @@
 | **M5** | Doctor + launchd 自启 + 配置热重载收口 | `shuo install` 写 plist + start，重启后自动起；`shuo doctor` 报权限/配置/ASR 连通；UDS `reload_config` 复用 watcher 的 parse + broadcast 路径；profile 里的 ASR/post 组合在下一次录音开始时按最新配置读取 |
 | **M6** | Suppress 真实生效 + 完整 hotkey 语法（modifier 组合 / 单按 / 双击）+ proptest 覆盖 tracker | F16 / cmd+`;` / right_shift / right_shift:double 等全验过；前台 App 不漏 trigger；非 trigger 键不误吞 |
 | **M7** | LLM 后处理（Claude Haiku / GPT-4o-mini）+ App context + per-app 配置文件 + overlay 反馈通道重构 | 按当前 App 自动选链路（找不到 fall back default）；失败/超时跳过 + notice/error 反馈；history 记 chain trace；麦克风可用性走运行时首帧非零样本 watchdog；error 路径不上屏不写剪贴板 |
-| **M8** | WhisperCppProvider（whisper-rs，本地离线） | 验证 trait 接口正确；不动 trait |
-| **M9** | AppleSpeechProvider（macOS 26 SpeechAnalyzer） | 评估中文质量；决定是否作为默认替代 |
+| ~~M8~~ | ~~WhisperCppProvider（whisper-rs，本地离线）~~ | **2026-06-15 revert**：实现完成后评估 Whisper 架构（batch + 30s 窗口）不适合实时 dictation，行业里 whisper 语音输入产品都是 batch-on-stop。设计历史档见 [docs/superpowers/specs/2026-06-15-m8-whisper-cpp-provider-design.md](docs/superpowers/specs/2026-06-15-m8-whisper-cpp-provider-design.md) |
+| **M8'** (new M8) | **AppleSpeechProvider（macOS 26 SpeechAnalyzer）** | 原 M9 提前。macOS 26 新 API，RNN-T 类原生流式，跑在 ANE，零额外内存。先做最小 POC 验证中文混英质量，过关接 trait 作为离线默认 driver |
+| M9（候选） | SenseVoice / Paraformer via ONNX（保留方案）| 仅在 Apple SpeechAnalyzer 中文质量不达标时启用。Alibaba 开源、专为中文训、ONNX 跑 onnxruntime-rs |
 
 ## 7. 文档维护
 

@@ -72,7 +72,7 @@ src/
 
 | M | 新增路径 | 主要新依赖 |
 |---|---|---|
-| **M8** | `asr/providers/whisper_cpp.rs` | whisper-rs (feature flag) |
-| **M9** | `asr/providers/apple_speech.rs` | objc2-speech |
+| **M8 (new)** | `asr/providers/apple_speech.rs` | objc2-speech (macOS 26 SpeechAnalyzer) |
+| ~~原 M8~~ | ~~`asr/providers/whisper_cpp.rs`~~ | reverted 2026-06-15；见 REQUIREMENTS §6 + spec 历史档 |
 
 每条路径的详细职责见 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)；关键设计决策见 [DESIGN.md §2](DESIGN.md#2-关键设计决策)。

@@ -364,7 +364,11 @@ fn build_provider(name: &str, overrides: &toml::value::Table) -> Result<Arc<dyn 
             asr::providers::doubao::DoubaoProvider::new_with_overrides(Some(overrides))
                 .context("init doubao provider")?,
         )),
-        other => anyhow::bail!("未知 ASR provider {other:?}。M5 仅支持 \"doubao\""),
+        "apple" => Ok(Arc::new(
+            asr::providers::apple::AppleProvider::new_with_overrides(Some(overrides))
+                .context("init apple provider")?,
+        )),
+        other => anyhow::bail!("未知 ASR provider {other:?}。支持 \"doubao\" / \"apple\""),
     }
 }
 

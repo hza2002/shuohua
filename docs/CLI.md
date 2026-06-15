@@ -2,7 +2,7 @@
 
 10 个面向用户的命令，扁平、无嵌套。`clap` derive 实现。
 
-> 配套文档：[REQUIREMENTS.md](../REQUIREMENTS.md) | [DESIGN.md](./DESIGN.md) | [SCHEMA.md](./SCHEMA.md)
+> 配套文档：[DESIGN.md](./DESIGN.md) | [SCHEMA.md](./SCHEMA.md) | [CHANGELOG.md](../CHANGELOG.md)
 
 ## 1. 命令列表
 

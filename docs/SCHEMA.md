@@ -2,7 +2,7 @@
 
 所有持久化/线协议数据格式集中在这里：UDS 协议 + history.jsonl。
 
-> 配套文档：[REQUIREMENTS.md](../REQUIREMENTS.md) | [DESIGN.md](./DESIGN.md) | [CLI.md](./CLI.md)
+> 配套文档：[DESIGN.md](./DESIGN.md) | [CLI.md](./CLI.md) | [CHANGELOG.md](../CHANGELOG.md)
 
 ## 1. UDS 协议
 

@@ -45,7 +45,7 @@ pub struct SessionCtx {
     pub language: LanguageMode,
     /// 当前 app profile 选择的 hotwords。
     /// provider 自由解释：Doubao 直接塞 `corpus.context.hotwords`、
-    /// Whisper 拼 `initial_prompt`、Apple SpeechAnalyzer 用 `contextualStrings`。
+    /// Apple SpeechAnalyzer 用 `contextualStrings`；其他 provider 可自由解释。
     pub hotwords: Vec<String>,
 }
 

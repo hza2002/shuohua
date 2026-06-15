@@ -1,7 +1,7 @@
 # 技术设计
 
 外观规范 + 关键设计决策 + 技术选型 + 目录结构 + 不变量 + 测试 + 安全。
-持久化/线协议格式见 [SCHEMA.md](./SCHEMA.md)，CLI 见 [CLI.md](./CLI.md)，高层需求见 [REQUIREMENTS.md](../REQUIREMENTS.md)。
+持久化/线协议格式见 [SCHEMA.md](./SCHEMA.md)，CLI 见 [CLI.md](./CLI.md)，阶段历史见 [CHANGELOG.md](../CHANGELOG.md)。
 
 ---
 
@@ -274,7 +274,7 @@ pub struct Caps {
 
 pub struct SessionCtx {
     pub language: LanguageMode,
-    pub hotwords: Vec<String>,        // 纯字符串数组；provider 自由解释（Doubao 直接塞、Whisper 拼 prompt 等）
+    pub hotwords: Vec<String>,        // 纯字符串数组；provider 自由解释（Doubao 直接塞、Apple 填 contextualStrings 等）
 }
 
 pub enum LanguageMode {
@@ -313,7 +313,7 @@ pub enum AsrError {
 
 **为什么删 `server_side_vad` cap**：原本用来告诉 voice "session 中间会不会冒 Segment"。改用单事件流后，voice 行为统一（来什么处理什么），不需要分支。Provider 实现保证 `is_last=true` 后至少出一个 Segment 即可。
 
-**为什么 hotwords 是 `Vec<String>` 而不是结构化 `{ word, boost }`**：路线图上的 provider 没有一家支持 per-word boost（Doubao 只接词列表、Whisper 拼 initial_prompt、Apple SpeechAnalyzer 用 contextualStrings）。统一结构是为假想未来设计、YAGNI。真接入 Deepgram 那天它在自己 `asr/deepgram.toml` 里写 `[[keyword]] word=... intensifier=...`，跟主 hotwords 列表互不影响。
+**为什么 hotwords 是 `Vec<String>` 而不是结构化 `{ word, boost }`**：现有 provider 没有一家支持 per-word boost（Doubao 接词列表、Apple SpeechAnalyzer 用 contextualStrings）。统一结构是为假想未来设计、YAGNI。真接入支持 boost 的 provider 时，它在自己的 `asr/<provider>.toml` 里定义私有字段，跟主 hotwords 列表互不影响。
 
 **错误处理策略**：
 - **M2 不自动重试**。用户操作可见可重复（再按一次 F16），自动重试反而隐藏失败、增加调试难度
@@ -325,12 +325,9 @@ pub enum AsrError {
 
 | Provider | Partial | Segment | 备注 |
 |---|---|---|---|
-| Doubao SAUC | `definite=false` → `AsrEvent::Partial` | `definite=true` → `AsrEvent::Segment` | M2 首发；codec 写死 raw PCM |
-| GPT-4o-Transcribe Realtime | `.delta` 事件 | `.completed` 事件 | 中英混合最佳候选 |
-| Apple SpeechAnalyzer (macOS 26) | `isFinal=false` 委托 | `isFinal=true` 委托 | objc2 适配；M9 评估中文 |
-| whisper.cpp 流式包装 | 每 ~300ms 局部重跑 | 客户端 VAD 切段 | M8 离线方案 |
-| Deepgram / AssemblyAI | `is_final=false` | `is_final=true` | 未来 |
-| ~~OpenAI Whisper API (batch)~~ | 无 | 无 | **不入选** |
+| Apple SpeechAnalyzer (macOS 26) | `isFinal=false` → `AsrEvent::Partial` | `isFinal=true` → `AsrEvent::Segment` | 本地优先；Swift helper 桥接 Swift-only API；provider 内部把 canonical i16 PCM 转 AVAudioPCMBuffer |
+| Doubao SAUC | `definite=false` → `AsrEvent::Partial` | `definite=true` → `AsrEvent::Segment` | 可用云端 provider；codec 写死 raw PCM |
+| 纯 batch ASR API | 无 | 无 | **不入选** |
 
 #### 配置文件布局
 
@@ -347,8 +344,7 @@ pub enum AsrError {
 │       └── deepseek.toml    # 后处理组件定义：LLM provider/model/prompt 默认值
 └── asr/
     ├── doubao.toml          # ← 文件名 == provider 名
-    ├── whisper_cpp.toml     # 未来 M8
-    └── apple_speech.toml    # 未来 M9
+    └── apple.toml           # 可省略；无 secret，缺省值可直接工作
 ```
 
 `config.toml` 只保留全局行为开关；apps/post 目录固定走 XDG 路径：
@@ -371,7 +367,7 @@ timeout_ms = 2000
 name = "Default"
 
 [asr]
-provider = "doubao"                         # → 加载 asr/doubao.toml
+provider = "apple"                          # → 加载 asr/apple.toml
 hotwords = ["Rust", "tokio", "Kubernetes"]   # provider 自由解释；不支持的 provider 静默忽略
 
 [post]
@@ -392,14 +388,14 @@ stream_mode = 2               # 可选实验字段；不确定时注释掉
 ai_vad      = true            # 可选实验字段；不确定时注释掉
 ```
 
-`asr/whisper_cpp.toml`（未来 M8）：
+`asr/apple.toml`（provider 私有；文件可省略）：
 
 ```toml
-model_path     = "/path/to/ggml-large-v3-q5_0.bin"
-language       = "zh"
-threads        = 4
-initial_prompt = "以下文本包含 Rust、tokio、Kubernetes 等技术术语"   # provider 自家可选字段
+language       = "zh-CN"  # 可省略；省略时从 SessionCtx 选 zh-CN 优先
+install_assets = true     # 首次使用时允许系统下载/安装本地 SpeechAnalyzer 资产
 ```
+
+AppleProvider 保持 `AsrSession::send_pcm(&[i16])` 的 canonical 输入不变。SpeechAnalyzer 在 macOS 26 上通常返回 `16kHz mono int16` 或 `float32` 兼容格式；具体 `AVAudioPCMBuffer` 适配发生在 provider 的 Swift helper 内部，Recorder 不感知 provider 私有音频格式。
 
 provider 之间**完全不共享 schema**。每个 provider impl 自己 deserialize 自家文件。hotwords 由 app profile 选择后塞进 `SessionCtx`。
 
@@ -872,7 +868,7 @@ shuohua 是 launchd 后台 daemon。release binary 跑起来时 stderr 会被 la
 | State 序列化 | `serde_json` | UDS 协议 + history JSONL |
 | 时间戳 | `time` | history/log 用 RFC3339；比 chrono 轻 |
 | UDS | `tokio::net::UnixListener` / `UnixStream` | 标准库即可，无额外 crate |
-| 本地 Whisper（M8） | `whisper-rs`（whisper.cpp 绑定，feature flag 控制） | 离线 ASR 备选 |
+| Apple SpeechAnalyzer（M8） | Swift helper + `build.rs` 编译嵌入 | macOS 26 本地流式识别；隐私优先默认候选 |
 | LLM 后处理（M7） | `reqwest` + 手写 client | 简单 OpenAI 兼容 schema，不引 sdk |
 | launchd plist 生成 | 模板字符串即可，不引依赖 | 简单 |
 
@@ -884,7 +880,7 @@ shuohua 是 launchd 后台 daemon。release binary 跑起来时 stderr 会被 la
 shuohua/
 ├── Cargo.toml
 ├── README.md
-├── REQUIREMENTS.md
+├── CHANGELOG.md
 ├── docs/
 │   ├── DESIGN.md
 │   ├── SCHEMA.md
@@ -909,9 +905,9 @@ shuohua/
 │   │   ├── mod.rs              # AsrProvider / AsrSession trait
 │   │   ├── types.rs            # Caps / SessionCtx / LanguageMode / AsrEvent / Boost
 │   │   └── providers/
-│   │       ├── doubao.rs       # M2 默认
-│   │       ├── whisper_cpp.rs  # M8 离线
-│   │       └── apple_speech.rs # M9 评估
+│   │       ├── apple.rs              # Apple SpeechAnalyzer provider
+│   │       ├── apple_helper.swift    # Swift-only SpeechAnalyzer bridge；build.rs 编译嵌入
+│   │       └── doubao.rs             # Doubao SAUC provider
 │   ├── post/
 │   │   ├── mod.rs              # PostProcessor trait + PipelineText + run_chain（M2.5）
 │   │   ├── filler.rs           # RuleBasedFiller（M2.5）

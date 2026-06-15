@@ -117,9 +117,33 @@ fn check_asr_provider() {
                 );
             }
         },
+        "apple" => {
+            match crate::asr::providers::apple::AppleProvider::new_with_overrides(Some(
+                &profile.asr.overrides,
+            )) {
+                Ok(provider) => {
+                    let caps = provider.caps();
+                    println!(
+                        "asr.apple: OK config readable (profile={:?}, hotwords={}, overrides={}, multilingual={})",
+                        profile.name,
+                        caps.hotwords,
+                        profile.asr.overrides.len(),
+                        caps.multilingual
+                    );
+                    println!("asr.apple: SpeechAnalyzer runtime check not run; no PCM sent");
+                }
+                Err(e) => {
+                    println!("asr.apple: ERROR {e:#}");
+                    println!(
+                        "hint: edit {}",
+                        crate::asr::providers::apple::config_path().display()
+                    );
+                }
+            }
+        }
         other => {
             println!("asr: ERROR unsupported provider {other:?}");
-            println!("hint: M7 supports app profile [asr] provider = \"doubao\"");
+            println!("hint: use app profile [asr] provider = \"doubao\" or \"apple\"");
         }
     }
 }

@@ -43,7 +43,6 @@ pub struct App {
     pub app: Option<String>,
     pub app_name: Option<String>,
     pub dur_ms: u64,
-    pub chars: u32,
     pub words: u32,
     pub segments: Vec<String>,
     pub partial: String,
@@ -70,7 +69,6 @@ impl App {
             app: None,
             app_name: None,
             dur_ms: 0,
-            chars: 0,
             words: 0,
             segments: Vec::new(),
             partial: String::new(),
@@ -96,8 +94,8 @@ impl App {
                 [
                     record.id.as_str(),
                     record.app.as_deref().unwrap_or_default(),
-                    record.asr.raw.as_str(),
-                    record.final_text(),
+                    record.asr.text.as_str(),
+                    &record.text,
                 ]
                 .join("\n")
                 .to_lowercase()
@@ -127,7 +125,6 @@ impl App {
                 app,
                 app_name,
                 dur_ms,
-                chars,
                 words,
                 segments,
                 partial,
@@ -139,7 +136,6 @@ impl App {
                 self.app = app;
                 self.app_name = app_name;
                 self.dur_ms = dur_ms;
-                self.chars = chars;
                 self.words = words;
                 self.segments = segments;
                 self.partial = partial;
@@ -160,7 +156,6 @@ impl App {
                     self.app = None;
                     self.app_name = None;
                     self.dur_ms = 0;
-                    self.chars = 0;
                     self.words = 0;
                 }
             }
@@ -168,13 +163,8 @@ impl App {
                 self.app = app;
                 self.app_name = app_name;
             }
-            Event::StatsChanged {
-                dur_ms,
-                chars,
-                words,
-            } => {
+            Event::StatsChanged { dur_ms, words } => {
                 self.dur_ms = dur_ms;
-                self.chars = chars;
                 self.words = words;
             }
             Event::Partial { text, .. } => self.partial = text,
@@ -326,7 +316,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 let text = app
                     .filtered_history()
                     .get(app.selected_history)
-                    .map(|record| record.final_text().to_string());
+                    .map(|record| record.text.clone());
                 if let Some(text) = text {
                     crate::clipboard_darwin::write_string(&text)?;
                     app.status = "copied selected history text".to_string();

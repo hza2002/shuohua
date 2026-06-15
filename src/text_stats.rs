@@ -3,13 +3,11 @@ use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextStats {
-    pub chars: usize,
     pub words: usize,
 }
 
 pub fn compute(text: &str) -> TextStats {
     TextStats {
-        chars: text.chars().count(),
         words: count_words(text),
     }
 }
@@ -41,9 +39,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_whitespace_for_words_but_not_chars() {
-        let stats = compute("Hi  Rust");
-        assert_eq!(stats.chars, 8);
-        assert_eq!(stats.words, 2);
+    fn ignores_whitespace_for_words() {
+        assert_eq!(compute("Hi  Rust").words, 2);
     }
 }

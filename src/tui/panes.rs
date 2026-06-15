@@ -85,7 +85,6 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             "tui.current_line",
             app = app_label,
             elapsed = format_duration(elapsed_ms),
-            chars = app.chars,
             words = app.words,
             history = app.history.len(),
         )),
@@ -153,7 +152,6 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 shown = summary.shown,
                 total = summary.total,
                 duration = format_duration(summary.total_duration_ms),
-                chars = summary.total_chars,
                 words = summary.total_words,
                 avg = format_duration(summary.avg_duration_ms),
             )),
@@ -182,7 +180,7 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 record.started_at,
                 app_name,
                 record.duration_ms,
-                record.final_text().replace('\n', " ")
+                record.text.replace('\n', " ")
             ))
         })
         .collect();
@@ -197,7 +195,7 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
     let selected = records
         .get(app.selected_history)
-        .map(|record| record.final_text().to_string())
+        .map(|record| record.text.clone())
         .unwrap_or_else(|| crate::t!("tui.no_history_selected"));
     frame.render_widget(
         Paragraph::new(selected).wrap(Wrap { trim: false }).block(
@@ -214,7 +212,6 @@ struct HistorySummary {
     shown: usize,
     total_duration_ms: u64,
     avg_duration_ms: u64,
-    total_chars: usize,
     total_words: usize,
 }
 
@@ -226,11 +223,6 @@ impl HistorySummary {
             .iter()
             .map(|record| record.duration_ms)
             .sum::<u64>();
-        let total_chars = app
-            .history
-            .iter()
-            .map(|record| record.text_stats().chars)
-            .sum::<usize>();
         let total_words = app
             .history
             .iter()
@@ -246,7 +238,6 @@ impl HistorySummary {
             shown: filtered.len(),
             total_duration_ms,
             avg_duration_ms,
-            total_chars,
             total_words,
         }
     }

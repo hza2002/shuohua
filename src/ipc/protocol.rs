@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::history::HistoryRecord;
 
-pub const PROTO_VERSION: u8 = 1;
+pub const PROTO_VERSION: u8 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,7 +47,6 @@ pub enum Event {
         app: Option<String>,
         app_name: Option<String>,
         dur_ms: u64,
-        chars: u32,
         words: u32,
         segments: Vec<String>,
         partial: String,
@@ -64,7 +63,6 @@ pub enum Event {
     },
     StatsChanged {
         dur_ms: u64,
-        chars: u32,
         words: u32,
     },
     Partial {

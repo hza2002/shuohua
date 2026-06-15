@@ -236,18 +236,6 @@ pub async fn run_recording(
                     Some(AsrEvent::Partial { text, seq }) => {
                         crate::debug_println!("[shuo]   partial#{seq}: {text}");
                         params.state.partial(recording_id.clone(), text.clone());
-                        overlay_send(
-                            &params,
-                            OverlayCmd::SetStats {
-                                dur_ms: recording_started_instant.elapsed().as_millis() as u64,
-                                chars: text.chars().count() as u32,
-                            },
-                        );
-                        let chars = pending_segments
-                            .iter()
-                            .map(|segment| segment.text.chars().count() as u32)
-                            .sum::<u32>()
-                            + text.chars().count() as u32;
                         let live_text = format!(
                             "{}{}",
                             pending_segments
@@ -257,11 +245,9 @@ pub async fn run_recording(
                             text
                         );
                         let words = crate::text_stats::compute(&live_text).words as u32;
-                        params.state.stats(
-                            recording_started_instant.elapsed().as_millis() as u64,
-                            chars,
-                            words,
-                        );
+                        let dur_ms = recording_started_instant.elapsed().as_millis() as u64;
+                        params.state.stats(dur_ms, words);
+                        overlay_send(&params, OverlayCmd::SetStats { dur_ms, words });
                         overlay_send(
                             &params,
                             OverlayCmd::SetText { text, kind: TextKind::Partial },
@@ -280,16 +266,18 @@ pub async fn run_recording(
                         rec.stop();
                         let _ = session.close().await;
                         let ended_at = time::OffsetDateTime::now_utc();
+                        let asr_text: String = pending_segments
+                            .iter()
+                            .map(|s| s.text.as_str())
+                            .collect();
                         if let Some(record) = append_history(HistoryInput {
                             id: recording_id,
                             provider: provider.name().to_string(),
                             started_at: recording_started_at,
                             ended_at,
                             started_instant: recording_started_instant,
-                            raw_text: pending_segments
-                                .iter()
-                                .map(|s| s.text.as_str())
-                                .collect::<String>(),
+                            asr_text: asr_text.clone(),
+                            final_text: asr_text,
                             segments: pending_segments,
                             pipeline: Vec::new(),
                             audio_ms: samples_to_ms(audio_samples_sent),
@@ -372,7 +360,8 @@ pub async fn run_recording(
             started_at: recording_started_at,
             ended_at: time::OffsetDateTime::now_utc(),
             started_instant: recording_started_instant,
-            raw_text,
+            asr_text: raw_text.clone(),
+            final_text: raw_text,
             segments: pending_segments,
             pipeline: Vec::new(),
             audio_ms: samples_to_ms(audio_samples_sent),
@@ -387,12 +376,19 @@ pub async fn run_recording(
     // terminal_error 路径：录音 / ASR 中途崩溃 → 不跑 post chain、不写剪贴板。
     // 理由（M7 决策）：半成品上屏会误导（用户以为成功），auto_paste 还可能粘到
     // 已经切走的应用；history.jsonl 保留所有 segments，需要的用户从 TUI 回捞。
-    let (pipeline, status, error) = if terminal_error.is_some() {
-        (Vec::new(), HistoryStatus::Error, None)
+    let (final_text, pipeline, status, error) = if terminal_error.is_some() {
+        (raw_text.clone(), Vec::new(), HistoryStatus::Error, None)
     } else {
         dispatch_with_post_chain(&pending_segments, params.auto_paste, &app_context, &params)
             .await
-            .unwrap_or_else(|err| (Vec::new(), HistoryStatus::Error, Some(err)))
+            .unwrap_or_else(|err| {
+                (
+                    raw_text.clone(),
+                    Vec::new(),
+                    HistoryStatus::Error,
+                    Some(err),
+                )
+            })
     };
     for step in &pipeline {
         params
@@ -431,7 +427,8 @@ pub async fn run_recording(
         started_at: recording_started_at,
         ended_at,
         started_instant: recording_started_instant,
-        raw_text,
+        asr_text: raw_text,
+        final_text,
         segments: pending_segments,
         pipeline,
         audio_ms: samples_to_ms(audio_samples_sent),
@@ -585,6 +582,7 @@ async fn dispatch_with_post_chain(
     params: &SessionParams,
 ) -> Result<
     (
+        String,
         Vec<PipelineStepHistory>,
         HistoryStatus,
         Option<HistoryError>,
@@ -595,7 +593,7 @@ async fn dispatch_with_post_chain(
     let raw_text: String = segment_texts.concat();
     if raw_text.is_empty() {
         crate::debug_println!("[shuo] (空识别结果，跳过 dispatch)");
-        return Ok((Vec::new(), HistoryStatus::Canceled, None));
+        return Ok((String::new(), Vec::new(), HistoryStatus::Canceled, None));
     }
     let initial = PipelineText::new(raw_text, segment_texts);
     overlay_send(
@@ -632,10 +630,12 @@ async fn dispatch_with_post_chain(
         }
     }
     crate::debug_println!("[shuo] ✓ 最终: {}", out.text);
+    let dispatched = out.text.clone();
     let pipeline = steps.into_iter().map(PipelineStepHistory::from).collect();
     if let Err(e) = dispatch::dispatch(&out.text, auto_paste) {
         eprintln!("[shuo] ❌ 剪贴板写入失败: {e:#}");
         return Ok((
+            dispatched,
             pipeline,
             HistoryStatus::Error,
             Some(HistoryError {
@@ -644,7 +644,7 @@ async fn dispatch_with_post_chain(
             }),
         ));
     }
-    Ok((pipeline, HistoryStatus::Submitted, None))
+    Ok((dispatched, pipeline, HistoryStatus::Submitted, None))
 }
 
 fn prepare_audio_path(recording_id: &str) -> anyhow::Result<PathBuf> {
@@ -676,7 +676,8 @@ struct HistoryInput {
     started_at: time::OffsetDateTime,
     ended_at: time::OffsetDateTime,
     started_instant: Instant,
-    raw_text: String,
+    asr_text: String,
+    final_text: String,
     segments: Vec<SegmentCapture>,
     pipeline: Vec<PipelineStepHistory>,
     audio_ms: u64,
@@ -685,49 +686,54 @@ struct HistoryInput {
     error: Option<HistoryError>,
 }
 
-fn append_history(input: HistoryInput) -> Option<HistoryRecord> {
-    let final_text = input
-        .pipeline
-        .iter()
-        .rev()
-        .find_map(|step| step.text.as_deref())
-        .unwrap_or(&input.raw_text);
-    let record = HistoryRecord {
-        version: 1,
+fn build_record(input: HistoryInput) -> HistoryRecord {
+    let session_started_at = input
+        .segments
+        .first()
+        .map(|s| instant_to_datetime(input.started_at, input.started_instant, s.started_at))
+        .unwrap_or(input.started_at);
+    let session_ended_at = input
+        .segments
+        .last()
+        .map(|s| instant_to_datetime(input.started_at, input.started_instant, s.ended_at))
+        .unwrap_or(input.ended_at);
+
+    let sessions = if input.segments.is_empty() && input.asr_text.is_empty() {
+        Vec::new()
+    } else {
+        vec![AsrSessionHistory {
+            text: input.asr_text.clone(),
+            started_at: session_started_at,
+            ended_at: session_ended_at,
+            audio_ms: input.audio_ms,
+        }]
+    };
+
+    HistoryRecord {
+        version: 2,
         id: input.id,
         started_at: input.started_at,
         ended_at: input.ended_at,
         duration_ms: (input.ended_at - input.started_at)
             .whole_milliseconds()
             .max(0) as u64,
-        text_stats: Some(crate::text_stats::compute(final_text)),
         status: input.status,
         app: input.app,
+        text: input.final_text.clone(),
+        text_stats: crate::text_stats::compute(&input.final_text),
         asr: AsrHistory {
             provider: input.provider,
-            raw: input.raw_text,
+            text: input.asr_text,
             audio_ms: input.audio_ms,
-            sessions: input
-                .segments
-                .into_iter()
-                .map(|s| AsrSessionHistory {
-                    text: s.text,
-                    started_at: instant_to_datetime(
-                        input.started_at,
-                        input.started_instant,
-                        s.started_at,
-                    ),
-                    ended_at: instant_to_datetime(
-                        input.started_at,
-                        input.started_instant,
-                        s.ended_at,
-                    ),
-                })
-                .collect(),
+            sessions,
         },
         pipeline: input.pipeline,
         error: input.error,
-    };
+    }
+}
+
+fn append_history(input: HistoryInput) -> Option<HistoryRecord> {
+    let record = build_record(input);
     if let Err(e) = history::append_default(&record) {
         eprintln!("[shuo] ❌ history append failed: {e:#}");
         return None;
@@ -767,7 +773,89 @@ impl From<post::PipelineStep> for PipelineStepHistory {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
+    use time::OffsetDateTime;
+
     use super::*;
+
+    #[test]
+    fn single_session_collapses_multiple_segments_into_one_entry() {
+        let recording_start = OffsetDateTime::from_unix_timestamp(1_750_000_000).unwrap();
+        let base = Instant::now();
+        let segments = vec![
+            SegmentCapture {
+                text: "alpha ".to_string(),
+                started_at: base,
+                ended_at: base + std::time::Duration::from_millis(500),
+            },
+            SegmentCapture {
+                text: "beta ".to_string(),
+                started_at: base + std::time::Duration::from_millis(600),
+                ended_at: base + std::time::Duration::from_millis(1_000),
+            },
+            SegmentCapture {
+                text: "gamma".to_string(),
+                started_at: base + std::time::Duration::from_millis(1_100),
+                ended_at: base + std::time::Duration::from_millis(1_500),
+            },
+        ];
+        let input = HistoryInput {
+            id: "01HXYZABCDEF0123456789ABCD".to_string(),
+            provider: "fake".to_string(),
+            started_at: recording_start,
+            ended_at: recording_start + time::Duration::milliseconds(2_000),
+            started_instant: base,
+            asr_text: "alpha beta gamma".to_string(),
+            final_text: "alpha beta gamma.".to_string(),
+            segments,
+            pipeline: Vec::new(),
+            audio_ms: 1_500,
+            app: None,
+            status: HistoryStatus::Submitted,
+            error: None,
+        };
+        let record = build_record(input);
+        assert_eq!(record.version, 2);
+        assert_eq!(record.text, "alpha beta gamma.");
+        assert_eq!(record.asr.text, "alpha beta gamma");
+        assert_eq!(record.asr.audio_ms, 1_500);
+        assert_eq!(
+            record.asr.sessions.len(),
+            1,
+            "all segments collapse into a single session entry in current phase"
+        );
+        let session = &record.asr.sessions[0];
+        assert_eq!(session.text, "alpha beta gamma");
+        assert_eq!(session.audio_ms, 1_500);
+        assert!(session.started_at < session.ended_at);
+        assert!(session.started_at >= record.started_at);
+        assert!(session.ended_at <= record.ended_at);
+    }
+
+    #[test]
+    fn empty_segments_and_empty_asr_text_produce_no_sessions() {
+        let recording_start = OffsetDateTime::from_unix_timestamp(1_750_000_000).unwrap();
+        let base = Instant::now();
+        let input = HistoryInput {
+            id: "01HXYZABCDEF0123456789ABCD".to_string(),
+            provider: "fake".to_string(),
+            started_at: recording_start,
+            ended_at: recording_start + time::Duration::milliseconds(500),
+            started_instant: base,
+            asr_text: String::new(),
+            final_text: String::new(),
+            segments: Vec::new(),
+            pipeline: Vec::new(),
+            audio_ms: 0,
+            app: None,
+            status: HistoryStatus::Canceled,
+            error: None,
+        };
+        let record = build_record(input);
+        assert!(record.asr.sessions.is_empty());
+        assert_eq!(record.asr.text, "");
+    }
 
     #[test]
     fn all_zero_frame_is_silence() {

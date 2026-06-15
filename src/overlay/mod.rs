@@ -20,7 +20,7 @@ pub enum OverlayCmd {
     },
     SetStats {
         dur_ms: u64,
-        chars: u32,
+        words: u32,
     },
     SetApp {
         bundle_id: Option<String>,
@@ -126,7 +126,7 @@ pub struct OverlayModel {
     pub state_label: String,
     pub state_color: u32,
     pub dur_ms: u64,
-    pub chars: u32,
+    pub words: u32,
     pub bundle_id: Option<String>,
     pub app_name: Option<String>,
     pub chain_summary: String,
@@ -147,7 +147,7 @@ impl Default for OverlayModel {
             state_label: crate::t!("overlay.state_idle"),
             state_color: OverlayState::Idle.color_rgb(),
             dur_ms: 0,
-            chars: 0,
+            words: 0,
             bundle_id: None,
             app_name: None,
             chain_summary: String::new(),
@@ -173,9 +173,9 @@ impl OverlayModel {
                 self.state_color = state.color_rgb();
                 self.visible = !matches!(state, OverlayState::Idle);
             }
-            OverlayCmd::SetStats { dur_ms, chars } => {
+            OverlayCmd::SetStats { dur_ms, words } => {
                 self.dur_ms = dur_ms;
-                self.chars = chars;
+                self.words = words;
             }
             OverlayCmd::SetApp {
                 bundle_id,
@@ -222,7 +222,7 @@ impl OverlayModel {
 
     fn clear_session(&mut self) {
         self.dur_ms = 0;
-        self.chars = 0;
+        self.words = 0;
         self.segments.clear();
         self.partial.clear();
         self.final_text.clear();
@@ -261,7 +261,7 @@ mod tests {
         });
         model.apply(OverlayCmd::SetStats {
             dur_ms: 3200,
-            chars: 84,
+            words: 14,
         });
         model.apply(OverlayCmd::AppendSegment {
             text: "今天".to_string(),
@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(model.state, OverlayState::Recording);
         assert_eq!(model.state_label, "Recording");
         assert_eq!(model.dur_ms, 3200);
-        assert_eq!(model.chars, 84);
+        assert_eq!(model.words, 14);
         assert_eq!(model.segments, vec!["今天"]);
         assert_eq!(model.partial, "今天天气");
         assert_eq!(model.notice.as_ref().unwrap().text, "filler skipped");

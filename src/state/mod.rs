@@ -22,7 +22,6 @@ pub struct StateSnapshot {
     pub app_bundle_id: Option<String>,
     pub app_name: Option<String>,
     pub dur_ms: u64,
-    pub chars: u32,
     pub words: u32,
     pub segments: Vec<String>,
     pub partial: String,
@@ -37,7 +36,6 @@ impl Default for StateSnapshot {
             app_bundle_id: None,
             app_name: None,
             dur_ms: 0,
-            chars: 0,
             words: 0,
             segments: Vec::new(),
             partial: String::new(),
@@ -58,7 +56,6 @@ pub enum StateEvent {
     },
     StatsChanged {
         dur_ms: u64,
-        chars: u32,
         words: u32,
     },
     Partial {
@@ -144,18 +141,13 @@ impl StateStore {
         });
     }
 
-    pub fn stats(&self, dur_ms: u64, chars: u32, words: u32) {
+    pub fn stats(&self, dur_ms: u64, words: u32) {
         {
             let mut snapshot = self.snapshot.write().expect("state snapshot lock poisoned");
             snapshot.dur_ms = dur_ms;
-            snapshot.chars = chars;
             snapshot.words = words;
         }
-        let _ = self.tx.send(StateEvent::StatsChanged {
-            dur_ms,
-            chars,
-            words,
-        });
+        let _ = self.tx.send(StateEvent::StatsChanged { dur_ms, words });
     }
 
     pub fn partial(&self, recording_id: String, text: String) {
@@ -171,11 +163,6 @@ impl StateStore {
             let mut snapshot = self.snapshot.write().expect("state snapshot lock poisoned");
             snapshot.segments.push(text.clone());
             snapshot.partial.clear();
-            snapshot.chars = snapshot
-                .segments
-                .iter()
-                .map(|segment| segment.chars().count() as u32)
-                .sum();
             snapshot.words = crate::text_stats::compute(&snapshot.segments.join("")).words as u32;
         }
         let _ = self.tx.send(StateEvent::Segment { recording_id, text });
@@ -210,7 +197,6 @@ impl StateStore {
                 snapshot.app_bundle_id = None;
                 snapshot.app_name = None;
                 snapshot.dur_ms = 0;
-                snapshot.chars = 0;
                 snapshot.words = 0;
             }
         }
@@ -243,7 +229,7 @@ mod tests {
             Some("com.apple.dt.Xcode".to_string()),
             Some("Xcode".to_string()),
         );
-        store.stats(3000, 2, 1);
+        store.stats(3000, 1);
         store.segment("01HXYZ".to_string(), "he".to_string());
         store.partial("01HXYZ".to_string(), "hello".to_string());
 
@@ -277,13 +263,8 @@ mod tests {
             other => panic!("unexpected event: {other:?}"),
         }
         match rx.try_recv().unwrap() {
-            StateEvent::StatsChanged {
-                dur_ms,
-                chars,
-                words,
-            } => {
+            StateEvent::StatsChanged { dur_ms, words } => {
                 assert_eq!(dur_ms, 3000);
-                assert_eq!(chars, 2);
                 assert_eq!(words, 1);
             }
             other => panic!("unexpected event: {other:?}"),

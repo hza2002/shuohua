@@ -135,7 +135,7 @@ struct OverlayView {
     state_icon: Retained<NSImageView>,
     status: Retained<NSTextField>,
     duration: Retained<NSTextField>,
-    chars: Retained<NSTextField>,
+    words: Retained<NSTextField>,
     meta: Retained<NSTextField>,
     text: Retained<NSTextField>,
     recording_started: Option<Instant>,
@@ -172,8 +172,8 @@ impl OverlayView {
         duration.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(
             12.0, 0.0,
         )));
-        let chars = label(mtm, row.chars, 12.0, false, COLOR_SECONDARY_TEXT);
-        chars.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(
+        let words = label(mtm, row.words, 12.0, false, COLOR_SECONDARY_TEXT);
+        words.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(
             12.0, 0.0,
         )));
         let meta = label(mtm, row.meta, 12.0, false, COLOR_SECONDARY_TEXT);
@@ -195,7 +195,7 @@ impl OverlayView {
         container.addSubview(&state_icon);
         container.addSubview(&status);
         container.addSubview(&duration);
-        container.addSubview(&chars);
+        container.addSubview(&words);
         container.addSubview(&meta);
         container.addSubview(&text);
 
@@ -213,7 +213,7 @@ impl OverlayView {
             state_icon,
             status,
             duration,
-            chars,
+            words,
             meta,
             text,
             recording_started: None,
@@ -381,8 +381,8 @@ impl OverlayView {
         // 用 text_stats 算 words：CJK 按字、英文按词，跨语言一致。
         // 文案模板 {n} 字 / {n} words 由 i18n 选；底层数 = words。
         let words = crate::text_stats::compute(&full_text).words as u32;
-        let chars_text = crate::t!("overlay.word_count", n = words);
-        let header = header_parts(&label, &dur, &chars_text, app, &self.model.chain_summary);
+        let words_text = crate::t!("overlay.word_count", n = words);
+        let header = header_parts(&label, &dur, &words_text, app, &self.model.chain_summary);
         self.render_state_icon(state, color_rgb);
         if self.last_status_text != header.state {
             fade_view(&self.status, 0.16);
@@ -400,9 +400,9 @@ impl OverlayView {
                 .setTextColor(Some(&color_from_rgb_alpha(COLOR_SECONDARY_TEXT, 1.0)));
             self.last_duration_text = header.duration;
         }
-        self.chars
-            .setStringValue(&NSString::from_str(&header.chars));
-        self.chars
+        self.words
+            .setStringValue(&NSString::from_str(&header.words));
+        self.words
             .setTextColor(Some(&color_from_rgb_alpha(COLOR_SECONDARY_TEXT, 1.0)));
 
         // meta 行：notice 活跃时盖住 chain_summary，黄字。
@@ -491,7 +491,7 @@ impl OverlayView {
         self.state_icon.setFrame(row.icon);
         self.status.setFrame(row.status);
         self.duration.setFrame(row.duration);
-        self.chars.setFrame(row.chars);
+        self.words.setFrame(row.words);
         self.meta.setFrame(row.meta);
         self.text.setFrame(NSRect::new(
             NSPoint::new(18.0, 18.0),
@@ -622,7 +622,7 @@ struct FirstRow {
     icon: NSRect,
     status: NSRect,
     duration: NSRect,
-    chars: NSRect,
+    words: NSRect,
     meta: NSRect,
 }
 
@@ -634,7 +634,7 @@ fn first_row_frames(top_offset: f64) -> FirstRow {
         icon: NSRect::new(NSPoint::new(16.0, y), NSSize::new(FIRST_ROW_H, FIRST_ROW_H)),
         status: NSRect::new(NSPoint::new(48.0, y), NSSize::new(80.0, FIRST_ROW_H)),
         duration: NSRect::new(NSPoint::new(134.0, y), NSSize::new(56.0, FIRST_ROW_H)),
-        chars: NSRect::new(NSPoint::new(196.0, y), NSSize::new(56.0, FIRST_ROW_H)),
+        words: NSRect::new(NSPoint::new(196.0, y), NSSize::new(56.0, FIRST_ROW_H)),
         meta: NSRect::new(NSPoint::new(258.0, y), NSSize::new(266.0, FIRST_ROW_H)),
     }
 }
@@ -883,11 +883,11 @@ fn display_text_plan(text: &str, max_lines: usize, chars_per_line: usize) -> (St
 struct HeaderParts {
     state: String,
     duration: String,
-    chars: String,
+    words: String,
     meta: String,
 }
 
-fn header_parts(state: &str, duration: &str, chars: &str, app: &str, chain: &str) -> HeaderParts {
+fn header_parts(state: &str, duration: &str, words: &str, app: &str, chain: &str) -> HeaderParts {
     let meta = if chain.is_empty() {
         app.to_string()
     } else if app.is_empty() {
@@ -898,7 +898,7 @@ fn header_parts(state: &str, duration: &str, chars: &str, app: &str, chain: &str
     HeaderParts {
         state: state.to_string(),
         duration: duration.to_string(),
-        chars: chars.to_string(),
+        words: words.to_string(),
         meta,
     }
 }
@@ -993,7 +993,7 @@ mod tests {
         let parts = header_parts("Recording", "3s", "84 words", "Xcode", "filler");
         assert_eq!(parts.state, "Recording");
         assert_eq!(parts.duration, "3s");
-        assert_eq!(parts.chars, "84 words");
+        assert_eq!(parts.words, "84 words");
         assert_eq!(parts.meta, "Xcode  ·  filler");
     }
 

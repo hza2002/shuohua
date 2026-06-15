@@ -210,7 +210,6 @@ fn snapshot_event(snapshot: StateSnapshot) -> Event {
         app: snapshot.app_bundle_id,
         app_name: snapshot.app_name,
         dur_ms: snapshot.dur_ms,
-        chars: snapshot.chars,
         words: snapshot.words,
         segments: snapshot.segments,
         partial: snapshot.partial,
@@ -248,15 +247,7 @@ impl From<StateEvent> for Event {
                 app: bundle_id,
                 app_name,
             },
-            StateEvent::StatsChanged {
-                dur_ms,
-                chars,
-                words,
-            } => Event::StatsChanged {
-                dur_ms,
-                chars,
-                words,
-            },
+            StateEvent::StatsChanged { dur_ms, words } => Event::StatsChanged { dur_ms, words },
             StateEvent::Partial { recording_id, text } => Event::Partial { recording_id, text },
             StateEvent::Segment { recording_id, text } => Event::Segment { recording_id, text },
             StateEvent::PipelineStep { recording_id, step } => {
@@ -333,8 +324,8 @@ fn history_matches(record: &HistoryRecord, query: &str) -> bool {
     let haystack = [
         record.id.as_str(),
         record.app.as_deref().unwrap_or_default(),
-        record.asr.raw.as_str(),
-        record.final_text(),
+        record.asr.text.as_str(),
+        &record.text,
     ]
     .join("\n")
     .to_lowercase();

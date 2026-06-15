@@ -17,10 +17,10 @@ pub struct HistoryRecord {
     #[serde(with = "time::serde::rfc3339")]
     pub ended_at: OffsetDateTime,
     pub duration_ms: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text_stats: Option<TextStats>,
     pub status: HistoryStatus,
     pub app: Option<String>,
+    pub text: String,
+    pub text_stats: TextStats,
     pub asr: AsrHistory,
     pub pipeline: Vec<PipelineStepHistory>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -28,17 +28,8 @@ pub struct HistoryRecord {
 }
 
 impl HistoryRecord {
-    pub fn final_text(&self) -> &str {
-        self.pipeline
-            .iter()
-            .rev()
-            .find_map(|step| step.text.as_deref())
-            .unwrap_or(&self.asr.raw)
-    }
-
     pub fn text_stats(&self) -> TextStats {
         self.text_stats
-            .unwrap_or_else(|| crate::text_stats::compute(self.final_text()))
     }
 }
 
@@ -60,7 +51,7 @@ pub struct HistoryError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AsrHistory {
     pub provider: String,
-    pub raw: String,
+    pub text: String,
     pub audio_ms: u64,
     pub sessions: Vec<AsrSessionHistory>,
 }
@@ -72,6 +63,7 @@ pub struct AsrSessionHistory {
     pub started_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub ended_at: OffsetDateTime,
+    pub audio_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -134,29 +126,26 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn append_writes_one_json_line_with_rfc3339_timestamps() {
-        let dir = std::env::temp_dir().join(format!("shuohua-history-test-{}", ulid::Ulid::new()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("history.jsonl");
-
-        let record = HistoryRecord {
-            version: 1,
+    fn sample_record() -> HistoryRecord {
+        HistoryRecord {
+            version: 2,
             id: "01HXYZABCDEF0123456789ABCD".to_string(),
             started_at: datetime!(2026-06-13 12:00:00 UTC),
             ended_at: datetime!(2026-06-13 12:00:08 UTC),
             duration_ms: 8000,
-            text_stats: Some(crate::text_stats::compute("今天天气真好 我们出去走走")),
             status: HistoryStatus::Submitted,
             app: Some("com.apple.dt.Xcode".to_string()),
+            text: "今天天气真好，我们出去走走。".to_string(),
+            text_stats: crate::text_stats::compute("今天天气真好，我们出去走走。"),
             asr: AsrHistory {
                 provider: "doubao".to_string(),
-                raw: "今天天气真好 我们出去走走".to_string(),
+                text: "今天天气真好 我们出去走走".to_string(),
                 audio_ms: 5300,
                 sessions: vec![AsrSessionHistory {
-                    text: "今天天气真好".to_string(),
+                    text: "今天天气真好 我们出去走走".to_string(),
                     started_at: datetime!(2026-06-13 12:00:00 UTC),
-                    ended_at: datetime!(2026-06-13 12:00:03 UTC),
+                    ended_at: datetime!(2026-06-13 12:00:05 UTC),
+                    audio_ms: 5300,
                 }],
             },
             pipeline: vec![PipelineStepHistory {
@@ -167,52 +156,62 @@ mod tests {
                 error: None,
             }],
             error: None,
-        };
+        }
+    }
 
+    #[test]
+    fn append_writes_one_json_line_with_v2_schema() {
+        let dir = std::env::temp_dir().join(format!("shuohua-history-test-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.jsonl");
+
+        let record = sample_record();
         append_record(&path, &record).unwrap();
         let body = fs::read_to_string(&path).unwrap();
         assert_eq!(body.lines().count(), 1);
         assert!(body.ends_with('\n'));
 
         let json: serde_json::Value = serde_json::from_str(body.trim_end()).unwrap();
-        assert_eq!(json["version"], 1);
-        assert_eq!(json["started_at"], "2026-06-13T12:00:00Z");
-        assert_eq!(json["ended_at"], "2026-06-13T12:00:08Z");
-        assert_eq!(json["text_stats"]["chars"], 13);
-        assert_eq!(json["text_stats"]["words"], 12);
-        assert_eq!(json["status"], "submitted");
+        assert_eq!(json["version"], 2);
+        assert_eq!(json["text"], "今天天气真好，我们出去走走。");
+        assert!(json["text_stats"]["words"].as_u64().unwrap() > 0);
+        assert!(json["text_stats"].get("chars").is_none());
+        assert_eq!(json["asr"]["text"], "今天天气真好 我们出去走走");
+        assert!(json["asr"].get("raw").is_none());
+        assert_eq!(json["asr"]["audio_ms"], 5300);
+        assert_eq!(json["asr"]["sessions"][0]["audio_ms"], 5300);
         assert_eq!(
             json["asr"]["sessions"][0]["started_at"],
             "2026-06-13T12:00:00Z"
         );
-        assert_eq!(json["pipeline"][0]["status"], "ok");
+        assert!(
+            json.get("error").is_none(),
+            "error should be omitted when status=submitted"
+        );
 
         let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn missing_text_stats_are_derived_from_final_text() {
-        let json = r#"{
-            "version": 1,
-            "id": "01HXYZABCDEF0123456789ABCD",
-            "started_at": "2026-06-13T12:00:00Z",
-            "ended_at": "2026-06-13T12:00:08Z",
-            "duration_ms": 8000,
-            "status": "submitted",
-            "app": null,
-            "asr": {
-                "provider": "doubao",
-                "raw": "Hello，你好。",
-                "audio_ms": 5300,
-                "sessions": []
-            },
-            "pipeline": []
-        }"#;
+    fn error_field_serialized_when_status_not_submitted() {
+        let mut record = sample_record();
+        record.status = HistoryStatus::Error;
+        record.error = Some(HistoryError {
+            kind: "asr_timeout".to_string(),
+            msg: "no done within 5s".to_string(),
+        });
+        let s = serde_json::to_string(&record).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(json["error"]["kind"], "asr_timeout");
+    }
 
-        let record: HistoryRecord = serde_json::from_str(json).unwrap();
-
-        assert_eq!(record.text_stats, None);
-        assert_eq!(record.text_stats().chars, 9);
-        assert_eq!(record.text_stats().words, 5);
+    #[test]
+    fn record_round_trips_through_serde() {
+        let record = sample_record();
+        let s = serde_json::to_string(&record).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(json["version"], 2);
+        let back: HistoryRecord = serde_json::from_str(&s).unwrap();
+        assert_eq!(record, back);
     }
 }

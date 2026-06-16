@@ -27,6 +27,7 @@ use crate::state::history::{
     PipelineStepHistory, PipelineStepStatus as HistoryPipelineStepStatus,
 };
 use crate::state::StateStore;
+use crate::voice::meter::MeterCollector;
 use crate::voice::observer::{RecordingObserver, SessionPhase, TraceStart};
 use crate::voice::{dispatch, recorder, SessionControl};
 use std::path::PathBuf;
@@ -57,6 +58,17 @@ fn frame_has_signal(samples: &[i16]) -> bool {
     samples
         .iter()
         .any(|s| s.unsigned_abs() > MIN_NONZERO_AMPLITUDE as u16)
+}
+
+fn emit_meters(
+    state: &StateStore,
+    recording_id: &str,
+    collector: &mut MeterCollector,
+    samples: &[i16],
+) {
+    for meter in collector.accept(samples) {
+        state.audio_meter(recording_id.to_string(), meter);
+    }
 }
 
 /// 非阻断 warn 在 meta 行上显示多久。跟 overlay 的 ERROR_TTL_MS 对齐，
@@ -262,6 +274,7 @@ async fn run_single_session_recording(
     let mut stop_requested = false;
     let mut cancel_requested = false;
     let mut terminal_error: Option<HistoryError> = None;
+    let mut meter = MeterCollector::new();
 
     loop {
         tokio::select! {
@@ -282,6 +295,7 @@ async fn run_single_session_recording(
                 match pcm {
                     Some(samples) => {
                         observe_pcm(&mut trace, &samples);
+                        emit_meters(&params.state, &recording_id, &mut meter, &samples);
                         if !first_audio_seen && frame_has_signal(&samples) {
                             first_audio_seen = true;
                         }
@@ -731,6 +745,7 @@ async fn run_multi_session_recording(
     let mut stop_requested = false;
     let mut cancel_requested = false;
     let mut terminal_error: Option<HistoryError> = None;
+    let mut meter = MeterCollector::new();
     let mut active = true;
 
     'outer: loop {
@@ -752,6 +767,7 @@ async fn run_multi_session_recording(
                             None => { stop_requested = true; break 'active; }
                             Some(samples) => {
                                 observe_pcm(&mut trace, &samples);
+                                emit_meters(&params.state, &recording_id, &mut meter, &samples);
                                 if !first_audio_seen && frame_has_signal(&samples) {
                                     first_audio_seen = true;
                                 }
@@ -774,6 +790,10 @@ async fn run_multi_session_recording(
                                 last_sent_sample = chunk.end_sample();
                                 // 喂 Silero
                                 for frame in silero.accept(&samples) {
+                                    meter.observe_vad(
+                                        frame.probability,
+                                        matches!(frame.frame, VadFrame::Speech),
+                                    );
                                     match controller.accept(frame.frame) {
                                         VadTransition::SilenceStarted => {
                                             pause_triggered = true;
@@ -898,6 +918,7 @@ async fn run_multi_session_recording(
                                 None => break,
                                 Some(samples) => {
                                     observe_pcm(&mut trace, &samples);
+                                    emit_meters(&params.state, &recording_id, &mut meter, &samples);
                                     let chunk = timeline.push(&samples);
                                     if let Some(s) = session.as_mut() {
                                         let _ = s.send_pcm(&samples, false).await;
@@ -916,6 +937,7 @@ async fn run_multi_session_recording(
                 rec.stop();
                 while let Some(samples) = rec.try_recv() {
                     observe_pcm(&mut trace, &samples);
+                    emit_meters(&params.state, &recording_id, &mut meter, &samples);
                     if let Some(s) = session.as_mut() {
                         let _ = s.send_pcm(&samples, false).await;
                     }
@@ -1038,9 +1060,14 @@ async fn run_multi_session_recording(
                             None => { stop_requested = true; break 'idle; }
                             Some(samples) => {
                                 observe_pcm(&mut trace, &samples);
+                                emit_meters(&params.state, &recording_id, &mut meter, &samples);
                                 let chunk = timeline.push(&samples);
                                 // 不发 ASR；只跑 VAD
                                 for frame in silero.accept(&samples) {
+                                    meter.observe_vad(
+                                        frame.probability,
+                                        matches!(frame.frame, VadFrame::Speech),
+                                    );
                                     if controller.accept(frame.frame) == VadTransition::SpeechStarted {
                                         resume_speech_start = Some(frame.start_sample);
                                         break;

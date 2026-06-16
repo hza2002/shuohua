@@ -3,6 +3,7 @@ pub mod history;
 use std::sync::{Arc, RwLock};
 
 use history::{HistoryRecord, PipelineStepHistory};
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio::sync::broadcast;
 
@@ -43,6 +44,17 @@ impl Default for StateSnapshot {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AudioMeter {
+    pub rms: f32,
+    pub peak: f32,
+    pub clipped: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vad_probability: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vad_speech: Option<bool>,
+}
+
 #[derive(Debug, Clone)]
 pub enum StateEvent {
     StateChanged {
@@ -69,6 +81,10 @@ pub enum StateEvent {
     PipelineStep {
         recording_id: String,
         step: PipelineStepHistory,
+    },
+    AudioMeter {
+        recording_id: String,
+        meter: AudioMeter,
     },
     HistoryAppended {
         record: Box<HistoryRecord>,
@@ -170,6 +186,13 @@ impl StateStore {
             .send(StateEvent::PipelineStep { recording_id, step });
     }
 
+    pub fn audio_meter(&self, recording_id: String, meter: AudioMeter) {
+        let _ = self.tx.send(StateEvent::AudioMeter {
+            recording_id,
+            meter,
+        });
+    }
+
     pub fn history_appended(&self, record: HistoryRecord) {
         let _ = self.tx.send(StateEvent::HistoryAppended {
             record: Box::new(record),
@@ -228,6 +251,16 @@ mod tests {
         store.stats(3000, 1);
         store.segment("01HXYZ".to_string(), "he".to_string());
         store.partial("01HXYZ".to_string(), "hello".to_string());
+        store.audio_meter(
+            "01HXYZ".to_string(),
+            AudioMeter {
+                rms: 0.25,
+                peak: 0.75,
+                clipped: false,
+                vad_probability: Some(0.8),
+                vad_speech: Some(true),
+            },
+        );
 
         let snapshot = store.snapshot();
         assert_eq!(snapshot.state, DaemonState::Recording);
@@ -276,6 +309,16 @@ mod tests {
             StateEvent::Partial { recording_id, text } => {
                 assert_eq!(recording_id, "01HXYZ");
                 assert_eq!(text, "hello");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        match rx.try_recv().unwrap() {
+            StateEvent::AudioMeter {
+                recording_id,
+                meter,
+            } => {
+                assert_eq!(recording_id, "01HXYZ");
+                assert_eq!(meter.vad_speech, Some(true));
             }
             other => panic!("unexpected event: {other:?}"),
         }

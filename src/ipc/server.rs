@@ -249,6 +249,13 @@ impl From<StateEvent> for Event {
             StateEvent::PipelineStep { recording_id, step } => {
                 pipeline_step_event(recording_id, step)
             }
+            StateEvent::AudioMeter {
+                recording_id,
+                meter,
+            } => Event::AudioMeter {
+                recording_id,
+                meter,
+            },
             StateEvent::HistoryAppended { record } => Event::HistoryAppended { record },
         }
     }
@@ -375,6 +382,16 @@ mod tests {
 
         state.set_recording("01HXYZ".to_string(), time::OffsetDateTime::now_utc());
         state.segment("01HXYZ".to_string(), "hello".to_string());
+        state.audio_meter(
+            "01HXYZ".to_string(),
+            crate::state::AudioMeter {
+                rms: 0.25,
+                peak: 0.75,
+                clipped: false,
+                vad_probability: Some(0.8),
+                vad_speech: Some(true),
+            },
+        );
 
         assert!(matches!(a.read_event().await, Event::StateChanged { .. }));
         assert!(matches!(b.read_event().await, Event::StateChanged { .. }));
@@ -390,6 +407,19 @@ mod tests {
             Event::Segment {
                 recording_id: "01HXYZ".to_string(),
                 text: "hello".to_string()
+            }
+        );
+        assert_eq!(
+            a.read_event().await,
+            Event::AudioMeter {
+                recording_id: "01HXYZ".to_string(),
+                meter: crate::state::AudioMeter {
+                    rms: 0.25,
+                    peak: 0.75,
+                    clipped: false,
+                    vad_probability: Some(0.8),
+                    vad_speech: Some(true),
+                }
             }
         );
 

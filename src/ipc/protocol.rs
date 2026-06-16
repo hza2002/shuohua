@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::state::history::HistoryRecord;
+use crate::state::AudioMeter;
 
 pub const PROTO_VERSION: u8 = 2;
 
@@ -81,6 +82,10 @@ pub enum Event {
         text: Option<String>,
         error: Option<String>,
     },
+    AudioMeter {
+        recording_id: String,
+        meter: AudioMeter,
+    },
     HistoryAppended {
         record: Box<HistoryRecord>,
     },
@@ -158,6 +163,25 @@ mod tests {
         let line = encode_event(&event).unwrap();
 
         assert!(line.contains(r#""event":"segment""#));
+        assert_eq!(decode_event(&line).unwrap(), event);
+    }
+
+    #[test]
+    fn audio_meter_event_round_trips() {
+        let event = Event::AudioMeter {
+            recording_id: "01HXYZ".to_string(),
+            meter: AudioMeter {
+                rms: 0.25,
+                peak: 0.75,
+                clipped: false,
+                vad_probability: Some(0.8),
+                vad_speech: Some(true),
+            },
+        };
+
+        let line = encode_event(&event).unwrap();
+
+        assert!(line.contains(r#""event":"audio_meter""#));
         assert_eq!(decode_event(&line).unwrap(), event);
     }
 }

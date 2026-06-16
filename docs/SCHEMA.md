@@ -29,6 +29,7 @@
 {"event":"stats_changed","dur_ms":3200,"words":32}
 {"event":"partial","recording_id":"01HXYZ...","text":"今天天气真"}      // ASR 增量
 {"event":"segment","recording_id":"01HXYZ...","text":"今天天气真好。"}    // 已定型文本段
+{"event":"audio_meter","recording_id":"01HXYZ...","meter":{"rms":0.12,"peak":0.44,"clipped":false,"vad_probability":0.82,"vad_speech":true}} // 录音中输入电平 + VAD 观测
 {"event":"pipeline_step","recording_id":"01HXYZ...","name":"filler","status":"ok","duration_ms":0.3,"text":"..."}
 {"event":"history","records":[...]}                         // get_history 回包，从新到旧
 {"event":"config_reloaded","path":"/Users/me/.config/shuohua/config.toml"} // reload_config 成功回包
@@ -42,6 +43,7 @@
 - **`segment` + `partial` 模型**：`segment` 是已定型文本段，`partial` 是当前 utterance 尾巴，会被后续 partial 覆盖。`snapshot.segments` 包含订阅时已经定型的段。TUI 渲染实时文本 = `segments.join("") + partial`，和 overlay 保持一致。
 - **`words` 是 shuohua 语义词数**：基于 Unicode word boundary（UAX #29），`unicode-segmentation::split_word_bounds` 过滤空白边界段后计数。英文连续词算 1，中文单字通常算 1，标点算 1，空白算 0。它不是 LLM token count。
 - **`pipeline_step` 事件**：让 TUI 能实时看到每个 processor 的产出（流水线观测）。
+- **`audio_meter` 事件**：只在已有录音 PCM/VAD 流上派生轻量监控数据，供 TUI 画 waveform / VAD activity。daemon 不为 TUI 单独打开麦克风流；UDS 不传原始 PCM。`rms` / `peak` / `vad_probability` 取值范围为 `0.0..=1.0`；`vad_probability` / `vad_speech` 在当前录音路径没有 VAD 时可省略。
 - **`get_history` 分页**：默认 `limit=50`，返回从新到旧。`before` 用 `started_at` RFC3339 时间戳，语义为只返回早于该时间的记录。`query` 是可选关键词过滤；M4 内置大小写不敏感 substring，未来如需 regex/fzf 体验由 TUI 层增强。
 - **协议版本**：`snapshot` 回包带 `proto_version: 2`。TUI 收到不认识的版本号时报 warning 但继续尝试解析；daemon 单方升级版本时必须同时升级 TUI（同二进制 → 不会错位）。未来加事件类型不破坏，删/改字段升 `proto_version`。
 

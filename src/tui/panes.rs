@@ -5,7 +5,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 
 use crate::ipc::protocol::WireState;
-use crate::tui::{App, Page};
+use crate::tui::{App, HistoryDetail, Page};
 
 pub fn render(frame: &mut Frame, app: &App) {
     let root = Layout::default()
@@ -48,9 +48,10 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(5),
             Constraint::Length(6),
             Constraint::Min(5),
-            Constraint::Length(7),
+            Constraint::Length(5),
         ])
         .split(area);
 
@@ -66,6 +67,11 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .clone()
         .or_else(|| app.app.clone())
         .unwrap_or_else(|| crate::t!("tui.no_active_app"));
+    let chain = app
+        .pipeline
+        .last()
+        .map(|_| crate::t!("tui.pipeline"))
+        .unwrap_or_else(|| "-".to_string());
     let header = vec![
         Line::from(vec![
             Span::styled(
@@ -75,23 +81,23 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
+            Span::raw(format!("{}  ", format_duration(elapsed_ms))),
+            Span::raw(format!("{} words  ", app.words)),
+            Span::raw(format!("{app_label}  ")),
+            Span::raw(chain),
+        ]),
+        Line::from(vec![
+            Span::styled("id ", Style::default().fg(Color::DarkGray)),
             Span::raw(
                 app.recording_id
                     .clone()
                     .unwrap_or_else(|| crate::t!("tui.no_active_recording")),
             ),
         ]),
-        Line::from(crate::t!(
-            "tui.current_line",
-            app = app_label,
-            elapsed = format_duration(elapsed_ms),
-            words = app.words,
-            history = app.history.len(),
-        )),
-        Line::from(crate::t!(
-            "tui.bundle_line",
-            bundle = app.app.clone().unwrap_or_else(|| "-".to_string()),
-        )),
+        Line::from(vec![
+            Span::styled("bundle ", Style::default().fg(Color::DarkGray)),
+            Span::raw(app.app.clone().unwrap_or_else(|| "-".to_string())),
+        ]),
     ];
     frame.render_widget(
         Paragraph::new(header).block(
@@ -102,6 +108,12 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         chunks[0],
     );
 
+    frame.render_widget(
+        Paragraph::new(meter_lines(app))
+            .block(Block::default().title("input").borders(Borders::ALL)),
+        chunks[1],
+    );
+
     let live_text = format!("{}{}", app.segments.join(""), app.partial);
     frame.render_widget(
         Paragraph::new(live_text).wrap(Wrap { trim: false }).block(
@@ -109,7 +121,7 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 .title(crate::t!("tui.live_speech"))
                 .borders(Borders::ALL),
         ),
-        chunks[1],
+        chunks[2],
     );
 
     let pipeline = if app.pipeline.is_empty() {
@@ -123,18 +135,100 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 .title(crate::t!("tui.pipeline"))
                 .borders(Borders::ALL),
         ),
-        chunks[2],
+        chunks[3],
     );
+}
+
+fn meter_lines(app: &App) -> Vec<Line<'static>> {
+    if !matches!(app.state, WireState::Recording | WireState::Stopping) && app.meters.is_empty() {
+        return vec![
+            Line::from(vec![
+                Span::styled("Audio  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("idle", Style::default().fg(Color::DarkGray)),
+            ]),
+            Line::from(vec![
+                Span::styled("       ", Style::default().fg(Color::DarkGray)),
+                Span::styled("────", Style::default().fg(Color::DarkGray)),
+            ]),
+            Line::from(vec![
+                Span::styled("VAD    ", Style::default().fg(Color::DarkGray)),
+                Span::styled("idle", Style::default().fg(Color::DarkGray)),
+            ]),
+        ];
+    }
+    let width = 72;
+    let start = app.meters.len().saturating_sub(width);
+    let meters = &app.meters[start..];
+    vec![
+        Line::from(vec![
+            Span::styled("Audio  ", Style::default().fg(Color::DarkGray)),
+            meter_span(audio_upper(meters), Color::Cyan),
+        ]),
+        Line::from(vec![
+            Span::styled("       ", Style::default().fg(Color::DarkGray)),
+            meter_span(audio_lower(meters), Color::Blue),
+        ]),
+        Line::from(vec![
+            Span::styled("VAD    ", Style::default().fg(Color::DarkGray)),
+            vad_spans(meters),
+        ]),
+    ]
+}
+
+fn meter_span(text: String, color: Color) -> Span<'static> {
+    Span::styled(text, Style::default().fg(color))
+}
+
+fn audio_upper(meters: &[crate::state::AudioMeter]) -> String {
+    meters.iter().map(|meter| upper_level(meter.peak)).collect()
+}
+
+fn audio_lower(meters: &[crate::state::AudioMeter]) -> String {
+    meters.iter().map(|meter| lower_level(meter.rms)).collect()
+}
+
+fn vad_spans(meters: &[crate::state::AudioMeter]) -> Span<'static> {
+    let mut text = String::with_capacity(meters.len());
+    let mut active = false;
+    for meter in meters {
+        let probability = meter.vad_probability.unwrap_or_else(|| {
+            if meter.vad_speech.unwrap_or(false) {
+                1.0
+            } else {
+                0.0
+            }
+        });
+        active |= meter.vad_speech.unwrap_or(probability >= 0.5);
+        text.push(upper_level(probability));
+    }
+    let color = if active {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
+    Span::styled(text, Style::default().fg(color))
+}
+
+fn upper_level(value: f32) -> char {
+    const LEVELS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    level_char(value, LEVELS)
+}
+
+fn lower_level(value: f32) -> char {
+    const LEVELS: &[char] = &['▔', '▇', '▆', '▅', '▄', '▃', '▂', '▁'];
+    level_char(value, LEVELS)
+}
+
+fn level_char(value: f32, levels: &[char]) -> char {
+    let value = value.clamp(0.0, 1.0);
+    let idx = (value * (levels.len() - 1) as f32).round() as usize;
+    levels[idx]
 }
 
 fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(5),
-            Constraint::Min(0),
-            Constraint::Length(6),
-        ])
+        .constraints([Constraint::Length(4), Constraint::Min(0)])
         .split(area);
     let summary = HistorySummary::from(app);
     let search = if app.searching {
@@ -164,6 +258,10 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         chunks[0],
     );
 
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
+        .split(chunks[1]);
     let records = app.filtered_history();
     let items: Vec<ListItem> = records
         .iter()
@@ -190,21 +288,93 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 .title(crate::t!("tui.history_newest_first"))
                 .borders(Borders::ALL),
         ),
-        chunks[1],
+        body[0],
     );
 
     let selected = records
         .get(app.selected_history)
-        .map(|record| record.text.clone())
+        .map(|record| history_detail_text(record, app.history_detail))
         .unwrap_or_else(|| crate::t!("tui.no_history_selected"));
     frame.render_widget(
         Paragraph::new(selected).wrap(Wrap { trim: false }).block(
             Block::default()
-                .title(crate::t!("tui.selected_final_text"))
+                .title(history_detail_title(app.history_detail))
                 .borders(Borders::ALL),
         ),
-        chunks[2],
+        body[1],
     );
+}
+
+fn history_detail_title(detail: HistoryDetail) -> &'static str {
+    match detail {
+        HistoryDetail::Final => "final",
+        HistoryDetail::Asr => "asr raw",
+        HistoryDetail::Pipeline => "pipeline",
+        HistoryDetail::Sessions => "sessions",
+        HistoryDetail::Error => "error",
+        HistoryDetail::Json => "json",
+    }
+}
+
+fn history_detail_text(
+    record: &crate::state::history::HistoryRecord,
+    detail: HistoryDetail,
+) -> String {
+    match detail {
+        HistoryDetail::Final => record.text.clone(),
+        HistoryDetail::Asr => format!(
+            "provider: {}\naudio: {}\n\n{}",
+            record.asr.provider,
+            format_duration(record.asr.audio_ms),
+            record.asr.text
+        ),
+        HistoryDetail::Pipeline => {
+            if record.pipeline.is_empty() {
+                return "no pipeline steps".to_string();
+            }
+            record
+                .pipeline
+                .iter()
+                .map(|step| {
+                    let body = step.text.as_deref().or(step.error.as_deref()).unwrap_or("");
+                    format!(
+                        "{}  {:?}  {:.1}ms\n{}",
+                        step.name, step.status, step.duration_ms, body
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
+        HistoryDetail::Sessions => {
+            if record.asr.sessions.is_empty() {
+                return "no ASR sessions".to_string();
+            }
+            record
+                .asr
+                .sessions
+                .iter()
+                .enumerate()
+                .map(|(idx, session)| {
+                    format!(
+                        "#{}  {} -> {}  audio {}\n{}",
+                        idx + 1,
+                        session.started_at,
+                        session.ended_at,
+                        format_duration(session.audio_ms),
+                        session.text
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
+        HistoryDetail::Error => record
+            .error
+            .as_ref()
+            .map(|error| format!("{}: {}", error.kind, error.msg))
+            .unwrap_or_else(|| "no error".to_string()),
+        HistoryDetail::Json => serde_json::to_string_pretty(record)
+            .unwrap_or_else(|e| format!("failed to render json: {e}")),
+    }
 }
 
 struct HistorySummary {
@@ -269,7 +439,7 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(0),
-            Constraint::Length(4),
+            Constraint::Length(5),
         ])
         .split(area);
     frame.render_widget(
@@ -280,24 +450,74 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         ),
         chunks[0],
     );
+    let rows = if app.settings_rows.is_empty() {
+        "no config rows found".to_string()
+    } else {
+        app.settings_rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "{:<7} {:<28} {:<28} {}",
+                    row.group, row.key, row.value, row.source
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     frame.render_widget(
-        Paragraph::new(app.config_body.as_str())
+        Paragraph::new(rows)
             .wrap(Wrap { trim: false })
-            .block(
-                Block::default()
-                    .title(crate::t!("tui.current_config"))
-                    .borders(Borders::ALL),
-            ),
+            .block(Block::default().title("settings").borders(Borders::ALL)),
         chunks[1],
     );
     frame.render_widget(
-        Paragraph::new(crate::t!("tui.doctor_m5"))
-            .wrap(Wrap { trim: false })
-            .block(
-                Block::default()
-                    .title(crate::t!("tui.doctor"))
-                    .borders(Borders::ALL),
-            ),
+        Paragraph::new(format!(
+            "{}\n{}",
+            crate::t!("tui.doctor_m5"),
+            "read-only: edit TOML files directly for prompts, API keys, and complex chains"
+        ))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .title(crate::t!("tui.doctor"))
+                .borders(Borders::ALL),
+        ),
         chunks[2],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn waveform_levels_use_low_and_high_blocks() {
+        assert_eq!(upper_level(0.0), '▁');
+        assert_eq!(upper_level(1.0), '█');
+        assert_eq!(lower_level(0.0), '▔');
+        assert_eq!(lower_level(1.0), '▁');
+    }
+
+    #[test]
+    fn audio_lines_render_one_char_per_meter() {
+        let meters = vec![
+            crate::state::AudioMeter {
+                rms: 0.0,
+                peak: 0.0,
+                clipped: false,
+                vad_probability: Some(0.0),
+                vad_speech: Some(false),
+            },
+            crate::state::AudioMeter {
+                rms: 1.0,
+                peak: 1.0,
+                clipped: true,
+                vad_probability: Some(1.0),
+                vad_speech: Some(true),
+            },
+        ];
+
+        assert_eq!(audio_upper(&meters).chars().count(), 2);
+        assert_eq!(audio_lower(&meters).chars().count(), 2);
+    }
 }

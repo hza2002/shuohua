@@ -1,5 +1,6 @@
 pub mod keybindings;
 pub mod panes;
+pub mod settings;
 
 use std::time::Duration;
 
@@ -16,6 +17,7 @@ use tokio::sync::mpsc;
 use crate::ipc::client::IpcClient;
 use crate::ipc::protocol::{Command, Event, WireState};
 use crate::state::history::HistoryRecord;
+use crate::state::AudioMeter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -34,6 +36,40 @@ impl Page {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryDetail {
+    Final,
+    Asr,
+    Pipeline,
+    Sessions,
+    Error,
+    Json,
+}
+
+impl HistoryDetail {
+    fn next(self) -> Self {
+        match self {
+            Self::Final => Self::Asr,
+            Self::Asr => Self::Pipeline,
+            Self::Pipeline => Self::Sessions,
+            Self::Sessions => Self::Error,
+            Self::Error => Self::Json,
+            Self::Json => Self::Final,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Final => Self::Json,
+            Self::Asr => Self::Final,
+            Self::Pipeline => Self::Asr,
+            Self::Sessions => Self::Pipeline,
+            Self::Error => Self::Sessions,
+            Self::Json => Self::Error,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct App {
     pub page: Page,
@@ -47,20 +83,21 @@ pub struct App {
     pub segments: Vec<String>,
     pub partial: String,
     pub pipeline: Vec<String>,
+    pub meters: Vec<AudioMeter>,
     pub history: Vec<HistoryRecord>,
     pub selected_history: usize,
+    pub history_detail: HistoryDetail,
     pub search: String,
     pub searching: bool,
     pub status: String,
     pub config_path: String,
-    pub config_body: String,
+    pub settings_rows: Vec<settings::SettingsRow>,
 }
 
 impl App {
     fn new() -> Self {
         let config_path = crate::config::default_path();
-        let config_body = std::fs::read_to_string(&config_path)
-            .unwrap_or_else(|e| format!("Failed to read config: {e}"));
+        let settings_rows = settings::load_rows();
         Self {
             page: Page::Status,
             state: WireState::Idle,
@@ -73,13 +110,15 @@ impl App {
             segments: Vec::new(),
             partial: String::new(),
             pipeline: Vec::new(),
+            meters: Vec::new(),
             history: Vec::new(),
             selected_history: 0,
+            history_detail: HistoryDetail::Final,
             search: String::new(),
             searching: false,
             status: "connected".to_string(),
             config_path: config_path.display().to_string(),
-            config_body,
+            settings_rows,
         }
     }
 
@@ -153,6 +192,7 @@ impl App {
                     self.segments.clear();
                     self.partial.clear();
                     self.pipeline.clear();
+                    self.meters.clear();
                     self.app = None;
                     self.app_name = None;
                     self.dur_ms = 0;
@@ -183,6 +223,12 @@ impl App {
                 let detail = text.or(error).unwrap_or_default();
                 self.pipeline
                     .push(format!("{name} {status} {duration_ms:.1}ms  {detail}"));
+            }
+            Event::AudioMeter { meter, .. } => {
+                self.meters.push(meter);
+                if self.meters.len() > 160 {
+                    self.meters.drain(..self.meters.len() - 160);
+                }
             }
             Event::HistoryAppended { record } => {
                 self.history.insert(0, *record);
@@ -291,6 +337,19 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         Action::MoveUp => {
             app.selected_history = app.selected_history.saturating_sub(1);
         }
+        Action::MoveTop => {
+            app.selected_history = 0;
+        }
+        Action::MoveBottom => {
+            let len = app.filtered_history().len();
+            app.selected_history = len.saturating_sub(1);
+        }
+        Action::NextDetail => {
+            app.history_detail = app.history_detail.next();
+        }
+        Action::PrevDetail => {
+            app.history_detail = app.history_detail.prev();
+        }
         Action::StartSearch => {
             app.page = Page::History;
             app.searching = true;
@@ -320,6 +379,18 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 if let Some(text) = text {
                     crate::clipboard_darwin::write_string(&text)?;
                     app.status = "copied selected history text".to_string();
+                }
+            }
+        }
+        Action::CopySelectedRaw => {
+            if app.page == Page::History {
+                let text = app
+                    .filtered_history()
+                    .get(app.selected_history)
+                    .map(|record| record.asr.text.clone());
+                if let Some(text) = text {
+                    crate::clipboard_darwin::write_string(&text)?;
+                    app.status = "copied selected ASR text".to_string();
                 }
             }
         }

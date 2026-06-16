@@ -46,6 +46,7 @@ src/
 │   ├── mod.rs
 │   ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 可选 wav 留存
 │   ├── finish.rs                        # 一次录音生命周期：单/多 session 两条主路径 + post pipeline + dispatch
+│   ├── meter.rs                         # 从已有 PCM/VAD 流聚合 50ms audio meter，供 UDS/TUI 画 waveform
 │   ├── observer.rs                      # dev observer：VAD shadow trace sidecar（feature=dev；默认 ZST no-op）
 │   ├── vad.rs                           # VAD frame/state 边界 + speech/silence hysteresis controller
 │   ├── silero.rs                        # Silero VAD 帧检测器（M10，默认 build）
@@ -62,7 +63,8 @@ src/
 ├── tui/
 │   ├── mod.rs                           # ratatui 主循环；Status/History/Settings 三页
 │   ├── panes.rs                         # 状态、实时文本、pipeline、历史、配置浏览渲染
-│   └── keybindings.rs                   # Tab/Shift-Tab + 1/2/3 翻页；vim/方向键滚动
+│   ├── keybindings.rs                   # Tab/Shift-Tab + 1/2/3 翻页；vim/方向键滚动
+│   └── settings.rs                      # Settings 页只读配置 inventory；脱敏展示 secret 字段
 ├── overlay/
 │   ├── mod.rs                           # OverlayCmd + OverlayState + OverlayHandle (mpsc 发命令)
 │   ├── view.rs                          # AppKit NSGlassEffectView 同进程渲染主循环

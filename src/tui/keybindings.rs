@@ -10,12 +10,17 @@ pub enum Action {
     SetPage(Page),
     MoveDown,
     MoveUp,
+    MoveTop,
+    MoveBottom,
+    NextDetail,
+    PrevDetail,
     StartSearch,
     CancelSearch,
     ClearSearch,
     SearchChar(char),
     Backspace,
     CopySelected,
+    CopySelectedRaw,
     None,
 }
 
@@ -44,9 +49,14 @@ pub fn action_for(key: KeyEvent, searching: bool) -> Action {
         KeyCode::Char('3') => Action::SetPage(Page::Settings),
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+        KeyCode::Char('g') => Action::MoveTop,
+        KeyCode::Char('G') => Action::MoveBottom,
+        KeyCode::Char('l') | KeyCode::Right => Action::NextDetail,
+        KeyCode::Char('h') | KeyCode::Left => Action::PrevDetail,
         KeyCode::Char('/') => Action::StartSearch,
         KeyCode::Esc => Action::ClearSearch,
-        KeyCode::Enter => Action::CopySelected,
+        KeyCode::Enter | KeyCode::Char('y') => Action::CopySelected,
+        KeyCode::Char('Y') => Action::CopySelectedRaw,
         _ => Action::None,
     }
 }

@@ -6,6 +6,7 @@
 
 pub mod dispatch;
 pub mod finish;
+pub mod meter;
 pub mod observer;
 pub mod recorder;
 pub mod silero;

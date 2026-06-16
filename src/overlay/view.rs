@@ -33,30 +33,34 @@ use crate::overlay::{
 const ERROR_TTL_MS: u64 = 5000;
 
 mod layout {
-    pub const WIDTH: f64 = 580.0;
-    pub const BASE_HEIGHT: f64 = 84.0;
+    pub const WIDTH: f64 = 572.0;
+    pub const BASE_HEIGHT: f64 = 64.0;
     pub const WINDOW_MARGIN: f64 = 16.0;
-    pub const H_PAD: f64 = 18.0;
-    pub const BOTTOM_PAD: f64 = 13.0;
-    pub const HEADER_H: f64 = 24.0;
-    pub const HEADER_BODY_GAP: f64 = 9.0;
+    pub const H_PAD: f64 = 16.0;
+    pub const BOTTOM_PAD: f64 = 7.0;
+    pub const HEADER_BODY_GAP: f64 = 2.0;
     pub const BODY_LINE_H: f64 = 21.0;
     pub const BODY_W: f64 = WIDTH - H_PAD * 2.0;
     pub const CHARS_PER_LINE: usize = 38;
-    pub const ICON: f64 = 24.0;
-    pub const ICON_STATE_GAP: f64 = 7.0;
-    pub const STATE_W: f64 = 58.0;
-    pub const FIELD_GAP: f64 = 10.0;
-    pub const DURATION_W: f64 = 48.0;
-    pub const WORDS_W: f64 = 64.0;
-    pub const APP_W: f64 = 112.0;
+    pub const HEADER_CENTER_Y: f64 = BOTTOM_PAD + BODY_LINE_H + HEADER_BODY_GAP + 12.0;
+    pub const ICON_BOX: f64 = 24.0;
+    pub const STATE_BOX_H: f64 = 20.0;
+    pub const META_BOX_H: f64 = 18.0;
+    pub const ICON_OPTICAL_Y: f64 = -0.5;
+    pub const STATE_OPTICAL_Y: f64 = 0.0;
+    pub const META_OPTICAL_Y: f64 = 0.0;
+    pub const ICON_STATE_GAP: f64 = 5.0;
+    pub const STATE_W: f64 = 56.0;
+    pub const STATE_STATS_GAP: f64 = 5.0;
+    pub const STATS_W: f64 = 220.0;
+    pub const META_GAP: f64 = 8.0;
     pub const META_MIN_W: f64 = 180.0;
 }
 
 mod typography {
     pub const ICON_SYMBOL: f64 = 18.0;
     pub const STATE: f64 = 15.0;
-    pub const META: f64 = 12.0;
+    pub const META: f64 = 13.0;
     pub const BODY: f64 = 15.0;
 }
 
@@ -151,9 +155,7 @@ struct OverlayView {
     background: Retained<NSView>,
     state_icon: Retained<NSImageView>,
     status: Retained<NSTextField>,
-    duration: Retained<NSTextField>,
-    words: Retained<NSTextField>,
-    app: Retained<NSTextField>,
+    stats: Retained<NSTextField>,
     meta: Retained<NSTextField>,
     text: Retained<NSTextField>,
     animation_started: Instant,
@@ -168,9 +170,7 @@ struct OverlayView {
     last_panel_frame: Option<NSRect>,
     last_visible_text: String,
     last_status_text: String,
-    last_duration_text: String,
-    last_words_text: String,
-    last_app_text: String,
+    last_stats_text: String,
     last_meta_text: String,
     peak_text_lines: usize,
     /// chrome 初始化 / 热重载时检测到不可用的 SPI / fallback 走人 → 等首次可见时塞 chrome error。
@@ -192,29 +192,13 @@ impl OverlayView {
         let state_icon = make_state_icon(mtm, COLOR_PRIMARY_TEXT);
         state_icon.setFrame(row.icon);
         let status = label(mtm, row.status, typography::STATE, true, COLOR_PRIMARY_TEXT);
-        let duration = label(
+        let stats = label(
             mtm,
-            row.duration,
+            row.stats,
             typography::META,
             false,
             COLOR_SECONDARY_TEXT,
         );
-        duration.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(
-            typography::META,
-            0.0,
-        )));
-        let words = label(
-            mtm,
-            row.words,
-            typography::META,
-            false,
-            COLOR_SECONDARY_TEXT,
-        );
-        words.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(
-            typography::META,
-            0.0,
-        )));
-        let app = label(mtm, row.app, typography::META, false, COLOR_SECONDARY_TEXT);
         let meta = label(mtm, row.meta, typography::META, false, COLOR_TERTIARY_TEXT);
         meta.setAlignment(NSTextAlignment::Right);
         let text = label(
@@ -236,9 +220,7 @@ impl OverlayView {
         // 这里追加 labels 自然叠在 glass 上面。
         container.addSubview(&state_icon);
         container.addSubview(&status);
-        container.addSubview(&duration);
-        container.addSubview(&words);
-        container.addSubview(&app);
+        container.addSubview(&stats);
         container.addSubview(&meta);
         container.addSubview(&text);
 
@@ -255,9 +237,7 @@ impl OverlayView {
             background,
             state_icon,
             status,
-            duration,
-            words,
-            app,
+            stats,
             meta,
             text,
             animation_started: Instant::now(),
@@ -269,9 +249,7 @@ impl OverlayView {
             last_panel_frame: None,
             last_visible_text: String::new(),
             last_status_text: String::new(),
-            last_duration_text: String::new(),
-            last_words_text: String::new(),
-            last_app_text: String::new(),
+            last_stats_text: String::new(),
             last_meta_text: String::new(),
             peak_text_lines: 1,
             pending_chrome_error,
@@ -463,27 +441,12 @@ impl OverlayView {
             self.last_status_text = header.state;
         }
 
-        if self.last_duration_text != header.duration {
-            self.duration
-                .setStringValue(&NSString::from_str(&header.duration));
-            self.duration
-                .setTextColor(Some(&color_from_rgb_alpha(COLOR_SECONDARY_TEXT, 1.0)));
-            self.last_duration_text = header.duration;
+        let stats_text = stats_text(&header.duration, &header.words, &header.app);
+        if self.last_stats_text != stats_text {
+            self.stats.setStringValue(&NSString::from_str(&stats_text));
+            self.last_stats_text = stats_text;
         }
-        if self.last_words_text != header.words {
-            self.words
-                .setStringValue(&NSString::from_str(&header.words));
-            self.last_words_text = header.words.clone();
-        }
-        self.words
-            .setTextColor(Some(&color_from_rgb_alpha(COLOR_SECONDARY_TEXT, 1.0)));
-
-        if self.last_app_text != header.app {
-            fade_view(&self.app, 0.16);
-            self.app.setStringValue(&NSString::from_str(&header.app));
-            self.last_app_text = header.app;
-        }
-        self.app
+        self.stats
             .setTextColor(Some(&color_from_rgb_alpha(COLOR_SECONDARY_TEXT, 1.0)));
 
         // meta 行：notice 活跃时盖住 chain_summary，黄字。
@@ -526,14 +489,7 @@ impl OverlayView {
     }
 
     fn render_state_icon(&self, state: OverlayState, color_rgb: u32) {
-        let symbol = match state {
-            OverlayState::Idle => "circle.fill",
-            OverlayState::Connecting => "dot.radiowaves.left.and.right",
-            OverlayState::Recording => "waveform",
-            OverlayState::Thinking => "brain.head.profile",
-            OverlayState::Stopping => "hourglass",
-            OverlayState::Error => "exclamationmark.triangle.fill",
-        };
+        let symbol = state_symbol(state);
         let phase = if state == OverlayState::Recording {
             self.recording_started
                 .map(|started| ((started.elapsed().as_millis() / 160) % 6) as usize)
@@ -548,7 +504,7 @@ impl OverlayView {
             OverlayState::Connecting | OverlayState::Thinking | OverlayState::Stopping
         ) {
             let ms = self.animation_started.elapsed().as_millis() as f64;
-            0.72 + ((ms / 280.0).sin() + 1.0) * 0.14
+            0.78 + ((ms / 360.0).sin() + 1.0) * 0.11
         } else {
             1.0
         };
@@ -562,7 +518,7 @@ impl OverlayView {
         if let Some(image) = symbol_image(symbol, value, variable) {
             self.state_icon.setImage(Some(&image));
         }
-        self.state_icon.setAlphaValue(value.clamp(0.72, 1.0));
+        self.state_icon.setAlphaValue(value.clamp(0.78, 1.0));
         let bold = unsafe { NSFontWeightBold };
         let config = NSImageSymbolConfiguration::configurationWithPointSize_weight_scale(
             typography::ICON_SYMBOL,
@@ -591,7 +547,7 @@ impl OverlayView {
         let attributed = NSMutableAttributedString::from_nsstring(&NSString::from_str(&full));
         let segment_len = utf16_len(&plan.segments);
         let full_len = utf16_len(&full);
-        let segment_color = color_from_rgb_alpha(COLOR_SEGMENT_TEXT, 0.92);
+        let segment_color = color_from_rgb_alpha(COLOR_SEGMENT_TEXT, 0.88);
         let partial_color = color_from_rgb_alpha(COLOR_PRIMARY_TEXT, 1.0);
         unsafe {
             let _: () = msg_send![
@@ -620,9 +576,7 @@ impl OverlayView {
         let row = first_row_frames(top_offset);
         self.state_icon.setFrame(row.icon);
         self.status.setFrame(row.status);
-        self.duration.setFrame(row.duration);
-        self.words.setFrame(row.words);
-        self.app.setFrame(row.app);
+        self.stats.setFrame(row.stats);
         self.meta.setFrame(row.meta);
         self.text.setFrame(NSRect::new(
             NSPoint::new(layout::H_PAD, layout::BOTTOM_PAD),
@@ -755,50 +709,55 @@ unsafe extern "C" {
 struct FirstRow {
     icon: NSRect,
     status: NSRect,
-    duration: NSRect,
-    words: NSRect,
-    app: NSRect,
+    stats: NSRect,
     meta: NSRect,
 }
 
 fn first_row_frames(top_offset: f64) -> FirstRow {
-    let y = layout::BOTTOM_PAD + layout::BODY_LINE_H + layout::HEADER_BODY_GAP + top_offset;
+    let center_y = layout::HEADER_CENTER_Y + top_offset;
     let mut x = layout::H_PAD;
     let icon = NSRect::new(
-        NSPoint::new(x, y),
-        NSSize::new(layout::ICON, layout::HEADER_H),
+        NSPoint::new(
+            x,
+            frame_y_for_visual_center(center_y, layout::ICON_BOX, layout::ICON_OPTICAL_Y),
+        ),
+        NSSize::new(layout::ICON_BOX, layout::ICON_BOX),
     );
-    x += layout::ICON + layout::ICON_STATE_GAP;
+    x += layout::ICON_BOX + layout::ICON_STATE_GAP;
     let status = NSRect::new(
-        NSPoint::new(x, y),
-        NSSize::new(layout::STATE_W, layout::HEADER_H),
+        NSPoint::new(
+            x,
+            frame_y_for_visual_center(center_y, layout::STATE_BOX_H, layout::STATE_OPTICAL_Y),
+        ),
+        NSSize::new(layout::STATE_W, layout::STATE_BOX_H),
     );
-    x += layout::STATE_W + layout::FIELD_GAP;
-    let duration = NSRect::new(
-        NSPoint::new(x, y),
-        NSSize::new(layout::DURATION_W, layout::HEADER_H),
+    x += layout::STATE_W + layout::STATE_STATS_GAP;
+    let stats = NSRect::new(
+        NSPoint::new(
+            x,
+            frame_y_for_visual_center(center_y, layout::META_BOX_H, layout::META_OPTICAL_Y),
+        ),
+        NSSize::new(layout::STATS_W, layout::META_BOX_H),
     );
-    x += layout::DURATION_W + layout::FIELD_GAP;
-    let words = NSRect::new(
-        NSPoint::new(x, y),
-        NSSize::new(layout::WORDS_W, layout::HEADER_H),
-    );
-    x += layout::WORDS_W + layout::FIELD_GAP;
-    let app = NSRect::new(
-        NSPoint::new(x, y),
-        NSSize::new(layout::APP_W, layout::HEADER_H),
-    );
-    x += layout::APP_W + layout::FIELD_GAP;
+    x += layout::STATS_W + layout::META_GAP;
     let right = layout::WIDTH - layout::H_PAD;
     let meta_w = (right - x).max(layout::META_MIN_W);
     FirstRow {
         icon,
         status,
-        duration,
-        words,
-        app,
-        meta: NSRect::new(NSPoint::new(x, y), NSSize::new(meta_w, layout::HEADER_H)),
+        stats,
+        meta: NSRect::new(
+            NSPoint::new(
+                x,
+                frame_y_for_visual_center(center_y, layout::META_BOX_H, layout::META_OPTICAL_Y),
+            ),
+            NSSize::new(meta_w, layout::META_BOX_H),
+        ),
     }
+}
+
+fn frame_y_for_visual_center(center_y: f64, height: f64, optical_y: f64) -> f64 {
+    center_y - height / 2.0 - optical_y
 }
 
 fn label(
@@ -1012,6 +971,17 @@ fn symbol_image(name: &str, value: f64, variable: bool) -> Option<Retained<NSIma
     NSImage::imageWithSystemSymbolName_accessibilityDescription(&name, Some(&desc))
 }
 
+fn state_symbol(state: OverlayState) -> &'static str {
+    match state {
+        OverlayState::Idle => "waveform.circle",
+        OverlayState::Connecting => "antenna.radiowaves.left.and.right",
+        OverlayState::Recording => "waveform",
+        OverlayState::Thinking => "sparkles",
+        OverlayState::Stopping => "stop.circle",
+        OverlayState::Error => "exclamationmark.triangle.fill",
+    }
+}
+
 fn color_from_rgb_alpha(rgb: u32, alpha: f64) -> Retained<NSColor> {
     let r = ((rgb >> 16) & 0xff) as f64 / 255.0;
     let g = ((rgb >> 8) & 0xff) as f64 / 255.0;
@@ -1131,6 +1101,14 @@ fn header_parts(state: &str, duration: &str, words: &str, app: &str, chain: &str
     }
 }
 
+fn stats_text(duration: &str, words: &str, app: &str) -> String {
+    if app.is_empty() {
+        format!("{duration} · {words}")
+    } else {
+        format!("{duration} · {words} · {app}")
+    }
+}
+
 fn panel_frame(
     anchor: NSRect,
     position: OverlayPosition,
@@ -1200,6 +1178,10 @@ fn format_duration(ms: u64) -> String {
 mod tests {
     use super::*;
 
+    fn visual_center(frame: NSRect, optical_y: f64) -> f64 {
+        frame.origin.y + frame.size.height / 2.0 + optical_y
+    }
+
     #[test]
     fn text_line_count_is_bounded() {
         assert_eq!(display_text_plan("", 5, 34).1, 1);
@@ -1231,11 +1213,66 @@ mod tests {
     #[test]
     fn first_row_clusters_stats_and_app_on_left_with_wide_meta() {
         let row = first_row_frames(0.0);
-        assert!(row.duration.origin.x < 128.0);
-        assert!(row.words.origin.x < 190.0);
-        assert!(row.app.size.width >= 96.0);
-        assert!(row.app.origin.x < row.meta.origin.x);
+        assert!(row.stats.origin.x - (row.status.origin.x + row.status.size.width) <= 6.0);
+        assert!(row.stats.size.width >= 210.0);
+        assert!(row.stats.origin.x < row.meta.origin.x);
         assert!(row.meta.size.width >= 180.0);
+    }
+
+    #[test]
+    fn base_overlay_spacing_is_compact() {
+        assert!(layout::BASE_HEIGHT <= 68.0);
+        assert!(layout::H_PAD <= 16.0);
+        assert!(layout::BOTTOM_PAD <= 8.0);
+    }
+
+    #[test]
+    fn first_row_uses_shared_visual_center() {
+        let row = first_row_frames(0.0);
+        let center = layout::HEADER_CENTER_Y;
+        assert!((visual_center(row.icon, layout::ICON_OPTICAL_Y) - center).abs() < 0.1);
+        assert!((visual_center(row.status, layout::STATE_OPTICAL_Y) - center).abs() < 0.1);
+        assert!((visual_center(row.stats, layout::META_OPTICAL_Y) - center).abs() < 0.1);
+        assert!((visual_center(row.meta, layout::META_OPTICAL_Y) - center).abs() < 0.1);
+    }
+
+    #[test]
+    fn meta_typography_is_readable_but_secondary() {
+        assert!(typography::META >= 13.0);
+        assert!(typography::META < typography::STATE);
+        assert_eq!(COLOR_TERTIARY_TEXT, crate::overlay::palette::FG3);
+    }
+
+    #[test]
+    fn state_symbols_match_overlay_semantics() {
+        assert_eq!(state_symbol(OverlayState::Idle), "waveform.circle");
+        assert_eq!(
+            state_symbol(OverlayState::Connecting),
+            "antenna.radiowaves.left.and.right"
+        );
+        assert_eq!(state_symbol(OverlayState::Recording), "waveform");
+        assert_eq!(state_symbol(OverlayState::Thinking), "sparkles");
+        assert_eq!(state_symbol(OverlayState::Stopping), "stop.circle");
+        assert_eq!(
+            state_symbol(OverlayState::Error),
+            "exclamationmark.triangle.fill"
+        );
+    }
+
+    #[test]
+    fn header_body_gap_keeps_rows_breathing() {
+        assert_eq!(layout::HEADER_BODY_GAP, 2.0);
+    }
+
+    #[test]
+    fn segment_text_uses_readable_secondary_color() {
+        assert_eq!(COLOR_SEGMENT_TEXT, crate::overlay::palette::FG1);
+    }
+
+    #[test]
+    fn stats_text_is_inline_metadata() {
+        assert_eq!(stats_text("12s", "128字", "Xcode"), "12s · 128字 · Xcode");
+        assert_eq!(stats_text("12s", "128字", ""), "12s · 128字");
     }
 
     #[test]

@@ -25,8 +25,8 @@ pub mod palette {
 
 pub const COLOR_PRIMARY_TEXT: u32 = palette::FG0;
 pub const COLOR_SECONDARY_TEXT: u32 = palette::FG1;
-pub const COLOR_TERTIARY_TEXT: u32 = palette::FG4;
-pub const COLOR_SEGMENT_TEXT: u32 = palette::FG3;
+pub const COLOR_TERTIARY_TEXT: u32 = palette::FG3;
+pub const COLOR_SEGMENT_TEXT: u32 = palette::FG1;
 pub const COLOR_NOTICE: u32 = palette::BRIGHT_YELLOW;
 pub const COLOR_ERROR_TEXT: u32 = palette::BRIGHT_RED;
 

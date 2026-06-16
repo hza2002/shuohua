@@ -954,7 +954,6 @@ shuohua/
 │   ├── overlay/
 │   │   ├── mod.rs              # 后台线程一侧：构造 OverlayCmd 推到主线程 channel
 │   │   ├── view.rs             # AppKit 视图层（NSPanel + NSGlassEffectView + 子视图）
-│   │   └── animations.rs       # CABasicAnimation / CATransition 包装
 │   ├── autotype_darwin.rs      # CGEventPost Cmd+V
 │   ├── clipboard_darwin.rs     # NSPasteboard
 │   ├── cli/                    # M5 引入

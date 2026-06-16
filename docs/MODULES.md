@@ -66,7 +66,6 @@ src/
 ├── overlay/
 │   ├── mod.rs                           # OverlayCmd + OverlayState + OverlayHandle (mpsc 发命令)
 │   ├── view.rs                          # AppKit NSGlassEffectView 同进程渲染主循环
-│   ├── animations.rs                    # 状态点 / 高度 / 阴影动画曲线
 │   └── debug.rs   (#[cfg(debug_assertions)])  # NSGlassEffectView SPI 探针
 └── i18n/
     └── mod.rs                            # assets/i18n/*.toml 加载 + 静态 LANG 切换

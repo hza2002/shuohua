@@ -1564,6 +1564,14 @@ fn build_record(input: HistoryInput) -> HistoryRecord {
         build_asr_sessions(&input.sessions, input.started_at, input.started_instant)
     };
 
+    // ASR 工作窗口（首段 started_at → 末段 ended_at）。空 sessions 直接 0。
+    let asr_duration_ms = match (sessions.first(), sessions.last()) {
+        (Some(first), Some(last)) => (last.ended_at - first.started_at)
+            .whole_milliseconds()
+            .max(0) as u64,
+        _ => 0,
+    };
+
     HistoryRecord {
         version: 2,
         id: input.id,
@@ -1579,6 +1587,7 @@ fn build_record(input: HistoryInput) -> HistoryRecord {
         asr: AsrHistory {
             provider: input.provider,
             text: input.asr_text,
+            duration_ms: asr_duration_ms,
             audio_ms,
             sessions,
         },
@@ -1799,10 +1808,41 @@ mod tests {
         assert_eq!(record.asr.audio_ms, 800 + 900);
 
         // ASR multi-session duration = last_session.ended_at - first_session.started_at
+        // 同时也写到 asr.duration_ms top-level 字段。
         let asr_duration_ms = (record.asr.sessions.last().unwrap().ended_at
             - record.asr.sessions.first().unwrap().started_at)
             .whole_milliseconds() as u64;
         assert_eq!(asr_duration_ms, 2_900);
+        assert_eq!(record.asr.duration_ms, 2_900);
+        // M10 跳过的纯静音时长 = duration_ms - audio_ms
+        assert_eq!(
+            record.asr.duration_ms - record.asr.audio_ms,
+            2_900 - (800 + 900)
+        );
+    }
+
+    #[test]
+    fn asr_duration_ms_is_zero_when_no_sessions() {
+        let recording_start = OffsetDateTime::from_unix_timestamp(1_750_000_000).unwrap();
+        let base = Instant::now();
+        let input = HistoryInput {
+            id: "01HXYZABCDEF0123456789ABCD".to_string(),
+            provider: "fake".to_string(),
+            started_at: recording_start,
+            ended_at: recording_start + time::Duration::milliseconds(500),
+            started_instant: base,
+            asr_text: String::new(),
+            final_text: String::new(),
+            sessions: Vec::new(),
+            pipeline: Vec::new(),
+            app: None,
+            status: HistoryStatus::Canceled,
+            error: None,
+        };
+        let record = build_record(input);
+        assert!(record.asr.sessions.is_empty());
+        assert_eq!(record.asr.duration_ms, 0);
+        assert_eq!(record.asr.audio_ms, 0);
     }
 
     #[test]

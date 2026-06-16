@@ -52,6 +52,12 @@ pub struct HistoryError {
 pub struct AsrHistory {
     pub provider: String,
     pub text: String,
+    /// ASR 工作窗口（毫秒）= 首 session.started_at → 末 session.ended_at。
+    /// 这是"如果不开 idle_pause、走单 session 会喂出去多少音频"的真实基线。
+    /// `duration_ms - audio_ms` = M10 跳过的纯静音时长。空 sessions = 0。
+    #[serde(default)]
+    pub duration_ms: u64,
+    /// 实际喂给 provider 的音频时长（毫秒）= Σ sessions[].audio_ms。
     pub audio_ms: u64,
     pub sessions: Vec<AsrSessionHistory>,
 }
@@ -140,6 +146,7 @@ mod tests {
             asr: AsrHistory {
                 provider: "doubao".to_string(),
                 text: "今天天气真好 我们出去走走".to_string(),
+                duration_ms: 5300,
                 audio_ms: 5300,
                 sessions: vec![AsrSessionHistory {
                     text: "今天天气真好 我们出去走走".to_string(),
@@ -179,6 +186,7 @@ mod tests {
         assert_eq!(json["asr"]["text"], "今天天气真好 我们出去走走");
         assert!(json["asr"].get("raw").is_none());
         assert_eq!(json["asr"]["audio_ms"], 5300);
+        assert_eq!(json["asr"]["duration_ms"], 5300);
         assert_eq!(json["asr"]["sessions"][0]["audio_ms"], 5300);
         assert_eq!(
             json["asr"]["sessions"][0]["started_at"],

@@ -7,6 +7,8 @@
 pub mod dispatch;
 pub mod finish;
 pub mod recorder;
+pub mod trace;
+pub mod vad;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionControl {

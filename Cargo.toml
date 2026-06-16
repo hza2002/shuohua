@@ -72,9 +72,18 @@ ratatui         = "0.30"
 crossterm       = "0.29"
 libc            = "0.2"
 unicode-segmentation = "1.13"
+voice_activity_detector = { version = "0.2.1", optional = true }
 
 [dev-dependencies]
 proptest = "1"
+
+[features]
+default = []
+# Development-only fixture probe for evaluating Silero against saved WAV files.
+# Do not enable in release builds or wire into the recording path.
+dev-vad-probe = ["dep:voice_activity_detector"]
+# Development-only live recording trace for evaluating VAD without changing history.
+dev-vad-trace = ["dep:voice_activity_detector"]
 
 [profile.release]
 opt-level = "z"

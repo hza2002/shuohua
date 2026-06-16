@@ -41,6 +41,7 @@ fn check_config() {
             println!("  post.timeout_ms = {}", cfg.post.timeout_ms);
             println!("  voice.stop_delay_ms = {}", cfg.voice.stop_delay_ms);
             println!("  voice.record_audio = {}", cfg.voice.record_audio);
+            println!("  voice.vad_trace = {}", cfg.voice.vad_trace);
             println!("  voice.auto_paste = {}", cfg.voice.auto_paste);
             println!("  ui.language = {:?}", cfg.ui.language);
             println!("  overlay.position = {:?}", cfg.overlay.position);

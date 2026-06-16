@@ -2,7 +2,7 @@
 
 `src/` 只包含已实现的模块。路径细节看 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)，阶段历史看 [CHANGELOG.md](../CHANGELOG.md)。
 
-## 已实现（M8' 完）
+## 已实现
 
 ```
 src/
@@ -11,6 +11,7 @@ src/
 ├── cli/
 │   ├── mod.rs                           # clap 子命令分发
 │   ├── doctor.rs                        # shuo doctor：配置 / hotkey / ASR 配置 / UDS / launchd 检查
+│   ├── vad_probe.rs                     # M10 dev-only Silero WAV fixture probe（feature=dev-vad-probe）
 │   └── service.rs                       # launchd install/uninstall/start/stop/restart/status
 ├── config.rs                            # ~/.config/shuohua/config.toml 解析
 ├── log.rs                                # debug_println! 宏（release no-op，DESIGN §2.13）
@@ -46,6 +47,8 @@ src/
 │   ├── mod.rs
 │   ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 可选 wav 留存
 │   ├── finish.rs                        # 一次录音的生命周期 + stop_delay drain + post pipeline + dispatch
+│   ├── trace.rs                         # dev-only VAD shadow trace sidecar（feature=dev-vad-trace；默认 no-op）
+│   ├── vad.rs                           # VAD frame/state 边界 + speech/silence hysteresis controller（暂未接入主流程）
 │   └── dispatch.rs                      # 剪贴板 + 可选 Cmd+V
 ├── state/
 │   ├── mod.rs                           # StateStore + 原子 subscribe_with_snapshot + StateEvent broadcast
@@ -72,6 +75,6 @@ src/
 
 ## 当前未实现
 
-下一阶段开始前再补充。不要提前在源码树里创建占位模块。
+M10 多 session ASR 尚未接入主录音流程。当前已存在的 `voice/vad.rs`、`voice/trace.rs`、`cli/vad_probe.rs` 是 M10 前置验证支撑，均为纯 controller 或 feature-gated dev 工具；正式控制协议见 [M10](M10.md)。
 
 每条路径的详细职责见 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)；关键设计决策见 [DESIGN.md §2](DESIGN.md#2-关键设计决策)。

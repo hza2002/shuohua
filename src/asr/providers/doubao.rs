@@ -476,8 +476,14 @@ async fn handle_response(
                 let _ = evt_tx
                     .send(AsrEvent::Segment {
                         text: u.text.clone(),
-                        started_at,
-                        ended_at: Instant::now(),
+                        started_at: u
+                            .start_time_ms
+                            .map(|ms| started_at + std::time::Duration::from_millis(ms))
+                            .unwrap_or(started_at),
+                        ended_at: u
+                            .end_time_ms
+                            .map(|ms| started_at + std::time::Duration::from_millis(ms))
+                            .unwrap_or_else(Instant::now),
                     })
                     .await;
                 drift.record(u.text.clone());
@@ -677,7 +683,11 @@ struct DoubaoUtterance {
     text: String,
     #[serde(default)]
     definite: bool,
-    // start_time / end_time / words 字段忽略（M2 用不到，DESIGN §2.8 Segment 内部用 Instant）
+    #[serde(default, rename = "start_time")]
+    start_time_ms: Option<u64>,
+    #[serde(default, rename = "end_time")]
+    end_time_ms: Option<u64>,
+    // words 字段暂不进入通用 AsrEvent；M10 trace 先用 utterance 区间评估 VAD。
 }
 
 /// 从 utterances 里抽出"还在变化的尾巴"：跳过所有 definite=true 的（它们已经
@@ -779,6 +789,8 @@ mod tests {
         let utterances = vec![DoubaoUtterance {
             text: "测试一下说话。".into(),
             definite: true,
+            start_time_ms: None,
+            end_time_ms: None,
         }];
         assert_eq!(compute_partial_text(&utterances), "");
     }
@@ -789,14 +801,20 @@ mod tests {
             DoubaoUtterance {
                 text: "你好。".into(),
                 definite: true,
+                start_time_ms: None,
+                end_time_ms: None,
             },
             DoubaoUtterance {
                 text: "我".into(),
                 definite: false,
+                start_time_ms: None,
+                end_time_ms: None,
             },
             DoubaoUtterance {
                 text: "在说话".into(),
                 definite: false,
+                start_time_ms: None,
+                end_time_ms: None,
             },
         ];
         assert_eq!(compute_partial_text(&utterances), "我在说话");
@@ -805,6 +823,17 @@ mod tests {
     #[test]
     fn compute_partial_empty_when_no_utterances() {
         assert_eq!(compute_partial_text(&[]), "");
+    }
+
+    #[test]
+    fn utterance_deserializes_audio_time_offsets() {
+        let utterance: DoubaoUtterance = serde_json::from_str(
+            r#"{"text":"测试","definite":true,"start_time":120,"end_time":980}"#,
+        )
+        .unwrap();
+
+        assert_eq!(utterance.start_time_ms, Some(120));
+        assert_eq!(utterance.end_time_ms, Some(980));
     }
 
     #[test]

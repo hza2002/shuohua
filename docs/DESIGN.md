@@ -356,6 +356,15 @@ trigger = "f16"
 [voice]
 stop_delay_ms = 800
 record_audio  = false                        # ← 见 §7
+vad_trace     = false                        # dev-only；需 feature=dev-vad-trace，见 SCHEMA §4
+
+[voice.vad]
+backend = "silero"
+threshold = 0.5
+pause_silence_ms = 1500
+pre_roll_ms = 300
+max_overlap_ms = 200
+min_start_voiced_frames = 2
 
 [post]
 timeout_ms = 2000
@@ -403,8 +412,8 @@ provider 之间**完全不共享 schema**。每个 provider impl 自己 deserial
 
 ### 2.9 客户端 VAD + 多段 session（"思考不计费"机制）
 
-> **状态**：设计保留，v1 不实现。M2.5 试过 webrtc-vad，在真实声学环境里误判率高（风扇/空调嗡鸣谐波会过频域检测、RMS 门无法同时满足灵敏度与稳定性），不适合生产。
-> 后续等更好的本地语音检测模型（如 Silero VAD ONNX、M9）或用户切换信号（如二次 F16）再启用多 session。
+> **状态**：M10 设计中，当前默认运行路径仍是单 ASR session。M2.5 试过 webrtc-vad，在真实声学环境里误判率高（风扇/空调嗡鸣谐波会过频域检测、RMS 门无法同时满足灵敏度与稳定性），不适合生产。
+> M10 采用 Silero VAD shadow trace 验证后再正式启用，详细控制协议见 [M10](M10.md)。
 
 #### Doubao 计费模型（核实后的事实）
 
@@ -851,7 +860,7 @@ shuohua 是 launchd 后台 daemon。release binary 跑起来时 stderr 会被 la
 | Objective-C 互操作 | `objc2` 0.6 + `objc2-app-kit` 0.3 + `objc2-foundation` 0.3 | 现役标准，活跃维护 |
 | Core Graphics / CGEventTap | `core-graphics` (≥ 0.25), `core-foundation` | CGEventTap pipe 桥的基础。0.25 的 `CallbackResult::Drop` 是 suppress 落地依赖（见 §2.4） |
 | 录音 | `cpal`（首选）/ `coreaudio-rs`（备选） | cpal 简单，coreaudio-rs 控制更细。先用 cpal |
-| VAD（未来） | `webrtc-vad`（libfvad）- 试过，误判率高，不推荐 | 后续用 Silero VAD ONNX（M9）或更好的模型 |
+| VAD（M10） | Silero VAD via optional `voice_activity_detector` / ORT | WebRTC/RMS 真实环境误判高；Silero 先以 dev trace 验证，正式接入见 [M10](M10.md) |
 | PCM 通道（callback→consumer） | `tokio::sync::mpsc::unbounded` | M2 已验稳定；Go 版 syscall pipe 都稳跑，mpsc 更轻 |
 | 唯一 ID | `ulid` | history record id；26 字符短于 UUID，含时序信息 |
 | WebSocket | `tokio-tungstenite` + `native-tls` | tokio 生态首选；DoubaoProvider 用。macOS 原生 Security framework 走 native-tls（无 rustls CryptoProvider 配置负担、无 OpenSSL；跨平台时再切 rustls） |

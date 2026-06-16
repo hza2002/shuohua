@@ -1,5 +1,7 @@
 pub mod doctor;
 pub mod service;
+#[cfg(feature = "dev-vad-probe")]
+pub mod vad_probe;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -18,6 +20,8 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Doctor(doctor::DoctorArgs),
+    #[cfg(feature = "dev-vad-probe")]
+    VadProbe(vad_probe::VadProbeArgs),
     Install,
     Uninstall,
     Start,
@@ -34,6 +38,8 @@ pub fn parse() -> Cli {
 pub fn run_command(command: Command) -> Result<()> {
     match command {
         Command::Doctor(args) => doctor::run(args),
+        #[cfg(feature = "dev-vad-probe")]
+        Command::VadProbe(args) => vad_probe::run(args),
         Command::Install => service::install(),
         Command::Uninstall => service::uninstall(),
         Command::Start => service::start(),

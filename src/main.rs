@@ -150,7 +150,7 @@ fn run_daemon_process() -> Result<()> {
     eprintln!(
         "[shuo] config {} loaded:\n         trigger={} (parsed={})\n         \
          post.timeout_ms={}\n         voice.auto_paste={}  voice.record_audio={}  \
-         voice.stop_delay_ms={}  ui.language={}",
+         voice.stop_delay_ms={}  voice.vad_trace={}  ui.language={}",
         cfg_path.display(),
         cfg.hotkey.trigger,
         trigger,
@@ -158,6 +158,7 @@ fn run_daemon_process() -> Result<()> {
         cfg.voice.auto_paste,
         cfg.voice.record_audio,
         cfg.voice.stop_delay_ms,
+        cfg.voice.vad_trace,
         cfg.ui.language,
     );
     let (overlay, _overlay_rx) = OverlayHandle::channel();
@@ -336,6 +337,7 @@ async fn run_daemon(
                         let params = SessionParams {
                             auto_paste: cfg.voice.auto_paste,
                             record_audio: cfg.voice.record_audio,
+                            vad_trace: cfg.voice.vad_trace,
                             stop_delay_ms: cfg.voice.stop_delay_ms,
                             hotwords: profile.asr.hotwords.clone(),
                             start_app_context,

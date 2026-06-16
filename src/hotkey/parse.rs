@@ -42,11 +42,8 @@ pub fn parse(s: &str) -> Result<Combo> {
     // both rejected (no further colon allowed; suffix must be exactly the
     // literal).
     let (body, double) = match s.rsplit_once(':') {
-        Some((body, suffix)) if suffix.trim() == "double" => (body.trim().to_string(), true),
-        Some((_, suffix)) => bail!(
-            "unknown hotkey suffix {:?}; only :double is recognized",
-            suffix.trim()
-        ),
+        Some((body, suffix)) if suffix == "double" => (body.to_string(), true),
+        Some((_, suffix)) => bail!("unknown hotkey suffix {suffix:?}; only :double is recognized"),
         None => (s, false),
     };
     if body.contains(':') {
@@ -424,15 +421,6 @@ mod tests {
         let parsed = parse("esc:double").unwrap();
         assert_eq!(parsed, parse("escape:double").unwrap());
         assert_eq!(parsed.to_string(), "escape:double");
-    }
-
-    #[test]
-    fn double_suffix_allows_whitespace_around_colon() {
-        assert_eq!(
-            parse("ESC: double").unwrap(),
-            parse("escape:double").unwrap()
-        );
-        assert_eq!(parse("esc : double").unwrap().to_string(), "escape:double");
     }
 
     #[test]

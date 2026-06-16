@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
+use time::{OffsetDateTime, UtcOffset};
 
 use crate::text_stats::TextStats;
 
@@ -92,8 +92,8 @@ pub enum PipelineStepStatus {
     Skipped,
 }
 
-pub fn default_path() -> PathBuf {
-    state_dir().join("history.jsonl")
+pub fn history_dir() -> PathBuf {
+    state_dir().join("history")
 }
 
 pub fn state_dir() -> PathBuf {
@@ -104,7 +104,37 @@ pub fn state_dir() -> PathBuf {
 }
 
 pub fn append_default(record: &HistoryRecord) -> Result<()> {
-    append_record(&default_path(), record)
+    append_record(&path_for_month(record.started_at), record)
+}
+
+pub fn path_for_month(now: OffsetDateTime) -> PathBuf {
+    path_for_month_in_dir(&history_dir(), now)
+}
+
+pub fn path_for_month_in_dir(dir: &Path, now: OffsetDateTime) -> PathBuf {
+    let local = now.to_offset(local_offset());
+    let name = format!("{:04}-{:02}.jsonl", local.year(), u8::from(local.month()));
+    dir.join(name)
+}
+
+pub fn monthly_history_files_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    match fs::read_dir(dir) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry?;
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "jsonl") {
+                    files.push(path);
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).with_context(|| format!("read history dir {}", dir.display())),
+    }
+    files.sort();
+    files.reverse();
+    Ok(files)
 }
 
 pub fn append_record(path: &Path, record: &HistoryRecord) -> Result<()> {
@@ -122,6 +152,10 @@ pub fn append_record(path: &Path, record: &HistoryRecord) -> Result<()> {
     file.write_all(b"\n")
         .with_context(|| format!("write history {}", path.display()))?;
     Ok(())
+}
+
+fn local_offset() -> UtcOffset {
+    UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC)
 }
 
 #[cfg(test)]
@@ -170,7 +204,7 @@ mod tests {
     fn append_writes_one_json_line_with_v2_schema() {
         let dir = std::env::temp_dir().join(format!("shuohua-history-test-{}", ulid::Ulid::new()));
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("history.jsonl");
+        let path = dir.join("2026-06.jsonl");
 
         let record = sample_record();
         append_record(&path, &record).unwrap();
@@ -196,6 +230,33 @@ mod tests {
             json.get("error").is_none(),
             "error should be omitted when status=submitted"
         );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn path_for_month_uses_year_month_jsonl_name() {
+        let dir = PathBuf::from("/tmp/shuohua-history-test");
+        let path = path_for_month_in_dir(&dir, datetime!(2026-06-13 12:00:00 UTC));
+        let file_name = path.file_name().unwrap().to_string_lossy();
+        assert!(file_name.ends_with(".jsonl"));
+        assert_eq!(file_name.len(), "2026-06.jsonl".len());
+    }
+
+    #[test]
+    fn monthly_history_files_returns_newest_files_first() {
+        let dir = std::env::temp_dir().join(format!("shuohua-history-list-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("2026-05.jsonl"), "").unwrap();
+        fs::write(dir.join("2026-07.jsonl"), "").unwrap();
+        fs::write(dir.join("notes.txt"), "").unwrap();
+
+        let files = monthly_history_files_in_dir(&dir).unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["2026-07.jsonl", "2026-05.jsonl"]);
 
         let _ = fs::remove_dir_all(dir);
     }

@@ -1,7 +1,6 @@
 //! UDS daemon server.
 
 use std::fs;
-use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -109,16 +108,11 @@ async fn handle_client(
                 before,
                 query,
             } => {
-                let records = read_history(
-                    &history::default_path(),
-                    limit,
-                    before.as_deref(),
-                    query.as_deref(),
-                )
-                .unwrap_or_else(|e| {
-                    tracing::warn!(error = ?e, "history read failed");
-                    Vec::new()
-                });
+                let records = read_history(limit, before.as_deref(), query.as_deref())
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(error = ?e, "history read failed");
+                        Vec::new()
+                    });
                 send_or_drop(&tx, Event::History { records });
             }
             Command::DaemonStatus => {
@@ -287,16 +281,19 @@ fn step_status(status: PipelineStepStatus) -> &'static str {
 }
 
 fn read_history(
-    path: &Path,
     limit: usize,
     before: Option<&str>,
     query: Option<&str>,
 ) -> Result<Vec<HistoryRecord>> {
-    let body = match fs::read_to_string(path) {
-        Ok(body) => body,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e).with_context(|| format!("read history {}", path.display())),
-    };
+    read_history_from_dir(&history::history_dir(), limit, before, query)
+}
+
+fn read_history_from_dir(
+    dir: &Path,
+    limit: usize,
+    before: Option<&str>,
+    query: Option<&str>,
+) -> Result<Vec<HistoryRecord>> {
     let before = before
         .map(|value| {
             time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
@@ -305,17 +302,22 @@ fn read_history(
         .context("parse history before timestamp")?;
     let query = query.map(str::to_lowercase);
     let mut records = Vec::new();
-    for line in body.lines().filter(|line| !line.trim().is_empty()) {
-        let record: HistoryRecord = serde_json::from_str(line).context("parse history line")?;
-        if before.is_some_and(|before| record.started_at >= before) {
-            continue;
-        }
-        if let Some(query) = query.as_deref() {
-            if !history_matches(&record, query) {
+    for path in history::monthly_history_files_in_dir(dir)? {
+        let body = fs::read_to_string(&path)
+            .with_context(|| format!("read history {}", path.display()))?;
+        for line in body.lines().filter(|line| !line.trim().is_empty()) {
+            let record: HistoryRecord = serde_json::from_str(line)
+                .with_context(|| format!("parse history line in {}", path.display()))?;
+            if before.is_some_and(|before| record.started_at >= before) {
                 continue;
             }
+            if let Some(query) = query.as_deref() {
+                if !history_matches(&record, query) {
+                    continue;
+                }
+            }
+            records.push(record);
         }
-        records.push(record);
     }
     records.sort_by(|a, b| b.started_at.cmp(&a.started_at));
     records.truncate(limit);
@@ -336,11 +338,13 @@ fn history_matches(record: &HistoryRecord, query: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use time::macros::datetime;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
 
     use super::*;
     use crate::ipc::protocol::{decode_event, encode_command};
+    use crate::state::history::{AsrHistory, HistoryStatus, PipelineStepStatus};
 
     #[tokio::test]
     async fn subscribe_fans_out_snapshot_and_live_events() {
@@ -393,6 +397,36 @@ mod tests {
         fs::remove_file(path).ok();
     }
 
+    #[test]
+    fn read_history_from_dir_reads_monthly_files_newest_first() {
+        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&dir).unwrap();
+
+        write_history_record(
+            &dir.join("2026-06.jsonl"),
+            history_record("jun", datetime!(2026-06-20 12:00:00 UTC), "六月记录"),
+        );
+        write_history_record(
+            &dir.join("2026-07.jsonl"),
+            history_record("jul-a", datetime!(2026-07-03 12:00:00 UTC), "七月较早"),
+        );
+        write_history_record(
+            &dir.join("2026-07.jsonl"),
+            history_record("jul-b", datetime!(2026-07-04 12:00:00 UTC), "七月较晚"),
+        );
+
+        let records = read_history_from_dir(&dir, 2, None, None).unwrap();
+        let ids: Vec<_> = records.iter().map(|record| record.id.as_str()).collect();
+        assert_eq!(ids, vec!["jul-b", "jul-a"]);
+
+        let records =
+            read_history_from_dir(&dir, 10, Some("2026-07-04T00:00:00Z"), Some("六月")).unwrap();
+        let ids: Vec<_> = records.iter().map(|record| record.id.as_str()).collect();
+        assert_eq!(ids, vec!["jun"]);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
     struct TestClient {
         lines: tokio::io::Lines<BufReader<tokio::net::unix::OwnedReadHalf>>,
         writer: tokio::net::unix::OwnedWriteHalf,
@@ -421,6 +455,39 @@ mod tests {
                     .unwrap()
                     .unwrap();
             decode_event(&line).unwrap()
+        }
+    }
+
+    fn write_history_record(path: &Path, record: HistoryRecord) {
+        history::append_record(path, &record).unwrap();
+    }
+
+    fn history_record(id: &str, started_at: time::OffsetDateTime, text: &str) -> HistoryRecord {
+        HistoryRecord {
+            version: 2,
+            id: id.to_string(),
+            started_at,
+            ended_at: started_at + time::Duration::seconds(1),
+            duration_ms: 1000,
+            status: HistoryStatus::Submitted,
+            app: Some("com.example.App".to_string()),
+            text: text.to_string(),
+            text_stats: crate::text_stats::compute(text),
+            asr: AsrHistory {
+                provider: "test".to_string(),
+                text: text.to_string(),
+                duration_ms: 1000,
+                audio_ms: 1000,
+                sessions: Vec::new(),
+            },
+            pipeline: vec![PipelineStepHistory {
+                name: "test".to_string(),
+                status: PipelineStepStatus::Ok,
+                duration_ms: 1.0,
+                text: None,
+                error: None,
+            }],
+            error: None,
         }
     }
 }

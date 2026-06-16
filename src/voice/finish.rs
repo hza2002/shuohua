@@ -486,7 +486,7 @@ async fn run_single_session_recording(
     }
     // terminal_error 路径：录音 / ASR 中途崩溃 → 不跑 post chain、不写剪贴板。
     // 理由（M7 决策）：半成品上屏会误导（用户以为成功），auto_paste 还可能粘到
-    // 已经切走的应用；history.jsonl 保留所有 segments，需要的用户从 TUI 回捞。
+    // 已经切走的应用；history 保留所有 segments，需要的用户从 TUI 回捞。
     let (final_text, pipeline, status, error) = if terminal_error.is_some() {
         (raw_text.clone(), Vec::new(), HistoryStatus::Error, None)
     } else {

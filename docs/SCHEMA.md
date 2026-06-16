@@ -168,13 +168,13 @@ ${XDG_STATE_HOME:-~/.local/state}/shuohua/audio/<recording_id>.wav
 
 ## 4. VAD Trace（开发期 sidecar）
 
-`voice.vad_trace = true` 且 binary 用 `--features dev-vad-trace` 构建时，每次 recording 额外写：
+`voice.vad_trace = true` 且 binary 用 `--features dev` 构建时，每次 recording 额外写：
 
 ```
 ${XDG_STATE_HOME:-~/.local/state}/shuohua/traces/<recording_id>.jsonl
 ```
 
-这是 M10 VAD 评估用 sidecar，不属于 history schema；release 默认不编译 Silero、不写 trace。每行一个 JSON 事件，当前包含：
+这是 M10 VAD 评估用 sidecar，不属于 history schema；默认 build 不写 trace。每行一个 JSON 事件，当前包含：
 
 - `recording_start`：recording id、provider、Silero shadow 参数。
 - `vad_frame`：每个 512-sample 窗口的 `start_ms/end_ms/probability/speech`。

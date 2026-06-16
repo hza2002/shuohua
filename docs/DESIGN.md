@@ -356,7 +356,7 @@ trigger = "f16"
 [voice]
 stop_delay_ms = 800
 record_audio  = false                        # ← 见 §7
-vad_trace     = false                        # dev-only；需 feature=dev-vad-trace，见 SCHEMA §4
+vad_trace     = false                        # dev-only；需 feature=dev，见 SCHEMA §4
 
 [voice.vad]
 backend = "silero"

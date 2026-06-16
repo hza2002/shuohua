@@ -11,7 +11,6 @@ src/
 ├── cli/
 │   ├── mod.rs                           # clap 子命令分发
 │   ├── doctor.rs                        # shuo doctor：配置 / hotkey / ASR 配置 / UDS / launchd 检查
-│   ├── vad_probe.rs                     # M10 dev-only Silero WAV fixture probe（feature=dev-vad-probe）
 │   └── service.rs                       # launchd install/uninstall/start/stop/restart/status
 ├── config.rs                            # ~/.config/shuohua/config.toml 解析
 ├── log.rs                                # debug_println! 宏（release no-op，DESIGN §2.13）
@@ -47,7 +46,7 @@ src/
 │   ├── mod.rs
 │   ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 可选 wav 留存
 │   ├── finish.rs                        # 一次录音生命周期：单/多 session 两条主路径 + post pipeline + dispatch
-│   ├── trace.rs                         # dev-only VAD shadow trace sidecar（feature=dev-vad-trace；默认 no-op）
+│   ├── observer.rs                      # dev observer：VAD shadow trace sidecar（feature=dev；默认 ZST no-op）
 │   ├── vad.rs                           # VAD frame/state 边界 + speech/silence hysteresis controller
 │   ├── silero.rs                        # Silero VAD 帧检测器（M10，默认 build）
 │   ├── timeline.rs                      # Sample-indexed PCM ring buffer + slice_from（M10 resume 用）
@@ -77,6 +76,6 @@ src/
 
 ## 当前实现状态
 
-M10 多 session ASR 已接入主录音流程。`finish::run_recording` 入口按 `params.idle_pause && params.vad.backend == Silero` 二选一分派到 `run_single_session_recording`（保持 M9 行为）或 `run_multi_session_recording`（Active / Pausing / Idle / Opening 状态机）。`voice/silero.rs`、`voice/timeline.rs`、`voice/vad.rs` 都是默认 build 编译。`voice/trace.rs`、`cli/vad_probe.rs` 仍是 feature-gated dev 工具。
+M10 多 session ASR 已接入主录音流程。`finish::run_recording` 入口按 `params.idle_pause && params.vad.backend == Silero` 二选一分派到 `run_single_session_recording`（保持 M9 行为）或 `run_multi_session_recording`（Active / Pausing / Idle / Opening 状态机）。`voice/silero.rs`、`voice/timeline.rs`、`voice/vad.rs` 都是默认 build 编译。`voice/observer.rs` 是 `feature=dev` 下的 trace observer，默认 build 是 ZST no-op。`cli/vad_probe.rs` 已删除；离线 threshold 评估改用保留 WAV + trace 后处理脚本。
 
 每条路径的详细职责见 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)；关键设计决策见 [DESIGN.md §2](DESIGN.md#2-关键设计决策)。

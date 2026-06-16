@@ -156,11 +156,6 @@ fn plist_body(exe: &std::path::Path, state_dir: &std::path::Path) -> String {
   <string>{}/launchd.stdout.log</string>
   <key>StandardErrorPath</key>
   <string>{}/launchd.stderr.log</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>RUST_LOG</key>
-    <string>info</string>
-  </dict>
 </dict>
 </plist>
 "#,

@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 #[command(name = "shuo", version, about = "macOS voice input assistant")]
 pub struct Cli {
     /// Run the long-lived daemon process.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub daemon: bool,
 
     #[command(subcommand)]

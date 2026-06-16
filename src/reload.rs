@@ -66,7 +66,7 @@ pub fn watch_with_handle(path: PathBuf) -> Result<(Rx, Handle)> {
         .name("config-watcher".into())
         .spawn(move || {
             if let Err(e) = run_watcher(dir, file_name, path, tx) {
-                eprintln!("[reload] watcher exited: {e:#}");
+                tracing::error!(error = ?e, "config watcher exited");
             }
         })
         .context("spawn config-watcher thread")?;
@@ -96,7 +96,7 @@ fn run_watcher(
         let event = match event_rx.recv() {
             Ok(Ok(e)) => e,
             Ok(Err(e)) => {
-                eprintln!("[reload] notify error: {e}");
+                tracing::warn!(error = %e, "notify error");
                 continue;
             }
             Err(_) => return Ok(()),
@@ -113,7 +113,7 @@ fn run_watcher(
         match load_and_broadcast(&path, &tx) {
             Ok(()) => {}
             Err(e) => {
-                eprintln!("[reload] parse failed, keeping previous: {e:#}");
+                tracing::warn!(error = ?e, "config reload failed; keeping previous config");
             }
         }
     }
@@ -122,7 +122,7 @@ fn run_watcher(
 fn load_and_broadcast(path: &PathBuf, tx: &watch::Sender<Cfg>) -> Result<()> {
     let cfg = config::load_from(path)?;
     tx.send(Arc::new(cfg)).context("broadcast config reload")?;
-    crate::debug_println!("[reload] config reloaded from {}", path.display());
+    tracing::info!(path = %path.display(), "config reloaded");
     Ok(())
 }
 
@@ -149,7 +149,7 @@ pub fn spawn_i18n(mut rx: Rx, handle: OverlayHandle) {
             if next != prev {
                 crate::i18n::init(&next);
                 handle.send(OverlayCmd::Relabel);
-                crate::debug_println!("[reload] language → {next}");
+                tracing::debug!(language = %next, "language changed");
                 prev = next;
             }
         }
@@ -173,10 +173,14 @@ pub fn spawn_hotkey(mut rx: Rx, combo_tx: mpsc::UnboundedSender<crate::hotkey::C
                     if combo_tx.send(combo).is_err() {
                         return;
                     }
-                    crate::debug_println!("[reload] hotkey trigger → {next} (parsed={printed})");
+                    tracing::debug!(trigger = %next, parsed = %printed, "hotkey trigger changed");
                 }
                 Err(e) => {
-                    eprintln!("[reload] invalid hotkey {next:?}, keeping previous: {e:#}");
+                    tracing::warn!(
+                        trigger = ?next,
+                        error = ?e,
+                        "invalid hotkey; keeping previous trigger"
+                    );
                 }
             }
             prev = next;

@@ -49,7 +49,7 @@ pub async fn run(listener: UnixListener, state: StateStore, control: ServerContr
         let control = control.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_client(stream, state, control).await {
-                crate::debug_println!("[ipc] client ended: {e:#}");
+                tracing::debug!(error = ?e, "IPC client ended");
             }
         });
     }
@@ -69,7 +69,7 @@ async fn handle_client(
             let line = match crate::ipc::protocol::encode_event(&event) {
                 Ok(line) => line,
                 Err(e) => {
-                    eprintln!("[ipc] serialize event failed: {e}");
+                    tracing::error!(error = %e, "serialize IPC event failed");
                     continue;
                 }
             };
@@ -116,7 +116,7 @@ async fn handle_client(
                     query.as_deref(),
                 )
                 .unwrap_or_else(|e| {
-                    eprintln!("[ipc] history read failed: {e:#}");
+                    tracing::warn!(error = ?e, "history read failed");
                     Vec::new()
                 });
                 send_or_drop(&tx, Event::History { records });
@@ -176,6 +176,7 @@ fn spawn_state_forwarder(
             match rx.recv().await {
                 Ok(event) => send_or_drop(&tx, event.into()),
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(lagged = n, "IPC client lagged");
                     send_or_drop(
                         &tx,
                         Event::Error {
@@ -193,6 +194,7 @@ fn spawn_state_forwarder(
 
 fn send_or_drop(tx: &mpsc::Sender<Event>, event: Event) {
     if tx.try_send(event).is_err() {
+        tracing::warn!("IPC client queue full");
         let _ = tx.try_send(Event::Error {
             recording_id: None,
             kind: "lag".to_string(),

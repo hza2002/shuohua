@@ -148,19 +148,17 @@ fn run_daemon_process() -> Result<()> {
     let trigger = hotkey::parse::parse(&cfg.hotkey.trigger)
         .with_context(|| format!("parse [hotkey] trigger = {:?}", cfg.hotkey.trigger))?;
 
-    eprintln!(
-        "[shuo] config {} loaded:\n         trigger={} (parsed={})\n         \
-         post.timeout_ms={}\n         voice.auto_paste={}  voice.record_audio={}  \
-         voice.stop_delay_ms={}  voice.vad_trace={}  ui.language={}",
-        cfg_path.display(),
-        cfg.hotkey.trigger,
-        trigger,
-        cfg.post.timeout_ms,
-        cfg.voice.auto_paste,
-        cfg.voice.record_audio,
-        cfg.voice.stop_delay_ms,
-        cfg.voice.vad_trace,
-        cfg.ui.language,
+    tracing::info!(
+        config_path = %cfg_path.display(),
+        trigger = %cfg.hotkey.trigger,
+        parsed_trigger = %trigger,
+        post_timeout_ms = cfg.post.timeout_ms,
+        auto_paste = cfg.voice.auto_paste,
+        record_audio = cfg.voice.record_audio,
+        stop_delay_ms = cfg.voice.stop_delay_ms,
+        vad_trace = cfg.voice.vad_trace,
+        language = %cfg.ui.language,
+        "daemon config loaded"
     );
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let state_store = StateStore::new();
@@ -183,7 +181,7 @@ fn run_daemon_process() -> Result<()> {
                 overlay_for_daemon,
                 state_for_daemon,
             )) {
-                eprintln!("[shuo] daemon exited: {e:#}");
+                tracing::error!(error = ?e, "daemon exited");
                 std::process::exit(2);
             }
         })
@@ -230,7 +228,7 @@ async fn run_daemon(
         .name("hotkey-eventtap".into())
         .spawn(move || {
             if let Err(e) = hotkey::provider_darwin::run(pipe_writer, suppressor_for_tap) {
-                eprintln!("[hotkey] event tap exited: {e:#}");
+                tracing::error!(error = ?e, "hotkey event tap exited");
                 std::process::exit(2);
             }
         })
@@ -242,10 +240,10 @@ async fn run_daemon(
         .spawn(move || pipe_to_mpsc(pipe_reader, raw_tx))
         .context("spawn hotkey bridge thread")?;
 
-    eprintln!(
-        "[shuo] M6 ready. UDS={} Press {} to toggle recording.",
-        socket_path.display(),
-        cfg_rx.borrow().hotkey.trigger
+    tracing::info!(
+        uds = %socket_path.display(),
+        trigger = %cfg_rx.borrow().hotkey.trigger,
+        "daemon ready"
     );
 
     let mut tracker = Tracker::new(initial_trigger);
@@ -304,7 +302,7 @@ async fn run_daemon(
                         ) {
                             Ok(profile) => profile,
                             Err(e) => {
-                                eprintln!("[app] profile load failed: {e:#}");
+                                tracing::warn!(error = ?e, "app profile load failed");
                                 state_store.set_error(None);
                                 continue;
                             }
@@ -320,7 +318,7 @@ async fn run_daemon(
                         ) {
                             Ok(chain) => chain,
                             Err(e) => {
-                                eprintln!("[post] chain load failed: {e:#}");
+                                tracing::warn!(error = ?e, "post chain load failed");
                                 state_store.set_error(None);
                                 continue;
                             }
@@ -329,7 +327,7 @@ async fn run_daemon(
                             match build_provider(&profile.asr.provider, &profile.asr.overrides) {
                             Ok(runtime) => runtime,
                             Err(e) => {
-                                eprintln!("[asr] provider init failed: {e:#}");
+                                tracing::error!(error = ?e, "ASR provider init failed");
                                 state_store.set_error(None);
                                 continue;
                             }
@@ -403,12 +401,12 @@ fn pipe_to_mpsc(mut reader: os_pipe::PipeReader, tx: tokio::sync::mpsc::Unbounde
     let mut buf = [0u8; 4];
     loop {
         if let Err(e) = reader.read_exact(&mut buf) {
-            eprintln!("[hotkey] pipe read failed: {e}");
+            tracing::error!(error = %e, "hotkey pipe read failed");
             return;
         }
         // Unknown kind byte = corrupt frame; skip it rather than crash.
         let Some(ev) = RawEvent::decode(buf) else {
-            eprintln!("[hotkey] dropped unknown frame {buf:?}");
+            tracing::warn!(frame = ?buf, "dropped unknown hotkey frame");
             continue;
         };
         if tx.send(ev).is_err() {

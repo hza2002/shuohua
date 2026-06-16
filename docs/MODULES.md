@@ -46,9 +46,11 @@ src/
 ├── voice/
 │   ├── mod.rs
 │   ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 可选 wav 留存
-│   ├── finish.rs                        # 一次录音的生命周期 + stop_delay drain + post pipeline + dispatch
+│   ├── finish.rs                        # 一次录音生命周期：单/多 session 两条主路径 + post pipeline + dispatch
 │   ├── trace.rs                         # dev-only VAD shadow trace sidecar（feature=dev-vad-trace；默认 no-op）
-│   ├── vad.rs                           # VAD frame/state 边界 + speech/silence hysteresis controller（暂未接入主流程）
+│   ├── vad.rs                           # VAD frame/state 边界 + speech/silence hysteresis controller
+│   ├── silero.rs                        # Silero VAD 帧检测器（M10，默认 build）
+│   ├── timeline.rs                      # Sample-indexed PCM ring buffer + slice_from（M10 resume 用）
 │   └── dispatch.rs                      # 剪贴板 + 可选 Cmd+V
 ├── state/
 │   ├── mod.rs                           # StateStore + 原子 subscribe_with_snapshot + StateEvent broadcast
@@ -73,8 +75,8 @@ src/
 
 数据流：键盘事件 → CGEventTap 回调（Default 模式，可吞）→ 解码成 4 字节 `RawEvent`（含 `EventKind` + `keycode` + 8-bit `ModMask`）→ pipe → mpsc → `Tracker::on_event(ev, Instant::now())` → tokio main loop。回调里同步问 `Mutex<Suppressor>` 决定 `CallbackResult::Drop` / `Keep`，按 trigger 类型分发：纯键 / combo 吞 key 部分的 down + 配对 up（§5 不变量 8，即使 reload 中途换 trigger 也安全）；modifier-only trigger 不吞任何事件（modifier 太常用，吞了破坏太多）。`Tracker` 内部分三个 sub-machine：纯键 / combo 走"KeyDown 时 mods 精确匹配 + auto-repeat 去抖"；modifier-only 走"FlagsChanged 检测 clean tap"（500ms hold 阈值 + 中间无普通键 + 中间无额外 modifier）；`:double` 后缀在 `register_tap` 用 400ms 窗口判定。第一次 trigger 命中 = toggle ON 瞬间取一次 `frontmost_app`，按 `apps/<bundle_id>.toml` / `apps/default.toml` 选定 app profile；profile 的 `[asr]` 决定 ASR provider、hotwords 和 provider 字段覆盖，`[post].chain` 再引用 `post/rules/*.toml` / `post/llm/*.toml` 组件并应用 `[post.llm.<name>]` 浅覆盖；spawn `finish::run_recording` 任务：cpal stream → `DoubaoSession.send_pcm` 流式推、`AsrEvent::Segment` 累积、`StateStore` 同步状态、`OverlayHandle` 推 UI 命令、UDS server fanout 给 TUI。第二次命中 = oneshot 通知 task 收尾：toggle OFF 瞬间再取一次 `frontmost_app` 只作为 prompt 变量，不重新选择 profile；drain `stop_delay_ms` 尾音 → send `is_last` → 等 Done（5s 超时）→ segments 直接 concat（provider 自带分隔） → 已选定的 post chain（执行时 overlay 显示 Thinking；单步失败/超时跳过 + meta 行 notice 黄字 3s + pipeline trace；致命错误经 text 区 error 红字反馈并跳过 dispatch）→ 剪贴板 + Cmd+V → `history.jsonl` 落一行 → `history_appended` 推给 TUI。配置热重载：notify watcher 监听 `~/.config/shuohua/` → 通过 `watch::Sender` 广播给 overlay / i18n / hotkey 三个 subscriber；hotkey subscriber 收到新 `Combo` 时同步调 `Tracker::set_trigger` 和 `Suppressor::set_trigger`；UDS `reload_config` 复用同一个 parse + broadcast 入口；app profile / ASR provider / post components 在下一次录音开始时生效。
 
-## 当前未实现
+## 当前实现状态
 
-M10 多 session ASR 尚未接入主录音流程。当前已存在的 `voice/vad.rs`、`voice/trace.rs`、`cli/vad_probe.rs` 是 M10 前置验证支撑，均为纯 controller 或 feature-gated dev 工具；正式控制协议见 [M10](M10.md)。
+M10 多 session ASR 已接入主录音流程。`finish::run_recording` 入口按 `params.idle_pause && params.vad.backend == Silero` 二选一分派到 `run_single_session_recording`（保持 M9 行为）或 `run_multi_session_recording`（Active / Pausing / Idle / Opening 状态机）。`voice/silero.rs`、`voice/timeline.rs`、`voice/vad.rs` 都是默认 build 编译。`voice/trace.rs`、`cli/vad_probe.rs` 仍是 feature-gated dev 工具。
 
 每条路径的详细职责见 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)；关键设计决策见 [DESIGN.md §2](DESIGN.md#2-关键设计决策)。

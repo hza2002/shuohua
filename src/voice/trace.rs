@@ -108,6 +108,47 @@ mod imp {
             self.write(json!({"event": "provider_opened", "t_ms": t_ms}));
         }
 
+        pub fn session_start(&mut self, session_index: u32, start_ms: u64) {
+            self.write(json!({
+                "event": "session_start",
+                "session_index": session_index,
+                "start_ms": start_ms,
+            }));
+        }
+
+        pub fn session_finalize_start(&mut self, session_index: u32, t_ms: u64) {
+            self.write(json!({
+                "event": "session_finalize_start",
+                "session_index": session_index,
+                "t_ms": t_ms,
+            }));
+        }
+
+        pub fn session_done(
+            &mut self,
+            session_index: u32,
+            start_ms: u64,
+            end_ms: u64,
+            audio_ms: u64,
+        ) {
+            self.write(json!({
+                "event": "session_done",
+                "session_index": session_index,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "audio_ms": audio_ms,
+            }));
+        }
+
+        pub fn session_open_error(&mut self, session_index: u32, t_ms: u64, message: &str) {
+            self.write(json!({
+                "event": "session_open_error",
+                "session_index": session_index,
+                "t_ms": t_ms,
+                "message": message,
+            }));
+        }
+
         pub fn asr_partial(&mut self, t_ms: u64, seq: u64, text: &str) {
             self.write(json!({
                 "event": "asr_partial",
@@ -324,6 +365,17 @@ mod imp {
         pub fn asr_segment(&mut self, _t_ms: u64, _text: &str, _start_ms: u64, _end_ms: u64) {}
         pub fn asr_error(&mut self, _t_ms: u64, _message: &str) {}
         pub fn asr_done(&mut self, _t_ms: u64) {}
+        pub fn session_start(&mut self, _session_index: u32, _start_ms: u64) {}
+        pub fn session_finalize_start(&mut self, _session_index: u32, _t_ms: u64) {}
+        pub fn session_done(
+            &mut self,
+            _session_index: u32,
+            _start_ms: u64,
+            _end_ms: u64,
+            _audio_ms: u64,
+        ) {
+        }
+        pub fn session_open_error(&mut self, _session_index: u32, _t_ms: u64, _message: &str) {}
         pub fn finish(&mut self, _status: &str, _audio_ms: u64) {}
     }
 }
@@ -360,6 +412,38 @@ mod tests {
         assert!(body.contains(r#""event":"asr_segment""#));
         assert!(body.contains(r#""event":"recording_end""#));
         assert!(body.contains(r#""audio_ms":1600"#));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn writes_session_boundary_events() {
+        let dir = std::env::temp_dir().join(format!("shuohua-trace-sess-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut trace = TraceRecorder::start_in_dir(
+            &dir,
+            TraceStart {
+                enabled: true,
+                recording_id: "01SESS".to_string(),
+                provider: "doubao".to_string(),
+                started_at: "2026-06-16T00:00:00Z".to_string(),
+            },
+        )
+        .unwrap();
+        trace.session_start(0, 0);
+        trace.session_finalize_start(0, 1234);
+        trace.session_done(0, 0, 1534, 1534);
+        trace.session_open_error(1, 2000, "boom");
+        trace.finish("error", 1534);
+
+        let body = fs::read_to_string(dir.join("01SESS.jsonl")).unwrap();
+        assert!(body.contains(r#""event":"session_start""#));
+        assert!(body.contains(r#""event":"session_finalize_start""#));
+        assert!(body.contains(r#""event":"session_done""#));
+        assert!(body.contains(r#""audio_ms":1534"#));
+        assert!(body.contains(r#""event":"session_open_error""#));
+        assert!(body.contains(r#""message":"boom""#));
 
         let _ = fs::remove_dir_all(dir);
     }

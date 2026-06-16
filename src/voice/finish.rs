@@ -664,6 +664,8 @@ async fn run_multi_session_recording(
         },
     );
     trace.provider_opened(instant_elapsed_ms(recording_started_instant));
+    let mut session_index: u32 = 0;
+    trace.session_start(session_index, 0);
 
     let mut sessions: Vec<SessionCapture> = Vec::new();
     let mut current_session_started_at: Instant = recording_started_instant;
@@ -859,6 +861,10 @@ async fn run_multi_session_recording(
             }
 
             // finalize 当前 session
+            trace.session_finalize_start(
+                session_index,
+                instant_elapsed_ms(recording_started_instant),
+            );
             let Some(active_session_ref) = session.as_mut() else {
                 break 'outer;
             };
@@ -893,6 +899,16 @@ async fn run_multi_session_recording(
 
             // 记录当前 session 的 SessionCapture
             let now = Instant::now();
+            let session_audio_ms = samples_to_ms(current_session_samples);
+            let session_start_ms =
+                instant_to_ms(recording_started_instant, current_session_started_at);
+            let session_end_ms = instant_to_ms(recording_started_instant, now);
+            trace.session_done(
+                session_index,
+                session_start_ms,
+                session_end_ms,
+                session_audio_ms,
+            );
             sessions.push(SessionCapture {
                 started_at: current_session_started_at,
                 ended_at: now,
@@ -962,11 +978,13 @@ async fn run_multi_session_recording(
                 timeline.oldest_sample(),
             );
 
+            let next_index = session_index + 1;
             let (new_session, new_events) = match provider.open(ctx.clone()).await {
                 Ok(t) => t,
                 Err(err) => {
                     eprintln!("[shuo] ❌ ASR resume open failed: {err}");
-                    trace.asr_error(
+                    trace.session_open_error(
+                        next_index,
                         instant_elapsed_ms(recording_started_instant),
                         &err.to_string(),
                     );
@@ -979,7 +997,9 @@ async fn run_multi_session_recording(
             };
             session = Some(new_session);
             events = new_events;
+            session_index = next_index;
             trace.provider_opened(instant_elapsed_ms(recording_started_instant));
+            trace.session_start(session_index, samples_to_ms(send_start));
 
             let replay = timeline.slice_from(send_start);
             current_session_started_at = recording_started_instant

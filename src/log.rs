@@ -101,20 +101,6 @@ fn local_offset() -> UtcOffset {
     UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC)
 }
 
-#[cfg(debug_assertions)]
-#[macro_export]
-macro_rules! debug_println {
-    ($($arg:tt)*) => { tracing::debug!($($arg)*) };
-}
-
-#[cfg(not(debug_assertions))]
-#[macro_export]
-macro_rules! debug_println {
-    ($($arg:tt)*) => {{
-        let _ = format_args!($($arg)*);
-    }};
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

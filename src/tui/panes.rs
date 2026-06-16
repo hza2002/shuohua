@@ -75,20 +75,18 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let header = vec![
         Line::from(vec![
             Span::styled(
-                status_label(app),
+                format!("{:<10}", status_label(app)),
                 Style::default()
                     .fg(phase_color(app))
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
-            Span::raw(format!("{}  ", format_duration(elapsed_ms))),
-            Span::raw(format!("{} words  ", app.words)),
             Span::raw(format!("{app_label} ({bundle})")),
         ]),
         Line::from(vec![
             Span::styled("id ", Style::default().fg(Color::DarkGray)),
             Span::raw(format!("{}  ", recording_id_label(app))),
-            Span::styled("elapsed ", Style::default().fg(Color::DarkGray)),
+            Span::styled("duration ", Style::default().fg(Color::DarkGray)),
             Span::raw(format!("{}  ", format_duration(elapsed_ms))),
             Span::styled("words ", Style::default().fg(Color::DarkGray)),
             Span::raw(app.words.to_string()),
@@ -184,22 +182,24 @@ fn live_speech_lines(app: &App, width: usize, max_lines: usize) -> Vec<Line<'sta
     let truncated = all_lines.len() > max_lines;
     if truncated {
         let prefix_width = 4;
-        let keep = width * max_lines - prefix_width;
-        let segment_chars = segments.chars().count();
-        let combined = format!("{segments}{}", app.partial);
-        let drop_chars = combined.chars().count().saturating_sub(keep);
-        all_lines = wrap_spans(
+        let first_width = width.saturating_sub(prefix_width).max(1);
+        let keep_width = first_width + width * max_lines.saturating_sub(1);
+        let partial_width = display_width(&app.partial);
+        let (segment_tail, partial_tail) = if partial_width >= keep_width {
+            (String::new(), take_display_suffix(&app.partial, keep_width))
+        } else {
+            (
+                take_display_suffix(&segments, keep_width - partial_width),
+                app.partial.clone(),
+            )
+        };
+        all_lines = wrap_spans_with_widths(
             vec![
-                Span::styled(
-                    take_char_suffix_after(&segments, drop_chars),
-                    Style::default().fg(Color::Gray),
-                ),
-                Span::styled(
-                    take_char_suffix_after(&app.partial, drop_chars.saturating_sub(segment_chars)),
-                    Style::default().fg(Color::Cyan),
-                ),
+                Span::styled(segment_tail, Style::default().fg(Color::Gray)),
+                Span::styled(partial_tail, Style::default().fg(Color::Cyan)),
             ],
-            width - prefix_width,
+            first_width,
+            width,
         );
         let first = all_lines.first_mut().expect("tail has at least one line");
         first.spans.insert(
@@ -210,11 +210,18 @@ fn live_speech_lines(app: &App, width: usize, max_lines: usize) -> Vec<Line<'sta
     all_lines
 }
 
-fn take_char_suffix_after(value: &str, drop_chars: usize) -> String {
-    value
-        .chars()
-        .skip(drop_chars.min(value.chars().count()))
-        .collect()
+fn take_display_suffix(value: &str, max_width: usize) -> String {
+    let mut width = 0usize;
+    let mut chars = Vec::new();
+    for ch in value.chars().rev() {
+        let ch_width = char_display_width(ch);
+        if width + ch_width > max_width {
+            break;
+        }
+        width += ch_width;
+        chars.push(ch);
+    }
+    chars.into_iter().rev().collect()
 }
 
 fn status_label(app: &App) -> String {
@@ -240,23 +247,46 @@ fn phase_color(app: &App) -> Color {
     }
 }
 fn wrap_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
+    wrap_spans_with_widths(spans, width, width)
+}
+
+fn wrap_spans_with_widths(
+    spans: Vec<Span<'static>>,
+    first_width: usize,
+    next_width: usize,
+) -> Vec<Line<'static>> {
     let mut lines = vec![Vec::<Span<'static>>::new()];
     let mut col = 0usize;
+    let mut line_width = first_width.max(1);
     for span in spans {
         let style = span.style;
         for ch in span.content.chars() {
-            if col >= width {
+            let ch_width = char_display_width(ch);
+            if col + ch_width > line_width && col > 0 {
                 lines.push(Vec::new());
                 col = 0;
+                line_width = next_width.max(1);
             }
             lines
                 .last_mut()
                 .expect("at least one line")
                 .push(Span::styled(ch.to_string(), style));
-            col += 1;
+            col += ch_width;
         }
     }
     lines.into_iter().map(Line::from).collect()
+}
+
+fn display_width(value: &str) -> usize {
+    value.chars().map(char_display_width).sum()
+}
+
+fn char_display_width(ch: char) -> usize {
+    if ch.is_ascii() {
+        1
+    } else {
+        2
+    }
 }
 
 fn meter_span(text: String, color: Color) -> Span<'static> {
@@ -680,5 +710,24 @@ mod tests {
 
         assert!(text.starts_with("... "));
         assert!(text.ends_with("456789"));
+        assert!(display_width(&text) <= 16);
+    }
+
+    #[test]
+    fn live_speech_keeps_tail_for_wide_cjk_text() {
+        let mut app = App::new();
+        app.segments = vec!["这是很长很长的一段已经定型的语音识别文本".to_string()];
+        app.partial = "最新的部分".to_string();
+
+        let line = live_speech_lines(&app, 16, 1);
+        let text = line[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.starts_with("... "));
+        assert!(text.ends_with("最新的部分"));
+        assert!(display_width(&text) <= 16);
     }
 }

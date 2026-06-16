@@ -922,7 +922,14 @@ async fn run_multi_session_recording(
             if stop_requested {
                 break 'outer;
             }
-            // VAD-triggered pause -> 进入 Idle
+            // VAD-triggered pause -> 进入 Idle 子状态。overlay 切到 Idle
+            // 让用户看到"麦克风还在听，ASR 已暂停"。
+            overlay_send(
+                &params,
+                OverlayCmd::SetState {
+                    state: OverlayState::Idle,
+                },
+            );
             active = false;
             controller.reset();
             controller.accept(VadFrame::Silence);
@@ -1023,6 +1030,14 @@ async fn run_multi_session_recording(
             controller.reset();
             // 重新设置成 Speech，防止 controller 立刻判 silence。
             controller.accept(VadFrame::Speech);
+            // overlay 切回 Recording。复用 SetState 不会重置 view 的录音时钟，
+            // 多 session 录音的 dur_ms 是连续的。
+            overlay_send(
+                &params,
+                OverlayCmd::SetState {
+                    state: OverlayState::Recording,
+                },
+            );
             active = true;
         }
     }

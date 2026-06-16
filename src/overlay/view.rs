@@ -246,13 +246,16 @@ impl OverlayView {
         match &cmd {
             OverlayCmd::SetState { state } => match state {
                 OverlayState::Recording => {
-                    self.recording_started = Some(Instant::now());
+                    // M10 多 session 路径上每次 resume 都会回到 Recording。
+                    // 时钟只在录音首次起跳时归零，后续 resume 不能让它跳回 0。
+                    if self.recording_started.is_none() {
+                        self.recording_started = Some(Instant::now());
+                    }
                     self.last_text_update = Some(Instant::now());
                 }
                 OverlayState::Idle => {
-                    self.recording_started = None;
-                    self.last_text_update = None;
-                    self.peak_text_lines = 1;
+                    // 多 session 路径上 `Idle` 表示"当前没 ASR，麦克风还在听"。
+                    // 不清时钟、不清 segments — Hide / Dismiss 会负责真正收尾。
                 }
                 OverlayState::Connecting => {
                     // 新 session 接管：抢断旧 session 留下的 lingering 状态。

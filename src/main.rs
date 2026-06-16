@@ -139,6 +139,7 @@ impl Drop for DaemonLock {
 
 fn run_daemon_process() -> Result<()> {
     let _lock = DaemonLock::acquire()?;
+    let _log_guard = log::init_daemon().context("initialize daemon logger")?;
     let cfg_path = config::default_path();
     let (cfg_rx, reload_handle) =
         reload::watch_with_handle(cfg_path.clone()).context("start config watcher")?;

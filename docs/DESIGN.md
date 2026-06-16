@@ -197,7 +197,7 @@ mod_name    := "cmd" | "command"                  // 都接受，canonical 是 "
             |  "opt"  | "alt"     | "option"       // 都接受，canonical 是 "opt"
             |  "shift"
 key         := f1..f20 | a..z | 0..9
-            |  space | tab | escape | return | delete | backspace
+            |  space | tab | escape | esc | return | delete | backspace
             |  up | down | left | right  (arrow keys; `left_cmd` 等模糊歧义靠下划线区分)
             |  ";" | "," | "." | "/" | "\" | "[" | "]" | "'" | "`" | "-" | "="
 ```
@@ -213,6 +213,7 @@ key         := f1..f20 | a..z | 0..9
 - 全小写，大小写不敏感（normalize 到小写后处理）
 - `left_` / `right_` 前缀只对修饰键有意义，未指定 = 任一侧匹配
 - 修饰键有别名（`command` = `cmd`，`control` = `ctrl`，`alt` / `option` = `opt`），输入接受所有别名，`Display` 输出 canonical 3 字母形式以便 TUI capture round-trip 稳定
+- `esc` 是 `escape` 的别名，`Display` canonical 输出 `escape`
 - 精确匹配：trigger 里没写的 modifier 必须松开。`cmd+r` 配置下按 `cmd+shift+r` 不触发（保持跟 VSCode 一致）
 - `cmd+left_cmd` 退化为 `left_cmd`；`left_cmd+right_cmd`（两侧都按）M6 拒绝以避免 `ModMatcher` 类型膨胀，需要时再加 `BothSides` 变体
 - `:double` 后缀仅一个，必须在末尾

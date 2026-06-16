@@ -254,6 +254,7 @@ const LEXICON: &[(&str, KeyCode)] = &[
     ("tab", 0x30),
     ("return", 0x24),
     ("escape", 0x35),
+    ("esc", 0x35),
     ("backspace", 0x33),
     ("delete", 0x75),
     // Arrows.
@@ -413,6 +414,13 @@ mod tests {
             // And reparsing the canonical must equal the alias's parse.
             assert_eq!(parsed, parse(canonical).unwrap());
         }
+    }
+
+    #[test]
+    fn key_aliases() {
+        let parsed = parse("esc:double").unwrap();
+        assert_eq!(parsed, parse("escape:double").unwrap());
+        assert_eq!(parsed.to_string(), "escape:double");
     }
 
     #[test]

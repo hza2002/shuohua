@@ -38,6 +38,8 @@ pub struct VoiceCfg {
     /// true (默认) = 识别完成后立刻 Cmd+V 上屏；false = 只进剪贴板。
     #[serde(default = "default_auto_paste")]
     pub auto_paste: bool,
+    #[serde(default)]
+    pub vad: VoiceVadCfg,
 }
 
 impl Default for VoiceCfg {
@@ -47,6 +49,7 @@ impl Default for VoiceCfg {
             record_audio: false,
             vad_trace: false,
             auto_paste: default_auto_paste(),
+            vad: VoiceVadCfg::default(),
         }
     }
 }
@@ -56,6 +59,61 @@ fn default_stop_delay_ms() -> u32 {
 }
 fn default_auto_paste() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum VoiceVadBackend {
+    Off,
+    Silero,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct VoiceVadCfg {
+    #[serde(default = "default_vad_backend")]
+    pub backend: VoiceVadBackend,
+    #[serde(default = "default_vad_threshold")]
+    pub threshold: f32,
+    #[serde(default = "default_pause_silence_ms")]
+    pub pause_silence_ms: u32,
+    #[serde(default = "default_pre_roll_ms")]
+    pub pre_roll_ms: u32,
+    #[serde(default = "default_max_overlap_ms")]
+    pub max_overlap_ms: u32,
+    #[serde(default = "default_min_start_voiced_frames")]
+    pub min_start_voiced_frames: u32,
+}
+
+impl Default for VoiceVadCfg {
+    fn default() -> Self {
+        Self {
+            backend: default_vad_backend(),
+            threshold: default_vad_threshold(),
+            pause_silence_ms: default_pause_silence_ms(),
+            pre_roll_ms: default_pre_roll_ms(),
+            max_overlap_ms: default_max_overlap_ms(),
+            min_start_voiced_frames: default_min_start_voiced_frames(),
+        }
+    }
+}
+
+fn default_vad_backend() -> VoiceVadBackend {
+    VoiceVadBackend::Off
+}
+fn default_vad_threshold() -> f32 {
+    0.5
+}
+fn default_pause_silence_ms() -> u32 {
+    1500
+}
+fn default_pre_roll_ms() -> u32 {
+    300
+}
+fn default_max_overlap_ms() -> u32 {
+    200
+}
+fn default_min_start_voiced_frames() -> u32 {
+    2
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -330,6 +388,50 @@ thinking_delay_ms = 900
         assert_eq!(cfg.overlay.subdued, 1);
         assert_eq!(cfg.overlay.max_text_lines, 6);
         assert_eq!(cfg.overlay.thinking_delay_ms, 900);
+    }
+
+    #[test]
+    fn voice_vad_defaults_are_disabled() {
+        let cfg: Config = toml::from_str(
+            r#"
+[hotkey]
+trigger = "f16"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.voice.vad.backend, VoiceVadBackend::Off);
+        assert!((cfg.voice.vad.threshold - 0.5).abs() < 1e-6);
+        assert_eq!(cfg.voice.vad.pause_silence_ms, 1500);
+        assert_eq!(cfg.voice.vad.pre_roll_ms, 300);
+        assert_eq!(cfg.voice.vad.max_overlap_ms, 200);
+        assert_eq!(cfg.voice.vad.min_start_voiced_frames, 2);
+    }
+
+    #[test]
+    fn voice_vad_can_parse_silero_settings() {
+        let cfg: Config = toml::from_str(
+            r#"
+[hotkey]
+trigger = "f16"
+
+[voice.vad]
+backend = "silero"
+threshold = 0.42
+pause_silence_ms = 1200
+pre_roll_ms = 250
+max_overlap_ms = 180
+min_start_voiced_frames = 3
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.voice.vad.backend, VoiceVadBackend::Silero);
+        assert!((cfg.voice.vad.threshold - 0.42).abs() < 1e-6);
+        assert_eq!(cfg.voice.vad.pause_silence_ms, 1200);
+        assert_eq!(cfg.voice.vad.pre_roll_ms, 250);
+        assert_eq!(cfg.voice.vad.max_overlap_ms, 180);
+        assert_eq!(cfg.voice.vad.min_start_voiced_frames, 3);
     }
 
     #[test]

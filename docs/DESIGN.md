@@ -120,8 +120,8 @@ enum OverlayCmd {
 | 通道 | 用途 | 性能特性 |
 |---|---|---|
 | `/tmp/shuohua-${UID}.sock`（UDS） | 实时状态流 + 控制命令 | **TUI 不连接时 daemon 零 UI 开销**；连上时事件驱动 push，无 polling |
-| `${XDG_STATE_HOME:-~/.local/state}/shuohua/history.jsonl` | 识别历史 append-only | TUI 启动时读一次算统计；外部脚本/未来 GUI 也读它 |
-| launchd 重定向的 stderr 文件 | release binary 的错误兜底日志 | 见 §2.13，不引入独立 log 框架；TUI **不**读这个文件 |
+| `${XDG_STATE_HOME:-~/.local/state}/shuohua/history/YYYY-MM.jsonl` | 识别历史 append-only（月分片） | TUI 启动时按月读历史；外部脚本/未来 GUI 也读它 |
+| `${XDG_STATE_HOME:-~/.local/state}/shuohua/logs/shuo-YYYY-MM-DD.log` | daemon 诊断日志（日分片） | 见 §2.13；TUI **不**读这个文件 |
 
 UDS 协议格式见 [SCHEMA.md](./SCHEMA.md)。
 
@@ -519,7 +519,7 @@ async fn run_chain(
 // caller（finish.rs）拿到 steps 后再统一对 Error/Timeout 推
 // OverlayCmd::Notice，把"什么 step 失败"的 UI 决策跟 chain 执行解耦。
 
-/// 对应 history.jsonl 里 pipeline[] 的每一项，也对应 UDS pipeline_step 事件。
+/// 对应 history JSONL 里 pipeline[] 的每一项，也对应 UDS pipeline_step 事件。
 #[derive(Clone)]
 pub struct PipelineStep {
     pub name:        String,
@@ -533,7 +533,7 @@ pub struct PipelineStep {
 **两条规则**：
 - **链不阻塞，最差是 raw**：失败/超时跳过该步，下一个继续用 upstream 的 text。不假设"后面会补"——后面的 processor 各干各的活，跳过的工作就是丢了。链路始终产出（最差等于 raw）
 - **失败/超时都推 notice**：caller 遍历 steps，对每个非 Ok/Skipped 状态发 `OverlayCmd::Notice { text, ttl_ms }`，meta 行黄字 3s。Hide 看到 notice 活着会自动延期，避免 dispatch 后 hide 一次性把 warn 吞掉
-- 所有失败 + 时延都写进 `pipeline[]`，进 history.jsonl + UDS 事件
+- 所有失败 + 时延都写进 `pipeline[]`，进 history JSONL + UDS 事件
 
 #### App Profile 与 Post Components
 
@@ -625,7 +625,7 @@ thinking = { type = "disabled" }     # DeepSeek 专属；不是 OpenAI 通用默
 #### 跟 UDS / history 的对接
 
 - **链路进行中**：每完成一步 processor，daemon 推一条 `pipeline_step` 事件到 UDS。TUI 实时显示每步 status + duration + text。
-- **链路结束 + dispatch 完成**：daemon 把整条 `HistoryRecord`（schema 见 [SCHEMA.md](./SCHEMA.md)）append 到 history.jsonl，同时推一条 `history_appended` 事件。**不再有独立的 `final` 事件**——会话完成即 history_appended。
+- **链路结束 + dispatch 完成**：daemon 把整条 `HistoryRecord`（schema 见 [SCHEMA.md](./SCHEMA.md)）append 到 history JSONL，同时推一条 `history_appended` 事件。**不再有独立的 `final` 事件**——会话完成即 history_appended。
 - **TUI 默认显示完整流水线**：raw → 每个 processor 的 output → 最终上屏文本。不切换模式，全可见，方便观测整条链。
 - **Overlay 只显示最终上屏文本**（chain 最后一项的 text；chain 空则 = raw），单步失败/超时通过 meta 行 notice 通知；致命错误（ASR 中断 / 剪贴板失败 / mic watchdog）通过 text 区 error 红字反馈，并跳过 dispatch。
 
@@ -753,8 +753,8 @@ language = "auto"        # auto | zh-CN | en-US
 | TUI 全部文本 | ✓ |
 | Doctor 输出 | ✓ |
 | `shuo help` / clap 自动文案 | 默认 en-US（clap 自带不易换；help 实际上是英文用户也能看懂的） |
-| 日志（stderr） | en-US 固定（debug 用，不走 i18n） |
-| history.jsonl | 不本地化（数据格式） |
+| daemon 日志 | en-US 固定（诊断用，不走 i18n） |
+| history JSONL | 不本地化（数据格式） |
 
 #### 热重载
 
@@ -814,42 +814,56 @@ parse 失败（非法 trigger 字符串）只打日志保留旧 trigger，不向
 
 ---
 
-### 2.13 日志门禁（release vs debug）
+### 2.13 正式日志系统
 
-shuohua 是 launchd 后台 daemon。release binary 跑起来时 stderr 会被 launchd `.plist` 的 `StandardErrorPath` 重定向到日志文件，**长年累积**——所以发到 stderr 的每一行都按"将来谁会读这条"标准来判断。
+shuohua daemon 不把 stdout/stderr 当业务日志通道。daemon 业务代码统一使用
+`tracing`，正式日志写入：
 
-#### 三层
+```
+${XDG_STATE_HOME:-~/.local/state}/shuohua/logs/shuo-YYYY-MM-DD.log
+```
 
-| 层 | 角色 | 在 release | 实现 |
-|---|---|---|---|
-| **canonical 记录** | 已完成 session 的事实（raw_text、segment 时间戳、pipeline 步骤、status、error） | 是，写 `~/.local/state/shuohua/history.jsonl` | `state::history::append_default` |
-| **stderr error 兜底** | 错误 / 警告 / 启动 OK / 致命路径 | 是，走 stderr → launchd 日志文件 | `eprintln!` 直调 |
-| **stderr debug narration** | partial / segment / 探针 / 每帧细节 / 成功路径口播 | **否**（编译期消除） | `crate::debug_println!` 宏 |
+文件名使用本地日期；日志行时间使用本地时间并带 UTC offset。history schema
+里的 `started_at` / `ended_at` 仍为 UTC RFC3339。
 
-核心原则：**history.jsonl 是真事实源**，stderr 只在 history 兜不到的失败路径（连接前崩、panic、未到 record state 的错误）当兜底。narration 是开发期工具，不该污染长驻 daemon 的日志文件。
+当 `shuo --daemon` 从交互式 terminal 直接运行时，同一份日志同时 mirror 到
+stderr，方便开发和 release 包排查。launchd 启动时不 mirror；plist 的
+`StandardOutPath` / `StandardErrorPath` 只作为 panic、极早期失败、logger 初始化
+失败的兜底。
 
-#### 怎么判一条 `eprintln!` 该归哪
+不提供环境变量或配置项控制日志等级。本阶段不做 `shuo logs` 命令，也不自动清理
+日志文件。后续如需存储管理，应单独设计 clean/analyze 类命令，统计 logs / history /
+audio / traces 的数量和大小，再给用户明确清理选项。
 
-| 这条日志的内容是 | 归层 |
+日志是诊断日志，不是 session 事实源。单次录音的详细事实仍以 history JSONL 为准。
+正式日志只记录少量锚点和异常：
+
+- daemon ready
+- recording started：`recording_id`、provider、app、multi_session
+- recording ended：`recording_id`、status、audio_ms、session_count、pipeline step status
+- config reload success/failure
+- ASR / recorder / dispatch / history / IPC / hotkey 异常
+- dev trace enabled：`recording_id`、trace path
+
+正式日志不得记录识别正文、clipboard 内容、prompt、hotwords 明细、post 输入输出正文、
+可能含正文的 provider 原始响应。即使 debug 级别也不破这个边界。`voice/observer`
+trace sidecar 是 dev-only 诊断文件，不属于正式 daemon log；它在 `--features dev`
+且 `voice.vad_trace = true` 时可以包含 ASR 正文和 VAD 高频事件。
+
+#### 日志等级语义
+
+日志等级是内部标签，不暴露给用户配置，也不靠环境变量控制。
+
+| 等级 | 用途 |
 |---|---|
-| 错误 / 异常 (`❌`)、警告 (`⚠`) | `eprintln!`（release） |
-| 启动一次性信息（"daemon ready"、配置摘要、apps/post 目录）| `eprintln!`（release） |
-| 单 session 内逐步 narration（"▶ recording"、"partial#N"、"segment"、"✓ 剪贴板已写入"）| `debug_println!` |
-| 探针 / 内省（drift、glass probe、协议帧 dump）| `debug_println!`（或整个模块 `#[cfg(debug_assertions)]`）|
-| history.jsonl 里**已经记录**的内容（pipeline 步骤耗时、最终文本、recording id）| `debug_println!` |
-| **正常路径**的 OK 行（"reloaded"、"language → en"）| `debug_println!` |
+| ERROR | 关键操作失败：ASR open/send/finalize、recorder start、history append、daemon 关键线程退出等 |
+| WARN | 可恢复降级：post step skipped、reload parse failed keeping previous、autopaste failed、IPC client lag 等 |
+| INFO | 低频生命周期锚点：daemon ready、recording started/ended、dev trace enabled |
+| DEBUG | 非敏感诊断细节：recorder format、hotkey trigger changed、provider handshake id 等 |
+| TRACE | 本阶段不用；VAD/ASR 高频观测走 `voice/observer` sidecar |
 
-#### 实现细节
-
-- `src/log.rs` 定义 `debug_println!`：debug build 直接 `eprintln!`；release build 用 `let _ = format_args!(...)` 消耗参数（避免 unused_variables 警告）但不做 IO。
-- 探针类对象（如 `DriftProbe`）走两份 `cfg` 分支的 struct + impl：debug build 持 `Vec<String>`、方法干活；release build zero-sized struct、方法空体。
-- 表达式位置（如 match arm）能直接用：`Ok(()) => crate::debug_println!("✓ ...")`。
-
-#### 不变量
-
-1. **不引入 `tracing` / `log` 等框架**，直到 shuohua 真有第二个用户 / 需要 runtime 级别切换 / 需要 structured fields。现在的二级门禁够了。
-2. **不在 release 路径里做 narration**。逐条决策点见上表，新写代码也按此分。
-3. **history.jsonl schema 升级走 SCHEMA.md**，不依赖 stderr 推测过去发生了什么。
+实现上采用 `tracing` + `tracing-subscriber` + `tracing-appender`。不引入 `log` facade，
+避免两套 API。
 
 ---
 
@@ -869,7 +883,7 @@ shuohua 是 launchd 后台 daemon。release binary 跑起来时 stderr 会被 la
 | 文件监听 | `notify` | 监听**目录**而非文件（避免 inode 替换） |
 | 异步运行时 | `tokio`（multi-thread） | 标准 |
 | Async trait | `async-trait` | AsrProvider/AsrSession 用 |
-| 日志 | std `eprintln!` + 自家 `debug_println!` 宏 | 不引日志框架（见 §2.13）；release 走 launchd stderr，debug build 看完整 narration |
+| 日志 | `tracing` + `tracing-subscriber` + `tracing-appender` | daemon 正式诊断日志；日分片文件 + 前台 daemon TTY mirror（见 §2.13） |
 | 错误 | `thiserror`（库错误）+ `anyhow`（main） | 标准组合 |
 | 配置校验 | `serde` 自带 + 自定义 `validate()` | 不引 garde 减少依赖 |
 | 无锁注册表快照 | `arc-swap` | suppress 实现关键，也用于 StateStore 快照 + i18n 字典 |
@@ -897,7 +911,7 @@ shuohua/
 ├── src/
 │   ├── main.rs                 # smart fallback；--daemon 跑 AppKit + tokio daemon；M5 再接 clap 子命令
 │   ├── config.rs               # serde TOML + 热键字符串解析（纯类型，无 I/O）
-│   ├── log.rs                  # debug_println! 宏 + 日志门禁原则（见 §2.13）
+│   ├── log.rs                  # tracing 初始化：daily file appender、本地时间格式、TTY mirror
 │   ├── reload.rs               # notify watcher + overlay/i18n/hotkey subscribers（M3.f）
 │   ├── doctor.rs               # 终端识别 + AX/麦克风权限检查
 │   ├── hotkey/
@@ -924,7 +938,7 @@ shuohua/
 │   │   └── app_context.rs      # NSWorkspace.frontmostApplication（M7）
 │   ├── state/
 │   │   ├── mod.rs              # 内存状态机 + tokio::sync::broadcast 给订阅者
-│   │   └── history.rs          # append-only history.jsonl + 派生统计
+│   │   └── history.rs          # append-only monthly history JSONL + 派生统计
 │   ├── ipc/
 │   │   ├── mod.rs              # 子模块声明 + 公共类型 re-export
 │   │   ├── protocol.rs         # 命令/事件 serde 类型（M4，schema 见 SCHEMA.md §1）
@@ -1008,7 +1022,7 @@ shuohua/
 
 - **配置文件权限**：首次写入 `~/.config/shuohua/config.toml` 时强制 `chmod 0600`。其他 toml 不强制（用户自己负责）。
 - **API key 存储**：明文 TOML 是 v1 选择（仓库放模板，用户填）。未来可选 `keychain://` 前缀走 macOS Keychain，但 v1 不做。LLM post 配置用 `api_key = "..."`，不写入 history。
-- **日志**：见 §2.13。release stderr 只兜底错误 / 警告 / 启动；debug build 才打 partial / segment 等识别文本细节。launchd 日志文件不含识别内容。
-- **history.jsonl 明文**：是设计选择（用户唯一数据源），用户应当知道并定期清理。提供 `shuo doctor` 提示"history 已 X MB / Y 条"，但 v1 不自动清理。
-- **音频留存可选**：`voice.record_audio = false` 是默认。开启时写 `~/.local/state/shuohua/audio/<recording_id>.wav`（跟 history.jsonl 同一根目录，state dir 语义 = "用户主动留档，不允许被系统 cache cleanup 清掉"；不用 `/tmp`/`~/.cache`）。文件名 = 该次 recording 的 ULID，跟 history.jsonl 行天然 join。多 session 情况（M2.5+）下整次录音仍是一个 wav（含静音停顿），段边界由 `history.asr.sessions[].started_at/ended_at` 切分。关闭路径完全跳过 wav 写入逻辑，零开销，零额外内存分配。
+- **日志**：见 §2.13。正式 daemon log 是诊断日志，不记录识别正文、clipboard 内容、prompt、hotwords 明细、post 输入输出正文或可能含正文的 provider 原始响应。launchd stdout/stderr 只做极早期兜底。
+- **history JSONL 明文**：是设计选择（用户唯一数据源），按本地月份写入 `~/.local/state/shuohua/history/YYYY-MM.jsonl`。用户应当知道并定期清理；v1 不自动清理。
+- **音频留存可选**：`voice.record_audio = false` 是默认。开启时写 `~/.local/state/shuohua/audio/<recording_id>.wav`（跟 history 同一根 state dir，语义 = "用户主动留档，不允许被系统 cache cleanup 清掉"；不用 `/tmp`/`~/.cache`）。文件名 = 该次 recording 的 ULID，跟 history record 天然 join。多 session 情况（M2.5+）下整次录音仍是一个 wav（含静音停顿），段边界由 `history.asr.sessions[].started_at/ended_at` 切分。关闭路径完全跳过 wav 写入逻辑，零开销，零额外内存分配。
 - **PostProcessor 隔离**：LLM processor 把识别文本发给第三方 API。doctor 启动时 warn 一次"启用 LLM 后处理意味着文本会发给 {provider}"。

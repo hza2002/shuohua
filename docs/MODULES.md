@@ -13,7 +13,7 @@ src/
 │   ├── doctor.rs                        # shuo doctor：配置 / hotkey / ASR 配置 / UDS / launchd 检查
 │   └── service.rs                       # launchd install/uninstall/start/stop/restart/status
 ├── config.rs                            # ~/.config/shuohua/config.toml 解析
-├── log.rs                                # debug_println! 宏（release no-op，DESIGN §2.13）
+├── log.rs                                # tracing 初始化：daily file appender、本地时间格式、TTY mirror
 ├── reload.rs                             # notify watcher + watch::Sender 广播；overlay/i18n/hotkey subscriber；UDS 手动 reload 复用同一路径
 ├── clipboard_darwin.rs                  # NSPasteboard 写文本
 ├── autotype_darwin.rs                   # CGEventPost Cmd+V
@@ -53,7 +53,7 @@ src/
 │   └── dispatch.rs                      # 剪贴板 + 可选 Cmd+V
 ├── state/
 │   ├── mod.rs                           # StateStore + 原子 subscribe_with_snapshot + StateEvent broadcast
-│   └── history.rs                       # history.jsonl append-only writer（schema 见 SCHEMA.md §2）
+│   └── history.rs                       # monthly history JSONL append-only writer（schema 见 SCHEMA.md §2）
 ├── ipc/
 │   ├── mod.rs                           # IPC 子模块
 │   ├── protocol.rs                      # line-delimited JSON over UDS；Command/Event serde schema
@@ -72,7 +72,7 @@ src/
     └── mod.rs                            # assets/i18n/*.toml 加载 + 静态 LANG 切换
 ```
 
-数据流：键盘事件 → CGEventTap 回调（Default 模式，可吞）→ 解码成 4 字节 `RawEvent`（含 `EventKind` + `keycode` + 8-bit `ModMask`）→ pipe → mpsc → `Tracker::on_event(ev, Instant::now())` → tokio main loop。回调里同步问 `Mutex<Suppressor>` 决定 `CallbackResult::Drop` / `Keep`，按 trigger 类型分发：纯键 / combo 吞 key 部分的 down + 配对 up（§5 不变量 8，即使 reload 中途换 trigger 也安全）；modifier-only trigger 不吞任何事件（modifier 太常用，吞了破坏太多）。`Tracker` 内部分三个 sub-machine：纯键 / combo 走"KeyDown 时 mods 精确匹配 + auto-repeat 去抖"；modifier-only 走"FlagsChanged 检测 clean tap"（500ms hold 阈值 + 中间无普通键 + 中间无额外 modifier）；`:double` 后缀在 `register_tap` 用 400ms 窗口判定。第一次 trigger 命中 = toggle ON 瞬间取一次 `frontmost_app`，按 `apps/<bundle_id>.toml` / `apps/default.toml` 选定 app profile；profile 的 `[asr]` 决定 ASR provider、hotwords 和 provider 字段覆盖，`[post].chain` 再引用 `post/rules/*.toml` / `post/llm/*.toml` 组件并应用 `[post.llm.<name>]` 浅覆盖；spawn `finish::run_recording` 任务：cpal stream → `DoubaoSession.send_pcm` 流式推、`AsrEvent::Segment` 累积、`StateStore` 同步状态、`OverlayHandle` 推 UI 命令、UDS server fanout 给 TUI。第二次命中 = oneshot 通知 task 收尾：toggle OFF 瞬间再取一次 `frontmost_app` 只作为 prompt 变量，不重新选择 profile；drain `stop_delay_ms` 尾音 → send `is_last` → 等 Done（5s 超时）→ segments 直接 concat（provider 自带分隔） → 已选定的 post chain（执行时 overlay 显示 Thinking；单步失败/超时跳过 + meta 行 notice 黄字 3s + pipeline trace；致命错误经 text 区 error 红字反馈并跳过 dispatch）→ 剪贴板 + Cmd+V → `history.jsonl` 落一行 → `history_appended` 推给 TUI。配置热重载：notify watcher 监听 `~/.config/shuohua/` → 通过 `watch::Sender` 广播给 overlay / i18n / hotkey 三个 subscriber；hotkey subscriber 收到新 `Combo` 时同步调 `Tracker::set_trigger` 和 `Suppressor::set_trigger`；UDS `reload_config` 复用同一个 parse + broadcast 入口；app profile / ASR provider / post components 在下一次录音开始时生效。
+数据流：键盘事件 → CGEventTap 回调（Default 模式，可吞）→ 解码成 4 字节 `RawEvent`（含 `EventKind` + `keycode` + 8-bit `ModMask`）→ pipe → mpsc → `Tracker::on_event(ev, Instant::now())` → tokio main loop。回调里同步问 `Mutex<Suppressor>` 决定 `CallbackResult::Drop` / `Keep`，按 trigger 类型分发：纯键 / combo 吞 key 部分的 down + 配对 up（§5 不变量 8，即使 reload 中途换 trigger 也安全）；modifier-only trigger 不吞任何事件（modifier 太常用，吞了破坏太多）。`Tracker` 内部分三个 sub-machine：纯键 / combo 走"KeyDown 时 mods 精确匹配 + auto-repeat 去抖"；modifier-only 走"FlagsChanged 检测 clean tap"（500ms hold 阈值 + 中间无普通键 + 中间无额外 modifier）；`:double` 后缀在 `register_tap` 用 400ms 窗口判定。第一次 trigger 命中 = toggle ON 瞬间取一次 `frontmost_app`，按 `apps/<bundle_id>.toml` / `apps/default.toml` 选定 app profile；profile 的 `[asr]` 决定 ASR provider、hotwords 和 provider 字段覆盖，`[post].chain` 再引用 `post/rules/*.toml` / `post/llm/*.toml` 组件并应用 `[post.llm.<name>]` 浅覆盖；spawn `finish::run_recording` 任务：cpal stream → `DoubaoSession.send_pcm` 流式推、`AsrEvent::Segment` 累积、`StateStore` 同步状态、`OverlayHandle` 推 UI 命令、UDS server fanout 给 TUI。第二次命中 = oneshot 通知 task 收尾：toggle OFF 瞬间再取一次 `frontmost_app` 只作为 prompt 变量，不重新选择 profile；drain `stop_delay_ms` 尾音 → send `is_last` → 等 Done（5s 超时）→ segments 直接 concat（provider 自带分隔） → 已选定的 post chain（执行时 overlay 显示 Thinking；单步失败/超时跳过 + meta 行 notice 黄字 3s + pipeline trace；致命错误经 text 区 error 红字反馈并跳过 dispatch）→ 剪贴板 + Cmd+V → monthly history JSONL 落一行 → `history_appended` 推给 TUI。配置热重载：notify watcher 监听 `~/.config/shuohua/` → 通过 `watch::Sender` 广播给 overlay / i18n / hotkey 三个 subscriber；hotkey subscriber 收到新 `Combo` 时同步调 `Tracker::set_trigger` 和 `Suppressor::set_trigger`；UDS `reload_config` 复用同一个 parse + broadcast 入口；app profile / ASR provider / post components 在下一次录音开始时生效。
 
 ## 当前实现状态
 

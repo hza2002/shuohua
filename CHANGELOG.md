@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-16 - Logging design transition
+
+- Decided to replace daemon stdout/stderr logging with `tracing` file logs.
+- Kept terminal mirroring for foreground `shuo --daemon` development runs.
+- Defined official logs as sparse diagnostic logs with strict privacy boundaries.
+- Planned monthly history JSONL partitioning without legacy migration.
+
 ## 2026-06-15 - Local Apple ASR baseline
 
 - Added `apple` ASR provider backed by macOS 26 SpeechAnalyzer through an embedded Swift helper.

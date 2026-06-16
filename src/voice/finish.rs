@@ -388,6 +388,7 @@ async fn run_single_session_recording(
                 &mut terminal_error,
                 &mut trace,
                 recording_started_instant,
+                params.overlay.as_ref(),
             )
             .await;
             if terminal_error.is_none() && control_rx.borrow().eq(&SessionControl::Cancel) {
@@ -878,6 +879,7 @@ async fn run_multi_session_recording(
                 recording_started_instant,
                 &params.state,
                 &recording_id,
+                params.overlay.as_ref(),
             )
             .await
             {
@@ -1171,6 +1173,7 @@ async fn run_multi_session_recording(
     trace.finish(trace_status, samples_to_ms(total_audio_samples));
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finish(
     rec: &mut recorder::RecordingStream,
     session: &mut Box<dyn AsrSession>,
@@ -1185,6 +1188,7 @@ async fn finish(
     terminal_error: &mut Option<HistoryError>,
     trace: &mut TraceRecorder,
     recording_started_instant: Instant,
+    overlay: Option<&OverlayHandle>,
 ) -> bool {
     let drain_until = Instant::now() + Duration::from_millis(stop_delay_ms as u64);
     loop {
@@ -1224,6 +1228,9 @@ async fn finish(
                             instant_to_ms(recording_started_instant, ended_at),
                         );
                         state.segment(recording_id.to_string(), text.clone());
+                        if let Some(overlay) = overlay {
+                            overlay.send(OverlayCmd::AppendSegment { text: text.clone() });
+                        }
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Done) => {
@@ -1265,6 +1272,7 @@ async fn finish(
         recording_started_instant,
         state,
         recording_id,
+        overlay,
     )
     .await
     {
@@ -1309,6 +1317,7 @@ async fn finalize_provider_session(
     recording_started_instant: Instant,
     state: &crate::state::StateStore,
     recording_id: &str,
+    overlay: Option<&OverlayHandle>,
 ) -> Result<FinalizeOutcome, HistoryError> {
     if let Err(e) = session.send_pcm(&[], true).await {
         return Err(HistoryError {
@@ -1349,6 +1358,11 @@ async fn finalize_provider_session(
                             instant_to_ms(recording_started_instant, ended_at),
                         );
                         state.segment(recording_id.to_string(), text.clone());
+                        // finalize 阶段拿到的 definite segment 也要喂 overlay，
+                        // 否则 Doubao 在 is_last 之后才"升级"出来的尾段全丢。
+                        if let Some(overlay) = overlay {
+                            overlay.send(OverlayCmd::AppendSegment { text: text.clone() });
+                        }
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Partial { text, seq }) => {

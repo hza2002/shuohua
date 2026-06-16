@@ -73,6 +73,12 @@ pub struct DoubaoConfig {
     /// 直连 WS 不接受会触发 server protocol error，到时换名重试。
     #[serde(default)]
     pub ai_vad: Option<bool>,
+    /// M10：允许 voice 层用本地 VAD 切分本 provider 的 session。默认关。
+    #[serde(default)]
+    pub idle_pause: bool,
+    /// M10：voice 发出 `is_last=true` 后最多等多久 provider finalize（毫秒）。
+    #[serde(default = "default_finalize_timeout_ms")]
+    pub finalize_timeout_ms: u64,
 }
 
 fn default_resource_id() -> String {
@@ -80,6 +86,9 @@ fn default_resource_id() -> String {
 }
 fn default_true() -> bool {
     true
+}
+fn default_finalize_timeout_ms() -> u64 {
+    5000
 }
 
 pub fn config_path() -> PathBuf {
@@ -138,6 +147,14 @@ impl DoubaoProvider {
         Ok(Self {
             config: load_config_with_overrides(overrides)?,
         })
+    }
+
+    pub fn idle_pause(&self) -> bool {
+        self.config.idle_pause
+    }
+
+    pub fn finalize_timeout_ms(&self) -> u64 {
+        self.config.finalize_timeout_ms
     }
 }
 
@@ -712,6 +729,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_idle_pause_and_finalize_timeout_fields() {
+        let cfg: DoubaoConfig = toml::from_str(
+            r#"
+app_key = "ak"
+access_key = "sk"
+idle_pause = true
+finalize_timeout_ms = 7000
+"#,
+        )
+        .unwrap();
+        assert!(cfg.idle_pause);
+        assert_eq!(cfg.finalize_timeout_ms, 7000);
+    }
+
+    #[test]
+    fn idle_pause_defaults_off_and_finalize_timeout_5000() {
+        let cfg: DoubaoConfig = toml::from_str(
+            r#"
+app_key = "ak"
+access_key = "sk"
+"#,
+        )
+        .unwrap();
+        assert!(!cfg.idle_pause);
+        assert_eq!(cfg.finalize_timeout_ms, 5000);
+    }
+
+    #[test]
     fn encode_full_client_request_layout() {
         let payload = b"{\"hello\":\"world\"}";
         let frame = encode_full_client_request(payload);
@@ -864,6 +909,8 @@ mod tests {
             enable_ddc: false,
             stream_mode: None,
             ai_vad: None,
+            idle_pause: false,
+            finalize_timeout_ms: default_finalize_timeout_ms(),
         };
         let ctx = SessionCtx {
             language: LanguageMode::Multilingual { hint: vec![] },
@@ -893,6 +940,8 @@ mod tests {
             enable_ddc: true,
             stream_mode: Some(2),
             ai_vad: Some(true),
+            idle_pause: false,
+            finalize_timeout_ms: default_finalize_timeout_ms(),
         };
         let ctx = SessionCtx {
             language: LanguageMode::Multilingual { hint: vec![] },
@@ -915,6 +964,8 @@ mod tests {
             enable_ddc: true,
             stream_mode: None,
             ai_vad: None,
+            idle_pause: false,
+            finalize_timeout_ms: default_finalize_timeout_ms(),
         };
         let ctx = SessionCtx {
             language: LanguageMode::Multilingual { hint: vec![] },
@@ -937,6 +988,8 @@ mod tests {
             enable_ddc: false,
             stream_mode: None,
             ai_vad: None,
+            idle_pause: false,
+            finalize_timeout_ms: default_finalize_timeout_ms(),
         };
         let ctx = SessionCtx {
             language: LanguageMode::Single("zh-CN".into()),

@@ -324,9 +324,9 @@ async fn run_daemon(
                                 continue;
                             }
                         };
-                        let provider =
+                        let runtime =
                             match build_provider(&profile.asr.provider, &profile.asr.overrides) {
-                            Ok(provider) => provider,
+                            Ok(runtime) => runtime,
                             Err(e) => {
                                 eprintln!("[asr] provider init failed: {e:#}");
                                 state_store.set_error(None);
@@ -338,6 +338,9 @@ async fn run_daemon(
                             auto_paste: cfg.voice.auto_paste,
                             record_audio: cfg.voice.record_audio,
                             vad_trace: cfg.voice.vad_trace,
+                            idle_pause: runtime.idle_pause,
+                            finalize_timeout_ms: runtime.finalize_timeout_ms,
+                            vad: cfg.voice.vad.clone(),
                             stop_delay_ms: cfg.voice.stop_delay_ms,
                             hotwords: profile.asr.hotwords.clone(),
                             start_app_context,
@@ -346,6 +349,7 @@ async fn run_daemon(
                             overlay: Some(overlay.clone()),
                             state: state_store.clone(),
                         };
+                        let provider = runtime.provider;
                         let join = tokio::spawn(async move {
                             voice::finish::run_recording(provider.as_ref(), params, control_rx).await;
                         });
@@ -360,16 +364,36 @@ async fn run_daemon(
     }
 }
 
-fn build_provider(name: &str, overrides: &toml::value::Table) -> Result<Arc<dyn asr::AsrProvider>> {
+struct ProviderRuntime {
+    provider: Arc<dyn asr::AsrProvider>,
+    idle_pause: bool,
+    finalize_timeout_ms: u64,
+}
+
+fn build_provider(name: &str, overrides: &toml::value::Table) -> Result<ProviderRuntime> {
     match name {
-        "doubao" => Ok(Arc::new(
-            asr::providers::doubao::DoubaoProvider::new_with_overrides(Some(overrides))
-                .context("init doubao provider")?,
-        )),
-        "apple" => Ok(Arc::new(
-            asr::providers::apple::AppleProvider::new_with_overrides(Some(overrides))
-                .context("init apple provider")?,
-        )),
+        "doubao" => {
+            let p = asr::providers::doubao::DoubaoProvider::new_with_overrides(Some(overrides))
+                .context("init doubao provider")?;
+            let idle_pause = p.idle_pause();
+            let finalize_timeout_ms = p.finalize_timeout_ms();
+            Ok(ProviderRuntime {
+                provider: Arc::new(p),
+                idle_pause,
+                finalize_timeout_ms,
+            })
+        }
+        "apple" => {
+            let p = asr::providers::apple::AppleProvider::new_with_overrides(Some(overrides))
+                .context("init apple provider")?;
+            let idle_pause = p.idle_pause();
+            let finalize_timeout_ms = p.finalize_timeout_ms();
+            Ok(ProviderRuntime {
+                provider: Arc::new(p),
+                idle_pause,
+                finalize_timeout_ms,
+            })
+        }
         other => anyhow::bail!("未知 ASR provider {other:?}。支持 \"doubao\" / \"apple\""),
     }
 }

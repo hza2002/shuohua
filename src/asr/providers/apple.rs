@@ -19,6 +19,12 @@ pub struct AppleConfig {
     pub language: Option<String>,
     #[serde(default = "default_true")]
     pub install_assets: bool,
+    /// M10：允许 voice 层用本地 VAD 切分本 provider 的 session。默认关。
+    #[serde(default)]
+    pub idle_pause: bool,
+    /// M10：voice 发出 `is_last=true` 后最多等多久 provider finalize（毫秒）。
+    #[serde(default = "default_finalize_timeout_ms")]
+    pub finalize_timeout_ms: u64,
 }
 
 impl Default for AppleConfig {
@@ -26,12 +32,17 @@ impl Default for AppleConfig {
         Self {
             language: None,
             install_assets: true,
+            idle_pause: false,
+            finalize_timeout_ms: default_finalize_timeout_ms(),
         }
     }
 }
 
 fn default_true() -> bool {
     true
+}
+fn default_finalize_timeout_ms() -> u64 {
+    5000
 }
 
 pub fn config_path() -> PathBuf {
@@ -83,6 +94,14 @@ impl AppleProvider {
         Ok(Self {
             config: load_config_with_overrides(overrides)?,
         })
+    }
+
+    pub fn idle_pause(&self) -> bool {
+        self.config.idle_pause
+    }
+
+    pub fn finalize_timeout_ms(&self) -> u64 {
+        self.config.finalize_timeout_ms
     }
 }
 
@@ -343,6 +362,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_idle_pause_and_finalize_timeout_fields() {
+        let cfg: AppleConfig = toml::from_str(
+            r#"
+idle_pause = true
+finalize_timeout_ms = 3000
+"#,
+        )
+        .unwrap();
+        assert!(cfg.idle_pause);
+        assert_eq!(cfg.finalize_timeout_ms, 3000);
+
+        let default = AppleConfig::default();
+        assert!(!default.idle_pause);
+        assert_eq!(default.finalize_timeout_ms, 5000);
+    }
+
+    #[test]
     fn parse_partial_event_from_helper_json() {
         let event = parse_helper_event(r#"{"event":"partial","text":"测试","seq":7}"#).unwrap();
         match event {
@@ -394,6 +430,8 @@ mod tests {
                 &AppleConfig {
                     language: Some("en-US".into()),
                     install_assets: true,
+                    idle_pause: false,
+                    finalize_timeout_ms: default_finalize_timeout_ms(),
                 },
                 &ctx,
             ),

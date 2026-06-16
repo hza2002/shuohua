@@ -85,6 +85,14 @@ pub struct SessionParams {
     pub auto_paste: bool,
     pub record_audio: bool,
     pub vad_trace: bool,
+    /// M10：provider 私有，源于 `asr/<provider>.toml.idle_pause`。
+    /// false 时 voice 不做多 session 切分，保持 M9 单 session 行为。
+    pub idle_pause: bool,
+    /// M10：provider 私有，源于 `asr/<provider>.toml.finalize_timeout_ms`。
+    /// voice 发出 `is_last=true` 后等 final segment / Done 的最大毫秒。
+    pub finalize_timeout_ms: u64,
+    /// M10：全局 voice VAD 配置；`backend = Off` 时 voice 不启用本地 VAD。
+    pub vad: crate::config::VoiceVadCfg,
     pub stop_delay_ms: u32,
     pub hotwords: Vec<String>,
     pub start_app_context: post::AppContext,
@@ -357,6 +365,7 @@ pub async fn run_recording(
                 &params.state,
                 &recording_id,
                 params.stop_delay_ms,
+                params.finalize_timeout_ms,
                 &mut control_rx,
                 &mut audio_samples_sent,
                 &mut terminal_error,
@@ -495,6 +504,7 @@ async fn finish(
     state: &crate::state::StateStore,
     recording_id: &str,
     stop_delay_ms: u32,
+    finalize_timeout_ms: u64,
     control_rx: &mut watch::Receiver<SessionControl>,
     audio_samples_sent: &mut u64,
     terminal_error: &mut Option<HistoryError>,
@@ -578,7 +588,7 @@ async fn finish(
         return false;
     }
 
-    let timeout = tokio::time::sleep(Duration::from_secs(5));
+    let timeout = tokio::time::sleep(Duration::from_millis(finalize_timeout_ms));
     tokio::pin!(timeout);
     loop {
         tokio::select! {
@@ -590,7 +600,7 @@ async fn finish(
                 }
             }
             _ = &mut timeout => {
-                eprintln!("[shuo] ⚠ 识别 final 超时 5s");
+                eprintln!("[shuo] ⚠ 识别 final 超时 {finalize_timeout_ms}ms");
                 *terminal_error = Some(HistoryError {
                     kind: "asr_timeout".to_string(),
                     msg: "timeout waiting final".to_string(),

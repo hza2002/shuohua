@@ -8,8 +8,8 @@ pub mod view;
 // Gruvbox dark palette (https://github.com/morhetz/gruvbox).
 // 颜色不放进 config：状态色是语义、文字色是排版层级，都是设计决策不是用户偏好。
 // 想换主题改这里。
-pub const COLOR_PRIMARY_TEXT: u32 = 0xFBF1C7; // fg0 / light0
-pub const COLOR_SECONDARY_TEXT: u32 = 0xBDAE93; // fg3
+pub const COLOR_PRIMARY_TEXT: u32 = 0xFBF1C7; // fg0
+pub const COLOR_SECONDARY_TEXT: u32 = 0xEBDBB2; // fg
 pub const COLOR_NOTICE: u32 = 0xFABD2F; // bright_yellow, meta 行临时 warn 用
 pub const COLOR_ERROR_TEXT: u32 = 0xFB4934; // bright_red, text 区 error 用
 
@@ -80,10 +80,10 @@ impl OverlayState {
     pub fn color_rgb(self) -> u32 {
         // Gruvbox semantic colors.
         match self {
-            OverlayState::Idle => 0x8EC07C,       // aqua
+            OverlayState::Idle => 0x8EC07C,       // bright_aqua
             OverlayState::Connecting => 0xFE8019, // bright_orange
             OverlayState::Recording => 0xFB4934,  // bright_red
-            OverlayState::Thinking => 0x458588,   // bright_blue
+            OverlayState::Thinking => 0x83A598,   // bright_blue
             OverlayState::Stopping => 0xFABD2F,   // bright_yellow
             OverlayState::Error => 0xCC241D,      // red（比 Recording 略沉，区分语义）
         }

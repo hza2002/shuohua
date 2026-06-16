@@ -38,9 +38,9 @@ const TEXT_WIDTH: f64 = 500.0;
 const CHARS_PER_LINE: usize = 34;
 const TEXT_LINE_HEIGHT: f64 = 22.0;
 const WINDOW_MARGIN: f64 = 16.0;
-const ICON_SYMBOL_POINT: f64 = 20.0;
-const STATUS_FONT_POINT: f64 = 15.0;
-const FIRST_ROW_Y: f64 = 56.0;
+const ICON_SYMBOL_POINT: f64 = 18.0;
+const STATUS_FONT_POINT: f64 = 16.0;
+const FIRST_ROW_Y: f64 = 50.0;
 const FIRST_ROW_H: f64 = 24.0;
 
 #[derive(Default)]

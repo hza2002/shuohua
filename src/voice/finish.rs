@@ -579,13 +579,67 @@ async fn finish(
         *audio_samples_sent += samples.len() as u64;
     }
 
+    match finalize_provider_session(
+        session,
+        events,
+        pending_segments,
+        finalize_timeout_ms,
+        control_rx,
+        terminal_error,
+        trace,
+        recording_started_instant,
+        state,
+        recording_id,
+    )
+    .await
+    {
+        Ok(FinalizeOutcome::Done) => false,
+        Ok(FinalizeOutcome::Canceled) => {
+            cancel_session(rec, session, audio_samples_sent).await;
+            true
+        }
+        Err(e) => {
+            match e.kind.as_str() {
+                "asr_send_last" => eprintln!("[shuo] ❌ send is_last failed: {}", e.msg),
+                "asr_timeout" => eprintln!("[shuo] ⚠ 识别 final 超时 {finalize_timeout_ms}ms"),
+                _ => eprintln!("[shuo] ⚠ finalize error: {} {}", e.kind, e.msg),
+            }
+            *terminal_error = Some(e);
+            false
+        }
+    }
+}
+
+/// 把 voice 视角的 ASR session 收尾原子化：发 `is_last=true`，等 final segment
+/// / `Done`、超时或 cancel。期间累计 segment、partial、ASR error（不中断收尾）。
+///
+/// 返回值语义：
+///
+/// - `Ok(Done)`：provider 已 finalize（收到 `Done` 或事件通道关闭）。
+/// - `Ok(Canceled)`：等待期间收到 `SessionControl::Cancel`；调用方负责后续清理。
+/// - `Err(asr_send_last)`：`send_pcm(&[], true)` 失败。
+/// - `Err(asr_timeout)`：`finalize_timeout_ms` 内未收到 `Done`。
+///
+/// 期间出现的 `AsrEvent::Error` 不中断等待（保持 M9 行为），但会写入
+/// `terminal_error`，调用方据此决定 history status。
+#[allow(clippy::too_many_arguments)]
+async fn finalize_provider_session(
+    session: &mut Box<dyn AsrSession>,
+    events: &mut mpsc::Receiver<AsrEvent>,
+    pending_segments: &mut Vec<SegmentCapture>,
+    finalize_timeout_ms: u64,
+    control_rx: &mut watch::Receiver<SessionControl>,
+    terminal_error: &mut Option<HistoryError>,
+    trace: &mut TraceRecorder,
+    recording_started_instant: Instant,
+    state: &crate::state::StateStore,
+    recording_id: &str,
+) -> Result<FinalizeOutcome, HistoryError> {
     if let Err(e) = session.send_pcm(&[], true).await {
-        eprintln!("[shuo] ❌ send is_last failed: {e}");
-        *terminal_error = Some(HistoryError {
+        return Err(HistoryError {
             kind: "asr_send_last".to_string(),
             msg: e.to_string(),
         });
-        return false;
     }
 
     let timeout = tokio::time::sleep(Duration::from_millis(finalize_timeout_ms));
@@ -595,24 +649,21 @@ async fn finish(
             biased;
             _ = control_rx.changed() => {
                 if matches!(*control_rx.borrow_and_update(), SessionControl::Cancel) {
-                    cancel_session(rec, session, audio_samples_sent).await;
-                    return true;
+                    return Ok(FinalizeOutcome::Canceled);
                 }
             }
             _ = &mut timeout => {
-                eprintln!("[shuo] ⚠ 识别 final 超时 {finalize_timeout_ms}ms");
-                *terminal_error = Some(HistoryError {
+                return Err(HistoryError {
                     kind: "asr_timeout".to_string(),
                     msg: "timeout waiting final".to_string(),
                 });
-                return false;
             }
             ev = events.recv() => {
                 match ev {
-                    None => return false,
+                    None => return Ok(FinalizeOutcome::Done),
                     Some(AsrEvent::Done) => {
                         trace.asr_done(instant_elapsed_ms(recording_started_instant));
-                        return false;
+                        return Ok(FinalizeOutcome::Done);
                     }
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                         crate::debug_println!("[shuo]   segment (final): {text}");
@@ -641,6 +692,12 @@ async fn finish(
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FinalizeOutcome {
+    Done,
+    Canceled,
 }
 
 async fn cancel_session(

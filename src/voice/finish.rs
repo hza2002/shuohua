@@ -311,9 +311,13 @@ pub async fn run_recording(
                             started_instant: recording_started_instant,
                             asr_text: asr_text.clone(),
                             final_text: asr_text,
-                            segments: pending_segments,
+                            sessions: wrap_single_session(
+                                recording_started_instant,
+                                Instant::now(),
+                                audio_samples_sent,
+                                pending_segments,
+                            ),
                             pipeline: Vec::new(),
-                            audio_ms: samples_to_ms(audio_samples_sent),
                             app: app_context.bundle_id.clone(),
                             status: HistoryStatus::Error,
                             error: Some(HistoryError {
@@ -402,9 +406,13 @@ pub async fn run_recording(
             started_instant: recording_started_instant,
             asr_text: raw_text.clone(),
             final_text: raw_text,
-            segments: pending_segments,
+            sessions: wrap_single_session(
+                recording_started_instant,
+                Instant::now(),
+                audio_samples_sent,
+                pending_segments,
+            ),
             pipeline: Vec::new(),
-            audio_ms: samples_to_ms(audio_samples_sent),
             app: app_context.bundle_id,
             status: HistoryStatus::Canceled,
             error: None,
@@ -484,9 +492,13 @@ pub async fn run_recording(
         started_instant: recording_started_instant,
         asr_text: raw_text,
         final_text,
-        segments: pending_segments,
+        sessions: wrap_single_session(
+            recording_started_instant,
+            Instant::now(),
+            audio_samples_sent,
+            pending_segments,
+        ),
         pipeline,
-        audio_ms: samples_to_ms(audio_samples_sent),
         app: app_context.bundle_id,
         status: history_status,
         error: terminal_error.or(error),
@@ -807,6 +819,69 @@ struct SegmentCapture {
     ended_at: Instant,
 }
 
+/// 一次 ASR provider session 在 recording timeline 上的捕获。
+///
+/// M10 之前每条 recording 只产生 1 个 `SessionCapture`；启用 idle_pause +
+/// Silero 后，一条 recording 可携带 1..N 个，保持 `sessions[]` 的多 session 语义。
+#[derive(Debug, Clone)]
+struct SessionCapture {
+    /// 该 session 第一帧 PCM 发送时刻（recording timeline 上的 instant）。
+    started_at: Instant,
+    /// 该 session finalize 完成（或被放弃）时刻。
+    ended_at: Instant,
+    /// 该 session 已发送的 PCM 样本数。`audio_ms = samples_to_ms(audio_samples)`。
+    audio_samples: u64,
+    /// 该 session 收到的 ASR segments，按 emit 顺序。
+    segments: Vec<SegmentCapture>,
+}
+
+/// 当前单 session 路径把整段 PCM 视作一个 `SessionCapture`。
+/// 空录音（无 segment 且未发送样本）返回空 Vec，保留 M9 "no sessions" 语义。
+fn wrap_single_session(
+    started_at: Instant,
+    ended_at: Instant,
+    audio_samples: u64,
+    segments: Vec<SegmentCapture>,
+) -> Vec<SessionCapture> {
+    if segments.is_empty() && audio_samples == 0 {
+        return Vec::new();
+    }
+    vec![SessionCapture {
+        started_at,
+        ended_at,
+        audio_samples,
+        segments,
+    }]
+}
+
+fn session_text(segments: &[SegmentCapture]) -> String {
+    segments.iter().map(|s| s.text.as_str()).collect()
+}
+
+fn build_asr_sessions(
+    sessions: &[SessionCapture],
+    recording_started_at: time::OffsetDateTime,
+    recording_started_instant: Instant,
+) -> Vec<AsrSessionHistory> {
+    sessions
+        .iter()
+        .map(|s| AsrSessionHistory {
+            text: session_text(&s.segments),
+            started_at: instant_to_datetime(
+                recording_started_at,
+                recording_started_instant,
+                s.started_at,
+            ),
+            ended_at: instant_to_datetime(
+                recording_started_at,
+                recording_started_instant,
+                s.ended_at,
+            ),
+            audio_ms: samples_to_ms(s.audio_samples),
+        })
+        .collect()
+}
+
 struct HistoryInput {
     id: String,
     provider: String,
@@ -815,35 +890,27 @@ struct HistoryInput {
     started_instant: Instant,
     asr_text: String,
     final_text: String,
-    segments: Vec<SegmentCapture>,
+    sessions: Vec<SessionCapture>,
     pipeline: Vec<PipelineStepHistory>,
-    audio_ms: u64,
     app: Option<String>,
     status: HistoryStatus,
     error: Option<HistoryError>,
 }
 
 fn build_record(input: HistoryInput) -> HistoryRecord {
-    let session_started_at = input
-        .segments
-        .first()
-        .map(|s| instant_to_datetime(input.started_at, input.started_instant, s.started_at))
-        .unwrap_or(input.started_at);
-    let session_ended_at = input
-        .segments
-        .last()
-        .map(|s| instant_to_datetime(input.started_at, input.started_instant, s.ended_at))
-        .unwrap_or(input.ended_at);
-
-    let sessions = if input.segments.is_empty() && input.asr_text.is_empty() {
+    let audio_ms: u64 = input
+        .sessions
+        .iter()
+        .map(|s| samples_to_ms(s.audio_samples))
+        .sum();
+    let all_sessions_empty = input
+        .sessions
+        .iter()
+        .all(|s| s.segments.is_empty() && s.audio_samples == 0);
+    let sessions = if all_sessions_empty && input.asr_text.is_empty() {
         Vec::new()
     } else {
-        vec![AsrSessionHistory {
-            text: input.asr_text.clone(),
-            started_at: session_started_at,
-            ended_at: session_ended_at,
-            audio_ms: input.audio_ms,
-        }]
+        build_asr_sessions(&input.sessions, input.started_at, input.started_instant)
     };
 
     HistoryRecord {
@@ -861,7 +928,7 @@ fn build_record(input: HistoryInput) -> HistoryRecord {
         asr: AsrHistory {
             provider: input.provider,
             text: input.asr_text,
-            audio_ms: input.audio_ms,
+            audio_ms,
             sessions,
         },
         pipeline: input.pipeline,
@@ -926,27 +993,29 @@ mod tests {
 
     use super::*;
 
+    fn segment(base: Instant, text: &str, start_ms: u64, end_ms: u64) -> SegmentCapture {
+        SegmentCapture {
+            text: text.to_string(),
+            started_at: base + std::time::Duration::from_millis(start_ms),
+            ended_at: base + std::time::Duration::from_millis(end_ms),
+        }
+    }
+
     #[test]
     fn single_session_collapses_multiple_segments_into_one_entry() {
         let recording_start = OffsetDateTime::from_unix_timestamp(1_750_000_000).unwrap();
         let base = Instant::now();
         let segments = vec![
-            SegmentCapture {
-                text: "alpha ".to_string(),
-                started_at: base,
-                ended_at: base + std::time::Duration::from_millis(500),
-            },
-            SegmentCapture {
-                text: "beta ".to_string(),
-                started_at: base + std::time::Duration::from_millis(600),
-                ended_at: base + std::time::Duration::from_millis(1_000),
-            },
-            SegmentCapture {
-                text: "gamma".to_string(),
-                started_at: base + std::time::Duration::from_millis(1_100),
-                ended_at: base + std::time::Duration::from_millis(1_500),
-            },
+            segment(base, "alpha ", 0, 500),
+            segment(base, "beta ", 600, 1_000),
+            segment(base, "gamma", 1_100, 1_500),
         ];
+        let sessions = vec![SessionCapture {
+            started_at: base,
+            ended_at: base + std::time::Duration::from_millis(1_500),
+            audio_samples: 16_000 * 1_500 / 1_000,
+            segments,
+        }];
         let input = HistoryInput {
             id: "01HXYZABCDEF0123456789ABCD".to_string(),
             provider: "fake".to_string(),
@@ -955,9 +1024,8 @@ mod tests {
             started_instant: base,
             asr_text: "alpha beta gamma".to_string(),
             final_text: "alpha beta gamma.".to_string(),
-            segments,
+            sessions,
             pipeline: Vec::new(),
-            audio_ms: 1_500,
             app: None,
             status: HistoryStatus::Submitted,
             error: None,
@@ -967,21 +1035,17 @@ mod tests {
         assert_eq!(record.text, "alpha beta gamma.");
         assert_eq!(record.asr.text, "alpha beta gamma");
         assert_eq!(record.asr.audio_ms, 1_500);
-        assert_eq!(
-            record.asr.sessions.len(),
-            1,
-            "all segments collapse into a single session entry in current phase"
-        );
+        assert_eq!(record.asr.sessions.len(), 1);
         let session = &record.asr.sessions[0];
         assert_eq!(session.text, "alpha beta gamma");
         assert_eq!(session.audio_ms, 1_500);
-        assert!(session.started_at < session.ended_at);
+        assert!(session.started_at <= session.ended_at);
         assert!(session.started_at >= record.started_at);
         assert!(session.ended_at <= record.ended_at);
     }
 
     #[test]
-    fn empty_segments_and_empty_asr_text_produce_no_sessions() {
+    fn empty_sessions_and_empty_asr_text_produce_no_sessions() {
         let recording_start = OffsetDateTime::from_unix_timestamp(1_750_000_000).unwrap();
         let base = Instant::now();
         let input = HistoryInput {
@@ -992,9 +1056,8 @@ mod tests {
             started_instant: base,
             asr_text: String::new(),
             final_text: String::new(),
-            segments: Vec::new(),
+            sessions: Vec::new(),
             pipeline: Vec::new(),
-            audio_ms: 0,
             app: None,
             status: HistoryStatus::Canceled,
             error: None,
@@ -1002,6 +1065,86 @@ mod tests {
         let record = build_record(input);
         assert!(record.asr.sessions.is_empty());
         assert_eq!(record.asr.text, "");
+    }
+
+    #[test]
+    fn multi_session_history_sums_audio_ms_and_preserves_session_count() {
+        let recording_start = OffsetDateTime::from_unix_timestamp(1_750_000_000).unwrap();
+        let base = Instant::now();
+        let sessions = vec![
+            SessionCapture {
+                started_at: base,
+                ended_at: base + std::time::Duration::from_millis(800),
+                audio_samples: 16_000 * 800 / 1_000,
+                segments: vec![segment(base, "hello ", 0, 600)],
+            },
+            SessionCapture {
+                started_at: base + std::time::Duration::from_millis(2_000),
+                ended_at: base + std::time::Duration::from_millis(2_900),
+                audio_samples: 16_000 * 900 / 1_000,
+                segments: vec![segment(base, "world", 2_100, 2_800)],
+            },
+        ];
+        let input = HistoryInput {
+            id: "01HXYZABCDEF0123456789ABCD".to_string(),
+            provider: "fake".to_string(),
+            started_at: recording_start,
+            ended_at: recording_start + time::Duration::milliseconds(3_000),
+            started_instant: base,
+            asr_text: "hello world".to_string(),
+            final_text: "hello world.".to_string(),
+            sessions,
+            pipeline: Vec::new(),
+            app: None,
+            status: HistoryStatus::Submitted,
+            error: None,
+        };
+        let record = build_record(input);
+        assert_eq!(record.asr.sessions.len(), 2);
+        assert_eq!(record.asr.sessions[0].text, "hello ");
+        assert_eq!(record.asr.sessions[1].text, "world");
+        assert_eq!(record.asr.sessions[0].audio_ms, 800);
+        assert_eq!(record.asr.sessions[1].audio_ms, 900);
+        assert_eq!(record.asr.audio_ms, 800 + 900);
+    }
+
+    #[test]
+    fn overlapping_session_instants_are_preserved() {
+        let recording_start = OffsetDateTime::from_unix_timestamp(1_750_000_000).unwrap();
+        let base = Instant::now();
+        // 第二个 session 从 700ms 开始（在第一个 800ms 结束之前 100ms 重叠）。
+        let sessions = vec![
+            SessionCapture {
+                started_at: base,
+                ended_at: base + std::time::Duration::from_millis(800),
+                audio_samples: 16_000 * 800 / 1_000,
+                segments: vec![segment(base, "a", 0, 700)],
+            },
+            SessionCapture {
+                started_at: base + std::time::Duration::from_millis(700),
+                ended_at: base + std::time::Duration::from_millis(1_500),
+                audio_samples: 16_000 * 800 / 1_000,
+                segments: vec![segment(base, "b", 800, 1_400)],
+            },
+        ];
+        let input = HistoryInput {
+            id: "01HXYZABCDEF0123456789ABCD".to_string(),
+            provider: "fake".to_string(),
+            started_at: recording_start,
+            ended_at: recording_start + time::Duration::milliseconds(2_000),
+            started_instant: base,
+            asr_text: "ab".to_string(),
+            final_text: "ab".to_string(),
+            sessions,
+            pipeline: Vec::new(),
+            app: None,
+            status: HistoryStatus::Submitted,
+            error: None,
+        };
+        let record = build_record(input);
+        assert_eq!(record.asr.sessions.len(), 2);
+        // 第二个 session 的 started_at 应早于第一个的 ended_at（允许 overlap）。
+        assert!(record.asr.sessions[1].started_at < record.asr.sessions[0].ended_at);
     }
 
     #[test]

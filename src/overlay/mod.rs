@@ -7,10 +7,28 @@ pub mod view;
 // Gruvbox dark palette (https://github.com/morhetz/gruvbox).
 // 颜色不放进 config：状态色是语义、文字色是排版层级，都是设计决策不是用户偏好。
 // 想换主题改这里。
-pub const COLOR_PRIMARY_TEXT: u32 = 0xFBF1C7; // fg0
-pub const COLOR_SECONDARY_TEXT: u32 = 0xEBDBB2; // fg
-pub const COLOR_NOTICE: u32 = 0xFABD2F; // bright_yellow, meta 行临时 warn 用
-pub const COLOR_ERROR_TEXT: u32 = 0xFB4934; // bright_red, text 区 error 用
+#[allow(dead_code)]
+pub mod palette {
+    pub const FG0: u32 = 0xFBF1C7;
+    pub const FG1: u32 = 0xEBDBB2;
+    pub const FG2: u32 = 0xD5C4A1;
+    pub const FG3: u32 = 0xBDAE93;
+    pub const FG4: u32 = 0xA89984;
+    pub const GRAY: u32 = 0x928374;
+    pub const BRIGHT_RED: u32 = 0xFB4934;
+    pub const RED: u32 = 0xCC241D;
+    pub const BRIGHT_ORANGE: u32 = 0xFE8019;
+    pub const BRIGHT_YELLOW: u32 = 0xFABD2F;
+    pub const BRIGHT_BLUE: u32 = 0x83A598;
+    pub const BRIGHT_AQUA: u32 = 0x8EC07C;
+}
+
+pub const COLOR_PRIMARY_TEXT: u32 = palette::FG0;
+pub const COLOR_SECONDARY_TEXT: u32 = palette::FG1;
+pub const COLOR_TERTIARY_TEXT: u32 = palette::FG4;
+pub const COLOR_SEGMENT_TEXT: u32 = palette::FG3;
+pub const COLOR_NOTICE: u32 = palette::BRIGHT_YELLOW;
+pub const COLOR_ERROR_TEXT: u32 = palette::BRIGHT_RED;
 
 #[derive(Debug, Clone)]
 pub enum OverlayCmd {
@@ -79,12 +97,12 @@ impl OverlayState {
     pub fn color_rgb(self) -> u32 {
         // Gruvbox semantic colors.
         match self {
-            OverlayState::Idle => 0x8EC07C,       // bright_aqua
-            OverlayState::Connecting => 0xFE8019, // bright_orange
-            OverlayState::Recording => 0xFB4934,  // bright_red
-            OverlayState::Thinking => 0x83A598,   // bright_blue
-            OverlayState::Stopping => 0xFABD2F,   // bright_yellow
-            OverlayState::Error => 0xCC241D,      // red（比 Recording 略沉，区分语义）
+            OverlayState::Idle => palette::BRIGHT_AQUA,
+            OverlayState::Connecting => palette::BRIGHT_ORANGE,
+            OverlayState::Recording => palette::BRIGHT_RED,
+            OverlayState::Thinking => palette::BRIGHT_BLUE,
+            OverlayState::Stopping => palette::BRIGHT_YELLOW,
+            OverlayState::Error => palette::RED,
         }
     }
 }

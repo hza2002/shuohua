@@ -156,30 +156,38 @@ pub fn spawn_i18n(mut rx: Rx, handle: OverlayHandle) {
     });
 }
 
-/// Hotkey subscriber：`[hotkey].trigger` 变化 → 重新 parse，成功则发新 `Combo` 到 daemon
+/// Hotkey subscriber：`[hotkey]` 变化 → 重新 parse，成功则发新 binding 到 daemon
 /// 主循环（主循环用 tokio::select 在 `RawEvent` 和这个 channel 之间多路复用，swap Tracker
 /// 与 Suppressor）。parse 失败保留旧 trigger，只打日志。
-pub fn spawn_hotkey(mut rx: Rx, combo_tx: mpsc::UnboundedSender<crate::hotkey::Combo>) {
+pub fn spawn_hotkey(mut rx: Rx, combo_tx: mpsc::UnboundedSender<crate::HotkeyBindings>) {
     tokio::spawn(async move {
-        let mut prev = rx.borrow().hotkey.trigger.clone();
+        let mut prev = rx.borrow().hotkey.clone();
         while rx.changed().await.is_ok() {
-            let next = rx.borrow().hotkey.trigger.clone();
-            if next == prev {
+            let next = rx.borrow().hotkey.clone();
+            if next.trigger == prev.trigger && next.cancel == prev.cancel {
                 continue;
             }
-            match crate::hotkey::parse::parse(&next) {
-                Ok(combo) => {
-                    let printed = combo.to_string();
-                    if combo_tx.send(combo).is_err() {
+            match crate::HotkeyBindings::parse(&next) {
+                Ok(bindings) => {
+                    let printed_trigger = bindings.trigger.to_string();
+                    let printed_cancel = bindings.cancel.to_string();
+                    if combo_tx.send(bindings).is_err() {
                         return;
                     }
-                    tracing::debug!(trigger = %next, parsed = %printed, "hotkey trigger changed");
+                    tracing::debug!(
+                        trigger = %next.trigger,
+                        cancel = %next.cancel,
+                        parsed_trigger = %printed_trigger,
+                        parsed_cancel = %printed_cancel,
+                        "hotkey bindings changed"
+                    );
                 }
                 Err(e) => {
                     tracing::warn!(
-                        trigger = ?next,
+                        trigger = ?next.trigger,
+                        cancel = ?next.cancel,
                         error = ?e,
-                        "invalid hotkey; keeping previous trigger"
+                        "invalid hotkey; keeping previous bindings"
                     );
                 }
             }

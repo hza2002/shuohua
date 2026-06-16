@@ -47,7 +47,25 @@ use state::StateStore;
 use voice::finish::SessionParams;
 use voice::SessionControl;
 
-const KEY_ESCAPE: u16 = 0x35;
+#[derive(Debug, Clone)]
+pub(crate) struct HotkeyBindings {
+    pub(crate) trigger: Combo,
+    pub(crate) cancel: Combo,
+}
+
+impl HotkeyBindings {
+    pub(crate) fn parse(cfg: &config::HotkeyCfg) -> Result<Self> {
+        let trigger = hotkey::parse::parse(&cfg.trigger)
+            .with_context(|| format!("parse [hotkey] trigger = {:?}", cfg.trigger))?;
+        let cancel = hotkey::parse::parse(&cfg.cancel)
+            .with_context(|| format!("parse [hotkey] cancel = {:?}", cfg.cancel))?;
+        anyhow::ensure!(
+            trigger != cancel,
+            "[hotkey] trigger and cancel must be different"
+        );
+        Ok(Self { trigger, cancel })
+    }
+}
 
 fn main() -> Result<()> {
     let args = cli::parse();
@@ -145,13 +163,14 @@ fn run_daemon_process() -> Result<()> {
         reload::watch_with_handle(cfg_path.clone()).context("start config watcher")?;
     let cfg: Arc<config::Config> = cfg_rx.borrow().clone();
     i18n::init(&cfg.ui.language);
-    let trigger = hotkey::parse::parse(&cfg.hotkey.trigger)
-        .with_context(|| format!("parse [hotkey] trigger = {:?}", cfg.hotkey.trigger))?;
+    let hotkeys = HotkeyBindings::parse(&cfg.hotkey)?;
 
     tracing::info!(
         config_path = %cfg_path.display(),
         trigger = %cfg.hotkey.trigger,
-        parsed_trigger = %trigger,
+        cancel = %cfg.hotkey.cancel,
+        parsed_trigger = %hotkeys.trigger,
+        parsed_cancel = %hotkeys.cancel,
         post_timeout_ms = cfg.post.timeout_ms,
         auto_paste = cfg.voice.auto_paste,
         record_audio = cfg.voice.record_audio,
@@ -177,7 +196,7 @@ fn run_daemon_process() -> Result<()> {
             if let Err(e) = rt.block_on(run_daemon(
                 cfg_rx_for_daemon,
                 reload_for_daemon,
-                trigger,
+                hotkeys,
                 overlay_for_daemon,
                 state_for_daemon,
             )) {
@@ -194,7 +213,7 @@ fn run_daemon_process() -> Result<()> {
 async fn run_daemon(
     cfg_rx: reload::Rx,
     reload_handle: reload::Handle,
-    initial_trigger: Combo,
+    initial_hotkeys: HotkeyBindings,
     overlay: OverlayHandle,
     state_store: StateStore,
 ) -> Result<()> {
@@ -212,8 +231,8 @@ async fn run_daemon(
     // 三个 subscriber，跟主循环解耦。每个都在 reload 模块里实现。
     reload::spawn_overlay(cfg_rx.clone(), overlay.clone());
     reload::spawn_i18n(cfg_rx.clone(), overlay.clone());
-    let (trigger_tx, mut trigger_rx) = tokio::sync::mpsc::unbounded_channel::<Combo>();
-    reload::spawn_hotkey(cfg_rx.clone(), trigger_tx);
+    let (hotkey_tx, mut hotkey_rx) = tokio::sync::mpsc::unbounded_channel::<HotkeyBindings>();
+    reload::spawn_hotkey(cfg_rx.clone(), hotkey_tx);
 
     let (pipe_reader, pipe_writer) = os_pipe::pipe().context("create hotkey pipe")?;
 
@@ -221,7 +240,7 @@ async fn run_daemon(
     // drop the event for the foreground app) and the daemon main loop (updates
     // the trigger code on `[hotkey].trigger` reload). Lock contention is
     // human-rate; std Mutex is fine.
-    let suppressor = Arc::new(Mutex::new(Suppressor::new(initial_trigger.clone())));
+    let suppressor = Arc::new(Mutex::new(Suppressor::new(initial_hotkeys.trigger.clone())));
     let suppressor_for_tap = suppressor.clone();
 
     thread::Builder::new()
@@ -246,7 +265,8 @@ async fn run_daemon(
         "daemon ready"
     );
 
-    let mut tracker = Tracker::new(initial_trigger);
+    let mut trigger_tracker = Tracker::new(initial_hotkeys.trigger);
+    let mut cancel_tracker = Tracker::new(initial_hotkeys.cancel);
     struct ActiveSession {
         control: tokio::sync::watch::Sender<SessionControl>,
         join: tokio::task::JoinHandle<()>,
@@ -256,14 +276,15 @@ async fn run_daemon(
 
     loop {
         tokio::select! {
-            Some(new_trigger) = trigger_rx.recv() => {
+            Some(new_hotkeys) = hotkey_rx.recv() => {
                 // 重 trigger：换 Tracker（清掉 in-flight tap 候选）+ 同步给 CGEventTap
                 // callback 里的 Suppressor。CGEventTap 不动——它本来就抓所有键。
                 // Suppressor 的 `held` 不清，旧 trigger 已按下的物理键 keyup 仍会被
                 // 正确吞掉（§5 不变量 8）。
-                tracker.set_trigger(new_trigger.clone());
+                trigger_tracker.set_trigger(new_hotkeys.trigger.clone());
+                cancel_tracker.set_trigger(new_hotkeys.cancel.clone());
                 if let Ok(mut s) = suppressor.lock() {
-                    s.set_trigger(new_trigger);
+                    s.set_trigger(new_hotkeys.trigger);
                 }
                 continue;
             }
@@ -271,7 +292,7 @@ async fn run_daemon(
                 let Some(ev) = maybe_raw else {
                     anyhow::bail!("hotkey bridge channel closed");
                 };
-                if matches!(ev.kind, hotkey::EventKind::KeyDown) && ev.code == KEY_ESCAPE {
+                if matches!(cancel_tracker.on_event(ev, Instant::now()), Some(HotkeyEvent::TriggerRecord)) {
                     // 先清掉已经结束的 session，避免对死 watch 发 Cancel。
                     if active.as_ref().is_some_and(|session| session.join.is_finished()) {
                         active = None;
@@ -284,7 +305,7 @@ async fn run_daemon(
                     overlay.send(overlay::OverlayCmd::Dismiss);
                     continue;
                 }
-                if !matches!(tracker.on_event(ev, Instant::now()), Some(HotkeyEvent::TriggerRecord)) {
+                if !matches!(trigger_tracker.on_event(ev, Instant::now()), Some(HotkeyEvent::TriggerRecord)) {
                     continue;
                 }
                 if active.as_ref().is_some_and(|session| session.join.is_finished()) {
@@ -412,5 +433,33 @@ fn pipe_to_mpsc(mut reader: os_pipe::PipeReader, tx: tokio::sync::mpsc::Unbounde
         if tx.send(ev).is_err() {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hotkey_bindings_parse_trigger_and_cancel() {
+        let bindings = HotkeyBindings::parse(&config::HotkeyCfg {
+            trigger: "f16".to_string(),
+            cancel: "escape:double".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(bindings.trigger.to_string(), "f16");
+        assert_eq!(bindings.cancel.to_string(), "escape:double");
+    }
+
+    #[test]
+    fn hotkey_bindings_reject_same_trigger_and_cancel() {
+        let err = HotkeyBindings::parse(&config::HotkeyCfg {
+            trigger: "escape".to_string(),
+            cancel: "escape".to_string(),
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("must be different"));
     }
 }

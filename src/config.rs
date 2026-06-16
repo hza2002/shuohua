@@ -22,9 +22,15 @@ pub struct Config {
     pub post: PostCfg,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct HotkeyCfg {
     pub trigger: String,
+    #[serde(default = "default_cancel_hotkey")]
+    pub cancel: String,
+}
+
+fn default_cancel_hotkey() -> String {
+    "escape".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -281,6 +287,7 @@ trigger = "f16"
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.hotkey.trigger, "f16");
+        assert_eq!(cfg.hotkey.cancel, "escape");
         assert_eq!(cfg.voice.stop_delay_ms, 800);
         assert!(!cfg.voice.record_audio);
         assert!(cfg.voice.auto_paste);
@@ -296,6 +303,17 @@ trigger = "f16"
         assert_eq!(cfg.overlay.subdued, 0);
         assert_eq!(cfg.overlay.max_text_lines, 5);
         assert_eq!(cfg.overlay.thinking_delay_ms, 1200);
+    }
+
+    #[test]
+    fn parses_cancel_hotkey_override() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+cancel = "escape:double"
+"#;
+        let cfg = parse(body).unwrap();
+        assert_eq!(cfg.hotkey.cancel, "escape:double");
     }
 
     #[test]

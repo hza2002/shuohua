@@ -38,6 +38,7 @@ fn check_config() {
             println!("config: OK {}", path.display());
             println!("effective config:");
             println!("  hotkey.trigger = {:?}", cfg.hotkey.trigger);
+            println!("  hotkey.cancel = {:?}", cfg.hotkey.cancel);
             println!("  post.timeout_ms = {}", cfg.post.timeout_ms);
             println!("  voice.stop_delay_ms = {}", cfg.voice.stop_delay_ms);
             println!("  voice.record_audio = {}", cfg.voice.record_audio);
@@ -72,9 +73,12 @@ fn check_microphone_input() {
 
 fn check_hotkey() {
     match crate::config::load_from(&crate::config::default_path())
-        .and_then(|cfg| crate::hotkey::parse::parse(&cfg.hotkey.trigger).map(|combo| (cfg, combo)))
+        .and_then(|cfg| crate::HotkeyBindings::parse(&cfg.hotkey).map(|bindings| (cfg, bindings)))
     {
-        Ok((cfg, combo)) => println!("hotkey: OK {:?} -> {}", cfg.hotkey.trigger, combo),
+        Ok((cfg, bindings)) => println!(
+            "hotkey: OK trigger {:?} -> {}, cancel {:?} -> {}",
+            cfg.hotkey.trigger, bindings.trigger, cfg.hotkey.cancel, bindings.cancel
+        ),
         Err(e) => {
             println!("hotkey: ERROR {e:#}");
             println!("hint: see docs/DESIGN.md §2.4 for the supported hotkey grammar");

@@ -233,7 +233,7 @@ key         := f1..f20 | a..z | 0..9
 
 > **`ModMask` 设计**：8-bit 紧凑 packed mask，L/R per modifier。pipe 线协议 4 字节 `[kind, code_lo, code_hi, mods]`。`Instant` 不上线协议（Tracker 收到事件时 `Instant::now()`，亚毫秒延迟远低于 250/400ms 窗口）。
 >
-> **当前 Suppressor 注册表**：单 `Combo` 包在 `std::sync::Mutex<Suppressor>` 里跟主循环共享。CGEventTap callback 频率远低于 Mutex 竞争阈值。未来若加多 trigger 多绑定，可换 `ArcSwap` 做无锁快照。
+> **当前 Suppressor 注册表**：只 suppress `[hotkey].trigger`，单 `Combo` 包在 `std::sync::Mutex<Suppressor>` 里跟主循环共享。`[hotkey].cancel` 由 daemon 侧第二个 `Tracker` 识别但不 suppress，避免默认 Escape 影响 Vim/前台 App。CGEventTap callback 频率远低于 Mutex 竞争阈值。未来若需要 cancel 也 suppress，可换多 binding 快照。
 
 ### 2.5 去掉 Plugin 抽象
 
@@ -352,6 +352,7 @@ pub enum AsrError {
 ```toml
 [hotkey]
 trigger = "f16"
+cancel  = "escape"  # Vim 用户可改成 "escape:double"
 
 [voice]
 stop_delay_ms = 800

@@ -327,7 +327,6 @@ async fn run_single_session_recording(
                             final_text: asr_text,
                             sessions: wrap_single_session(
                                 recording_started_instant,
-                                Instant::now(),
                                 audio_samples_sent,
                                 pending_segments,
                             ),
@@ -422,7 +421,6 @@ async fn run_single_session_recording(
             final_text: raw_text,
             sessions: wrap_single_session(
                 recording_started_instant,
-                Instant::now(),
                 audio_samples_sent,
                 pending_segments,
             ),
@@ -508,7 +506,6 @@ async fn run_single_session_recording(
         final_text,
         sessions: wrap_single_session(
             recording_started_instant,
-            Instant::now(),
             audio_samples_sent,
             pending_segments,
         ),
@@ -668,7 +665,9 @@ async fn run_multi_session_recording(
     trace.session_start(session_index, 0);
 
     let mut sessions: Vec<SessionCapture> = Vec::new();
-    let mut current_session_started_at: Instant = recording_started_instant;
+    // session 边界严格用 timeline 上的样本索引；started_at / ended_at
+    // 都从这两个数字派生，保证 audio_ms == ended_at - started_at。
+    let mut current_session_start_sample: u64 = 0;
     let mut current_session_samples: u64 = 0;
     let mut current_pending_segments: Vec<SegmentCapture> = Vec::new();
     let mut last_sent_sample: u64 = 0;
@@ -897,12 +896,15 @@ async fn run_multi_session_recording(
                 let _ = s.close().await;
             }
 
-            // 记录当前 session 的 SessionCapture
-            let now = Instant::now();
+            // 记录当前 session 的 SessionCapture。
+            // 边界用 sample 索引派生：started_at = 首发样本 timeline 位置，
+            // ended_at = 末发样本 timeline 位置；audio_ms = ended − started。
             let session_audio_ms = samples_to_ms(current_session_samples);
-            let session_start_ms =
-                instant_to_ms(recording_started_instant, current_session_started_at);
-            let session_end_ms = instant_to_ms(recording_started_instant, now);
+            let session_start_ms = samples_to_ms(current_session_start_sample);
+            let session_end_sample = current_session_start_sample + current_session_samples;
+            let session_end_ms = samples_to_ms(session_end_sample);
+            let started_at = recording_started_instant + Duration::from_millis(session_start_ms);
+            let ended_at = recording_started_instant + Duration::from_millis(session_end_ms);
             trace.session_done(
                 session_index,
                 session_start_ms,
@@ -910,8 +912,8 @@ async fn run_multi_session_recording(
                 session_audio_ms,
             );
             sessions.push(SessionCapture {
-                started_at: current_session_started_at,
-                ended_at: now,
+                started_at,
+                ended_at,
                 audio_samples: current_session_samples,
                 segments: std::mem::take(&mut current_pending_segments),
             });
@@ -1002,8 +1004,7 @@ async fn run_multi_session_recording(
             trace.session_start(session_index, samples_to_ms(send_start));
 
             let replay = timeline.slice_from(send_start);
-            current_session_started_at = recording_started_instant
-                + Duration::from_millis(samples_to_ms(replay.start_sample));
+            current_session_start_sample = replay.start_sample;
             current_session_samples = replay.samples.len() as u64;
             total_audio_samples += replay.samples.len() as u64;
             last_sent_sample = replay.end_sample();
@@ -1027,11 +1028,14 @@ async fn run_multi_session_recording(
     }
 
     // ----- Teardown -----
+    // 异常退出（cancel / send 失败 / open 失败）也走严格 sample-window 边界，
+    // ended_at = first_sent + samples_to_ms(audio_samples)。
     if !current_pending_segments.is_empty() || current_session_samples > 0 {
-        let ended = Instant::now();
+        let session_start_ms = samples_to_ms(current_session_start_sample);
+        let session_end_ms = samples_to_ms(current_session_start_sample + current_session_samples);
         sessions.push(SessionCapture {
-            started_at: current_session_started_at,
-            ended_at: ended,
+            started_at: recording_started_instant + Duration::from_millis(session_start_ms),
+            ended_at: recording_started_instant + Duration::from_millis(session_end_ms),
             audio_samples: current_session_samples,
             segments: std::mem::take(&mut current_pending_segments),
         });
@@ -1481,15 +1485,18 @@ struct SessionCapture {
 
 /// 当前单 session 路径把整段 PCM 视作一个 `SessionCapture`。
 /// 空录音（无 segment 且未发送样本）返回空 Vec，保留 M9 "no sessions" 语义。
+///
+/// session 边界严格 = "首/末发送样本的 timeline ms"，即
+/// `ended_at − started_at == samples_to_ms(audio_samples)`。不变量见 SCHEMA §2.2。
 fn wrap_single_session(
     started_at: Instant,
-    ended_at: Instant,
     audio_samples: u64,
     segments: Vec<SegmentCapture>,
 ) -> Vec<SessionCapture> {
     if segments.is_empty() && audio_samples == 0 {
         return Vec::new();
     }
+    let ended_at = started_at + Duration::from_millis(samples_to_ms(audio_samples));
     vec![SessionCapture {
         started_at,
         ended_at,
@@ -1790,6 +1797,37 @@ mod tests {
         assert_eq!(record.asr.sessions[0].audio_ms, 800);
         assert_eq!(record.asr.sessions[1].audio_ms, 900);
         assert_eq!(record.asr.audio_ms, 800 + 900);
+
+        // ASR multi-session duration = last_session.ended_at - first_session.started_at
+        let asr_duration_ms = (record.asr.sessions.last().unwrap().ended_at
+            - record.asr.sessions.first().unwrap().started_at)
+            .whole_milliseconds() as u64;
+        assert_eq!(asr_duration_ms, 2_900);
+    }
+
+    #[test]
+    fn wrap_single_session_audio_ms_matches_ended_minus_started() {
+        // 不变量：sessions[].audio_ms == ended_at - started_at（recording timeline）
+        let base = Instant::now();
+        let segments = vec![segment(base, "hello", 0, 800)];
+        let audio_samples = 16_000 * 1_500 / 1_000; // 1500ms
+        let sessions = wrap_single_session(base, audio_samples, segments);
+        assert_eq!(sessions.len(), 1);
+        let s = &sessions[0];
+        let span_ms = s
+            .ended_at
+            .saturating_duration_since(s.started_at)
+            .as_millis() as u64;
+        let audio_ms = (s.audio_samples * 1000) / 16_000;
+        assert_eq!(span_ms, audio_ms);
+        assert_eq!(span_ms, 1_500);
+    }
+
+    #[test]
+    fn empty_single_session_wrap_returns_empty_vec() {
+        let base = Instant::now();
+        let sessions = wrap_single_session(base, 0, Vec::new());
+        assert!(sessions.is_empty());
     }
 
     #[test]

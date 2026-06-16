@@ -698,13 +698,11 @@ dispatch         = "Paste failed — text saved in history"
 ```rust
 // src/i18n/mod.rs
 use std::collections::HashMap;
-use std::sync::OnceLock;
-use arc_swap::ArcSwap;
+use std::sync::{Arc, OnceLock, RwLock};
 
-static DICT: OnceLock<ArcSwap<Dict>> = OnceLock::new();
+static DICT: OnceLock<RwLock<Arc<Dict>>> = OnceLock::new();
 
 pub struct Dict {
-    pub lang:    Lang,
     pub entries: HashMap<String, String>,   // 扁平 key 如 "overlay.state_idle"
 }
 
@@ -713,7 +711,7 @@ pub enum Lang { ZhCN, EnUS }
 pub fn init(cfg_lang: &str) {
     let lang = resolve_lang(cfg_lang);     // "auto" → 读 $LANG → fallback en-US
     let entries = load_toml(lang);
-    DICT.set(ArcSwap::from_pointee(Dict { lang, entries })).ok();
+    set_dict(Dict { entries });
 }
 
 /// t!("overlay.state_recording") → "录音中" / "Recording"

@@ -1619,7 +1619,9 @@ fn overlay_send(params: &SessionParams, cmd: OverlayCmd) {
 #[derive(Debug, Clone)]
 struct SegmentCapture {
     text: String,
+    #[allow(dead_code)]
     started_at: Instant,
+    #[allow(dead_code)]
     ended_at: Instant,
 }
 

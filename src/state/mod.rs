@@ -90,10 +90,6 @@ impl StateStore {
         }
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<StateEvent> {
-        self.tx.subscribe()
-    }
-
     pub fn subscribe_with_snapshot(&self) -> (StateSnapshot, broadcast::Receiver<StateEvent>) {
         let snapshot = self
             .snapshot
@@ -222,7 +218,7 @@ mod tests {
     #[test]
     fn store_updates_snapshot_and_broadcasts_events() {
         let store = StateStore::new();
-        let mut rx = store.subscribe();
+        let (_, mut rx) = store.subscribe_with_snapshot();
 
         store.set_recording("01HXYZ".to_string(), datetime!(2026-06-13 12:00:00 UTC));
         store.app(

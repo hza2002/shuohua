@@ -25,6 +25,7 @@ impl PcmChunk {
         self.start_sample + self.samples.len() as u64
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.samples.is_empty()
     }
@@ -69,6 +70,7 @@ impl PcmTimeline {
     }
 
     /// 下一次 push 将分配的起始样本索引；同时等于到目前为止总样本数。
+    #[cfg(test)]
     pub fn next_sample(&self) -> u64 {
         self.next_sample
     }
@@ -100,7 +102,8 @@ pub fn ms_to_samples(ms: u32) -> u64 {
     (ms as u64) * SAMPLE_RATE / 1000
 }
 
-pub fn samples_to_ms(samples: u64) -> u64 {
+#[cfg(test)]
+fn samples_to_ms(samples: u64) -> u64 {
     samples.saturating_mul(1000) / SAMPLE_RATE
 }
 

@@ -16,4 +16,4 @@ pub mod types;
 #[cfg(test)]
 pub mod fake;
 
-pub use types::{AsrError, AsrEvent, AsrProvider, AsrSession, Caps, LanguageMode, SessionCtx};
+pub use types::AsrProvider;

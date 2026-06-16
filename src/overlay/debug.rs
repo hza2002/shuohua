@@ -171,9 +171,7 @@ pub fn probe_glass_state_ranges(glass: &NSGlassEffectView) {
 /// 从 ObjC method encoding 里查某个 selector 的类型编码。
 /// encoding 字符串格式如 `v24@0:8q16`（setter）或 `q16@0:8`（getter）。
 fn encoding_for_selector(obj: &AnyObject, sel: Sel) -> String {
-    use core::ffi::c_char;
     extern "C" {
-        fn sel_getName(sel: Sel) -> *const c_char;
         fn method_getTypeEncoding(method: Method) -> *const c_char;
         fn class_getInstanceMethod(cls: *const AnyClass, sel: Sel) -> Method;
         fn object_getClass(obj: *const AnyObject) -> *const AnyClass;

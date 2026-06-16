@@ -1,6 +1,5 @@
 use tokio::sync::mpsc;
 
-pub mod animations;
 #[cfg(debug_assertions)]
 pub mod debug;
 pub mod view;

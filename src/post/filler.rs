@@ -22,6 +22,7 @@ pub struct RuleBasedFiller {
 
 impl RuleBasedFiller {
     /// 用任意 filler 词列表构造。词会被 regex escape 后做 alternation。
+    #[cfg(test)]
     pub fn new(patterns: &[&str]) -> Self {
         Self::with_name("filler", patterns)
     }
@@ -41,6 +42,7 @@ impl RuleBasedFiller {
     }
 
     /// 默认 5 词集合（DESIGN §2.10 示例）：嗯 啊 呃 那个 就是。
+    #[cfg(test)]
     pub fn default_patterns() -> Self {
         Self::new(&["嗯", "啊", "呃", "那个", "就是"])
     }

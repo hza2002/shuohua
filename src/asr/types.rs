@@ -35,6 +35,7 @@ pub struct Caps {
     /// false → SessionCtx.hotwords 静默忽略，doctor 会提示。
     pub hotwords: bool,
     /// provider 单 session 最长寿命（用于 voice 模块决定是否自动续 session）。
+    #[allow(dead_code)]
     pub max_session_secs: Option<u32>,
     /// 同 session 内是否支持 code-switch（中英混合）。
     pub multilingual: bool,
@@ -52,6 +53,7 @@ pub struct SessionCtx {
 #[derive(Debug, Clone)]
 pub enum LanguageMode {
     /// "zh-CN" / "en-US"。
+    #[allow(dead_code)]
     Single(String),
     /// 中英混合走这个。hint = 主要可能语言列表。
     Multilingual { hint: Vec<String> },
@@ -93,9 +95,11 @@ pub enum AsrError {
     #[error("protocol: {0}")]
     Protocol(String),
     #[error("timeout waiting final")]
+    #[allow(dead_code)]
     Timeout,
     #[error("server: {0}")]
     Server(String),
     #[error("canceled")]
+    #[allow(dead_code)]
     Canceled,
 }

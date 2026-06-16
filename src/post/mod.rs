@@ -25,9 +25,11 @@ pub use filler::RuleBasedFiller;
 #[derive(Debug, Clone)]
 pub struct PipelineText {
     /// 原始 ASR 全文，整条链不变。
+    #[allow(dead_code)]
     pub raw: String,
     /// 多段 ASR session 的原始文本列表（M2.5.d2 之后才会出现 >1 项）。
     /// M3 history.asr.sessions 直接消费这个 Vec。
+    #[allow(dead_code)]
     pub segments: Vec<String>,
     /// 当前 in-flight 版本。run_chain 跑完即最终上屏文本。
     pub text: String,
@@ -103,6 +105,7 @@ pub enum PipelineStepStatus {
     Ok,
     Error,
     Timeout,
+    #[allow(dead_code)]
     Skipped,
 }
 

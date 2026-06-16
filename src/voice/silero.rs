@@ -16,6 +16,7 @@ pub struct SileroConfig {
 
 impl SileroConfig {
     /// 每一帧的样本数（固定 512）。
+    #[cfg(any(test, feature = "dev"))]
     pub const fn frame_samples() -> usize {
         SILERO_CHUNK_SAMPLES
     }
@@ -83,6 +84,7 @@ impl SileroVad {
     }
 
     /// 当前已处理样本数（= 已 emit 帧覆盖的样本数）。
+    #[cfg(test)]
     pub fn processed_samples(&self) -> u64 {
         self.sample_offset
     }

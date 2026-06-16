@@ -5,7 +5,6 @@ static DICT: OnceLock<RwLock<Arc<Dict>>> = OnceLock::new();
 
 #[derive(Debug)]
 pub struct Dict {
-    pub lang: Lang,
     entries: HashMap<String, String>,
 }
 
@@ -80,7 +79,6 @@ fn load_dict(lang: Lang) -> Dict {
         Lang::EnUS => include_str!("../../assets/i18n/en-US.toml"),
     };
     Dict {
-        lang,
         entries: flatten_toml(body),
     }
 }

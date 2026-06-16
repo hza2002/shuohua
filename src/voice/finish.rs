@@ -318,12 +318,6 @@ async fn run_single_session_recording(
                 match ev {
                     None => break,
                     Some(AsrEvent::Partial { text, seq }) => {
-                        tracing::debug!(
-                            recording_id = %recording_id,
-                            seq,
-                            chars = text.chars().count(),
-                            "ASR partial received"
-                        );
                         observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Partial { text: text.clone(), seq });
                         params.state.partial(recording_id.clone(), text.clone());
                         let live_text = format!(
@@ -344,11 +338,6 @@ async fn run_single_session_recording(
                         );
                     }
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                        tracing::debug!(
-                            recording_id = %recording_id,
-                            chars = text.chars().count(),
-                            "ASR segment received"
-                        );
                         observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Segment { text: text.clone(), started_at, ended_at });
                         params.state.segment(recording_id.clone(), text.clone());
                         overlay_send(&params, OverlayCmd::AppendSegment { text: text.clone() });
@@ -814,12 +803,6 @@ async fn run_multi_session_recording(
                         match ev {
                             None => { stop_requested = true; break 'active; }
                             Some(AsrEvent::Partial { text, seq }) => {
-                                tracing::debug!(
-                                    recording_id = %recording_id,
-                                    seq,
-                                    chars = text.chars().count(),
-                                    "ASR partial received"
-                                );
                                 observe_asr_event(
                                     &mut trace,
                                     recording_started_instant,
@@ -838,11 +821,6 @@ async fn run_multi_session_recording(
                                 overlay_send(&params, OverlayCmd::SetText { text, kind: TextKind::Partial });
                             }
                             Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                                tracing::debug!(
-                                    recording_id = %recording_id,
-                                    chars = text.chars().count(),
-                                    "ASR segment received"
-                                );
                                 observe_asr_event(
                                     &mut trace,
                                     recording_started_instant,
@@ -1012,6 +990,13 @@ async fn run_multi_session_recording(
                     audio_ms: session_audio_ms,
                 },
             );
+            tracing::debug!(
+                recording_id = %recording_id,
+                session_index,
+                audio_ms = session_audio_ms,
+                segment_count = current_pending_segments.len(),
+                "ASR session finalized"
+            );
             sessions.push(SessionCapture {
                 started_at,
                 ended_at,
@@ -1137,6 +1122,13 @@ async fn run_multi_session_recording(
                     }
                 }
             }
+            tracing::debug!(
+                recording_id = %recording_id,
+                session_index,
+                replay_ms = samples_to_ms(replay.samples.len() as u64),
+                start_ms = samples_to_ms(replay.start_sample),
+                "ASR session resumed"
+            );
             controller.reset();
             // 重新设置成 Speech，防止 controller 立刻判 silence。
             controller.accept(VadFrame::Speech);
@@ -1328,11 +1320,6 @@ async fn finish(
                 match ev {
                     None => break,
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                        tracing::debug!(
-                            recording_id = %recording_id,
-                            chars = text.chars().count(),
-                            "ASR segment received during drain"
-                        );
                         observe_asr_event(
                             trace,
                             recording_started_instant,
@@ -1349,12 +1336,6 @@ async fn finish(
                         break;
                     }
                     Some(AsrEvent::Partial { text, seq }) => {
-                        tracing::debug!(
-                            recording_id = %recording_id,
-                            seq,
-                            chars = text.chars().count(),
-                            "ASR partial received during drain"
-                        );
                         observe_asr_event(
                             trace,
                             recording_started_instant,
@@ -1493,11 +1474,6 @@ async fn finalize_provider_session(
                         return Ok(FinalizeOutcome::Done);
                     }
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                        tracing::debug!(
-                            recording_id = %recording_id,
-                            chars = text.chars().count(),
-                            "ASR segment received during final"
-                        );
                         observe_asr_event(
                             trace,
                             recording_started_instant,
@@ -1512,12 +1488,6 @@ async fn finalize_provider_session(
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Partial { text, seq }) => {
-                        tracing::debug!(
-                            recording_id = %recording_id,
-                            seq,
-                            chars = text.chars().count(),
-                            "ASR partial received during final"
-                        );
                         observe_asr_event(
                             trace,
                             recording_started_instant,

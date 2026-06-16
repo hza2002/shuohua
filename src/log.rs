@@ -37,6 +37,7 @@ pub fn init_daemon() -> Result<LogGuard> {
     let timer = timer();
     let file_layer = tracing_subscriber::fmt::layer()
         .with_ansi(false)
+        .with_target(false)
         .with_timer(timer.clone())
         .with_writer(file_writer)
         .with_filter(daemon_filter());
@@ -46,6 +47,7 @@ pub fn init_daemon() -> Result<LogGuard> {
         let (stderr_writer, guard) = tracing_appender::non_blocking(std::io::stderr());
         let layer = tracing_subscriber::fmt::layer()
             .with_ansi(true)
+            .with_target(false)
             .with_timer(timer)
             .with_writer(stderr_writer)
             .with_filter(daemon_filter());
@@ -83,8 +85,12 @@ pub fn log_file_path(now: OffsetDateTime) -> Result<PathBuf> {
 
 fn daemon_filter() -> Targets {
     Targets::new()
-        .with_target(env!("CARGO_CRATE_NAME"), LevelFilter::DEBUG)
+        .with_target(env!("CARGO_CRATE_NAME"), crate_level())
         .with_default(LevelFilter::WARN)
+}
+
+fn crate_level() -> LevelFilter {
+    LevelFilter::DEBUG
 }
 
 fn timer() -> OffsetTime<Vec<time::format_description::FormatItem<'static>>> {
@@ -117,5 +123,10 @@ mod tests {
     #[test]
     fn logs_dir_lives_under_state_dir() {
         assert!(logs_dir().ends_with("logs"));
+    }
+
+    #[test]
+    fn crate_log_level_is_debug_for_all_build_profiles() {
+        assert_eq!(crate_level(), LevelFilter::DEBUG);
     }
 }

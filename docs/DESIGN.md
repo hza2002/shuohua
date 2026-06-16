@@ -836,19 +836,25 @@ stderr，方便开发和 release 包排查。launchd 启动时不 mirror；plist
 audio / traces 的数量和大小，再给用户明确清理选项。
 
 日志是诊断日志，不是 session 事实源。单次录音的详细事实仍以 history JSONL 为准。
-正式日志只记录少量锚点和异常：
+release / debug build 的正式 daemon log 语义基本一致：release 也必须足够定位用户
+反馈的大多数问题，debug 只允许多少量开发便利型低频细节。build type 不是诊断能力
+边界；daemon log 和 `voice/observer` sidecar 才是边界。
+
+正式日志只记录低频诊断事件和异常：
 
 - daemon ready
 - recording started：`recording_id`、provider、app、multi_session
+- ASR session resumed/finalized：`recording_id`、session index、audio/replay ms、segment count
 - recording ended：`recording_id`、status、audio_ms、session_count、pipeline step status
 - config reload success/failure
 - ASR / recorder / dispatch / history / IPC / hotkey 异常
 - dev trace enabled：`recording_id`、trace path
 
 正式日志不得记录识别正文、clipboard 内容、prompt、hotwords 明细、post 输入输出正文、
-可能含正文的 provider 原始响应。即使 debug 级别也不破这个边界。`voice/observer`
+可能含正文的 provider 原始响应。正式日志也不得记录每个 ASR partial / segment、
+VAD frame、PCM chunk 这类高频正常事件，即使 debug build 也不例外。`voice/observer`
 trace sidecar 是 dev-only 诊断文件，不属于正式 daemon log；它在 `--features dev`
-且 `voice.vad_trace = true` 时可以包含 ASR 正文和 VAD 高频事件。
+且 `voice.vad_trace = true` 时可以包含 ASR 正文、高频 ASR event 和 VAD 事件。
 
 #### 日志等级语义
 
@@ -859,11 +865,12 @@ trace sidecar 是 dev-only 诊断文件，不属于正式 daemon log；它在 `-
 | ERROR | 关键操作失败：ASR open/send/finalize、recorder start、history append、daemon 关键线程退出等 |
 | WARN | 可恢复降级：post step skipped、reload parse failed keeping previous、autopaste failed、IPC client lag 等 |
 | INFO | 低频生命周期锚点：daemon ready、recording started/ended、dev trace enabled |
-| DEBUG | 非敏感诊断细节：recorder format、hotkey trigger changed、provider handshake id 等 |
+| DEBUG | 低频非敏感诊断细节：recorder format、hotkey trigger changed、provider handshake id、post step duration、ASR session summary 等 |
 | TRACE | 本阶段不用；VAD/ASR 高频观测走 `voice/observer` sidecar |
 
-实现上采用 `tracing` + `tracing-subscriber` + `tracing-appender`。不引入 `log` facade，
-避免两套 API。
+实现上采用 `tracing` + `tracing-subscriber` + `tracing-appender`。crate 自身默认收
+`DEBUG`，依赖默认收 `WARN`；日志行不输出 `shuo::...` target，节省空间并保持可读。
+不引入 `log` facade，避免两套 API。
 
 ---
 

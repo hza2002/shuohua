@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::state::history::HistoryRecord;
-use crate::state::AudioMeter;
+use crate::state::{AudioMeter, SessionMeta};
 
 pub const PROTO_VERSION: u8 = 2;
 
@@ -85,6 +85,10 @@ pub enum Event {
     AudioMeter {
         recording_id: String,
         meter: AudioMeter,
+    },
+    SessionMeta {
+        recording_id: String,
+        meta: SessionMeta,
     },
     HistoryAppended {
         record: Box<HistoryRecord>,
@@ -182,6 +186,24 @@ mod tests {
         let line = encode_event(&event).unwrap();
 
         assert!(line.contains(r#""event":"audio_meter""#));
+        assert_eq!(decode_event(&line).unwrap(), event);
+    }
+
+    #[test]
+    fn session_meta_event_round_trips() {
+        let event = Event::SessionMeta {
+            recording_id: "01HXYZ".to_string(),
+            meta: SessionMeta {
+                provider: "doubao".to_string(),
+                chain: "rule:filler → llm:deepseek".to_string(),
+                vad: "silero".to_string(),
+                hotwords: 3,
+            },
+        };
+
+        let line = encode_event(&event).unwrap();
+
+        assert!(line.contains(r#""event":"session_meta""#));
         assert_eq!(decode_event(&line).unwrap(), event);
     }
 }

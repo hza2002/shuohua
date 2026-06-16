@@ -55,6 +55,14 @@ pub struct AudioMeter {
     pub vad_speech: Option<bool>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionMeta {
+    pub provider: String,
+    pub chain: String,
+    pub vad: String,
+    pub hotwords: usize,
+}
+
 #[derive(Debug, Clone)]
 pub enum StateEvent {
     StateChanged {
@@ -85,6 +93,10 @@ pub enum StateEvent {
     AudioMeter {
         recording_id: String,
         meter: AudioMeter,
+    },
+    SessionMeta {
+        recording_id: String,
+        meta: SessionMeta,
     },
     HistoryAppended {
         record: Box<HistoryRecord>,
@@ -191,6 +203,10 @@ impl StateStore {
             recording_id,
             meter,
         });
+    }
+
+    pub fn session_meta(&self, recording_id: String, meta: SessionMeta) {
+        let _ = self.tx.send(StateEvent::SessionMeta { recording_id, meta });
     }
 
     pub fn history_appended(&self, record: HistoryRecord) {

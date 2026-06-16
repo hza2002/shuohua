@@ -26,7 +26,7 @@ use crate::state::history::{
     self, AsrHistory, AsrSessionHistory, HistoryError, HistoryRecord, HistoryStatus,
     PipelineStepHistory, PipelineStepStatus as HistoryPipelineStepStatus,
 };
-use crate::state::StateStore;
+use crate::state::{SessionMeta, StateStore};
 use crate::voice::meter::MeterCollector;
 use crate::voice::observer::{RecordingObserver, SessionPhase, TraceStart};
 use crate::voice::{dispatch, recorder, SessionControl};
@@ -69,6 +69,23 @@ fn emit_meters(
     for meter in collector.accept(samples) {
         state.audio_meter(recording_id.to_string(), meter);
     }
+}
+
+fn emit_session_meta(
+    state: &StateStore,
+    recording_id: &str,
+    provider: &dyn AsrProvider,
+    params: &SessionParams,
+) {
+    state.session_meta(
+        recording_id.to_string(),
+        SessionMeta {
+            provider: provider.name().to_string(),
+            chain: params.post_chain.name.clone(),
+            vad: format!("{:?}", params.vad.backend).to_lowercase(),
+            hotwords: params.hotwords.len(),
+        },
+    );
 }
 
 /// 非阻断 warn 在 meta 行上显示多久。跟 overlay 的 ERROR_TTL_MS 对齐，
@@ -189,6 +206,7 @@ async fn run_single_session_recording(
     params
         .state
         .set_recording(recording_id.clone(), recording_started_at);
+    emit_session_meta(&params.state, &recording_id, provider, &params);
     params
         .state
         .app(app_context.bundle_id.clone(), app_context.app_name.clone());
@@ -625,6 +643,7 @@ async fn run_multi_session_recording(
     params
         .state
         .set_recording(recording_id.clone(), recording_started_at);
+    emit_session_meta(&params.state, &recording_id, provider, &params);
     params
         .state
         .app(app_context.bundle_id.clone(), app_context.app_name.clone());

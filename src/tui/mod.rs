@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use crate::ipc::client::IpcClient;
 use crate::ipc::protocol::{Command, Event, WireState};
 use crate::state::history::HistoryRecord;
-use crate::state::AudioMeter;
+use crate::state::{AudioMeter, SessionMeta};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -83,6 +83,7 @@ pub struct App {
     pub segments: Vec<String>,
     pub partial: String,
     pub pipeline: Vec<String>,
+    pub session_meta: Option<SessionMeta>,
     pub meters: Vec<AudioMeter>,
     pub history: Vec<HistoryRecord>,
     pub selected_history: usize,
@@ -110,6 +111,7 @@ impl App {
             segments: Vec::new(),
             partial: String::new(),
             pipeline: Vec::new(),
+            session_meta: None,
             meters: Vec::new(),
             history: Vec::new(),
             selected_history: 0,
@@ -192,6 +194,7 @@ impl App {
                     self.segments.clear();
                     self.partial.clear();
                     self.pipeline.clear();
+                    self.session_meta = None;
                     self.meters.clear();
                     self.app = None;
                     self.app_name = None;
@@ -229,6 +232,9 @@ impl App {
                 if self.meters.len() > 160 {
                     self.meters.drain(..self.meters.len() - 160);
                 }
+            }
+            Event::SessionMeta { meta, .. } => {
+                self.session_meta = Some(meta);
             }
             Event::HistoryAppended { record } => {
                 self.history.insert(0, *record);

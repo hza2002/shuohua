@@ -67,11 +67,17 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .clone()
         .or_else(|| app.app.clone())
         .unwrap_or_else(|| crate::t!("tui.no_active_app"));
+    let bundle = app.app.clone().unwrap_or_else(|| "-".to_string());
+    let provider = app
+        .session_meta
+        .as_ref()
+        .map(|meta| meta.provider.as_str())
+        .unwrap_or("-");
     let chain = app
-        .pipeline
-        .last()
-        .map(|_| crate::t!("tui.pipeline"))
-        .unwrap_or_else(|| "-".to_string());
+        .session_meta
+        .as_ref()
+        .map(|meta| meta.chain.as_str())
+        .unwrap_or("-");
     let header = vec![
         Line::from(vec![
             Span::styled(
@@ -83,20 +89,15 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             Span::raw("  "),
             Span::raw(format!("{}  ", format_duration(elapsed_ms))),
             Span::raw(format!("{} words  ", app.words)),
-            Span::raw(format!("{app_label}  ")),
-            Span::raw(chain),
+            Span::raw(format!("{app_label} ({bundle})")),
         ]),
         Line::from(vec![
             Span::styled("id ", Style::default().fg(Color::DarkGray)),
-            Span::raw(
-                app.recording_id
-                    .clone()
-                    .unwrap_or_else(|| crate::t!("tui.no_active_recording")),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("bundle ", Style::default().fg(Color::DarkGray)),
-            Span::raw(app.app.clone().unwrap_or_else(|| "-".to_string())),
+            Span::raw(format!("{}  ", recording_id_label(app))),
+            Span::styled("asr ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("{provider}  ")),
+            Span::styled("chain ", Style::default().fg(Color::DarkGray)),
+            Span::raw(chain.to_string()),
         ]),
     ];
     frame.render_widget(
@@ -109,14 +110,22 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     );
 
     frame.render_widget(
-        Paragraph::new(meter_lines(app))
-            .block(Block::default().title("input").borders(Borders::ALL)),
+        Paragraph::new(meter_lines(
+            app,
+            chunks[1].width.saturating_sub(10) as usize,
+        ))
+        .block(Block::default().title("Input").borders(Borders::ALL)),
         chunks[1],
     );
 
-    let live_text = format!("{}{}", app.segments.join(""), app.partial);
     frame.render_widget(
-        Paragraph::new(live_text).wrap(Wrap { trim: false }).block(
+        Paragraph::new(live_speech_lines(
+            app,
+            chunks[2].width.saturating_sub(2) as usize,
+            chunks[2].height.saturating_sub(2) as usize,
+        ))
+        .wrap(Wrap { trim: false })
+        .block(
             Block::default()
                 .title(crate::t!("tui.live_speech"))
                 .borders(Borders::ALL),
@@ -124,22 +133,25 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         chunks[2],
     );
 
-    let pipeline = if app.pipeline.is_empty() {
-        crate::t!("tui.no_pipeline_steps")
-    } else {
-        app.pipeline.join("\n")
-    };
     frame.render_widget(
-        Paragraph::new(pipeline).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .title(crate::t!("tui.pipeline"))
-                .borders(Borders::ALL),
-        ),
+        Paragraph::new(pipeline_lines(app))
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .title(crate::t!("tui.pipeline"))
+                    .borders(Borders::ALL),
+            ),
         chunks[3],
     );
 }
 
-fn meter_lines(app: &App) -> Vec<Line<'static>> {
+fn recording_id_label(app: &App) -> String {
+    app.recording_id
+        .clone()
+        .unwrap_or_else(|| crate::t!("tui.no_active_recording"))
+}
+
+fn meter_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     if !matches!(app.state, WireState::Recording | WireState::Stopping) && app.meters.is_empty() {
         return vec![
             Line::from(vec![
@@ -156,23 +168,85 @@ fn meter_lines(app: &App) -> Vec<Line<'static>> {
             ]),
         ];
     }
-    let width = 72;
+    let width = width.clamp(16, 200);
     let start = app.meters.len().saturating_sub(width);
     let meters = &app.meters[start..];
     vec![
         Line::from(vec![
             Span::styled("Audio  ", Style::default().fg(Color::DarkGray)),
             meter_span(audio_upper(meters), Color::Cyan),
+            Span::styled("  peak", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
             Span::styled("       ", Style::default().fg(Color::DarkGray)),
             meter_span(audio_lower(meters), Color::Blue),
+            Span::styled("  rms", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
             Span::styled("VAD    ", Style::default().fg(Color::DarkGray)),
             vad_spans(meters),
+            Span::styled("  probability", Style::default().fg(Color::DarkGray)),
         ]),
     ]
+}
+
+fn live_speech_lines(app: &App, width: usize, max_lines: usize) -> Vec<Line<'static>> {
+    let max_chars = width.max(16) * max_lines.max(1);
+    let segments = app.segments.join("");
+    let combined = format!("{segments}{}", app.partial);
+    let total_chars = combined.chars().count();
+    let prefix = if total_chars > max_chars { "... " } else { "" };
+    let keep = max_chars.saturating_sub(prefix.chars().count());
+    let drop_chars = total_chars.saturating_sub(keep);
+    let segment_chars = segments.chars().count();
+    let segment_tail = if drop_chars < segment_chars {
+        take_char_range(&segments, drop_chars, segment_chars)
+    } else {
+        String::new()
+    };
+    let partial_drop = drop_chars.saturating_sub(segment_chars);
+    let partial_tail = take_char_range(&app.partial, partial_drop, app.partial.chars().count());
+    vec![Line::from(vec![
+        Span::styled(prefix.to_string(), Style::default().fg(Color::DarkGray)),
+        Span::styled(segment_tail, Style::default().fg(Color::Gray)),
+        Span::styled(partial_tail, Style::default().fg(Color::Cyan)),
+    ])]
+}
+
+fn take_char_range(value: &str, start: usize, end: usize) -> String {
+    let chars = value.chars().collect::<Vec<_>>();
+    let start = start.min(chars.len());
+    let end = end.min(chars.len()).max(start);
+    chars[start..end].iter().collect()
+}
+
+fn pipeline_lines(app: &App) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if let Some(meta) = app.session_meta.as_ref() {
+        lines.push(Line::from(vec![
+            Span::styled("ASR  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(meta.provider.clone(), Style::default().fg(Color::Cyan)),
+        ]));
+        for step in meta.chain.split(" → ").flat_map(|part| part.split(" -> ")) {
+            lines.push(Line::from(vec![
+                Span::styled("POST ", Style::default().fg(Color::DarkGray)),
+                Span::raw(step.to_string()),
+            ]));
+        }
+    }
+    if !app.pipeline.is_empty() {
+        lines.push(Line::from(""));
+        lines.extend(app.pipeline.iter().map(|step| {
+            Line::from(Span::styled(
+                step.clone(),
+                Style::default().fg(Color::Green),
+            ))
+        }));
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(crate::t!("tui.no_pipeline_steps")));
+    }
+    lines
 }
 
 fn meter_span(text: String, color: Color) -> Span<'static> {
@@ -272,12 +346,12 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             } else {
                 "  "
             };
-            let app_name = record.app.as_deref().unwrap_or("-");
+            let app_name = short_app_label(record.app.as_deref());
             ListItem::new(format!(
-                "{marker}{}  {}  {}ms  {}",
-                record.started_at,
+                "{marker}{}  {}  {}  {}",
+                format_local_time(record.started_at),
                 app_name,
-                record.duration_ms,
+                format_duration(record.duration_ms),
                 record.text.replace('\n', " ")
             ))
         })
@@ -321,11 +395,23 @@ fn history_detail_text(
     detail: HistoryDetail,
 ) -> String {
     match detail {
-        HistoryDetail::Final => record.text.clone(),
-        HistoryDetail::Asr => format!(
-            "provider: {}\naudio: {}\n\n{}",
+        HistoryDetail::Final => format!(
+            "status: {:?}\napp: {}\nstarted: {}\nduration: {}\nwords: {}\nasr: {}  audio {}\npipeline: {}\n\n{}",
+            record.status,
+            short_app_label(record.app.as_deref()),
+            format_local_time(record.started_at),
+            format_duration(record.duration_ms),
+            record.text_stats().words,
             record.asr.provider,
             format_duration(record.asr.audio_ms),
+            pipeline_summary(record),
+            record.text
+        ),
+        HistoryDetail::Asr => format!(
+            "provider: {}\naudio: {}\nstarted: {}\n\n{}",
+            record.asr.provider,
+            format_duration(record.asr.audio_ms),
+            format_local_time(record.started_at),
             record.asr.text
         ),
         HistoryDetail::Pipeline => {
@@ -358,8 +444,8 @@ fn history_detail_text(
                     format!(
                         "#{}  {} -> {}  audio {}\n{}",
                         idx + 1,
-                        session.started_at,
-                        session.ended_at,
+                        format_local_time(session.started_at),
+                        format_local_time(session.ended_at),
                         format_duration(session.audio_ms),
                         session.text
                     )
@@ -375,6 +461,25 @@ fn history_detail_text(
         HistoryDetail::Json => serde_json::to_string_pretty(record)
             .unwrap_or_else(|e| format!("failed to render json: {e}")),
     }
+}
+
+fn pipeline_summary(record: &crate::state::history::HistoryRecord) -> String {
+    if record.pipeline.is_empty() {
+        return "-".to_string();
+    }
+    record
+        .pipeline
+        .iter()
+        .map(|step| format!("{}:{:?}", step.name, step.status))
+        .collect::<Vec<_>>()
+        .join(" -> ")
+}
+
+fn short_app_label(app: Option<&str>) -> String {
+    let Some(app) = app else {
+        return "-".to_string();
+    };
+    app.rsplit('.').next().unwrap_or(app).to_string()
 }
 
 struct HistorySummary {
@@ -431,6 +536,19 @@ fn format_duration(ms: u64) -> String {
     } else {
         format!("{:02}:{:02}", minutes, seconds % 60)
     }
+}
+
+fn format_local_time(value: time::OffsetDateTime) -> String {
+    let value = match time::UtcOffset::current_local_offset() {
+        Ok(offset) => value.to_offset(offset),
+        Err(_) => value,
+    };
+    value
+        .format(
+            &time::format_description::parse("[year]-[month]-[day] [hour]:[minute]:[second]")
+                .expect("valid static time format"),
+        )
+        .unwrap_or_else(|_| value.to_string())
 }
 
 fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -519,5 +637,38 @@ mod tests {
 
         assert_eq!(audio_upper(&meters).chars().count(), 2);
         assert_eq!(audio_lower(&meters).chars().count(), 2);
+    }
+
+    #[test]
+    fn local_time_format_omits_fraction_and_offset() {
+        let value = time::macros::datetime!(2026-06-17 12:34:56.789 UTC);
+        let text = format_local_time(value);
+
+        assert!(!text.contains('.'));
+        assert!(!text.ends_with('Z'));
+        assert_eq!(text.len(), "2026-06-17 12:34:56".len());
+    }
+
+    #[test]
+    fn short_app_label_uses_bundle_tail() {
+        assert_eq!(short_app_label(Some("com.mitchellh.ghostty")), "ghostty");
+        assert_eq!(short_app_label(None), "-");
+    }
+
+    #[test]
+    fn live_speech_keeps_tail_when_space_is_limited() {
+        let mut app = App::new();
+        app.segments = vec!["abcdefghijklmnopqrstuvwxyz".to_string()];
+        app.partial = "0123456789".to_string();
+
+        let line = live_speech_lines(&app, 10, 1);
+        let text = line[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.starts_with("... "));
+        assert!(text.ends_with("456789"));
     }
 }

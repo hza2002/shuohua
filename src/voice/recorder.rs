@@ -88,7 +88,7 @@ pub fn start(audio_wav_path: Option<PathBuf>) -> Result<RecordingStream> {
         .name("cpal-recorder".into())
         .spawn(move || {
             if let Err(e) = run_recorder(pcm_tx, stop_rx, audio_wav_path, ready_tx) {
-                eprintln!("[recorder] {e:#}");
+                tracing::warn!(error = ?e, "recorder thread exited with error");
             }
         })
         .context("spawn recorder thread")?;
@@ -150,7 +150,7 @@ fn build_recorder_stream(
     validate_supported_config(&supported)?;
     let src_rate = supported.sample_rate();
     let channels = supported.channels() as usize;
-    crate::debug_println!("[recorder] {src_rate}Hz × {channels}ch F32 → 16k mono s16le");
+    tracing::debug!(src_rate, channels, "recorder format selected");
 
     let wav = Arc::new(Mutex::new(open_wav(audio_wav_path.as_deref())?));
     let wav_cb = wav.clone();
@@ -175,7 +175,7 @@ fn build_recorder_stream(
                 // 增加内存占用，不会丢帧。
                 let _ = pcm_tx.send(pcm);
             },
-            |err| eprintln!("[recorder] stream error: {err}"),
+            |err| tracing::warn!(error = %err, "recorder stream error"),
             None,
         )
         .context("build input stream")?;

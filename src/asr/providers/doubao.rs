@@ -209,7 +209,7 @@ impl AsrProvider for DoubaoProvider {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("-")
             .to_string();
-        crate::debug_println!("[doubao] connected, X-Tt-Logid={logid}");
+        tracing::debug!(logid = %logid, "doubao connected");
 
         // 首条 full client request
         let payload = build_full_client_request_payload(&self.config, &ctx);
@@ -400,7 +400,12 @@ impl DriftProbe {
     fn check_drift(&self, i: usize, current: &str) {
         if let Some(prev) = self.snapshots.get(i) {
             if prev != current {
-                eprintln!("[doubao] ⚠ utterance[{i}] drift: {prev:?} → {:?}", current);
+                tracing::warn!(
+                    utterance_index = i,
+                    previous_chars = prev.chars().count(),
+                    current_chars = current.chars().count(),
+                    "doubao utterance drift detected"
+                );
             }
         }
     }
@@ -412,9 +417,10 @@ impl DriftProbe {
     fn check_final(&self, doubao_text: &str) {
         let ours: String = self.snapshots.concat();
         if ours != doubao_text {
-            eprintln!(
-                "[doubao] ⚠ final mismatch\n  ours:   {ours:?}\n  doubao: {:?}",
-                doubao_text
+            tracing::warn!(
+                ours_chars = ours.chars().count(),
+                doubao_chars = doubao_text.chars().count(),
+                "doubao final text mismatch"
             );
         }
     }

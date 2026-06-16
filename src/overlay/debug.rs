@@ -2,7 +2,7 @@
 //! mod.rs 处门禁，release build 完全不编译，零开销。
 //!
 //! 当 macOS 升级 / Apple 改动 `NSGlassEffectView` 私有 SPI 命名或参数语义时，
-//! 跑一次 `cargo run` 就能从 stderr 看到：
+//! 跑一次前台 daemon 就能从 tracing mirror 看到：
 //!
 //! - [`dump_glass_selectors`] 列出真实方法名 + ObjC 类型编码
 //! - [`probe_glass_state_ranges`] 对 setter+getter 对做 0..=31 round-trip，看 Apple 是否 clamp
@@ -26,14 +26,14 @@ unsafe extern "C" {
     fn sel_getName(sel: Sel) -> *const c_char;
 }
 
-/// 一行 glass 相关 trace，自动加 `[overlay glass]` 前缀打到 stderr。
+/// 一行 glass 相关 trace，自动加 area 字段方便过滤。
 pub fn trace(msg: impl AsRef<str>) {
-    eprintln!("[overlay glass] {}", msg.as_ref());
+    tracing::debug!(area = "overlay_glass", message = %msg.as_ref());
 }
 
 /// 枚举 glass 实例的运行时 class 上**所有**实例方法，过滤含
 /// `subdued / dim / variant / style / opaque / blur` 关键词的
-/// selector 名字打印到 stderr，**附带 ObjC 类型编码**（确认 ABI 是 `q`=NSInteger
+/// selector 名字打印到 debug 日志，**附带 ObjC 类型编码**（确认 ABI 是 `q`=NSInteger
 /// 还是 `Q`=NSUInteger / `c`=BOOL，避免再次像 BOOL→long long 那样错传）。
 ///
 /// 编码字符串格式示例 `v24@0:8q16` ——
@@ -57,7 +57,7 @@ pub fn dump_glass_selectors(glass: &NSGlassEffectView) {
             let lower = name.to_ascii_lowercase();
             if needles.iter().any(|n| lower.contains(n)) {
                 let encoding = CStr::from_ptr(method_getTypeEncoding(method)).to_string_lossy();
-                eprintln!("[overlay glass probe] {name}  encoding={encoding}");
+                tracing::debug!(area = "overlay_glass", selector = %name, encoding = %encoding, "glass selector");
             }
         }
         // 调试一次性调用，buffer 一直存活直到进程退出；不引 libc 只为 free()
@@ -98,17 +98,19 @@ pub fn probe_glass_state_ranges(glass: &NSGlassEffectView) {
             let getter_responds: bool = msg_send![obj, respondsToSelector: getter];
 
             if !setter_responds {
-                eprintln!(
-                    "[overlay glass range] {:30} not available (setter missing)",
-                    setter_name.to_string_lossy()
+                tracing::debug!(
+                    area = "overlay_glass",
+                    setter = %setter_name.to_string_lossy(),
+                    "glass setter not available"
                 );
                 continue;
             }
             if !getter_responds {
-                eprintln!(
-                    "[overlay glass range] {:30} setter exists but getter {} missing — can't probe",
-                    setter_name.to_string_lossy(),
-                    getter_name.to_string_lossy()
+                tracing::debug!(
+                    area = "overlay_glass",
+                    setter = %setter_name.to_string_lossy(),
+                    getter = %getter_name.to_string_lossy(),
+                    "glass getter missing"
                 );
                 continue;
             }
@@ -120,11 +122,12 @@ pub fn probe_glass_state_ranges(glass: &NSGlassEffectView) {
             let getter_ret = ret_type(&getter_enc);
 
             if setter_arg != Some('q') || getter_ret != Some('q') {
-                eprintln!(
-                    "[overlay glass range] {:30} skipped (setter arg={}, getter ret={} — not q+q, can't round-trip as i64)",
-                    setter_name.to_string_lossy(),
-                    setter_arg.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string()),
-                    getter_ret.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string()),
+                tracing::debug!(
+                    area = "overlay_glass",
+                    setter = %setter_name.to_string_lossy(),
+                    setter_arg = %setter_arg.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string()),
+                    getter_ret = %getter_ret.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string()),
+                    "glass probe skipped for ABI mismatch"
                 );
                 continue;
             }
@@ -155,9 +158,11 @@ pub fn probe_glass_state_ranges(glass: &NSGlassEffectView) {
 
             let _: () = obj.send_message(setter, (original,));
 
-            eprintln!(
-                "[overlay glass range] {:30} {summary}",
-                setter_name.to_string_lossy()
+            tracing::debug!(
+                area = "overlay_glass",
+                setter = %setter_name.to_string_lossy(),
+                summary = %summary,
+                "glass range probe"
             );
         }
     }

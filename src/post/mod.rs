@@ -9,7 +9,7 @@
 //!   history 直接消费。
 //! - run_chain "链不阻塞"：单步 processor 失败/超时**跳过**，下一个继续用上一步
 //!   的 text。最差产出 == raw（不会丢内容）。
-//! - M2.5 不接 toast / step_tx；M3 加 overlay 时再扩参数。失败/超时走 eprintln!。
+//! - M2.5 不接 toast / step_tx；M3 加 overlay 时再扩参数。失败/超时走诊断日志。
 
 pub mod app_context;
 pub mod config;
@@ -130,12 +130,16 @@ pub async fn run_chain(
         match tokio::time::timeout(timeout, p.process(current.clone(), ctx)).await {
             Ok(Ok(out)) => {
                 let step = PipelineStep::ok(p.name(), started.elapsed(), out.text.clone());
-                crate::debug_println!("[post] {} ok in {:.1}ms", p.name(), step.duration_ms);
+                tracing::debug!(
+                    step = %p.name(),
+                    duration_ms = step.duration_ms,
+                    "post step succeeded"
+                );
                 current = out;
                 steps.push(step);
             }
             Ok(Err(e)) => {
-                eprintln!("[post] ⚠ {} failed, skipped: {e}", p.name());
+                tracing::warn!(step = %p.name(), error = %e, "post step failed; skipped");
                 steps.push(PipelineStep::error(
                     p.name(),
                     started.elapsed(),
@@ -143,7 +147,11 @@ pub async fn run_chain(
                 ));
             }
             Err(_) => {
-                eprintln!("[post] ⚠ {} timed out (>{:?}), skipped", p.name(), timeout);
+                tracing::warn!(
+                    step = %p.name(),
+                    timeout_ms = timeout.as_millis(),
+                    "post step timed out; skipped"
+                );
                 steps.push(PipelineStep::timeout(p.name(), started.elapsed()));
             }
         }

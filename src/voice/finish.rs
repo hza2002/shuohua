@@ -156,7 +156,13 @@ async fn run_single_session_recording(
     let recording_id = ulid::Ulid::new().to_string();
     let recording_started_at = time::OffsetDateTime::now_utc();
     let recording_started_instant = Instant::now();
-    crate::debug_println!("[shuo] ▶ recording id={recording_id}");
+    tracing::info!(
+        recording_id = %recording_id,
+        provider = %provider.name(),
+        app = ?params.start_app_context.bundle_id,
+        multi_session = false,
+        "recording started"
+    );
     let mut trace = RecordingObserver::start(TraceStart {
         enabled: params.vad_trace,
         recording_id: recording_id.clone(),
@@ -164,6 +170,9 @@ async fn run_single_session_recording(
         started_at: recording_started_at.to_string(),
         started_instant: recording_started_instant,
     });
+    if params.vad_trace {
+        tracing::info!(recording_id = %recording_id, "dev voice trace enabled");
+    }
     let mut app_context = params.start_app_context.clone();
     params
         .state
@@ -190,7 +199,11 @@ async fn run_single_session_recording(
         match prepare_audio_path(&recording_id) {
             Ok(p) => Some(p),
             Err(e) => {
-                eprintln!("[shuo] record_audio 开启但准备路径失败: {e:#}");
+                tracing::warn!(
+                    recording_id = %recording_id,
+                    error = ?e,
+                    "record_audio enabled but audio path preparation failed"
+                );
                 None
             }
         }
@@ -198,13 +211,13 @@ async fn run_single_session_recording(
         None
     };
     if let Some(p) = &audio_path {
-        crate::debug_println!("[shuo] 留存 wav → {}", p.display());
+        tracing::debug!(recording_id = %recording_id, path = %p.display(), "record audio wav enabled");
     }
 
     let mut rec = match recorder::start(audio_path) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[shuo] ❌ 录音启动失败: {e:#}");
+            tracing::error!(recording_id = %recording_id, error = ?e, "recorder start failed");
             observe_finish_ms(&mut trace, "recorder_start_error", 0);
             params.state.set_error(Some(recording_id));
             send_error_overlay(&params, crate::t!("error.recorder_start"));
@@ -227,7 +240,7 @@ async fn run_single_session_recording(
     let (mut session, mut events) = match provider.open(ctx).await {
         Ok(t) => t,
         Err(err) => {
-            eprintln!("[shuo] ❌ ASR open failed: {err}");
+            tracing::error!(recording_id = %recording_id, error = %err, "ASR open failed");
             rec.stop();
             observe_asr_error(&mut trace, recording_started_instant, err.clone());
             observe_finish_ms(&mut trace, "asr_open_error", 0);
@@ -273,7 +286,7 @@ async fn run_single_session_recording(
                             first_audio_seen = true;
                         }
                         if let Err(e) = session.send_pcm(&samples, false).await {
-                            eprintln!("[shuo] ❌ ASR send_pcm failed: {e}");
+                            tracing::error!(recording_id = %recording_id, error = %e, "ASR send_pcm failed");
                             terminal_error = Some(HistoryError {
                                 kind: "asr_send".to_string(),
                                 msg: e.to_string(),
@@ -283,14 +296,16 @@ async fn run_single_session_recording(
                         audio_samples_sent += samples.len() as u64;
                     }
                     None => {
-                        eprintln!("[shuo] recorder ended unexpectedly");
+                        tracing::warn!(recording_id = %recording_id, "recorder ended unexpectedly");
                         stop_requested = true;
                     }
                 }
             }
             _ = sleep_until(first_audio_deadline), if !first_audio_seen => {
-                eprintln!(
-                    "[shuo] ❌ {FIRST_AUDIO_TIMEOUT_MS}ms 内未收到麦克风音频，疑似设备不可用"
+                tracing::error!(
+                    recording_id = %recording_id,
+                    timeout_ms = FIRST_AUDIO_TIMEOUT_MS,
+                    "no microphone audio received before timeout"
                 );
                 rec.stop();
                 let _ = session.close().await;
@@ -303,7 +318,12 @@ async fn run_single_session_recording(
                 match ev {
                     None => break,
                     Some(AsrEvent::Partial { text, seq }) => {
-                        crate::debug_println!("[shuo]   partial#{seq}: {text}");
+                        tracing::debug!(
+                            recording_id = %recording_id,
+                            seq,
+                            chars = text.chars().count(),
+                            "ASR partial received"
+                        );
                         observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Partial { text: text.clone(), seq });
                         params.state.partial(recording_id.clone(), text.clone());
                         let live_text = format!(
@@ -324,14 +344,18 @@ async fn run_single_session_recording(
                         );
                     }
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                        crate::debug_println!("[shuo]   segment: {text}");
+                        tracing::debug!(
+                            recording_id = %recording_id,
+                            chars = text.chars().count(),
+                            "ASR segment received"
+                        );
                         observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Segment { text: text.clone(), started_at, ended_at });
                         params.state.segment(recording_id.clone(), text.clone());
                         overlay_send(&params, OverlayCmd::AppendSegment { text: text.clone() });
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Error { err }) => {
-                        eprintln!("[shuo] ❌ ASR error: {err}");
+                        tracing::error!(recording_id = %recording_id, error = %err, "ASR event error");
                         observe_asr_error(&mut trace, recording_started_instant, err.clone());
                         params.state.set_error(Some(recording_id.clone()));
                         send_error_overlay(&params, crate::t!("error.asr_runtime"));
@@ -434,7 +458,7 @@ async fn run_single_session_recording(
         .map(|s| s.text.as_str())
         .collect::<String>();
     if cancel_requested {
-        crate::debug_println!("[shuo] ✖ recording canceled");
+        tracing::info!(recording_id = %recording_id, "recording canceled");
         params.state.set_idle();
         overlay_send(&params, OverlayCmd::Hide);
         if let Some(record) = append_history(HistoryInput {
@@ -577,7 +601,13 @@ async fn run_multi_session_recording(
     let recording_id = ulid::Ulid::new().to_string();
     let recording_started_at = time::OffsetDateTime::now_utc();
     let recording_started_instant = Instant::now();
-    crate::debug_println!("[shuo] ▶ recording id={recording_id} (multi-session)");
+    tracing::info!(
+        recording_id = %recording_id,
+        provider = %provider.name(),
+        app = ?params.start_app_context.bundle_id,
+        multi_session = true,
+        "recording started"
+    );
     let mut trace = RecordingObserver::start(TraceStart {
         enabled: params.vad_trace,
         recording_id: recording_id.clone(),
@@ -585,6 +615,9 @@ async fn run_multi_session_recording(
         started_at: recording_started_at.to_string(),
         started_instant: recording_started_instant,
     });
+    if params.vad_trace {
+        tracing::info!(recording_id = %recording_id, "dev voice trace enabled");
+    }
     let mut app_context = params.start_app_context.clone();
     params
         .state
@@ -611,7 +644,11 @@ async fn run_multi_session_recording(
         match prepare_audio_path(&recording_id) {
             Ok(p) => Some(p),
             Err(e) => {
-                eprintln!("[shuo] record_audio 开启但准备路径失败: {e:#}");
+                tracing::warn!(
+                    recording_id = %recording_id,
+                    error = ?e,
+                    "record_audio enabled but audio path preparation failed"
+                );
                 None
             }
         }
@@ -622,7 +659,7 @@ async fn run_multi_session_recording(
     let mut rec = match recorder::start(audio_path) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[shuo] ❌ 录音启动失败: {e:#}");
+            tracing::error!(recording_id = %recording_id, error = ?e, "recorder start failed");
             observe_finish_ms(&mut trace, "recorder_start_error", 0);
             params.state.set_error(Some(recording_id));
             send_error_overlay(&params, crate::t!("error.recorder_start"));
@@ -637,7 +674,7 @@ async fn run_multi_session_recording(
     }) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("[shuo] ❌ Silero VAD 初始化失败: {e:#}");
+            tracing::error!(recording_id = %recording_id, error = ?e, "Silero VAD init failed");
             rec.stop();
             observe_finish_ms(&mut trace, "vad_init_error", 0);
             params.state.set_error(Some(recording_id));
@@ -666,7 +703,7 @@ async fn run_multi_session_recording(
     let (initial_session, initial_events) = match provider.open(ctx.clone()).await {
         Ok(t) => t,
         Err(err) => {
-            eprintln!("[shuo] ❌ ASR open failed: {err}");
+            tracing::error!(recording_id = %recording_id, error = %err, "ASR open failed");
             rec.stop();
             observe_asr_error(&mut trace, recording_started_instant, err.clone());
             observe_finish_ms(&mut trace, "asr_open_error", 0);
@@ -736,7 +773,7 @@ async fn run_multi_session_recording(
                                     None => Err(crate::asr::types::AsrError::Network("no active session".into())),
                                 };
                                 if let Err(e) = send_res {
-                                    eprintln!("[shuo] ❌ ASR send_pcm failed: {e}");
+                                    tracing::error!(recording_id = %recording_id, error = %e, "ASR send_pcm failed");
                                     terminal_error = Some(HistoryError {
                                         kind: "asr_send".to_string(),
                                         msg: e.to_string(),
@@ -761,8 +798,10 @@ async fn run_multi_session_recording(
                         }
                     }
                     _ = sleep_until(first_audio_deadline), if !first_audio_seen => {
-                        eprintln!(
-                            "[shuo] ❌ {FIRST_AUDIO_TIMEOUT_MS}ms 内未收到麦克风音频，疑似设备不可用"
+                        tracing::error!(
+                            recording_id = %recording_id,
+                            timeout_ms = FIRST_AUDIO_TIMEOUT_MS,
+                            "no microphone audio received before timeout"
                         );
                         rec.stop();
                         if let Some(s) = session.take() { let _ = s.close().await; }
@@ -775,7 +814,12 @@ async fn run_multi_session_recording(
                         match ev {
                             None => { stop_requested = true; break 'active; }
                             Some(AsrEvent::Partial { text, seq }) => {
-                                crate::debug_println!("[shuo]   partial#{seq}: {text}");
+                                tracing::debug!(
+                                    recording_id = %recording_id,
+                                    seq,
+                                    chars = text.chars().count(),
+                                    "ASR partial received"
+                                );
                                 observe_asr_event(
                                     &mut trace,
                                     recording_started_instant,
@@ -794,7 +838,11 @@ async fn run_multi_session_recording(
                                 overlay_send(&params, OverlayCmd::SetText { text, kind: TextKind::Partial });
                             }
                             Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                                crate::debug_println!("[shuo]   segment: {text}");
+                                tracing::debug!(
+                                    recording_id = %recording_id,
+                                    chars = text.chars().count(),
+                                    "ASR segment received"
+                                );
                                 observe_asr_event(
                                     &mut trace,
                                     recording_started_instant,
@@ -805,7 +853,7 @@ async fn run_multi_session_recording(
                                 current_pending_segments.push(SegmentCapture { text, started_at, ended_at });
                             }
                             Some(AsrEvent::Error { err }) => {
-                                eprintln!("[shuo] ❌ ASR error: {err}");
+                                tracing::error!(recording_id = %recording_id, error = %err, "ASR event error");
                                 observe_asr_event(
                                     &mut trace,
                                     recording_started_instant,
@@ -932,7 +980,12 @@ async fn run_multi_session_recording(
                     break 'outer;
                 }
                 Err(e) => {
-                    eprintln!("[shuo] ⚠ finalize: {} {}", e.kind, e.msg);
+                    tracing::warn!(
+                        recording_id = %recording_id,
+                        error_kind = %e.kind,
+                        error = %e.msg,
+                        "ASR finalize error"
+                    );
                     terminal_error = Some(e);
                     break 'outer;
                 }
@@ -1039,7 +1092,7 @@ async fn run_multi_session_recording(
             let (new_session, new_events) = match provider.open(ctx.clone()).await {
                 Ok(t) => t,
                 Err(err) => {
-                    eprintln!("[shuo] ❌ ASR resume open failed: {err}");
+                    tracing::error!(recording_id = %recording_id, session_index = next_index, error = %err, "ASR resume open failed");
                     observe_session(
                         &mut trace,
                         SessionPhase::OpenError {
@@ -1075,7 +1128,7 @@ async fn run_multi_session_recording(
             if !replay.samples.is_empty() {
                 if let Some(s) = session.as_mut() {
                     if let Err(e) = s.send_pcm(&replay.samples, false).await {
-                        eprintln!("[shuo] ❌ ASR resume send_pcm failed: {e}");
+                        tracing::error!(recording_id = %recording_id, session_index, error = %e, "ASR resume send_pcm failed");
                         terminal_error = Some(HistoryError {
                             kind: "asr_send".to_string(),
                             msg: e.to_string(),
@@ -1127,7 +1180,7 @@ async fn run_multi_session_recording(
         .collect();
 
     if cancel_requested {
-        crate::debug_println!("[shuo] ✖ recording canceled");
+        tracing::info!(recording_id = %recording_id, "recording canceled");
         params.state.set_idle();
         overlay_send(&params, OverlayCmd::Hide);
         if let Some(record) = append_history(HistoryInput {
@@ -1275,7 +1328,11 @@ async fn finish(
                 match ev {
                     None => break,
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                        crate::debug_println!("[shuo]   segment (drain): {text}");
+                        tracing::debug!(
+                            recording_id = %recording_id,
+                            chars = text.chars().count(),
+                            "ASR segment received during drain"
+                        );
                         observe_asr_event(
                             trace,
                             recording_started_instant,
@@ -1292,7 +1349,12 @@ async fn finish(
                         break;
                     }
                     Some(AsrEvent::Partial { text, seq }) => {
-                        crate::debug_println!("[shuo]   partial#{seq} (drain): {text}");
+                        tracing::debug!(
+                            recording_id = %recording_id,
+                            seq,
+                            chars = text.chars().count(),
+                            "ASR partial received during drain"
+                        );
                         observe_asr_event(
                             trace,
                             recording_started_instant,
@@ -1300,7 +1362,7 @@ async fn finish(
                         );
                     }
                     Some(AsrEvent::Error { err }) => {
-                        eprintln!("[shuo] ❌ ASR error during drain: {err}");
+                        tracing::error!(recording_id = %recording_id, error = %err, "ASR event error during drain");
                         observe_asr_event(
                             trace,
                             recording_started_instant,
@@ -1345,9 +1407,28 @@ async fn finish(
         }
         Err(e) => {
             match e.kind.as_str() {
-                "asr_send_last" => eprintln!("[shuo] ❌ send is_last failed: {}", e.msg),
-                "asr_timeout" => eprintln!("[shuo] ⚠ 识别 final 超时 {finalize_timeout_ms}ms"),
-                _ => eprintln!("[shuo] ⚠ finalize error: {} {}", e.kind, e.msg),
+                "asr_send_last" => {
+                    tracing::error!(
+                        recording_id = %recording_id,
+                        error = %e.msg,
+                        "ASR send is_last failed"
+                    )
+                }
+                "asr_timeout" => {
+                    tracing::warn!(
+                        recording_id = %recording_id,
+                        finalize_timeout_ms,
+                        "ASR final timed out"
+                    )
+                }
+                _ => {
+                    tracing::warn!(
+                        recording_id = %recording_id,
+                        error_kind = %e.kind,
+                        error = %e.msg,
+                        "ASR finalize error"
+                    )
+                }
             }
             *terminal_error = Some(e);
             false
@@ -1412,7 +1493,11 @@ async fn finalize_provider_session(
                         return Ok(FinalizeOutcome::Done);
                     }
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                        crate::debug_println!("[shuo]   segment (final): {text}");
+                        tracing::debug!(
+                            recording_id = %recording_id,
+                            chars = text.chars().count(),
+                            "ASR segment received during final"
+                        );
                         observe_asr_event(
                             trace,
                             recording_started_instant,
@@ -1427,7 +1512,12 @@ async fn finalize_provider_session(
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Partial { text, seq }) => {
-                        crate::debug_println!("[shuo]   partial#{seq} (final): {text}");
+                        tracing::debug!(
+                            recording_id = %recording_id,
+                            seq,
+                            chars = text.chars().count(),
+                            "ASR partial received during final"
+                        );
                         observe_asr_event(
                             trace,
                             recording_started_instant,
@@ -1435,7 +1525,7 @@ async fn finalize_provider_session(
                         );
                     }
                     Some(AsrEvent::Error { err }) => {
-                        eprintln!("[shuo] ❌ ASR error during final: {err}");
+                        tracing::error!(recording_id = %recording_id, error = %err, "ASR event error during final");
                         observe_asr_event(
                             trace,
                             recording_started_instant,
@@ -1487,7 +1577,6 @@ async fn dispatch_with_post_chain(
     let segment_texts: Vec<String> = segments.iter().map(|s| s.text.clone()).collect();
     let raw_text: String = segment_texts.concat();
     if raw_text.is_empty() {
-        crate::debug_println!("[shuo] (空识别结果，跳过 dispatch)");
         return Ok((String::new(), Vec::new(), HistoryStatus::Canceled, None));
     }
     let initial = PipelineText::new(raw_text, segment_texts);
@@ -1524,11 +1613,10 @@ async fn dispatch_with_post_chain(
             PipelineStepStatus::Ok | PipelineStepStatus::Skipped => {}
         }
     }
-    crate::debug_println!("[shuo] ✓ 最终: {}", out.text);
     let dispatched = out.text.clone();
     let pipeline = steps.into_iter().map(PipelineStepHistory::from).collect();
     if let Err(e) = dispatch::dispatch(&out.text, auto_paste) {
-        eprintln!("[shuo] ❌ 剪贴板写入失败: {e:#}");
+        tracing::error!(error = ?e, "dispatch failed");
         return Ok((
             dispatched,
             pipeline,
@@ -1697,9 +1785,22 @@ fn build_record(input: HistoryInput) -> HistoryRecord {
 fn append_history(input: HistoryInput) -> Option<HistoryRecord> {
     let record = build_record(input);
     if let Err(e) = history::append_default(&record) {
-        eprintln!("[shuo] ❌ history append failed: {e:#}");
+        tracing::error!(
+            recording_id = %record.id,
+            error = ?e,
+            "history append failed"
+        );
         return None;
     }
+    tracing::info!(
+        recording_id = %record.id,
+        status = ?record.status,
+        provider = %record.asr.provider,
+        audio_ms = record.asr.audio_ms,
+        session_count = record.asr.sessions.len(),
+        pipeline_steps = record.pipeline.len(),
+        "recording ended"
+    );
     Some(record)
 }
 

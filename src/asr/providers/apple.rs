@@ -153,7 +153,8 @@ impl AsrProvider for AppleProvider {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    crate::debug_println!("[apple_helper] {line}");
+                    let _ = line;
+                    tracing::debug!("apple helper emitted stderr line");
                 }
             });
         }

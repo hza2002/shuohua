@@ -85,7 +85,7 @@ mod imp {
             match Self::start_in_dir(&default_trace_dir(), start) {
                 Ok(trace) => trace,
                 Err(e) => {
-                    eprintln!("[trace] disabled: {e:#}");
+                    tracing::warn!(error = ?e, "dev voice trace disabled");
                     Self { inner: None }
                 }
             }

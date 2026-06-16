@@ -51,7 +51,6 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             Constraint::Length(5),
             Constraint::Length(6),
             Constraint::Min(5),
-            Constraint::Length(5),
         ])
         .split(area);
 
@@ -94,10 +93,10 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         Line::from(vec![
             Span::styled("id ", Style::default().fg(Color::DarkGray)),
             Span::raw(format!("{}  ", recording_id_label(app))),
-            Span::styled("asr ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{provider}  ")),
-            Span::styled("chain ", Style::default().fg(Color::DarkGray)),
-            Span::raw(chain.to_string()),
+            Span::styled("elapsed ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("{}  ", format_duration(elapsed_ms))),
+            Span::styled("words ", Style::default().fg(Color::DarkGray)),
+            Span::raw(app.words.to_string()),
         ]),
     ];
     frame.render_widget(
@@ -110,11 +109,11 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     );
 
     frame.render_widget(
-        Paragraph::new(meter_lines(
-            app,
-            chunks[1].width.saturating_sub(10) as usize,
-        ))
-        .block(Block::default().title("Input").borders(Borders::ALL)),
+        Paragraph::new(meter_lines(app, chunks[1].width.saturating_sub(9) as usize)).block(
+            Block::default()
+                .title(format!("Input  ASR {provider}  {chain}"))
+                .borders(Borders::ALL),
+        ),
         chunks[1],
     );
 
@@ -131,17 +130,6 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 .borders(Borders::ALL),
         ),
         chunks[2],
-    );
-
-    frame.render_widget(
-        Paragraph::new(pipeline_lines(app))
-            .wrap(Wrap { trim: false })
-            .block(
-                Block::default()
-                    .title(crate::t!("tui.pipeline"))
-                    .borders(Borders::ALL),
-            ),
-        chunks[3],
     );
 }
 
@@ -173,31 +161,29 @@ fn meter_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     let meters = &app.meters[start..];
     vec![
         Line::from(vec![
-            Span::styled("Audio  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Peak   ", Style::default().fg(Color::DarkGray)),
             meter_span(audio_upper(meters), Color::Cyan),
-            Span::styled("  peak", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
-            Span::styled("       ", Style::default().fg(Color::DarkGray)),
+            Span::styled("RMS    ", Style::default().fg(Color::DarkGray)),
             meter_span(audio_lower(meters), Color::Blue),
-            Span::styled("  rms", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
             Span::styled("VAD    ", Style::default().fg(Color::DarkGray)),
             vad_spans(meters),
-            Span::styled("  probability", Style::default().fg(Color::DarkGray)),
         ]),
     ]
 }
 
 fn live_speech_lines(app: &App, width: usize, max_lines: usize) -> Vec<Line<'static>> {
-    let max_chars = width.max(16) * max_lines.max(1);
+    let width = width.max(16);
+    let max_lines = max_lines.max(1);
     let segments = app.segments.join("");
     let combined = format!("{segments}{}", app.partial);
-    let total_chars = combined.chars().count();
-    let prefix = if total_chars > max_chars { "... " } else { "" };
-    let keep = max_chars.saturating_sub(prefix.chars().count());
-    let drop_chars = total_chars.saturating_sub(keep);
+    let lines_needed = combined.chars().count().div_ceil(width);
+    let truncated = lines_needed > max_lines;
+    let keep = width * max_lines - usize::from(truncated) * 4;
+    let drop_chars = combined.chars().count().saturating_sub(keep);
     let segment_chars = segments.chars().count();
     let segment_tail = if drop_chars < segment_chars {
         take_char_range(&segments, drop_chars, segment_chars)
@@ -206,11 +192,36 @@ fn live_speech_lines(app: &App, width: usize, max_lines: usize) -> Vec<Line<'sta
     };
     let partial_drop = drop_chars.saturating_sub(segment_chars);
     let partial_tail = take_char_range(&app.partial, partial_drop, app.partial.chars().count());
-    vec![Line::from(vec![
-        Span::styled(prefix.to_string(), Style::default().fg(Color::DarkGray)),
-        Span::styled(segment_tail, Style::default().fg(Color::Gray)),
-        Span::styled(partial_tail, Style::default().fg(Color::Cyan)),
-    ])]
+    let mut spans = Vec::new();
+    if truncated {
+        spans.push(Span::styled(
+            "... ".to_string(),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    spans.push(Span::styled(segment_tail, Style::default().fg(Color::Gray)));
+    spans.push(Span::styled(partial_tail, Style::default().fg(Color::Cyan)));
+    wrap_spans(spans, width)
+}
+
+fn wrap_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![Vec::<Span<'static>>::new()];
+    let mut col = 0usize;
+    for span in spans {
+        let style = span.style;
+        for ch in span.content.chars() {
+            if col >= width {
+                lines.push(Vec::new());
+                col = 0;
+            }
+            lines
+                .last_mut()
+                .expect("at least one line")
+                .push(Span::styled(ch.to_string(), style));
+            col += 1;
+        }
+    }
+    lines.into_iter().map(Line::from).collect()
 }
 
 fn take_char_range(value: &str, start: usize, end: usize) -> String {
@@ -218,35 +229,6 @@ fn take_char_range(value: &str, start: usize, end: usize) -> String {
     let start = start.min(chars.len());
     let end = end.min(chars.len()).max(start);
     chars[start..end].iter().collect()
-}
-
-fn pipeline_lines(app: &App) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    if let Some(meta) = app.session_meta.as_ref() {
-        lines.push(Line::from(vec![
-            Span::styled("ASR  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(meta.provider.clone(), Style::default().fg(Color::Cyan)),
-        ]));
-        for step in meta.chain.split(" → ").flat_map(|part| part.split(" -> ")) {
-            lines.push(Line::from(vec![
-                Span::styled("POST ", Style::default().fg(Color::DarkGray)),
-                Span::raw(step.to_string()),
-            ]));
-        }
-    }
-    if !app.pipeline.is_empty() {
-        lines.push(Line::from(""));
-        lines.extend(app.pipeline.iter().map(|step| {
-            Line::from(Span::styled(
-                step.clone(),
-                Style::default().fg(Color::Green),
-            ))
-        }));
-    }
-    if lines.is_empty() {
-        lines.push(Line::from(crate::t!("tui.no_pipeline_steps")));
-    }
-    lines
 }
 
 fn meter_span(text: String, color: Color) -> Span<'static> {
@@ -348,7 +330,7 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             };
             let app_name = short_app_label(record.app.as_deref());
             ListItem::new(format!(
-                "{marker}{}  {}  {}  {}",
+                "{marker}{:<19}  {:<12}  {:>8}  {}",
                 format_local_time(record.started_at),
                 app_name,
                 format_duration(record.duration_ms),

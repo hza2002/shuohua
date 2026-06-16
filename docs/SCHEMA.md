@@ -27,6 +27,7 @@
 {"event":"state_changed","state":"recording","recording_id":"01HXYZ...","started_at":"..."}
 {"event":"app_changed","app":"com.apple.dt.Xcode","app_name":"Xcode"}
 {"event":"session_meta","recording_id":"01HXYZ...","meta":{"provider":"doubao","chain":"rule:filler → llm:deepseek","vad":"silero","hotwords":3}}
+{"event":"session_phase","recording_id":"01HXYZ...","phase":"idle"} // 多 session 路径下 TUI 子状态：active / idle / stopping
 {"event":"stats_changed","dur_ms":3200,"words":32}
 {"event":"partial","recording_id":"01HXYZ...","text":"今天天气真"}      // ASR 增量
 {"event":"segment","recording_id":"01HXYZ...","text":"今天天气真好。"}    // 已定型文本段
@@ -46,6 +47,7 @@
 - **`pipeline_step` 事件**：让 TUI 能实时看到每个 processor 的产出（流水线观测）。
 - **`audio_meter` 事件**：只在已有录音 PCM/VAD 流上派生轻量监控数据，供 TUI 画 waveform / VAD activity。daemon 不为 TUI 单独打开麦克风流；UDS 不传原始 PCM。`rms` / `peak` / `vad_probability` 取值范围为 `0.0..=1.0`；`vad_probability` / `vad_speech` 在当前录音路径没有 VAD 时可省略。
 - **`session_meta` 事件**：录音开始后推一次本次 session 的静态元数据，供 TUI 在 pipeline 尚未执行时显示完整 ASR provider、post chain、VAD backend 和 hotwords 数量。它不是持久化状态；最终事实仍以 `history_appended.record` 为准。
+- **`session_phase` 事件**：TUI 专用的录音内部阶段，不改变顶层 `state_changed.state` 语义。`active` 表示正在把音频送 ASR，`idle` 表示 VAD pause 后麦克风仍在听但 ASR 暂停，`stopping` 表示用户停止后的收尾阶段。
 - **`get_history` 分页**：默认 `limit=50`，返回从新到旧。`before` 用 `started_at` RFC3339 时间戳，语义为只返回早于该时间的记录。`query` 是可选关键词过滤；M4 内置大小写不敏感 substring，未来如需 regex/fzf 体验由 TUI 层增强。
 - **协议版本**：`snapshot` 回包带 `proto_version: 2`。TUI 收到不认识的版本号时报 warning 但继续尝试解析；daemon 单方升级版本时必须同时升级 TUI（同二进制 → 不会错位）。未来加事件类型不破坏，删/改字段升 `proto_version`。
 

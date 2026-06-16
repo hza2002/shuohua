@@ -259,6 +259,13 @@ impl From<StateEvent> for Event {
             StateEvent::SessionMeta { recording_id, meta } => {
                 Event::SessionMeta { recording_id, meta }
             }
+            StateEvent::SessionPhase {
+                recording_id,
+                phase,
+            } => Event::SessionPhase {
+                recording_id,
+                phase,
+            },
             StateEvent::HistoryAppended { record } => Event::HistoryAppended { record },
         }
     }

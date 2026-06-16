@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 
 use crate::ipc::protocol::WireState;
+use crate::state::SessionPhase;
 use crate::tui::{App, HistoryDetail, Page};
 
 pub fn render(frame: &mut Frame, app: &App) {
@@ -54,12 +55,6 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         ])
         .split(area);
 
-    let state_color = match app.state {
-        WireState::Idle => Color::Green,
-        WireState::Recording => Color::Red,
-        WireState::Stopping => Color::Yellow,
-        WireState::Error => Color::LightRed,
-    };
     let elapsed_ms = app.current_elapsed_ms();
     let app_label = app
         .app_name
@@ -80,9 +75,9 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let header = vec![
         Line::from(vec![
             Span::styled(
-                state_label(app.state),
+                status_label(app),
                 Style::default()
-                    .fg(state_color)
+                    .fg(phase_color(app))
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
@@ -111,7 +106,7 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     frame.render_widget(
         Paragraph::new(meter_lines(app, chunks[1].width.saturating_sub(9) as usize)).block(
             Block::default()
-                .title(format!("Input  ASR {provider}  {chain}"))
+                .title(format!("Input  ASR: {provider} -> {chain}"))
                 .borders(Borders::ALL),
         ),
         chunks[1],
@@ -156,7 +151,7 @@ fn meter_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             ]),
         ];
     }
-    let width = width.clamp(16, 200);
+    let width = width.max(16);
     let start = app.meters.len().saturating_sub(width);
     let meters = &app.meters[start..];
     vec![
@@ -179,31 +174,71 @@ fn live_speech_lines(app: &App, width: usize, max_lines: usize) -> Vec<Line<'sta
     let width = width.max(16);
     let max_lines = max_lines.max(1);
     let segments = app.segments.join("");
-    let combined = format!("{segments}{}", app.partial);
-    let lines_needed = combined.chars().count().div_ceil(width);
-    let truncated = lines_needed > max_lines;
-    let keep = width * max_lines - usize::from(truncated) * 4;
-    let drop_chars = combined.chars().count().saturating_sub(keep);
-    let segment_chars = segments.chars().count();
-    let segment_tail = if drop_chars < segment_chars {
-        take_char_range(&segments, drop_chars, segment_chars)
-    } else {
-        String::new()
-    };
-    let partial_drop = drop_chars.saturating_sub(segment_chars);
-    let partial_tail = take_char_range(&app.partial, partial_drop, app.partial.chars().count());
-    let mut spans = Vec::new();
+    let mut all_lines = wrap_spans(
+        vec![
+            Span::styled(segments.clone(), Style::default().fg(Color::Gray)),
+            Span::styled(app.partial.clone(), Style::default().fg(Color::Cyan)),
+        ],
+        width,
+    );
+    let truncated = all_lines.len() > max_lines;
     if truncated {
-        spans.push(Span::styled(
-            "... ".to_string(),
-            Style::default().fg(Color::DarkGray),
-        ));
+        let prefix_width = 4;
+        let keep = width * max_lines - prefix_width;
+        let segment_chars = segments.chars().count();
+        let combined = format!("{segments}{}", app.partial);
+        let drop_chars = combined.chars().count().saturating_sub(keep);
+        all_lines = wrap_spans(
+            vec![
+                Span::styled(
+                    take_char_suffix_after(&segments, drop_chars),
+                    Style::default().fg(Color::Gray),
+                ),
+                Span::styled(
+                    take_char_suffix_after(&app.partial, drop_chars.saturating_sub(segment_chars)),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ],
+            width - prefix_width,
+        );
+        let first = all_lines.first_mut().expect("tail has at least one line");
+        first.spans.insert(
+            0,
+            Span::styled("... ".to_string(), Style::default().fg(Color::DarkGray)),
+        );
     }
-    spans.push(Span::styled(segment_tail, Style::default().fg(Color::Gray)));
-    spans.push(Span::styled(partial_tail, Style::default().fg(Color::Cyan)));
-    wrap_spans(spans, width)
+    all_lines
 }
 
+fn take_char_suffix_after(value: &str, drop_chars: usize) -> String {
+    value
+        .chars()
+        .skip(drop_chars.min(value.chars().count()))
+        .collect()
+}
+
+fn status_label(app: &App) -> String {
+    match app.session_phase {
+        Some(SessionPhase::Active) => crate::t!("tui.state_recording"),
+        Some(SessionPhase::Idle) => crate::t!("tui.state_idle"),
+        Some(SessionPhase::Stopping) => crate::t!("tui.state_stopping"),
+        None => state_label(app.state),
+    }
+}
+
+fn phase_color(app: &App) -> Color {
+    match app.session_phase {
+        Some(SessionPhase::Active) => Color::Red,
+        Some(SessionPhase::Idle) => Color::Blue,
+        Some(SessionPhase::Stopping) => Color::Yellow,
+        None => match app.state {
+            WireState::Idle => Color::Green,
+            WireState::Recording => Color::Red,
+            WireState::Stopping => Color::Yellow,
+            WireState::Error => Color::LightRed,
+        },
+    }
+}
 fn wrap_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![Vec::<Span<'static>>::new()];
     let mut col = 0usize;
@@ -222,13 +257,6 @@ fn wrap_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
         }
     }
     lines.into_iter().map(Line::from).collect()
-}
-
-fn take_char_range(value: &str, start: usize, end: usize) -> String {
-    let chars = value.chars().collect::<Vec<_>>();
-    let start = start.min(chars.len());
-    let end = end.min(chars.len()).max(start);
-    chars[start..end].iter().collect()
 }
 
 fn meter_span(text: String, color: Color) -> Span<'static> {

@@ -63,6 +63,14 @@ pub struct SessionMeta {
     pub hotwords: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionPhase {
+    Active,
+    Idle,
+    Stopping,
+}
+
 #[derive(Debug, Clone)]
 pub enum StateEvent {
     StateChanged {
@@ -97,6 +105,10 @@ pub enum StateEvent {
     SessionMeta {
         recording_id: String,
         meta: SessionMeta,
+    },
+    SessionPhase {
+        recording_id: String,
+        phase: SessionPhase,
     },
     HistoryAppended {
         record: Box<HistoryRecord>,
@@ -207,6 +219,13 @@ impl StateStore {
 
     pub fn session_meta(&self, recording_id: String, meta: SessionMeta) {
         let _ = self.tx.send(StateEvent::SessionMeta { recording_id, meta });
+    }
+
+    pub fn session_phase(&self, recording_id: String, phase: SessionPhase) {
+        let _ = self.tx.send(StateEvent::SessionPhase {
+            recording_id,
+            phase,
+        });
     }
 
     pub fn history_appended(&self, record: HistoryRecord) {

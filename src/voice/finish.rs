@@ -26,7 +26,7 @@ use crate::state::history::{
     self, AsrHistory, AsrSessionHistory, HistoryError, HistoryRecord, HistoryStatus,
     PipelineStepHistory, PipelineStepStatus as HistoryPipelineStepStatus,
 };
-use crate::state::{SessionMeta, StateStore};
+use crate::state::{SessionMeta, SessionPhase as UiSessionPhase, StateStore};
 use crate::voice::meter::MeterCollector;
 use crate::voice::observer::{RecordingObserver, SessionPhase, TraceStart};
 use crate::voice::{dispatch, recorder, SessionControl};
@@ -207,6 +207,9 @@ async fn run_single_session_recording(
         .state
         .set_recording(recording_id.clone(), recording_started_at);
     emit_session_meta(&params.state, &recording_id, provider, &params);
+    params
+        .state
+        .session_phase(recording_id.clone(), UiSessionPhase::Active);
     params
         .state
         .app(app_context.bundle_id.clone(), app_context.app_name.clone());
@@ -444,6 +447,9 @@ async fn run_single_session_recording(
                 },
             );
             params.state.set_stopping(recording_id.clone());
+            params
+                .state
+                .session_phase(recording_id.clone(), UiSessionPhase::Stopping);
             finish(
                 &mut rec,
                 &mut session,
@@ -644,6 +650,9 @@ async fn run_multi_session_recording(
         .state
         .set_recording(recording_id.clone(), recording_started_at);
     emit_session_meta(&params.state, &recording_id, provider, &params);
+    params
+        .state
+        .session_phase(recording_id.clone(), UiSessionPhase::Active);
     params
         .state
         .app(app_context.bundle_id.clone(), app_context.app_name.clone());
@@ -919,6 +928,9 @@ async fn run_multi_session_recording(
                     },
                 );
                 params.state.set_stopping(recording_id.clone());
+                params
+                    .state
+                    .session_phase(recording_id.clone(), UiSessionPhase::Stopping);
                 let drain_until =
                     Instant::now() + Duration::from_millis(params.stop_delay_ms as u64);
                 while Instant::now() < drain_until {
@@ -1057,6 +1069,9 @@ async fn run_multi_session_recording(
                     state: OverlayState::Idle,
                 },
             );
+            params
+                .state
+                .session_phase(recording_id.clone(), UiSessionPhase::Idle);
             active = false;
             controller.reset();
             controller.accept(VadFrame::Silence);
@@ -1186,6 +1201,9 @@ async fn run_multi_session_recording(
                     state: OverlayState::Recording,
                 },
             );
+            params
+                .state
+                .session_phase(recording_id.clone(), UiSessionPhase::Active);
             active = true;
         }
     }

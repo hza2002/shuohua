@@ -1,5 +1,5 @@
 #[derive(Debug, Clone)]
-#[cfg_attr(not(feature = "dev-vad-trace"), allow(dead_code))]
+#[cfg_attr(not(feature = "dev"), allow(dead_code))]
 pub struct TraceStart {
     pub enabled: bool,
     pub recording_id: String,
@@ -7,7 +7,7 @@ pub struct TraceStart {
     pub started_at: String,
 }
 
-#[cfg(feature = "dev-vad-trace")]
+#[cfg(feature = "dev")]
 mod imp {
     use super::TraceStart;
     use crate::voice::silero::{SileroConfig, SileroVad};
@@ -22,7 +22,7 @@ mod imp {
     const VAD_THRESHOLD: f32 = 0.5;
     const PRE_ROLL_MS: u64 = 300;
 
-    pub struct TraceRecorder {
+    pub struct RecordingObserver {
         inner: Option<TraceInner>,
     }
 
@@ -49,7 +49,7 @@ mod imp {
         Speech,
     }
 
-    impl TraceRecorder {
+    impl RecordingObserver {
         pub fn start(start: TraceStart) -> Self {
             match Self::start_in_dir(&default_trace_dir(), start) {
                 Ok(trace) => trace,
@@ -341,15 +341,15 @@ mod imp {
     }
 }
 
-#[cfg(not(feature = "dev-vad-trace"))]
+#[cfg(not(feature = "dev"))]
 mod imp {
     use super::TraceStart;
     use std::path::Path;
 
     #[derive(Debug, Clone)]
-    pub struct TraceRecorder;
+    pub struct RecordingObserver;
 
-    impl TraceRecorder {
+    impl RecordingObserver {
         pub fn start(_start: TraceStart) -> Self {
             Self
         }
@@ -380,9 +380,9 @@ mod imp {
     }
 }
 
-pub use imp::TraceRecorder;
+pub use imp::RecordingObserver;
 
-#[cfg(all(test, feature = "dev-vad-trace"))]
+#[cfg(all(test, feature = "dev"))]
 mod tests {
     use super::*;
     use std::fs;
@@ -392,7 +392,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("shuohua-trace-test-{}", ulid::Ulid::new()));
         fs::create_dir_all(&dir).unwrap();
 
-        let mut trace = TraceRecorder::start_in_dir(
+        let mut trace = RecordingObserver::start_in_dir(
             &dir,
             TraceStart {
                 enabled: true,
@@ -421,7 +421,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("shuohua-trace-sess-{}", ulid::Ulid::new()));
         fs::create_dir_all(&dir).unwrap();
 
-        let mut trace = TraceRecorder::start_in_dir(
+        let mut trace = RecordingObserver::start_in_dir(
             &dir,
             TraceStart {
                 enabled: true,

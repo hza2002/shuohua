@@ -27,7 +27,7 @@ use crate::state::history::{
     PipelineStepHistory, PipelineStepStatus as HistoryPipelineStepStatus,
 };
 use crate::state::StateStore;
-use crate::voice::trace::{TraceRecorder, TraceStart};
+use crate::voice::observer::{RecordingObserver, TraceStart};
 use crate::voice::{dispatch, recorder, SessionControl};
 use std::path::PathBuf;
 use tokio::sync::{mpsc, watch};
@@ -125,7 +125,7 @@ async fn run_single_session_recording(
     let recording_started_at = time::OffsetDateTime::now_utc();
     let recording_started_instant = Instant::now();
     crate::debug_println!("[shuo] ▶ recording id={recording_id}");
-    let mut trace = TraceRecorder::start(TraceStart {
+    let mut trace = RecordingObserver::start(TraceStart {
         enabled: params.vad_trace,
         recording_id: recording_id.clone(),
         provider: provider.name().to_string(),
@@ -553,7 +553,7 @@ async fn run_multi_session_recording(
     let recording_started_at = time::OffsetDateTime::now_utc();
     let recording_started_instant = Instant::now();
     crate::debug_println!("[shuo] ▶ recording id={recording_id} (multi-session)");
-    let mut trace = TraceRecorder::start(TraceStart {
+    let mut trace = RecordingObserver::start(TraceStart {
         enabled: params.vad_trace,
         recording_id: recording_id.clone(),
         provider: provider.name().to_string(),
@@ -1186,7 +1186,7 @@ async fn finish(
     control_rx: &mut watch::Receiver<SessionControl>,
     audio_samples_sent: &mut u64,
     terminal_error: &mut Option<HistoryError>,
-    trace: &mut TraceRecorder,
+    trace: &mut RecordingObserver,
     recording_started_instant: Instant,
     overlay: Option<&OverlayHandle>,
 ) -> bool {
@@ -1313,7 +1313,7 @@ async fn finalize_provider_session(
     finalize_timeout_ms: u64,
     control_rx: &mut watch::Receiver<SessionControl>,
     terminal_error: &mut Option<HistoryError>,
-    trace: &mut TraceRecorder,
+    trace: &mut RecordingObserver,
     recording_started_instant: Instant,
     state: &crate::state::StateStore,
     recording_id: &str,

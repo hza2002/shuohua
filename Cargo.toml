@@ -79,11 +79,8 @@ proptest = "1"
 
 [features]
 default = []
-# Development-only fixture probe for evaluating Silero against saved WAV files.
-# Do not enable in release builds or wire into the recording path.
-dev-vad-probe = []
-# Development-only live recording trace for evaluating VAD without changing history.
-dev-vad-trace = []
+# Development-only tools. Do not enable in release builds.
+dev = []
 
 [profile.release]
 opt-level = "z"

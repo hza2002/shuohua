@@ -6,10 +6,10 @@
 
 pub mod dispatch;
 pub mod finish;
+pub mod observer;
 pub mod recorder;
 pub mod silero;
 pub mod timeline;
-pub mod trace;
 pub mod vad;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

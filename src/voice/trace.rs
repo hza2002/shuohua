@@ -10,6 +10,7 @@ pub struct TraceStart {
 #[cfg(feature = "dev-vad-trace")]
 mod imp {
     use super::TraceStart;
+    use crate::voice::silero::{SileroConfig, SileroVad};
     use crate::voice::vad::{VadFrame, VadPolicy};
     use anyhow::{Context, Result};
     use serde_json::json;
@@ -18,7 +19,6 @@ mod imp {
     use std::path::{Path, PathBuf};
 
     const SAMPLE_RATE: u64 = 16_000;
-    const SILERO_CHUNK_SAMPLES: usize = 512;
     const VAD_THRESHOLD: f32 = 0.5;
     const PRE_ROLL_MS: u64 = 300;
 
@@ -32,9 +32,7 @@ mod imp {
     }
 
     struct SileroTrace {
-        detector: voice_activity_detector::VoiceActivityDetector,
-        buffer: Vec<i16>,
-        sample_offset: u64,
+        detector: SileroVad,
         state: TraceVadState,
         voiced_frames: u32,
         first_voiced_start_ms: Option<u64>,
@@ -174,15 +172,12 @@ mod imp {
     impl SileroTrace {
         fn new() -> Result<Self> {
             let policy = VadPolicy::default();
-            let detector = voice_activity_detector::VoiceActivityDetector::builder()
-                .sample_rate(SAMPLE_RATE as i64)
-                .chunk_size(SILERO_CHUNK_SAMPLES)
-                .build()
-                .map_err(|e| anyhow::anyhow!("create Silero VAD: {e}"))?;
+            let detector = SileroVad::new(SileroConfig {
+                threshold: VAD_THRESHOLD,
+            })
+            .map_err(|e| anyhow::anyhow!("create Silero VAD: {e}"))?;
             Ok(Self {
                 detector,
-                buffer: Vec::with_capacity(SILERO_CHUNK_SAMPLES),
-                sample_offset: 0,
                 state: TraceVadState::Silence,
                 voiced_frames: 0,
                 first_voiced_start_ms: None,
@@ -196,31 +191,19 @@ mod imp {
 
         fn accept(&mut self, samples: &[i16]) -> Vec<serde_json::Value> {
             let mut out = Vec::new();
-            self.buffer.extend_from_slice(samples);
-            while self.buffer.len() >= SILERO_CHUNK_SAMPLES {
-                let chunk: Vec<i16> = self.buffer.drain(..SILERO_CHUNK_SAMPLES).collect();
-                let start_sample = self.sample_offset;
-                self.sample_offset += SILERO_CHUNK_SAMPLES as u64;
-                let start_ms = samples_to_ms(start_sample);
-                let end_ms = samples_to_ms(self.sample_offset);
-                let probability = self.detector.predict(chunk.iter().copied());
-                let speech = probability >= VAD_THRESHOLD;
+            for frame in self.detector.accept(samples) {
+                let start_ms = samples_to_ms(frame.start_sample);
+                let end_ms =
+                    samples_to_ms(frame.start_sample + SileroConfig::frame_samples() as u64);
+                let speech = matches!(frame.frame, VadFrame::Speech);
                 out.push(json!({
                     "event": "vad_frame",
                     "start_ms": start_ms,
                     "end_ms": end_ms,
-                    "probability": probability,
+                    "probability": frame.probability,
                     "speech": speech,
                 }));
-                if let Some(event) = self.accept_vad_frame(
-                    if speech {
-                        VadFrame::Speech
-                    } else {
-                        VadFrame::Silence
-                    },
-                    start_ms,
-                    end_ms,
-                ) {
+                if let Some(event) = self.accept_vad_frame(frame.frame, start_ms, end_ms) {
                     out.push(event);
                 }
             }

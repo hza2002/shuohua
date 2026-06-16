@@ -7,6 +7,7 @@
 pub mod dispatch;
 pub mod finish;
 pub mod recorder;
+pub mod silero;
 pub mod timeline;
 pub mod trace;
 pub mod vad;

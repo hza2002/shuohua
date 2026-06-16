@@ -1,3 +1,7 @@
+use std::time::Instant;
+
+use crate::asr::types::AsrEvent;
+
 #[derive(Debug, Clone)]
 #[cfg_attr(not(feature = "dev"), allow(dead_code))]
 pub struct TraceStart {
@@ -5,11 +9,36 @@ pub struct TraceStart {
     pub recording_id: String,
     pub provider: String,
     pub started_at: String,
+    pub started_instant: Instant,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "dev"), allow(dead_code))]
+pub enum SessionPhase {
+    Start {
+        index: u32,
+        start_ms: u64,
+    },
+    FinalizeStart {
+        index: u32,
+        t_ms: u64,
+    },
+    Done {
+        index: u32,
+        start_ms: u64,
+        end_ms: u64,
+        audio_ms: u64,
+    },
+    OpenError {
+        index: u32,
+        t_ms: u64,
+        message: String,
+    },
 }
 
 #[cfg(feature = "dev")]
 mod imp {
-    use super::TraceStart;
+    use super::{AsrEvent, SessionPhase, TraceStart};
     use crate::voice::silero::{SileroConfig, SileroVad};
     use crate::voice::vad::{VadFrame, VadPolicy};
     use anyhow::{Context, Result};
@@ -17,6 +46,7 @@ mod imp {
     use std::fs::{File, OpenOptions};
     use std::io::{BufWriter, Write};
     use std::path::{Path, PathBuf};
+    use std::time::Instant;
 
     const SAMPLE_RATE: u64 = 16_000;
     const VAD_THRESHOLD: f32 = 0.5;
@@ -29,6 +59,7 @@ mod imp {
     struct TraceInner {
         writer: BufWriter<File>,
         vad: SileroTrace,
+        started_instant: Instant,
     }
 
     struct SileroTrace {
@@ -76,6 +107,7 @@ mod imp {
             let mut inner = TraceInner {
                 writer: BufWriter::new(file),
                 vad: SileroTrace::new()?,
+                started_instant: start.started_instant,
             };
             inner.write(json!({
                 "event": "recording_start",
@@ -94,7 +126,7 @@ mod imp {
             Ok(Self { inner: Some(inner) })
         }
 
-        pub fn pcm_frame(&mut self, samples: &[i16]) {
+        pub fn on_pcm(&mut self, samples: &[i16]) {
             let Some(inner) = self.inner.as_mut() else {
                 return;
             };
@@ -104,83 +136,97 @@ mod imp {
             }
         }
 
-        pub fn provider_opened(&mut self, t_ms: u64) {
+        pub fn on_provider_opened(&mut self, t_ms: u64) {
             self.write(json!({"event": "provider_opened", "t_ms": t_ms}));
         }
 
-        pub fn session_start(&mut self, session_index: u32, start_ms: u64) {
-            self.write(json!({
-                "event": "session_start",
-                "session_index": session_index,
-                "start_ms": start_ms,
-            }));
+        pub fn on_asr_event(&mut self, t_ms: u64, event: &AsrEvent) {
+            let started_instant = self
+                .inner
+                .as_ref()
+                .map(|inner| inner.started_instant)
+                .unwrap_or_else(Instant::now);
+            match event {
+                AsrEvent::Partial { text, seq } => {
+                    self.write(json!({
+                        "event": "asr_partial",
+                        "t_ms": t_ms,
+                        "seq": seq,
+                        "text": text,
+                    }));
+                }
+                AsrEvent::Segment {
+                    text,
+                    started_at,
+                    ended_at,
+                } => {
+                    self.write(json!({
+                        "event": "asr_segment",
+                        "t_ms": t_ms,
+                        "text": text,
+                        "start_ms": instant_to_ms(started_instant, *started_at),
+                        "end_ms": instant_to_ms(started_instant, *ended_at),
+                    }));
+                }
+                AsrEvent::Error { err } => {
+                    self.write(json!({
+                        "event": "asr_error",
+                        "t_ms": t_ms,
+                        "message": err.to_string(),
+                    }));
+                }
+                AsrEvent::Done => {
+                    self.write(json!({"event": "asr_done", "t_ms": t_ms}));
+                }
+            }
         }
 
-        pub fn session_finalize_start(&mut self, session_index: u32, t_ms: u64) {
-            self.write(json!({
-                "event": "session_finalize_start",
-                "session_index": session_index,
-                "t_ms": t_ms,
-            }));
+        pub fn on_session(&mut self, phase: SessionPhase) {
+            match phase {
+                SessionPhase::Start { index, start_ms } => {
+                    self.write(json!({
+                        "event": "session_start",
+                        "session_index": index,
+                        "start_ms": start_ms,
+                    }));
+                }
+                SessionPhase::FinalizeStart { index, t_ms } => {
+                    self.write(json!({
+                        "event": "session_finalize_start",
+                        "session_index": index,
+                        "t_ms": t_ms,
+                    }));
+                }
+                SessionPhase::Done {
+                    index,
+                    start_ms,
+                    end_ms,
+                    audio_ms,
+                } => {
+                    self.write(json!({
+                        "event": "session_done",
+                        "session_index": index,
+                        "start_ms": start_ms,
+                        "end_ms": end_ms,
+                        "audio_ms": audio_ms,
+                    }));
+                }
+                SessionPhase::OpenError {
+                    index,
+                    t_ms,
+                    message,
+                } => {
+                    self.write(json!({
+                        "event": "session_open_error",
+                        "session_index": index,
+                        "t_ms": t_ms,
+                        "message": message,
+                    }));
+                }
+            }
         }
 
-        pub fn session_done(
-            &mut self,
-            session_index: u32,
-            start_ms: u64,
-            end_ms: u64,
-            audio_ms: u64,
-        ) {
-            self.write(json!({
-                "event": "session_done",
-                "session_index": session_index,
-                "start_ms": start_ms,
-                "end_ms": end_ms,
-                "audio_ms": audio_ms,
-            }));
-        }
-
-        pub fn session_open_error(&mut self, session_index: u32, t_ms: u64, message: &str) {
-            self.write(json!({
-                "event": "session_open_error",
-                "session_index": session_index,
-                "t_ms": t_ms,
-                "message": message,
-            }));
-        }
-
-        pub fn asr_partial(&mut self, t_ms: u64, seq: u64, text: &str) {
-            self.write(json!({
-                "event": "asr_partial",
-                "t_ms": t_ms,
-                "seq": seq,
-                "text": text,
-            }));
-        }
-
-        pub fn asr_segment(&mut self, t_ms: u64, text: &str, start_ms: u64, end_ms: u64) {
-            self.write(json!({
-                "event": "asr_segment",
-                "t_ms": t_ms,
-                "text": text,
-                "start_ms": start_ms,
-                "end_ms": end_ms,
-            }));
-        }
-
-        pub fn asr_error(&mut self, t_ms: u64, message: &str) {
-            self.write(json!({
-                "event": "asr_error",
-                "t_ms": t_ms,
-                "message": message,
-            }));
-        }
-
-        pub fn asr_done(&mut self, t_ms: u64) {
-            self.write(json!({"event": "asr_done", "t_ms": t_ms}));
-        }
-
-        pub fn finish(&mut self, status: &str, audio_ms: u64) {
+        pub fn on_finish(&mut self, status: &str, audio_ms: u64) {
             let Some(inner) = self.inner.as_mut() else {
                 return;
             };
@@ -336,6 +382,14 @@ mod imp {
         samples.saturating_mul(1000) / SAMPLE_RATE
     }
 
+    fn instant_to_ms(base: Instant, instant: Instant) -> u64 {
+        instant
+            .saturating_duration_since(base)
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX)
+    }
+
     fn default_trace_dir() -> PathBuf {
         crate::state::history::state_dir().join("traces")
     }
@@ -343,40 +397,38 @@ mod imp {
 
 #[cfg(not(feature = "dev"))]
 mod imp {
-    use super::TraceStart;
+    use super::{AsrEvent, SessionPhase, TraceStart};
     use std::path::Path;
 
     #[derive(Debug, Clone)]
     pub struct RecordingObserver;
 
     impl RecordingObserver {
+        #[inline(always)]
         pub fn start(_start: TraceStart) -> Self {
             Self
         }
 
         #[allow(dead_code)]
+        #[inline(always)]
         pub fn start_in_dir(_base: &Path, _start: TraceStart) -> anyhow::Result<Self> {
             Ok(Self)
         }
 
-        pub fn pcm_frame(&mut self, _samples: &[i16]) {}
-        pub fn provider_opened(&mut self, _t_ms: u64) {}
-        pub fn asr_partial(&mut self, _t_ms: u64, _seq: u64, _text: &str) {}
-        pub fn asr_segment(&mut self, _t_ms: u64, _text: &str, _start_ms: u64, _end_ms: u64) {}
-        pub fn asr_error(&mut self, _t_ms: u64, _message: &str) {}
-        pub fn asr_done(&mut self, _t_ms: u64) {}
-        pub fn session_start(&mut self, _session_index: u32, _start_ms: u64) {}
-        pub fn session_finalize_start(&mut self, _session_index: u32, _t_ms: u64) {}
-        pub fn session_done(
-            &mut self,
-            _session_index: u32,
-            _start_ms: u64,
-            _end_ms: u64,
-            _audio_ms: u64,
-        ) {
-        }
-        pub fn session_open_error(&mut self, _session_index: u32, _t_ms: u64, _message: &str) {}
-        pub fn finish(&mut self, _status: &str, _audio_ms: u64) {}
+        #[inline(always)]
+        pub fn on_pcm(&mut self, _samples: &[i16]) {}
+
+        #[inline(always)]
+        pub fn on_provider_opened(&mut self, _t_ms: u64) {}
+
+        #[inline(always)]
+        pub fn on_asr_event(&mut self, _t_ms: u64, _event: &AsrEvent) {}
+
+        #[inline(always)]
+        pub fn on_session(&mut self, _phase: SessionPhase) {}
+
+        #[inline(always)]
+        pub fn on_finish(&mut self, _status: &str, _audio_ms: u64) {}
     }
 }
 
@@ -399,12 +451,27 @@ mod tests {
                 recording_id: "01TRACE".to_string(),
                 provider: "doubao".to_string(),
                 started_at: "2026-06-16T00:00:00Z".to_string(),
+                started_instant: Instant::now(),
             },
         )
         .unwrap();
-        trace.asr_partial(10, 1, "测");
-        trace.asr_segment(20, "测试", 0, 500);
-        trace.finish("submitted", 1600);
+        let started_instant = Instant::now();
+        trace.on_asr_event(
+            10,
+            &AsrEvent::Partial {
+                text: "测".to_string(),
+                seq: 1,
+            },
+        );
+        trace.on_asr_event(
+            20,
+            &AsrEvent::Segment {
+                text: "测试".to_string(),
+                started_at: started_instant,
+                ended_at: started_instant + std::time::Duration::from_millis(500),
+            },
+        );
+        trace.on_finish("submitted", 1600);
 
         let body = fs::read_to_string(dir.join("01TRACE.jsonl")).unwrap();
         assert!(body.contains(r#""event":"recording_start""#));
@@ -428,14 +495,30 @@ mod tests {
                 recording_id: "01SESS".to_string(),
                 provider: "doubao".to_string(),
                 started_at: "2026-06-16T00:00:00Z".to_string(),
+                started_instant: Instant::now(),
             },
         )
         .unwrap();
-        trace.session_start(0, 0);
-        trace.session_finalize_start(0, 1234);
-        trace.session_done(0, 0, 1534, 1534);
-        trace.session_open_error(1, 2000, "boom");
-        trace.finish("error", 1534);
+        trace.on_session(SessionPhase::Start {
+            index: 0,
+            start_ms: 0,
+        });
+        trace.on_session(SessionPhase::FinalizeStart {
+            index: 0,
+            t_ms: 1234,
+        });
+        trace.on_session(SessionPhase::Done {
+            index: 0,
+            start_ms: 0,
+            end_ms: 1534,
+            audio_ms: 1534,
+        });
+        trace.on_session(SessionPhase::OpenError {
+            index: 1,
+            t_ms: 2000,
+            message: "boom".to_string(),
+        });
+        trace.on_finish("error", 1534);
 
         let body = fs::read_to_string(dir.join("01SESS.jsonl")).unwrap();
         assert!(body.contains(r#""event":"session_start""#));

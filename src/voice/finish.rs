@@ -27,7 +27,7 @@ use crate::state::history::{
     PipelineStepHistory, PipelineStepStatus as HistoryPipelineStepStatus,
 };
 use crate::state::StateStore;
-use crate::voice::observer::{RecordingObserver, TraceStart};
+use crate::voice::observer::{RecordingObserver, SessionPhase, TraceStart};
 use crate::voice::{dispatch, recorder, SessionControl};
 use std::path::PathBuf;
 use tokio::sync::{mpsc, watch};
@@ -81,6 +81,38 @@ fn send_error_overlay(params: &SessionParams, message: String) {
     );
 }
 
+fn observe_asr_event(trace: &mut RecordingObserver, started_at: Instant, event: &AsrEvent) {
+    trace.on_asr_event(instant_elapsed_ms(started_at), event);
+}
+
+fn observe_asr_error(
+    trace: &mut RecordingObserver,
+    started_at: Instant,
+    err: crate::asr::types::AsrError,
+) {
+    observe_asr_event(trace, started_at, &AsrEvent::Error { err });
+}
+
+fn observe_pcm(trace: &mut RecordingObserver, samples: &[i16]) {
+    trace.on_pcm(samples);
+}
+
+fn observe_provider_opened(trace: &mut RecordingObserver, started_at: Instant) {
+    trace.on_provider_opened(instant_elapsed_ms(started_at));
+}
+
+fn observe_session(trace: &mut RecordingObserver, phase: SessionPhase) {
+    trace.on_session(phase);
+}
+
+fn observe_finish(trace: &mut RecordingObserver, status: &str, audio_samples: u64) {
+    trace.on_finish(status, samples_to_ms(audio_samples));
+}
+
+fn observe_finish_ms(trace: &mut RecordingObserver, status: &str, audio_ms: u64) {
+    trace.on_finish(status, audio_ms);
+}
+
 pub struct SessionParams {
     pub auto_paste: bool,
     pub record_audio: bool,
@@ -130,6 +162,7 @@ async fn run_single_session_recording(
         recording_id: recording_id.clone(),
         provider: provider.name().to_string(),
         started_at: recording_started_at.to_string(),
+        started_instant: recording_started_instant,
     });
     let mut app_context = params.start_app_context.clone();
     params
@@ -172,7 +205,7 @@ async fn run_single_session_recording(
         Ok(r) => r,
         Err(e) => {
             eprintln!("[shuo] ❌ 录音启动失败: {e:#}");
-            trace.finish("recorder_start_error", 0);
+            observe_finish_ms(&mut trace, "recorder_start_error", 0);
             params.state.set_error(Some(recording_id));
             send_error_overlay(&params, crate::t!("error.recorder_start"));
             return;
@@ -196,11 +229,8 @@ async fn run_single_session_recording(
         Err(err) => {
             eprintln!("[shuo] ❌ ASR open failed: {err}");
             rec.stop();
-            trace.asr_error(
-                instant_elapsed_ms(recording_started_instant),
-                &err.to_string(),
-            );
-            trace.finish("asr_open_error", 0);
+            observe_asr_error(&mut trace, recording_started_instant, err.clone());
+            observe_finish_ms(&mut trace, "asr_open_error", 0);
             params.state.set_error(Some(recording_id));
             send_error_overlay(&params, crate::t!("error.asr_open"));
             return;
@@ -212,7 +242,7 @@ async fn run_single_session_recording(
             state: OverlayState::Recording,
         },
     );
-    trace.provider_opened(instant_elapsed_ms(recording_started_instant));
+    observe_provider_opened(&mut trace, recording_started_instant);
 
     let mut pending_segments: Vec<SegmentCapture> = Vec::new();
     let mut audio_samples_sent: u64 = 0;
@@ -238,7 +268,7 @@ async fn run_single_session_recording(
             pcm = rec.recv(), if !stop_requested => {
                 match pcm {
                     Some(samples) => {
-                        trace.pcm_frame(&samples);
+                        observe_pcm(&mut trace, &samples);
                         if !first_audio_seen && frame_has_signal(&samples) {
                             first_audio_seen = true;
                         }
@@ -264,7 +294,7 @@ async fn run_single_session_recording(
                 );
                 rec.stop();
                 let _ = session.close().await;
-                trace.finish("no_audio", samples_to_ms(audio_samples_sent));
+                observe_finish(&mut trace, "no_audio", audio_samples_sent);
                 params.state.set_error(Some(recording_id));
                 send_error_overlay(&params, crate::t!("error.no_audio"));
                 return;
@@ -274,7 +304,7 @@ async fn run_single_session_recording(
                     None => break,
                     Some(AsrEvent::Partial { text, seq }) => {
                         crate::debug_println!("[shuo]   partial#{seq}: {text}");
-                        trace.asr_partial(instant_elapsed_ms(recording_started_instant), seq, &text);
+                        observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Partial { text: text.clone(), seq });
                         params.state.partial(recording_id.clone(), text.clone());
                         let live_text = format!(
                             "{}{}",
@@ -295,19 +325,14 @@ async fn run_single_session_recording(
                     }
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                         crate::debug_println!("[shuo]   segment: {text}");
-                        trace.asr_segment(
-                            instant_elapsed_ms(recording_started_instant),
-                            &text,
-                            instant_to_ms(recording_started_instant, started_at),
-                            instant_to_ms(recording_started_instant, ended_at),
-                        );
+                        observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Segment { text: text.clone(), started_at, ended_at });
                         params.state.segment(recording_id.clone(), text.clone());
                         overlay_send(&params, OverlayCmd::AppendSegment { text: text.clone() });
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Error { err }) => {
                         eprintln!("[shuo] ❌ ASR error: {err}");
-                        trace.asr_error(instant_elapsed_ms(recording_started_instant), &err.to_string());
+                        observe_asr_error(&mut trace, recording_started_instant, err.clone());
                         params.state.set_error(Some(recording_id.clone()));
                         send_error_overlay(&params, crate::t!("error.asr_runtime"));
                         rec.stop();
@@ -340,11 +365,11 @@ async fn run_single_session_recording(
                         }) {
                             params.state.history_appended(record);
                         }
-                        trace.finish("asr_error", samples_to_ms(audio_samples_sent));
+                        observe_finish(&mut trace, "asr_error", audio_samples_sent);
                         return;
                     }
                     Some(AsrEvent::Done) => {
-                        trace.asr_done(instant_elapsed_ms(recording_started_instant));
+                        observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Done);
                         break;
                     }
                 }
@@ -432,7 +457,7 @@ async fn run_single_session_recording(
         }) {
             params.state.history_appended(record);
         }
-        trace.finish("canceled", samples_to_ms(audio_samples_sent));
+        observe_finish(&mut trace, "canceled", audio_samples_sent);
         return;
     }
     // terminal_error 路径：录音 / ASR 中途崩溃 → 不跑 post chain、不写剪贴板。
@@ -517,7 +542,7 @@ async fn run_single_session_recording(
     }) {
         params.state.history_appended(record);
     }
-    trace.finish(trace_status, samples_to_ms(audio_samples_sent));
+    observe_finish(&mut trace, trace_status, audio_samples_sent);
 }
 
 /// 给定 VAD 检测到的 speech 起点，按 pre-roll / overlap 上限算出该从 timeline
@@ -558,6 +583,7 @@ async fn run_multi_session_recording(
         recording_id: recording_id.clone(),
         provider: provider.name().to_string(),
         started_at: recording_started_at.to_string(),
+        started_instant: recording_started_instant,
     });
     let mut app_context = params.start_app_context.clone();
     params
@@ -597,7 +623,7 @@ async fn run_multi_session_recording(
         Ok(r) => r,
         Err(e) => {
             eprintln!("[shuo] ❌ 录音启动失败: {e:#}");
-            trace.finish("recorder_start_error", 0);
+            observe_finish_ms(&mut trace, "recorder_start_error", 0);
             params.state.set_error(Some(recording_id));
             send_error_overlay(&params, crate::t!("error.recorder_start"));
             return;
@@ -613,7 +639,7 @@ async fn run_multi_session_recording(
         Err(e) => {
             eprintln!("[shuo] ❌ Silero VAD 初始化失败: {e:#}");
             rec.stop();
-            trace.finish("vad_init_error", 0);
+            observe_finish_ms(&mut trace, "vad_init_error", 0);
             params.state.set_error(Some(recording_id));
             send_error_overlay(&params, crate::t!("error.asr_runtime"));
             return;
@@ -642,11 +668,8 @@ async fn run_multi_session_recording(
         Err(err) => {
             eprintln!("[shuo] ❌ ASR open failed: {err}");
             rec.stop();
-            trace.asr_error(
-                instant_elapsed_ms(recording_started_instant),
-                &err.to_string(),
-            );
-            trace.finish("asr_open_error", 0);
+            observe_asr_error(&mut trace, recording_started_instant, err.clone());
+            observe_finish_ms(&mut trace, "asr_open_error", 0);
             params.state.set_error(Some(recording_id));
             send_error_overlay(&params, crate::t!("error.asr_open"));
             return;
@@ -661,9 +684,15 @@ async fn run_multi_session_recording(
             state: OverlayState::Recording,
         },
     );
-    trace.provider_opened(instant_elapsed_ms(recording_started_instant));
+    observe_provider_opened(&mut trace, recording_started_instant);
     let mut session_index: u32 = 0;
-    trace.session_start(session_index, 0);
+    observe_session(
+        &mut trace,
+        SessionPhase::Start {
+            index: session_index,
+            start_ms: 0,
+        },
+    );
 
     let mut sessions: Vec<SessionCapture> = Vec::new();
     // session 边界严格用 timeline 上的样本索引；started_at / ended_at
@@ -696,7 +725,7 @@ async fn run_multi_session_recording(
                         match pcm {
                             None => { stop_requested = true; break 'active; }
                             Some(samples) => {
-                                trace.pcm_frame(&samples);
+                                observe_pcm(&mut trace, &samples);
                                 if !first_audio_seen && frame_has_signal(&samples) {
                                     first_audio_seen = true;
                                 }
@@ -737,7 +766,7 @@ async fn run_multi_session_recording(
                         );
                         rec.stop();
                         if let Some(s) = session.take() { let _ = s.close().await; }
-                        trace.finish("no_audio", samples_to_ms(total_audio_samples));
+                        observe_finish(&mut trace, "no_audio", total_audio_samples);
                         params.state.set_error(Some(recording_id));
                         send_error_overlay(&params, crate::t!("error.no_audio"));
                         return;
@@ -747,7 +776,11 @@ async fn run_multi_session_recording(
                             None => { stop_requested = true; break 'active; }
                             Some(AsrEvent::Partial { text, seq }) => {
                                 crate::debug_println!("[shuo]   partial#{seq}: {text}");
-                                trace.asr_partial(instant_elapsed_ms(recording_started_instant), seq, &text);
+                                observe_asr_event(
+                                    &mut trace,
+                                    recording_started_instant,
+                                    &AsrEvent::Partial { text: text.clone(), seq },
+                                );
                                 params.state.partial(recording_id.clone(), text.clone());
                                 let live_text = format!(
                                     "{}{}",
@@ -762,11 +795,10 @@ async fn run_multi_session_recording(
                             }
                             Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                                 crate::debug_println!("[shuo]   segment: {text}");
-                                trace.asr_segment(
-                                    instant_elapsed_ms(recording_started_instant),
-                                    &text,
-                                    instant_to_ms(recording_started_instant, started_at),
-                                    instant_to_ms(recording_started_instant, ended_at),
+                                observe_asr_event(
+                                    &mut trace,
+                                    recording_started_instant,
+                                    &AsrEvent::Segment { text: text.clone(), started_at, ended_at },
                                 );
                                 params.state.segment(recording_id.clone(), text.clone());
                                 overlay_send(&params, OverlayCmd::AppendSegment { text: text.clone() });
@@ -774,7 +806,11 @@ async fn run_multi_session_recording(
                             }
                             Some(AsrEvent::Error { err }) => {
                                 eprintln!("[shuo] ❌ ASR error: {err}");
-                                trace.asr_error(instant_elapsed_ms(recording_started_instant), &err.to_string());
+                                observe_asr_event(
+                                    &mut trace,
+                                    recording_started_instant,
+                                    &AsrEvent::Error { err: err.clone() },
+                                );
                                 terminal_error = Some(HistoryError {
                                     kind: "asr_error".to_string(),
                                     msg: err.to_string(),
@@ -782,7 +818,11 @@ async fn run_multi_session_recording(
                                 break 'outer;
                             }
                             Some(AsrEvent::Done) => {
-                                trace.asr_done(instant_elapsed_ms(recording_started_instant));
+                                observe_asr_event(
+                                    &mut trace,
+                                    recording_started_instant,
+                                    &AsrEvent::Done,
+                                );
                                 // provider 主动 Done：把当前 session 落账并进 Idle，等待重启。
                                 pause_triggered = true;
                                 break 'active;
@@ -831,7 +871,7 @@ async fn run_multi_session_recording(
                             match pcm {
                                 None => break,
                                 Some(samples) => {
-                                    trace.pcm_frame(&samples);
+                                    observe_pcm(&mut trace, &samples);
                                     let chunk = timeline.push(&samples);
                                     if let Some(s) = session.as_mut() {
                                         let _ = s.send_pcm(&samples, false).await;
@@ -849,7 +889,7 @@ async fn run_multi_session_recording(
                 }
                 rec.stop();
                 while let Some(samples) = rec.try_recv() {
-                    trace.pcm_frame(&samples);
+                    observe_pcm(&mut trace, &samples);
                     if let Some(s) = session.as_mut() {
                         let _ = s.send_pcm(&samples, false).await;
                     }
@@ -861,9 +901,12 @@ async fn run_multi_session_recording(
             }
 
             // finalize 当前 session
-            trace.session_finalize_start(
-                session_index,
-                instant_elapsed_ms(recording_started_instant),
+            observe_session(
+                &mut trace,
+                SessionPhase::FinalizeStart {
+                    index: session_index,
+                    t_ms: instant_elapsed_ms(recording_started_instant),
+                },
             );
             let Some(active_session_ref) = session.as_mut() else {
                 break 'outer;
@@ -907,11 +950,14 @@ async fn run_multi_session_recording(
             let session_end_ms = samples_to_ms(session_end_sample);
             let started_at = recording_started_instant + Duration::from_millis(session_start_ms);
             let ended_at = recording_started_instant + Duration::from_millis(session_end_ms);
-            trace.session_done(
-                session_index,
-                session_start_ms,
-                session_end_ms,
-                session_audio_ms,
+            observe_session(
+                &mut trace,
+                SessionPhase::Done {
+                    index: session_index,
+                    start_ms: session_start_ms,
+                    end_ms: session_end_ms,
+                    audio_ms: session_audio_ms,
+                },
             );
             sessions.push(SessionCapture {
                 started_at,
@@ -953,7 +999,7 @@ async fn run_multi_session_recording(
                         match pcm {
                             None => { stop_requested = true; break 'idle; }
                             Some(samples) => {
-                                trace.pcm_frame(&samples);
+                                observe_pcm(&mut trace, &samples);
                                 let chunk = timeline.push(&samples);
                                 // 不发 ASR；只跑 VAD
                                 for frame in silero.accept(&samples) {
@@ -994,10 +1040,13 @@ async fn run_multi_session_recording(
                 Ok(t) => t,
                 Err(err) => {
                     eprintln!("[shuo] ❌ ASR resume open failed: {err}");
-                    trace.session_open_error(
-                        next_index,
-                        instant_elapsed_ms(recording_started_instant),
-                        &err.to_string(),
+                    observe_session(
+                        &mut trace,
+                        SessionPhase::OpenError {
+                            index: next_index,
+                            t_ms: instant_elapsed_ms(recording_started_instant),
+                            message: err.to_string(),
+                        },
                     );
                     terminal_error = Some(HistoryError {
                         kind: "asr_resume_open".to_string(),
@@ -1009,8 +1058,14 @@ async fn run_multi_session_recording(
             session = Some(new_session);
             events = new_events;
             session_index = next_index;
-            trace.provider_opened(instant_elapsed_ms(recording_started_instant));
-            trace.session_start(session_index, samples_to_ms(send_start));
+            observe_provider_opened(&mut trace, recording_started_instant);
+            observe_session(
+                &mut trace,
+                SessionPhase::Start {
+                    index: session_index,
+                    start_ms: samples_to_ms(send_start),
+                },
+            );
 
             let replay = timeline.slice_from(send_start);
             current_session_start_sample = replay.start_sample;
@@ -1091,7 +1146,7 @@ async fn run_multi_session_recording(
         }) {
             params.state.history_appended(record);
         }
-        trace.finish("canceled", samples_to_ms(total_audio_samples));
+        observe_finish(&mut trace, "canceled", total_audio_samples);
         return;
     }
 
@@ -1170,7 +1225,7 @@ async fn run_multi_session_recording(
     }) {
         params.state.history_appended(record);
     }
-    trace.finish(trace_status, samples_to_ms(total_audio_samples));
+    observe_finish(&mut trace, trace_status, total_audio_samples);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1209,7 +1264,7 @@ async fn finish(
             pcm = rec.recv() => {
                 match pcm {
                     Some(samples) => {
-                        trace.pcm_frame(&samples);
+                        observe_pcm(trace, &samples);
                         let _ = session.send_pcm(&samples, false).await;
                         *audio_samples_sent += samples.len() as u64;
                     }
@@ -1221,11 +1276,10 @@ async fn finish(
                     None => break,
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                         crate::debug_println!("[shuo]   segment (drain): {text}");
-                        trace.asr_segment(
-                            instant_elapsed_ms(recording_started_instant),
-                            &text,
-                            instant_to_ms(recording_started_instant, started_at),
-                            instant_to_ms(recording_started_instant, ended_at),
+                        observe_asr_event(
+                            trace,
+                            recording_started_instant,
+                            &AsrEvent::Segment { text: text.clone(), started_at, ended_at },
                         );
                         state.segment(recording_id.to_string(), text.clone());
                         if let Some(overlay) = overlay {
@@ -1234,16 +1288,24 @@ async fn finish(
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Done) => {
-                        trace.asr_done(instant_elapsed_ms(recording_started_instant));
+                        observe_asr_event(trace, recording_started_instant, &AsrEvent::Done);
                         break;
                     }
                     Some(AsrEvent::Partial { text, seq }) => {
                         crate::debug_println!("[shuo]   partial#{seq} (drain): {text}");
-                        trace.asr_partial(instant_elapsed_ms(recording_started_instant), seq, &text);
+                        observe_asr_event(
+                            trace,
+                            recording_started_instant,
+                            &AsrEvent::Partial { text, seq },
+                        );
                     }
                     Some(AsrEvent::Error { err }) => {
                         eprintln!("[shuo] ❌ ASR error during drain: {err}");
-                        trace.asr_error(instant_elapsed_ms(recording_started_instant), &err.to_string());
+                        observe_asr_event(
+                            trace,
+                            recording_started_instant,
+                            &AsrEvent::Error { err: err.clone() },
+                        );
                         *terminal_error = Some(HistoryError {
                             kind: "asr_error".to_string(),
                             msg: err.to_string(),
@@ -1256,7 +1318,7 @@ async fn finish(
 
     rec.stop();
     while let Some(samples) = rec.try_recv() {
-        trace.pcm_frame(&samples);
+        observe_pcm(trace, &samples);
         let _ = session.send_pcm(&samples, false).await;
         *audio_samples_sent += samples.len() as u64;
     }
@@ -1346,16 +1408,15 @@ async fn finalize_provider_session(
                 match ev {
                     None => return Ok(FinalizeOutcome::Done),
                     Some(AsrEvent::Done) => {
-                        trace.asr_done(instant_elapsed_ms(recording_started_instant));
+                        observe_asr_event(trace, recording_started_instant, &AsrEvent::Done);
                         return Ok(FinalizeOutcome::Done);
                     }
                     Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                         crate::debug_println!("[shuo]   segment (final): {text}");
-                        trace.asr_segment(
-                            instant_elapsed_ms(recording_started_instant),
-                            &text,
-                            instant_to_ms(recording_started_instant, started_at),
-                            instant_to_ms(recording_started_instant, ended_at),
+                        observe_asr_event(
+                            trace,
+                            recording_started_instant,
+                            &AsrEvent::Segment { text: text.clone(), started_at, ended_at },
                         );
                         state.segment(recording_id.to_string(), text.clone());
                         // finalize 阶段拿到的 definite segment 也要喂 overlay，
@@ -1367,11 +1428,19 @@ async fn finalize_provider_session(
                     }
                     Some(AsrEvent::Partial { text, seq }) => {
                         crate::debug_println!("[shuo]   partial#{seq} (final): {text}");
-                        trace.asr_partial(instant_elapsed_ms(recording_started_instant), seq, &text);
+                        observe_asr_event(
+                            trace,
+                            recording_started_instant,
+                            &AsrEvent::Partial { text, seq },
+                        );
                     }
                     Some(AsrEvent::Error { err }) => {
                         eprintln!("[shuo] ❌ ASR error during final: {err}");
-                        trace.asr_error(instant_elapsed_ms(recording_started_instant), &err.to_string());
+                        observe_asr_event(
+                            trace,
+                            recording_started_instant,
+                            &AsrEvent::Error { err: err.clone() },
+                        );
                         *terminal_error = Some(HistoryError {
                             kind: "asr_error".to_string(),
                             msg: err.to_string(),
@@ -1641,12 +1710,6 @@ fn instant_to_datetime(
 ) -> time::OffsetDateTime {
     let delta = instant.saturating_duration_since(recording_started_instant);
     recording_started_at + time::Duration::milliseconds(delta.as_millis() as i64)
-}
-
-fn instant_to_ms(recording_started_instant: Instant, instant: Instant) -> u64 {
-    instant
-        .saturating_duration_since(recording_started_instant)
-        .as_millis() as u64
 }
 
 fn instant_elapsed_ms(recording_started_instant: Instant) -> u64 {

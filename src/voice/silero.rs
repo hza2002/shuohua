@@ -1,9 +1,8 @@
 //! Silero VAD backend wrapper.
 //!
 //! 把 ONNX 加载和样本缓冲都封死在本模块里，给 voice 层和 dev trace 共用同一
-//! 套帧边界（每 512 样本 = 32ms @ 16kHz）。release 默认构建不开 Silero
-//! 依赖：没编译 `voice_activity_detector` 时 [`SileroVad`] 是 zero-sized
-//! 占位类型，不提供 `new`/`accept`，迫使调用方先验证 feature 再实例化。
+//! 套帧边界（每 512 样本 = 32ms @ 16kHz）。`voice_activity_detector` 是
+//! M10 默认依赖，[`SileroVad`] 在所有 build 里都可用。
 
 use crate::voice::vad::VadFrame;
 
@@ -37,7 +36,6 @@ pub struct SileroFrame {
     pub frame: VadFrame,
 }
 
-#[cfg(any(feature = "dev-vad-trace", feature = "dev-vad-probe"))]
 pub struct SileroVad {
     detector: voice_activity_detector::VoiceActivityDetector,
     threshold: f32,
@@ -45,7 +43,6 @@ pub struct SileroVad {
     sample_offset: u64,
 }
 
-#[cfg(any(feature = "dev-vad-trace", feature = "dev-vad-probe"))]
 impl SileroVad {
     pub fn new(config: SileroConfig) -> anyhow::Result<Self> {
         let detector = voice_activity_detector::VoiceActivityDetector::builder()
@@ -91,9 +88,6 @@ impl SileroVad {
     }
 }
 
-#[cfg(not(any(feature = "dev-vad-trace", feature = "dev-vad-probe")))]
-pub struct SileroVad;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,7 +98,6 @@ mod tests {
         assert_eq!(SileroConfig::frame_ms(), 32);
     }
 
-    #[cfg(any(feature = "dev-vad-trace", feature = "dev-vad-probe"))]
     #[test]
     fn accept_emits_one_frame_per_512_samples() {
         let mut vad = SileroVad::new(SileroConfig { threshold: 0.5 }).unwrap();
@@ -120,7 +113,6 @@ mod tests {
         assert_eq!(vad.processed_samples(), 1024);
     }
 
-    #[cfg(any(feature = "dev-vad-trace", feature = "dev-vad-probe"))]
     #[test]
     fn accept_buffers_partial_chunks_until_full() {
         let mut vad = SileroVad::new(SileroConfig { threshold: 0.5 }).unwrap();

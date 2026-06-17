@@ -6,7 +6,7 @@ use ratatui::Frame;
 
 use crate::ipc::protocol::WireState;
 use crate::state::SessionPhase;
-use crate::tui::{App, Confirm, HistoryDetail, Page};
+use crate::tui::{App, ConfigureModule, Confirm, HistoryDetail, Page};
 
 pub fn render(frame: &mut Frame, app: &App) {
     let root = Layout::default()
@@ -808,47 +808,87 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         ])
         .split(area);
     frame.render_widget(
-        Paragraph::new(app.config_path.as_str()).block(
+        Paragraph::new(configure_module_line(app)).block(
             Block::default()
-                .title(crate::t!("tui.config_path"))
+                .title(crate::t!("tui.configure.modules"))
                 .borders(Borders::ALL),
         ),
         chunks[0],
     );
-    let rows = if app.settings_rows.is_empty() {
-        "no config rows found".to_string()
-    } else {
-        app.settings_rows
-            .iter()
-            .map(|row| {
-                format!(
-                    "{:<7} {:<28} {:<28} {}",
-                    row.group, row.key, row.value, row.source
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+    let rows = configure_rows(app);
     frame.render_widget(
-        Paragraph::new(rows)
-            .wrap(Wrap { trim: false })
-            .block(Block::default().title("settings").borders(Borders::ALL)),
+        Paragraph::new(rows).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .title(configure_module_title(app.configure_module))
+                .borders(Borders::ALL),
+        ),
         chunks[1],
     );
     frame.render_widget(
         Paragraph::new(format!(
-            "{}\n{}",
-            crate::t!("tui.doctor_m5"),
-            "read-only: edit TOML files directly for prompts, API keys, and complex chains"
+            "{}\n{}\n{}",
+            crate::t!("tui.configure.source", path = app.config_path.clone()),
+            crate::t!("tui.configure.read_only"),
+            crate::t!("tui.configure.refresh_hint")
         ))
         .wrap(Wrap { trim: false })
         .block(
             Block::default()
-                .title(crate::t!("tui.doctor"))
+                .title(crate::t!("tui.configure.overview"))
                 .borders(Borders::ALL),
         ),
         chunks[2],
     );
+}
+
+fn configure_rows(app: &App) -> String {
+    let module = app.configure_module.inventory_module();
+    let rows = app
+        .settings_rows
+        .iter()
+        .filter(|row| row.group == module.label())
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        crate::t!("tui.configure.no_entries")
+    } else {
+        rows.iter()
+            .map(|row| format!("{:<28} {:<32} {}", row.key, row.value, row.source))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+fn configure_module_line(app: &App) -> String {
+    [
+        ConfigureModule::Overview,
+        ConfigureModule::Main,
+        ConfigureModule::Profile,
+        ConfigureModule::PostProcessor,
+        ConfigureModule::AsrProvider,
+        ConfigureModule::Theme,
+    ]
+    .into_iter()
+    .map(|module| {
+        let label = configure_module_title(module);
+        if module == app.configure_module {
+            format!("[{label}]")
+        } else {
+            format!(" {label} ")
+        }
+    })
+    .collect::<Vec<_>>()
+    .join("  ")
+}
+
+fn configure_module_title(module: ConfigureModule) -> String {
+    match module {
+        ConfigureModule::Overview => crate::t!("tui.configure.overview"),
+        ConfigureModule::Main => crate::t!("tui.configure.main"),
+        ConfigureModule::Profile => crate::t!("tui.configure.profile"),
+        ConfigureModule::PostProcessor => crate::t!("tui.configure.post_processor"),
+        ConfigureModule::AsrProvider => crate::t!("tui.configure.asr_provider"),
+        ConfigureModule::Theme => crate::t!("tui.configure.theme"),
+    }
 }
 
 #[cfg(test)]

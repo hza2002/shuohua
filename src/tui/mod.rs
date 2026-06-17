@@ -39,6 +39,51 @@ impl Page {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigureModule {
+    Overview,
+    Main,
+    Profile,
+    PostProcessor,
+    AsrProvider,
+    Theme,
+}
+
+impl ConfigureModule {
+    fn next(self) -> Self {
+        match self {
+            Self::Overview => Self::Main,
+            Self::Main => Self::Profile,
+            Self::Profile => Self::PostProcessor,
+            Self::PostProcessor => Self::AsrProvider,
+            Self::AsrProvider => Self::Theme,
+            Self::Theme => Self::Overview,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Overview => Self::Theme,
+            Self::Main => Self::Overview,
+            Self::Profile => Self::Main,
+            Self::PostProcessor => Self::Profile,
+            Self::AsrProvider => Self::PostProcessor,
+            Self::Theme => Self::AsrProvider,
+        }
+    }
+
+    pub fn inventory_module(self) -> crate::config::inventory::InventoryModule {
+        match self {
+            Self::Overview => crate::config::inventory::InventoryModule::Overview,
+            Self::Main => crate::config::inventory::InventoryModule::Main,
+            Self::Profile => crate::config::inventory::InventoryModule::Profile,
+            Self::PostProcessor => crate::config::inventory::InventoryModule::PostProcessor,
+            Self::AsrProvider => crate::config::inventory::InventoryModule::AsrProvider,
+            Self::Theme => crate::config::inventory::InventoryModule::Theme,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryDetail {
     Details,
     Asr,
@@ -96,6 +141,7 @@ pub struct App {
     pub status: String,
     pub config_path: String,
     pub settings_rows: Vec<settings::SettingsRow>,
+    pub configure_module: ConfigureModule,
     pub meter_width: usize,
     pub audio_cache: HashMap<String, audio::AudioInfo>,
     pub confirm: Option<Confirm>,
@@ -133,6 +179,7 @@ impl App {
             status: "connected".to_string(),
             config_path: config_path.display().to_string(),
             settings_rows,
+            configure_module: ConfigureModule::Overview,
             meter_width: 160,
             audio_cache: HashMap::new(),
             confirm: None,
@@ -421,10 +468,18 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             app.selected_history = len.saturating_sub(1);
         }
         Action::NextDetail => {
-            app.history_detail = app.history_detail.next();
+            if app.page == Page::Settings {
+                app.configure_module = app.configure_module.next();
+            } else {
+                app.history_detail = app.history_detail.next();
+            }
         }
         Action::PrevDetail => {
-            app.history_detail = app.history_detail.prev();
+            if app.page == Page::Settings {
+                app.configure_module = app.configure_module.prev();
+            } else {
+                app.history_detail = app.history_detail.prev();
+            }
         }
         Action::StartSearch => {
             app.page = Page::History;
@@ -500,6 +555,9 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
 fn on_page_changed(app: &mut App) {
     if app.page == Page::Status {
         app.meters.clear();
+    }
+    if app.page == Page::Settings {
+        app.settings_rows = settings::load_rows();
     }
 }
 
@@ -622,5 +680,16 @@ mod tests {
         assert_eq!(meter_capacity_for_terminal_width(200), 189);
         assert_eq!(meter_capacity_for_terminal_width(20), 16);
         assert_eq!(meter_capacity_for_terminal_width(3840), MAX_METER_HISTORY);
+    }
+
+    #[test]
+    fn configure_modules_cycle_in_order() {
+        assert_eq!(ConfigureModule::Overview.next(), ConfigureModule::Main);
+        assert_eq!(ConfigureModule::Theme.next(), ConfigureModule::Overview);
+        assert_eq!(ConfigureModule::Overview.prev(), ConfigureModule::Theme);
+        assert_eq!(
+            ConfigureModule::AsrProvider.inventory_module(),
+            crate::config::inventory::InventoryModule::AsrProvider
+        );
     }
 }

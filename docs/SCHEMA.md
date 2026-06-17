@@ -182,7 +182,7 @@ ${XDG_STATE_HOME:-~/.local/state}/shuohua/audio/<recording_id>.wav
 
 ## 4. VAD Trace（开发期 sidecar）
 
-`voice.vad_trace = true` 且 binary 用 `--features dev` 构建时，每次 recording 额外写：
+`dev.vad_trace = true` 且 binary 用 `--features dev` 构建时，每次 recording 额外写：
 
 ```
 ${XDG_STATE_HOME:-~/.local/state}/shuohua/traces/<recording_id>.jsonl

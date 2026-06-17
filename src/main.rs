@@ -175,7 +175,7 @@ fn run_daemon_process() -> Result<()> {
         auto_paste = cfg.voice.auto_paste,
         record_audio = cfg.voice.record_audio,
         stop_delay_ms = cfg.voice.stop_delay_ms,
-        vad_trace = cfg.voice.vad_trace,
+        vad_trace = cfg.dev.vad_trace,
         language = %cfg.ui.language,
         "daemon config loaded"
     );
@@ -367,7 +367,7 @@ async fn run_daemon(
                         let params = SessionParams {
                             auto_paste: cfg.voice.auto_paste,
                             record_audio: cfg.voice.record_audio,
-                            vad_trace: cfg.voice.vad_trace,
+                            vad_trace: cfg.dev.vad_trace,
                             idle_pause: runtime.idle_pause,
                             finalize_timeout_ms: runtime.finalize_timeout_ms,
                             vad: cfg.voice.vad.clone(),

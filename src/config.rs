@@ -16,6 +16,8 @@ pub struct Config {
     #[serde(default)]
     pub voice: VoiceCfg,
     #[serde(default)]
+    pub dev: DevCfg,
+    #[serde(default)]
     pub ui: UiCfg,
     #[serde(default)]
     pub overlay: OverlayCfg,
@@ -42,8 +44,6 @@ pub struct VoiceCfg {
     pub stop_delay_ms: u32,
     #[serde(default)]
     pub record_audio: bool,
-    #[serde(default)]
-    pub vad_trace: bool,
     /// true (默认) = 识别完成后立刻 Cmd+V 上屏；false = 只进剪贴板。
     #[serde(default = "default_auto_paste")]
     pub auto_paste: bool,
@@ -56,7 +56,6 @@ impl Default for VoiceCfg {
         Self {
             stop_delay_ms: default_stop_delay_ms(),
             record_audio: false,
-            vad_trace: false,
             auto_paste: default_auto_paste(),
             vad: VoiceVadCfg::default(),
         }
@@ -68,6 +67,12 @@ fn default_stop_delay_ms() -> u32 {
 }
 fn default_auto_paste() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct DevCfg {
+    #[serde(default)]
+    pub vad_trace: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -352,13 +357,11 @@ trigger = "f16"
 stop_delay_ms = 1200
 record_audio  = true
 auto_paste    = false
-vad_trace     = true
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.voice.stop_delay_ms, 1200);
         assert!(cfg.voice.record_audio);
         assert!(!cfg.voice.auto_paste);
-        assert!(cfg.voice.vad_trace);
     }
 
     #[test]
@@ -378,7 +381,20 @@ trigger = "f16"
 trigger = "f16"
 "#;
         let cfg = parse(body).unwrap();
-        assert!(!cfg.voice.vad_trace);
+        assert!(!cfg.dev.vad_trace);
+    }
+
+    #[test]
+    fn dev_vad_trace_is_configurable() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+
+[dev]
+vad_trace = true
+"#;
+        let cfg = parse(body).unwrap();
+        assert!(cfg.dev.vad_trace);
     }
 
     #[test]

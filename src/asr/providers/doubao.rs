@@ -3,26 +3,30 @@
 //! 协议: https://www.volcengine.com/docs/6561/1354869
 //! Endpoint: wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async
 //!
-//! 协议要点（实测自 just-talk-go，与官方文档一致）：
+//! 协议要点（与 Hypnus-Yuan/doubao-speech、chaitin/MonkeyCode、openless、
+//! yyyzl/push-2-talk 四份独立实现交叉验证一致）：
 //!
 //!   - 鉴权走 HTTP upgrade header：X-Api-App-Key / X-Api-Access-Key /
 //!     X-Api-Resource-Id / X-Api-Request-Id / X-Api-Connect-Id / X-Api-Sequence
-//!   - 客户端二进制帧 = [4 字节 header][4 字节 size BE][payload]
+//!   - 客户端二进制帧 = [4 字节 header][4 字节 sequence BE][4 字节 size BE][payload]
 //!       byte0 = 0x11 (proto v1 << 4 | header_size=1)
 //!       byte1 = msg_type << 4 | flags
 //!              msg_type: 0x1=full client req, 0x2=audio-only
-//!              flags:    0x2=last packet
+//!              flags:    0x1=PositiveSeq（普通帧）, 0x3=NegativeSeq（末帧）
 //!       byte2 = serialize << 4 | compress
 //!              serialize: 0x1=JSON, 0x0=raw bytes
-//!              compress:  0x0=none (我们写死 raw，DESIGN §2.8)
+//!              compress:  0x0=none (raw PCM 高熵 gzip 仅 ~30%，DESIGN §2.8 不压)
 //!       byte3 = 0x00 reserved
-//!     不用 sequence number；只靠 flags=0x02 标末包
+//!     **所有客户端帧都带 sequence**：FullClientRequest=1，audio 帧从 2 起单调递增，
+//!     末帧 flag 改为 NegativeSeq + 取负序号（如已发到 5，末帧 seq=-6）。
+//!     不带 sequence 的"裸末帧"（flags=0x02）会让 Doubao 走 server 自分配 fallback
+//!     路径，偶发 finalize 慢到 5s+。
 //!   - 服务端帧 = [4 字节 header][4 字节 sequence (跳过)][4 字节 size BE][payload]
-//!     payload 是 result/utterances/audio_info JSON
+//!     payload 是 result/utterances/audio_info JSON。flag bit 0x02 = 末帧
+//!     （server 也可能用 NegativeSeq=0x03，has_seq + is_last 两位都会置上）
 //!   - `enable_nonstream=true` + `show_utterances=true` 是定型 (`definite=true`)
 //!     的必要条件，DESIGN §2.8 表里 Doubao 行依赖这两个 flag
 //!   - 音频 codec 写死 raw PCM 16kHz s16le mono；gzip 收益小不做
-//!     （raw PCM 高熵 gzip 仅 ~30% 压缩，DESIGN §2.8）
 
 use crate::asr::types::*;
 use async_trait::async_trait;
@@ -88,7 +92,9 @@ fn default_true() -> bool {
     true
 }
 fn default_finalize_timeout_ms() -> u64 {
-    5000
+    // 12s 取自 openless 实测经验值；正常情况下 < 1s 就能拿到 Done，这是给罕见
+    // server 长尾留的 budget。改协议（带 sequence）之后应该几乎不会触发。
+    12_000
 }
 
 pub fn config_path() -> PathBuf {
@@ -211,11 +217,11 @@ impl AsrProvider for DoubaoProvider {
             .to_string();
         tracing::debug!(logid = %logid, "doubao connected");
 
-        // 首条 full client request
+        // 首条 full client request；占 seq=1，后续 audio 帧从 seq=2 开始。
         let payload = build_full_client_request_payload(&self.config, &ctx);
         let payload_bytes = serde_json::to_vec(&payload)
             .map_err(|e| AsrError::Protocol(format!("encode init payload: {e}")))?;
-        let frame = encode_full_client_request(&payload_bytes);
+        let frame = encode_full_client_request(&payload_bytes, 1);
         ws.send(Message::Binary(frame.into()))
             .await
             .map_err(send_err)?;
@@ -299,7 +305,12 @@ async fn session_task(
     let started_at = Instant::now();
     let mut definite_emitted: usize = 0;
     let mut drift = DriftProbe::new();
-    let mut seq: u64 = 0;
+    let mut partial_seq: u64 = 0;
+    // 协议层 audio 帧 sequence number。FullClientRequest 在 open() 里占 seq=1，
+    // 这里从 2 起。末帧 (is_last=true) 用 NegativeSeq + 下一个 seq 取负——
+    // 先递增再取负，避免末帧 seq 跟最后一帧 audio seq 撞号触发服务端
+    // "autoAssignedSequence mismatch" 报错（chaitin 实测过这条坑）。
+    let mut wire_seq: i32 = 1;
     let mut last_sent = false; // 是否已发出 is_last 帧；之后只等服务端 Done
 
     loop {
@@ -316,7 +327,9 @@ async fn session_task(
                         return;
                     }
                     Some(PcmCmd::Audio { bytes, is_last }) => {
-                        let frame = encode_audio_frame(&bytes, is_last);
+                        wire_seq += 1;
+                        let frame_seq = if is_last { -wire_seq } else { wire_seq };
+                        let frame = encode_audio_frame(&bytes, frame_seq, is_last);
                         if let Err(e) = sink.send(Message::Binary(frame.into())).await {
                             let _ = evt_tx.send(AsrEvent::Error { err: AsrError::Network(e.to_string()) }).await;
                             return;
@@ -343,7 +356,7 @@ async fn session_task(
                             started_at,
                             &mut definite_emitted,
                             &mut drift,
-                            &mut seq,
+                            &mut partial_seq,
                             &evt_tx,
                         ).await {
                             ResponseAction::Continue => {}
@@ -544,37 +557,45 @@ async fn handle_response(
 // ============================================================
 
 const HDR_BYTE0: u8 = 0x11; // proto v1 (0b0001 << 4) | header_size=1 (0b0001)
-const MSG_FULL_CLIENT_REQ: u8 = 0x10; // type=0b0001 << 4 | flags=0
-const MSG_AUDIO_ONLY: u8 = 0x20; // type=0b0010 << 4 | flags=0
-const AUDIO_FLAG_LAST: u8 = 0x02; // last packet, no sequence
+                            // byte1 高 4 bit = msg_type
+const MSG_TYPE_FULL_CLIENT_REQ: u8 = 0x10; // 0b0001 << 4
+const MSG_TYPE_AUDIO_ONLY: u8 = 0x20; // 0b0010 << 4
+                                      // byte1 低 4 bit = flags（与 msg_type 按位或拼成 byte1）
+const FLAG_POS_SEQ: u8 = 0x01; // 普通帧：带正序号
+const FLAG_NEG_SEQ: u8 = 0x03; // 末帧：带负序号 + is_last
 const SERIALIZE_JSON_NO_COMPRESS: u8 = 0x10; // serialize=JSON | compress=none
 const SERIALIZE_RAW_NO_COMPRESS: u8 = 0x00; // serialize=raw | compress=none
 
 const SRV_MSG_FULL_RESPONSE: u8 = 0x09; // 0b1001
 const SRV_MSG_ERROR: u8 = 0x0F; // 0b1111
 
-fn encode_full_client_request(payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8 + payload.len());
+/// FullClientRequest 帧。`seq` 永远是 1（session 起手）。flag=PositiveSeq。
+fn encode_full_client_request(payload: &[u8], seq: i32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(12 + payload.len());
     out.extend_from_slice(&[
         HDR_BYTE0,
-        MSG_FULL_CLIENT_REQ,
+        MSG_TYPE_FULL_CLIENT_REQ | FLAG_POS_SEQ,
         SERIALIZE_JSON_NO_COMPRESS,
         0x00,
     ]);
+    out.extend_from_slice(&seq.to_be_bytes());
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     out.extend_from_slice(payload);
     out
 }
 
-fn encode_audio_frame(pcm: &[u8], is_last: bool) -> Vec<u8> {
-    let flags = if is_last { AUDIO_FLAG_LAST } else { 0 };
-    let mut out = Vec::with_capacity(8 + pcm.len());
+/// Audio 帧。普通帧 (`is_last=false`) flag=PositiveSeq，`seq` 是单调递增的正数；
+/// 末帧 (`is_last=true`) flag=NegativeSeq，`seq` 应该是负数（调用方负责取负）。
+fn encode_audio_frame(pcm: &[u8], seq: i32, is_last: bool) -> Vec<u8> {
+    let flag = if is_last { FLAG_NEG_SEQ } else { FLAG_POS_SEQ };
+    let mut out = Vec::with_capacity(12 + pcm.len());
     out.extend_from_slice(&[
         HDR_BYTE0,
-        MSG_AUDIO_ONLY | flags,
+        MSG_TYPE_AUDIO_ONLY | flag,
         SERIALIZE_RAW_NO_COMPRESS,
         0x00,
     ]);
+    out.extend_from_slice(&seq.to_be_bytes());
     out.extend_from_slice(&(pcm.len() as u32).to_be_bytes());
     out.extend_from_slice(pcm);
     out
@@ -750,7 +771,7 @@ finalize_timeout_ms = 7000
     }
 
     #[test]
-    fn idle_pause_defaults_off_and_finalize_timeout_5000() {
+    fn idle_pause_defaults_off_and_finalize_timeout_default() {
         let cfg: DoubaoConfig = toml::from_str(
             r#"
 app_key = "ak"
@@ -759,31 +780,42 @@ access_key = "sk"
         )
         .unwrap();
         assert!(!cfg.idle_pause);
-        assert_eq!(cfg.finalize_timeout_ms, 5000);
+        assert_eq!(cfg.finalize_timeout_ms, 12_000);
     }
 
     #[test]
-    fn encode_full_client_request_layout() {
+    fn encode_full_client_request_uses_positive_seq_one() {
         let payload = b"{\"hello\":\"world\"}";
-        let frame = encode_full_client_request(payload);
+        let frame = encode_full_client_request(payload, 1);
         assert_eq!(frame[0], 0x11);
-        assert_eq!(frame[1], 0x10);
+        assert_eq!(frame[1], 0x11, "msg_type=FullClientReq | PositiveSeq");
         assert_eq!(frame[2], 0x10);
         assert_eq!(frame[3], 0x00);
-        assert_eq!(&frame[4..8], &(payload.len() as u32).to_be_bytes());
-        assert_eq!(&frame[8..], payload);
+        assert_eq!(&frame[4..8], &1i32.to_be_bytes(), "sequence=1");
+        assert_eq!(&frame[8..12], &(payload.len() as u32).to_be_bytes());
+        assert_eq!(&frame[12..], payload);
     }
 
     #[test]
-    fn encode_audio_frame_normal_vs_last() {
+    fn encode_audio_frame_normal_carries_positive_seq() {
         let pcm = [1u8, 2, 3, 4];
-        let normal = encode_audio_frame(&pcm, false);
-        assert_eq!(normal[1], 0x20);
-        assert_eq!(&normal[8..], &pcm);
+        let frame = encode_audio_frame(&pcm, 7, false);
+        assert_eq!(frame[0], 0x11);
+        assert_eq!(frame[1], 0x21, "msg_type=AudioOnly | PositiveSeq");
+        assert_eq!(&frame[4..8], &7i32.to_be_bytes(), "sequence=7");
+        assert_eq!(&frame[8..12], &(pcm.len() as u32).to_be_bytes());
+        assert_eq!(&frame[12..], &pcm);
+    }
 
-        let last = encode_audio_frame(&pcm, true);
-        assert_eq!(last[1], 0x22, "type=0x2, last flag=0x2");
-        assert_eq!(&last[8..], &pcm);
+    #[test]
+    fn encode_audio_frame_last_carries_negative_seq_and_empty_payload() {
+        let pcm: [u8; 0] = [];
+        let frame = encode_audio_frame(&pcm, -8, true);
+        assert_eq!(frame[0], 0x11);
+        assert_eq!(frame[1], 0x23, "msg_type=AudioOnly | NegativeSeq");
+        assert_eq!(&frame[4..8], &(-8i32).to_be_bytes(), "sequence=-8");
+        assert_eq!(&frame[8..12], &0u32.to_be_bytes(), "empty payload size");
+        assert_eq!(frame.len(), 12);
     }
 
     #[test]

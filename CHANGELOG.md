@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-17 - Doubao wire protocol corrected to sequenced frames
+
+- Switched Doubao `bigmodel_async` client framing from "no-sequence + LastNoSeq(0x02)" to "PositiveSeq for every frame + NegativeSeq end frame with negated sequence".
+- Cross-validated against four independent open-source implementations (`Hypnus-Yuan/doubao-speech`, `chaitin/MonkeyCode`, `Open-Less/openless`, `yyyzl/push-2-talk`); the earlier framing was a defect inherited from a toy reference and forced Doubao's server-side auto-assigned-sequence fallback path, which produced rare 5s+ finalize tails.
+- Bumped `default_finalize_timeout_ms` from 5_000 to 12_000 to match openless's measured budget; with the corrected protocol the timeout should virtually never fire.
+- Voice layer untouched — VAD-pause finalize is no longer expected to time out, so no soft-failure path was added. If the timeout still fires in the wild, the original "recording marked error" behavior preserves the diagnostic signal.
+- Archived `docs/M10.md` and `docs/M10_PLAN.md` (planning + implementation docs for the multi-session ASR work that is now live).
+
 ## 2026-06-16 - Logging design transition
 
 - Decided to replace daemon stdout/stderr logging with `tracing` file logs.

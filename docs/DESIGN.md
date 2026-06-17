@@ -317,9 +317,9 @@ pub enum AsrError {
 **为什么 hotwords 是 `Vec<String>` 而不是结构化 `{ word, boost }`**：现有 provider 没有一家支持 per-word boost（Doubao 接词列表、Apple SpeechAnalyzer 用 contextualStrings）。统一结构是为假想未来设计、YAGNI。真接入支持 boost 的 provider 时，它在自己的 `asr/<provider>.toml` 里定义私有字段，跟主 hotwords 列表互不影响。
 
 **错误处理策略**：
-- **M2 不自动重试**。用户操作可见可重复（再按一次 F16），自动重试反而隐藏失败、增加调试难度
+- **不自动重试**。用户操作可见可重复（再按一次 F16），自动重试反而隐藏失败、增加调试难度
 - **dispatch 只在 `Final`/`Segment` 拼完才写剪贴板**，没收到末段就不上屏（部分识别上屏是 bug）
-- **Stopping 等 final 超时 5s**（M2 单 session 场景；正常 final 应在 send last 后 < 1s）
+- **finalize 等待时间是 provider 私有参数**（`asr/<provider>.toml.finalize_timeout_ms`），默认 12s；正常 final 应在 send last 后 < 1s，12s 只是给罕见 server 长尾留 budget
 - **`AsrError::Canceled` 静默处理**，voice 模块不报 stderr、不发 error overlay
 
 #### 各 provider 怎么映射
@@ -420,8 +420,8 @@ provider 之间**完全不共享 schema**。每个 provider impl 自己 deserial
 
 ### 2.9 客户端 VAD + 多段 session（"思考不计费"机制）
 
-> **状态**：M10 设计中，当前默认运行路径仍是单 ASR session。M2.5 试过 webrtc-vad，在真实声学环境里误判率高（风扇/空调嗡鸣谐波会过频域检测、RMS 门无法同时满足灵敏度与稳定性），不适合生产。
-> M10 采用 Silero VAD shadow trace 验证后再正式启用，详细控制协议见 [M10](M10.md)。
+> **状态**：已经接入主录音流程（`voice/finish.rs::run_multi_session_recording`）。启用条件：`[voice.vad] backend = "silero"` + `asr/<provider>.toml.idle_pause = true`，两个开关都打开时走多 session 路径，否则回退单 session（行为与多 session 落地前一致）。M2.5 试过 webrtc-vad，在真实声学环境里误判率高（风扇/空调嗡鸣谐波会过频域检测、RMS 门无法同时满足灵敏度与稳定性），不适合生产；最终选 Silero。
+> 历史规划和实施细节见 [archive/M10.md](archive/M10.md) 和 [archive/M10_PLAN.md](archive/M10_PLAN.md)。
 
 #### Doubao 计费模型（核实后的事实）
 
@@ -891,7 +891,7 @@ trace sidecar 是 dev-only 诊断文件，不属于正式 daemon log；它在 `-
 | Objective-C 互操作 | `objc2` 0.6 + `objc2-app-kit` 0.3 + `objc2-foundation` 0.3 | 现役标准，活跃维护 |
 | Core Graphics / CGEventTap | `core-graphics` (≥ 0.25), `core-foundation` | CGEventTap pipe 桥的基础。0.25 的 `CallbackResult::Drop` 是 suppress 落地依赖（见 §2.4） |
 | 录音 | `cpal`（首选）/ `coreaudio-rs`（备选） | cpal 简单，coreaudio-rs 控制更细。先用 cpal |
-| VAD（M10） | Silero VAD via optional `voice_activity_detector` / ORT | WebRTC/RMS 真实环境误判高；Silero 先以 dev trace 验证，正式接入见 [M10](M10.md) |
+| VAD | Silero VAD via `voice_activity_detector` / ORT（默认进 build） | WebRTC/RMS 真实环境误判高；Silero 经 dev trace 验证后正式接入，控制协议见 §2.9 |
 | PCM 通道（callback→consumer） | `tokio::sync::mpsc::unbounded` | M2 已验稳定；Go 版 syscall pipe 都稳跑，mpsc 更轻 |
 | 唯一 ID | `ulid` | history record id；26 字符短于 UUID，含时序信息 |
 | WebSocket | `tokio-tungstenite` + `native-tls` | tokio 生态首选；DoubaoProvider 用。macOS 原生 Security framework 走 native-tls（无 rustls CryptoProvider 配置负担、无 OpenSSL；跨平台时再切 rustls） |

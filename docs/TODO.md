@@ -17,3 +17,5 @@
   newest recording.
 - Add a TUI or overlay-assisted route workflow for assigning the current app
   bundle id to a profile. See [TUI_PLAN.md](TUI_PLAN.md) Phase 7.
+- Extend Configure diagnostics so `doctor` and TUI consume the same structured
+  config diagnostic objects instead of parsing doctor stdout.

@@ -169,7 +169,7 @@
   - `tui.action.*`
   - `tui.confirm.*`
   - `tui.error.*`
-  - `tui.settings.*`
+  - `tui.configure.*`
 - History detail title、footer、状态栏反馈、确认框、错误消息都走 i18n。
 - 增加测试保证 `zh-CN` 和 `en-US` key 对齐。
 
@@ -182,9 +182,9 @@
 原则：
 
 - 配置文件仍是 source of truth。
-- TUI 负责发现、展示、创建、复制、重命名、删除、验证配置文件。
+- TUI 负责发现、展示、创建 LLM post component、打开编辑器、Finder 定位、刷新和验证配置文件。
 - 复杂编辑交给 `$EDITOR` / `$VISUAL` / macOS 默认编辑器。
-- 官方模板只维护一份普通文本文件，程序和 CLI 都消费同一份模板。
+- 官方模板位于 `assets/config/**`；`config::template` registry 渲染并测试校验这些文件，避免模板与 spec 静默漂移。
 
 第一步范围：
 
@@ -200,21 +200,16 @@
 - 网络验证。
 - 全量 TOML 表单编辑器。
 
-### 模板与配置文件布局建议
+### 模板与配置文件布局
 
-模板文件建议放在：
+模板文件当前放在：
 
 ```text
 assets/config/
   manifest.toml
-  base/
-    config.toml
-    profile/default.toml
-    profile/chat.toml
-    profile/agent.toml
-    asr/apple.toml
-    asr/doubao.toml
-    post/rule/zh_filter.toml
+  main.toml
+  profile/default.toml
+  post/rule/zh_filter.toml
   post/llm/
     deepseek.toml
     openai.toml
@@ -225,11 +220,11 @@ assets/config/
 
 语义：
 
-- `base/`：未来 `shuo init` 或 `shuo init-config` 复制到用户配置目录的参考配置。
+- `main.toml` / `profile/default.toml` / `post/rule/zh_filter.toml`：官方基础模板。
 - `post/llm/`：TUI 新建 LLM component 使用的模板。
 - `manifest.toml` 只描述模板元信息，不重复模板正文。
 
-模板是唯一真相。文档不要复制大片配置内容；TUI 创建、CLI 初始化和测试验证都读取同一批模板。
+模板内容由 `config::template` registry 渲染，并由测试逐字节校验 `assets/config/**`。文档不要复制大片配置内容。
 
 ### 新建 LLM post component 向导
 
@@ -252,27 +247,17 @@ assets/config/
 
 第一版不做网络验证，不自动加入 profile pipeline。创建配置和接入 profile 是两个动作。
 
-## 第一批实施范围
+当前已实现：
 
-新 session 开始优先实现：
+- Configure 模块导航：Overview / Main / Profile / PostProcessor / ASR Provider / Theme。
+- Overview 首次进入运行 `shuo doctor` 并显示输出；`v` 手动刷新 inventory 并重跑 doctor。
+- `o` 打开选中配置文件，`r` Finder 定位选中配置文件或配置目录。
+- `R` 发送现有 UDS `reload_config`，并刷新 Configure inventory。
+- PostProcessor 模块按 `n` 启动 LLM component wizard，创建 `post/llm/<file_id>.toml` 后打开编辑器。
 
-1. Phase 1
-2. Phase 2
-3. Phase 2 所需最小 i18n
-4. 更新 `docs/SCHEMA.md` 或本文件，明确删除单条音频不影响 history JSONL
+## 当前剩余项
 
-第一批不要做：
-
-- 时间范围筛选
-- 批量标记
-- 批量删除
-- Configure
-- 模板系统
-- 配置写入
-
-第一批完成标准：
-
-- `cargo fmt`
-- `cargo check`
-- `cargo test`
-- 手动验证项写进最终回复：打开、Finder reveal、删除音频需要用户在 macOS 上实际确认。
+- History 时间范围筛选、批量标记、批量音频清理仍未实现。
+- Configure 仍需把 `doctor` 和 TUI Overview 收敛到同一套结构化 diagnostics，而不是只显示 `shuo doctor` stdout。
+- Profile route 辅助 workflow 仍未实现；新增 LLM component 不会自动修改 profile chain。
+- 打开文件、Finder reveal、创建后自动打开编辑器这些 macOS 交互需要用户手动验证。

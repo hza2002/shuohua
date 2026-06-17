@@ -44,10 +44,6 @@ history_stats_line = "records: {shown} shown / {total} total    total: {duration
 history_newest_first = "History newest first"
 selected_final_text = "Selected final text"
 no_history_selected = "no history selected"
-config_path = "Config path"
-current_config = "Current config"
-doctor = "Doctor"
-doctor_m5 = "Config editing and doctor validation are M5 scope; this page is the stable TUI slot for them."
 
 [tui.configure]
 modules = "Configure modules"

@@ -7,12 +7,21 @@
 ```
 src/
 ├── main.rs                              # clap 入口；smart fallback；--daemon 跑 AppKit + tokio daemon；F16 toggle 状态机
-├── profile.rs                           # profile/default + config [profile] 路由加载（ASR/post 组合 + provider 覆盖）
+├── profile.rs                           # compatibility re-export；实际 profile schema/loading 在 config::profile
 ├── cli/
 │   ├── mod.rs                           # clap 子命令分发
 │   ├── doctor.rs                        # shuo doctor：配置 / hotkey / ASR 配置 / UDS / launchd 检查
 │   └── service.rs                       # launchd install/uninstall/start/stop/restart/status
-├── config.rs                            # ~/.config/shuohua/config.toml 解析
+├── config/
+│   ├── mod.rs                           # config public API + compatibility re-exports
+│   ├── main.rs                          # ~/.config/shuohua/config.toml schema/parse/path helpers
+│   ├── spec.rs                          # shared field/spec metadata + validation diagnostics
+│   ├── inventory.rs                     # structured Configure/doctor inventory scan
+│   ├── template.rs                      # official config template registry + LLM component creation
+│   ├── profile.rs                       # profile/*.toml schema + route loading
+│   ├── post/                            # post component config namespace
+│   ├── asr/                             # ASR provider config loaders
+│   └── theme.rs                         # reserved theme namespace
 ├── log.rs                                # tracing 初始化：daily file appender、本地时间格式、TTY mirror
 ├── reload.rs                             # notify watcher + watch::Sender 广播；overlay/i18n/hotkey subscriber；UDS 手动 reload 复用同一路径
 ├── clipboard_darwin.rs                  # NSPasteboard 写文本
@@ -39,7 +48,7 @@ src/
 ├── post/
 │   ├── mod.rs                           # PostProcessor trait + PipelineText + run_chain
 │   ├── app_context.rs                   # post 层 AppContext 入口；macOS 复用 app_context_darwin
-│   ├── config.rs                        # post component 加载；profile 可浅覆盖 LLM component 字段
+│   ├── config.rs                        # compatibility re-export；实际加载在 config::post::runtime
 │   ├── zh_filter.rs                     # ZhFilter
 │   └── llm.rs                           # LlmCleanup；OpenAI-compatible / Anthropic native 一次性调用
 ├── voice/
@@ -61,11 +70,12 @@ src/
 │   ├── server.rs                        # UnixListener；subscribe snapshot；per-client fanout；history 查询
 │   └── client.rs                        # TUI/smart fallback 共用 UnixStream framing helper
 ├── tui/
-│   ├── mod.rs                           # ratatui 主循环；Status/History/Settings 三页
+│   ├── mod.rs                           # ratatui 主循环；Status/History/Configure 三页
 │   ├── audio.rs                         # History retained audio path/status/open/reveal/delete helpers
-│   ├── panes.rs                         # 状态、实时文本、pipeline、历史、配置浏览渲染
+│   ├── config_actions.rs                # Configure editor/Finder launcher helpers
+│   ├── panes.rs                         # 状态、实时文本、pipeline、历史、Configure 渲染
 │   ├── keybindings.rs                   # Tab/Shift-Tab + 1/2/3 翻页；vim/方向键滚动
-│   └── settings.rs                      # Settings 页只读配置 inventory；脱敏展示 secret 字段
+│   └── settings.rs                      # Configure inventory rows；脱敏展示 secret 字段
 ├── overlay/
 │   ├── mod.rs                           # OverlayCmd + OverlayState + OverlayHandle (mpsc 发命令)
 │   ├── view.rs                          # AppKit NSGlassEffectView 同进程渲染主循环

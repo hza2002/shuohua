@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-17 - Configure refactor foundation
+
+- Moved configuration parsing into a `config/` module tree and added shared
+  spec, validation, inventory, and template registry foundations.
+- Reworked the TUI Settings tab into Configure modules: Overview, Main,
+  Profile, PostProcessor, ASR Provider, and Theme.
+- Integrated Overview doctor output, config file open/reveal actions, manual
+  refresh/validate, and daemon `reload_config` from Configure.
+- Added official `assets/config/**` templates and a first LLM post component
+  wizard that writes `post/llm/<file_id>.toml` without auto-attaching it to
+  profile chains.
+
 ## 2026-06-17 - First TUI status/history audio pass
 
 - Added the first usable TUI retained-audio workflow: History derives audio paths from `state_dir()/audio/<recording_id>.wav`, shows cached audio status, opens audio files, reveals them in Finder, and deletes one `.wav` with confirmation without touching history JSONL.

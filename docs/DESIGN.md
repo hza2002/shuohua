@@ -926,11 +926,19 @@ shuohua/
 │   ├── SCHEMA.md
 │   └── CLI.md
 ├── src/
-│   ├── main.rs                 # smart fallback；--daemon 跑 AppKit + tokio daemon；M5 再接 clap 子命令
-│   ├── config.rs               # serde TOML + 热键字符串解析（纯类型，无 I/O）
+│   ├── main.rs                 # smart fallback；--daemon 跑 AppKit + tokio daemon
+│   ├── config/
+│   │   ├── mod.rs              # public API + compatibility re-exports
+│   │   ├── main.rs             # top-level config.toml schema/parse/path helpers
+│   │   ├── spec.rs             # shared config spec metadata + diagnostics
+│   │   ├── inventory.rs        # structured Configure inventory
+│   │   ├── template.rs         # official templates + LLM component creation
+│   │   ├── profile.rs          # profile/*.toml schema/routes
+│   │   ├── post/               # post component config namespace
+│   │   ├── asr/                # ASR provider config loaders
+│   │   └── theme.rs            # reserved theme namespace
 │   ├── log.rs                  # tracing 初始化：daily file appender、本地时间格式、TTY mirror
 │   ├── reload.rs               # notify watcher + overlay/i18n/hotkey subscribers（M3.f）
-│   ├── doctor.rs               # 终端识别 + AX/麦克风权限检查
 │   ├── hotkey/
 │   │   ├── mod.rs              # Combo / Modifier / KeyCode 类型
 │   │   ├── tracker.rs          # 纯函数式状态机 + proptest
@@ -950,6 +958,7 @@ shuohua/
 │   │       └── doubao.rs             # Doubao SAUC provider
 │   ├── post/
 │   │   ├── mod.rs              # PostProcessor trait + PipelineText + run_chain（M2.5）
+│   │   ├── config.rs           # compatibility re-export for config::post::runtime
 │   │   ├── zh_filter.rs        # ZhFilter（M2.5）
 │   │   ├── llm.rs              # M7 LLM 清洗
 │   │   └── app_context.rs      # NSWorkspace.frontmostApplication（M7）
@@ -966,20 +975,24 @@ shuohua/
 │   │   ├── view.rs             # AppKit 视图层（NSPanel + NSGlassEffectView + 子视图）
 │   ├── autotype_darwin.rs      # CGEventPost Cmd+V
 │   ├── clipboard_darwin.rs     # NSPasteboard
-│   ├── cli/                    # M5 引入
+│   ├── cli/
 │   │   ├── mod.rs              # clap derive，子命令分发
 │   │   ├── doctor.rs           # shuo doctor（包含配置 validate + 打印 effective config）
 │   │   └── service.rs          # install / uninstall / start / stop / restart / status
 │   ├── i18n/
 │   │   └── mod.rs              # t!() 宏 + 字典加载，~100 行
 │   └── tui/
-│       ├── mod.rs              # ratatui 主循环（订阅 UDS）；Status / History / Settings 三页
-│       ├── panes.rs            # 状态 / 历史 / pipeline / 配置浏览渲染
-│       └── keybindings.rs      # Tab/Shift-Tab + 1/2/3 翻页；h/l 留给未来设置项调整
+│       ├── mod.rs              # ratatui 主循环；Status / History / Configure 三页
+│       ├── audio.rs            # retained audio path/status/open/reveal/delete helpers
+│       ├── config_actions.rs   # Configure editor/Finder launcher helpers
+│       ├── panes.rs            # 状态 / 历史 / Configure 渲染
+│       ├── settings.rs         # Configure inventory row adapter
+│       └── keybindings.rs      # Tab/Shift-Tab + 1/2/3 翻页；page-specific actions
 ├── assets/
+│   ├── config/                 # official config templates + manifest
 │   └── i18n/
-│       ├── zh-CN.toml          # 默认中文
-│       └── en-US.toml          # 默认英文
+│       ├── zh-CN.toml
+│       └── en-US.toml
 └── build.rs                    # 链接 AppKit / AudioToolbox / ApplicationServices；嵌入 i18n toml
 ```
 

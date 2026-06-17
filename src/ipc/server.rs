@@ -3,7 +3,8 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -186,9 +187,19 @@ fn spawn_state_forwarder(
     });
 }
 
+static LAST_QUEUE_FULL_WARN: Mutex<Option<Instant>> = Mutex::new(None);
+
 fn send_or_drop(tx: &mpsc::Sender<Event>, event: Event) {
     if tx.try_send(event).is_err() {
-        tracing::warn!("IPC client queue full");
+        // Throttle: the queue stays full across many consecutive sends,
+        // so warn at most once per second to avoid flooding the log.
+        let mut last = LAST_QUEUE_FULL_WARN.lock().unwrap();
+        let now = Instant::now();
+        let should_warn = last.map_or(true, |t| now.duration_since(t) > Duration::from_secs(1));
+        if should_warn {
+            tracing::warn!("IPC client queue full");
+            *last = Some(now);
+        }
         let _ = tx.try_send(Event::Error {
             recording_id: None,
             kind: "lag".to_string(),

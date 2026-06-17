@@ -6,7 +6,7 @@ use ratatui::Frame;
 
 use crate::ipc::protocol::WireState;
 use crate::state::SessionPhase;
-use crate::tui::{App, HistoryDetail, Page};
+use crate::tui::{App, Confirm, HistoryDetail, Page};
 
 pub fn render(frame: &mut Frame, app: &App) {
     let root = Layout::default()
@@ -39,17 +39,27 @@ pub fn render(frame: &mut Frame, app: &App) {
         Page::Settings => render_settings(frame, app, root[1]),
     }
 
-    frame.render_widget(
-        Paragraph::new(crate::t!("tui.footer", status = app.status.clone())),
-        root[2],
-    );
+    frame.render_widget(Paragraph::new(footer_text(app)), root[2]);
+}
+
+fn footer_text(app: &App) -> String {
+    let page_keys = match app.page {
+        Page::Status => crate::t!("tui.footer_status"),
+        Page::History => crate::t!("tui.footer_history"),
+        Page::Settings => crate::t!("tui.footer_settings"),
+    };
+    crate::t!(
+        "tui.footer",
+        page_keys = page_keys,
+        status = app.status.clone()
+    )
 }
 
 fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),
+            Constraint::Length(6),
             Constraint::Length(6),
             Constraint::Min(5),
         ])
@@ -72,26 +82,7 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .as_ref()
         .map(|meta| meta.chain.as_str())
         .unwrap_or("-");
-    let header = vec![
-        Line::from(vec![
-            Span::styled(
-                format!("{:<10}", status_label(app)),
-                Style::default()
-                    .fg(phase_color(app))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::raw(format!("{app_label} ({bundle})")),
-        ]),
-        Line::from(vec![
-            Span::styled("id ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{}  ", recording_id_label(app))),
-            Span::styled("duration ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{}  ", format_duration(elapsed_ms))),
-            Span::styled("words ", Style::default().fg(Color::DarkGray)),
-            Span::raw(app.words.to_string()),
-        ]),
-    ];
+    let header = status_header_lines(app, &app_label, &bundle, provider, chain, elapsed_ms);
     frame.render_widget(
         Paragraph::new(header).block(
             Block::default()
@@ -124,6 +115,44 @@ fn render_status(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         ),
         chunks[2],
     );
+}
+
+fn status_header_lines(
+    app: &App,
+    app_label: &str,
+    bundle: &str,
+    provider: &str,
+    chain: &str,
+    elapsed_ms: u64,
+) -> Vec<Line<'static>> {
+    vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{:<10}", status_label(app)),
+                Style::default()
+                    .fg(phase_color(app))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            label_span(" app "),
+            value_span(app_label.to_string(), Color::Cyan),
+            label_span(" bundle "),
+            value_span(bundle.to_string(), Color::DarkGray),
+        ]),
+        Line::from(vec![
+            label_span("id "),
+            value_span(recording_id_label(app), Color::Blue),
+            label_span(" duration "),
+            value_span(format_duration(elapsed_ms), Color::Yellow),
+            label_span(" words "),
+            value_span(app.words.to_string(), Color::Green),
+        ]),
+        Line::from(vec![
+            label_span("asr "),
+            value_span(provider.to_string(), Color::Blue),
+            label_span(" chain "),
+            value_span(chain.to_string(), Color::Magenta),
+        ]),
+    ]
 }
 
 fn recording_id_label(app: &App) -> String {
@@ -353,18 +382,7 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         format!("/{}", app.search)
     };
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(search),
-            Line::from(crate::t!(
-                "tui.history_stats_line",
-                shown = summary.shown,
-                total = summary.total,
-                duration = format_duration(summary.total_duration_ms),
-                words = summary.total_words,
-                avg = format_duration(summary.avg_duration_ms),
-            )),
-        ])
-        .block(
+        Paragraph::new(vec![Line::from(search), history_stats_line(&summary)]).block(
             Block::default()
                 .title(crate::t!("tui.history_stats"))
                 .borders(Borders::ALL),
@@ -381,19 +399,7 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .iter()
         .enumerate()
         .map(|(idx, record)| {
-            let marker = if idx == app.selected_history {
-                "> "
-            } else {
-                "  "
-            };
-            let app_name = short_app_label(record.app.as_deref());
-            ListItem::new(format!(
-                "{marker}{:<19}  {:<12}  {:>8}  {}",
-                format_local_time(record.started_at),
-                app_name,
-                format_duration(record.duration_ms),
-                record.text.replace('\n', " ")
-            ))
+            ListItem::new(history_list_line(app, record, idx == app.selected_history))
         })
         .collect();
     frame.render_widget(
@@ -407,8 +413,21 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
     let selected = records
         .get(app.selected_history)
-        .map(|record| history_detail_text(record, app.history_detail))
-        .unwrap_or_else(|| crate::t!("tui.no_history_selected"));
+        .map(|record| history_detail_text(app, record, app.history_detail))
+        .unwrap_or_else(|| vec![Line::from(crate::t!("tui.no_history_selected"))]);
+    let selected = if let Some(confirm) = &app.confirm {
+        let mut lines = vec![Line::styled(
+            confirm_text(confirm),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )];
+        lines.push(Line::from(""));
+        lines.extend(selected);
+        lines
+    } else {
+        selected
+    };
     frame.render_widget(
         Paragraph::new(selected).wrap(Wrap { trim: false }).block(
             Block::default()
@@ -419,88 +438,267 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     );
 }
 
-fn history_detail_title(detail: HistoryDetail) -> &'static str {
+fn history_stats_line(summary: &HistorySummary) -> Line<'static> {
+    Line::from(vec![
+        label_span("records "),
+        value_span(summary.shown.to_string(), Color::Cyan),
+        label_span(" shown / "),
+        value_span(summary.total.to_string(), Color::Cyan),
+        label_span(" total    duration "),
+        value_span(format_duration(summary.total_duration_ms), Color::Yellow),
+        label_span("    words "),
+        value_span(summary.total_words.to_string(), Color::Green),
+        label_span("    avg "),
+        value_span(format_duration(summary.avg_duration_ms), Color::Yellow),
+    ])
+}
+
+fn history_list_line(
+    app: &App,
+    record: &crate::state::history::HistoryRecord,
+    selected: bool,
+) -> Line<'static> {
+    let marker = if selected { "> " } else { "  " };
+    let audio = history_audio_marker(app, record);
+    let audio_color = if app.audio_info_for_record(record).exists() {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
+    Line::from(vec![
+        Span::styled(
+            marker.to_string(),
+            Style::default()
+                .fg(if selected {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                })
+                .add_modifier(if selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ),
+        Span::styled(
+            format!("{:<19}", format_local_time(record.started_at)),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!(
+                "{:<10}",
+                truncate_display(&short_app_label(record.app.as_deref()), 10)
+            ),
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!("{:>5}", format_duration(record.duration_ms)),
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::raw(" "),
+        Span::styled(format!("{audio:<1}"), Style::default().fg(audio_color)),
+        Span::raw(" "),
+        Span::raw(record.text.replace('\n', " ")),
+    ])
+}
+
+fn history_detail_title(detail: HistoryDetail) -> String {
     match detail {
-        HistoryDetail::Final => "final",
-        HistoryDetail::Asr => "asr raw",
-        HistoryDetail::Pipeline => "pipeline",
-        HistoryDetail::Sessions => "sessions",
-        HistoryDetail::Error => "error",
-        HistoryDetail::Json => "json",
+        HistoryDetail::Details => crate::t!("tui.history.detail.details"),
+        HistoryDetail::Asr => crate::t!("tui.history.detail.asr"),
+        HistoryDetail::Pipeline => crate::t!("tui.history.detail.pipeline"),
+        HistoryDetail::Sessions => crate::t!("tui.history.detail.sessions"),
+        HistoryDetail::Error => crate::t!("tui.history.detail.error"),
+        HistoryDetail::Json => crate::t!("tui.history.detail.json"),
     }
 }
 
 fn history_detail_text(
+    app: &App,
     record: &crate::state::history::HistoryRecord,
     detail: HistoryDetail,
-) -> String {
+) -> Vec<Line<'static>> {
     match detail {
-        HistoryDetail::Final => format!(
-            "status: {:?}\napp: {}\nstarted: {}\nduration: {}\nwords: {}\nasr: {}  audio {}\npipeline: {}\n\n{}",
-            record.status,
-            short_app_label(record.app.as_deref()),
-            format_local_time(record.started_at),
-            format_duration(record.duration_ms),
-            record.text_stats().words,
-            record.asr.provider,
-            format_duration(record.asr.audio_ms),
-            pipeline_summary(record),
-            record.text
-        ),
-        HistoryDetail::Asr => format!(
+        HistoryDetail::Details => history_details_lines(app, record),
+        HistoryDetail::Asr => text_lines(format!(
             "provider: {}\naudio: {}\nstarted: {}\n\n{}",
             record.asr.provider,
             format_duration(record.asr.audio_ms),
             format_local_time(record.started_at),
             record.asr.text
-        ),
+        )),
         HistoryDetail::Pipeline => {
             if record.pipeline.is_empty() {
-                return "no pipeline steps".to_string();
+                return vec![Line::from("no pipeline steps")];
             }
-            record
-                .pipeline
-                .iter()
-                .map(|step| {
-                    let body = step.text.as_deref().or(step.error.as_deref()).unwrap_or("");
-                    format!(
-                        "{}  {:?}  {:.1}ms\n{}",
-                        step.name, step.status, step.duration_ms, body
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n")
+            text_lines(
+                record
+                    .pipeline
+                    .iter()
+                    .map(|step| {
+                        let body = step.text.as_deref().or(step.error.as_deref()).unwrap_or("");
+                        format!(
+                            "{}  {:?}  {:.1}ms\n{}",
+                            step.name, step.status, step.duration_ms, body
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            )
         }
         HistoryDetail::Sessions => {
             if record.asr.sessions.is_empty() {
-                return "no ASR sessions".to_string();
+                return vec![Line::from("no ASR sessions")];
             }
-            record
-                .asr
-                .sessions
-                .iter()
-                .enumerate()
-                .map(|(idx, session)| {
-                    format!(
-                        "#{}  {} -> {}  audio {}\n{}",
-                        idx + 1,
-                        format_local_time(session.started_at),
-                        format_local_time(session.ended_at),
-                        format_duration(session.audio_ms),
-                        session.text
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n")
+            text_lines(
+                record
+                    .asr
+                    .sessions
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, session)| {
+                        format!(
+                            "#{}  {} -> {}  audio {}\n{}",
+                            idx + 1,
+                            format_local_time(session.started_at),
+                            format_local_time(session.ended_at),
+                            format_duration(session.audio_ms),
+                            session.text
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            )
         }
-        HistoryDetail::Error => record
-            .error
-            .as_ref()
-            .map(|error| format!("{}: {}", error.kind, error.msg))
-            .unwrap_or_else(|| "no error".to_string()),
-        HistoryDetail::Json => serde_json::to_string_pretty(record)
-            .unwrap_or_else(|e| format!("failed to render json: {e}")),
+        HistoryDetail::Error => text_lines(
+            record
+                .error
+                .as_ref()
+                .map(|error| format!("{}: {}", error.kind, error.msg))
+                .unwrap_or_else(|| "no error".to_string()),
+        ),
+        HistoryDetail::Json => text_lines(
+            serde_json::to_string_pretty(record)
+                .unwrap_or_else(|e| format!("failed to render json: {e}")),
+        ),
     }
+}
+
+fn history_audio_marker(app: &App, record: &crate::state::history::HistoryRecord) -> String {
+    if app.audio_info_for_record(record).exists() {
+        crate::t!("tui.history.audio.present_short")
+    } else {
+        crate::t!("tui.history.audio.missing_short")
+    }
+}
+
+fn history_details_lines(
+    app: &App,
+    record: &crate::state::history::HistoryRecord,
+) -> Vec<Line<'static>> {
+    let info = app.audio_info_for_record(record);
+    let status = if info.exists() {
+        crate::t!("tui.history.audio.present")
+    } else {
+        crate::t!("tui.history.audio.missing")
+    };
+    let size = info
+        .size_bytes
+        .map(format_bytes)
+        .unwrap_or_else(|| "-".to_string());
+    let modified = info
+        .modified
+        .map(format_system_time)
+        .unwrap_or_else(|| "-".to_string());
+    let mut lines = vec![
+        kv_line("status", format!("{:?}", record.status), Color::Green),
+        kv_line("app", short_app_label(record.app.as_deref()), Color::Cyan),
+        kv_line(
+            "started",
+            format_local_time(record.started_at),
+            Color::White,
+        ),
+        kv_line(
+            "duration",
+            format_duration(record.duration_ms),
+            Color::Yellow,
+        ),
+        kv_line("words", record.text_stats().words.to_string(), Color::Cyan),
+        kv_line("asr", record.asr.provider.clone(), Color::Blue),
+        kv_line("pipeline", pipeline_summary(record), Color::White),
+        kv_line(
+            "audio",
+            status,
+            if info.exists() {
+                Color::Green
+            } else {
+                Color::DarkGray
+            },
+        ),
+        kv_line(crate::t!("tui.history.audio.size"), size, Color::White),
+        kv_line(crate::t!("tui.history.audio.mtime"), modified, Color::White),
+        Line::from(""),
+        kv_line("text", "", Color::White),
+    ];
+    lines.extend(text_lines(record.text.clone()));
+    lines
+}
+
+fn confirm_text(confirm: &Confirm) -> String {
+    match confirm {
+        Confirm::DeleteAudio { record_id } => {
+            crate::t!("tui.confirm.delete_audio_detail", id = record_id)
+        }
+    }
+}
+
+fn kv_line(label: impl Into<String>, value: impl Into<String>, color: Color) -> Line<'static> {
+    Line::from(vec![
+        label_span(format!("{}: ", label.into())),
+        value_span(value.into(), color),
+    ])
+}
+
+fn label_span(text: impl Into<String>) -> Span<'static> {
+    Span::styled(text.into(), Style::default().fg(Color::DarkGray))
+}
+
+fn value_span(text: impl Into<String>, color: Color) -> Span<'static> {
+    Span::styled(text.into(), Style::default().fg(color))
+}
+
+fn text_lines(text: String) -> Vec<Line<'static>> {
+    text.lines()
+        .map(|line| Line::from(line.to_string()))
+        .collect()
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let bytes_f = bytes as f64;
+    if bytes_f >= GIB {
+        format!("{:.1} GiB", bytes_f / GIB)
+    } else if bytes_f >= MIB {
+        format!("{:.1} MiB", bytes_f / MIB)
+    } else if bytes_f >= KIB {
+        format!("{:.1} KiB", bytes_f / KIB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn format_system_time(value: std::time::SystemTime) -> String {
+    let Ok(duration) = value.duration_since(std::time::UNIX_EPOCH) else {
+        return "-".to_string();
+    };
+    let Ok(datetime) = time::OffsetDateTime::from_unix_timestamp(duration.as_secs() as i64) else {
+        return "-".to_string();
+    };
+    format_local_time(datetime)
 }
 
 fn pipeline_summary(record: &crate::state::history::HistoryRecord) -> String {
@@ -520,6 +718,15 @@ fn short_app_label(app: Option<&str>) -> String {
         return "-".to_string();
     };
     app.rsplit('.').next().unwrap_or(app).to_string()
+}
+
+fn truncate_display(value: &str, max_chars: usize) -> String {
+    let mut out = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars && max_chars > 0 {
+        out.pop();
+        out.push('…');
+    }
+    out
 }
 
 struct HistorySummary {
@@ -693,6 +900,42 @@ mod tests {
     fn short_app_label_uses_bundle_tail() {
         assert_eq!(short_app_label(Some("com.mitchellh.ghostty")), "ghostty");
         assert_eq!(short_app_label(None), "-");
+    }
+
+    #[test]
+    fn truncate_display_marks_long_values() {
+        assert_eq!(truncate_display("Ghostty", 9), "Ghostty");
+        assert_eq!(truncate_display("Ghostty", 10), "Ghostty");
+        assert_eq!(truncate_display("VeryLongApp", 9), "VeryLong…");
+    }
+
+    #[test]
+    fn footer_only_shows_history_actions_on_history_page() {
+        crate::i18n::init("en-US");
+        let mut app = App::new();
+        app.page = Page::Status;
+        assert!(!footer_text(&app).contains("open audio"));
+
+        app.page = Page::History;
+        assert!(footer_text(&app).contains("open audio"));
+    }
+
+    #[test]
+    fn status_header_includes_colored_asr_metadata() {
+        crate::i18n::init("en-US");
+        let app = App::new();
+
+        let lines = status_header_lines(&app, "Ghostty", "com.mitchellh.ghostty", "apple", "-", 0);
+        let text = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.contains("Ghostty"));
+        assert!(text.contains("asr apple"));
+        assert!(text.contains("chain -"));
+        assert_eq!(lines.len(), 3);
     }
 
     #[test]

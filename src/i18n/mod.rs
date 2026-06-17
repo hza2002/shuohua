@@ -138,4 +138,28 @@ mod tests {
             "filler failed, skipped"
         );
     }
+
+    #[test]
+    fn zh_cn_and_en_us_keys_match() {
+        let zh = load_dict(Lang::ZhCN);
+        let en = load_dict(Lang::EnUS);
+
+        let mut zh_only = zh
+            .entries
+            .keys()
+            .filter(|key| !en.entries.contains_key(*key))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut en_only = en
+            .entries
+            .keys()
+            .filter(|key| !zh.entries.contains_key(*key))
+            .cloned()
+            .collect::<Vec<_>>();
+        zh_only.sort();
+        en_only.sort();
+
+        assert!(zh_only.is_empty(), "zh-CN only keys: {zh_only:?}");
+        assert!(en_only.is_empty(), "en-US only keys: {en_only:?}");
+    }
 }

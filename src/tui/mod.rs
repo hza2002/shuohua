@@ -1,7 +1,9 @@
+pub mod audio;
 pub mod keybindings;
 pub mod panes;
 pub mod settings;
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -38,7 +40,7 @@ impl Page {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryDetail {
-    Final,
+    Details,
     Asr,
     Pipeline,
     Sessions,
@@ -49,19 +51,19 @@ pub enum HistoryDetail {
 impl HistoryDetail {
     fn next(self) -> Self {
         match self {
-            Self::Final => Self::Asr,
+            Self::Details => Self::Asr,
             Self::Asr => Self::Pipeline,
             Self::Pipeline => Self::Sessions,
             Self::Sessions => Self::Error,
             Self::Error => Self::Json,
-            Self::Json => Self::Final,
+            Self::Json => Self::Details,
         }
     }
 
     fn prev(self) -> Self {
         match self {
-            Self::Final => Self::Json,
-            Self::Asr => Self::Final,
+            Self::Details => Self::Json,
+            Self::Asr => Self::Details,
             Self::Pipeline => Self::Asr,
             Self::Sessions => Self::Pipeline,
             Self::Error => Self::Sessions,
@@ -94,6 +96,14 @@ pub struct App {
     pub status: String,
     pub config_path: String,
     pub settings_rows: Vec<settings::SettingsRow>,
+    pub meter_width: usize,
+    pub audio_cache: HashMap<String, audio::AudioInfo>,
+    pub confirm: Option<Confirm>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Confirm {
+    DeleteAudio { record_id: String },
 }
 
 impl App {
@@ -117,12 +127,15 @@ impl App {
             meters: Vec::new(),
             history: Vec::new(),
             selected_history: 0,
-            history_detail: HistoryDetail::Final,
+            history_detail: HistoryDetail::Details,
             search: String::new(),
             searching: false,
             status: "connected".to_string(),
             config_path: config_path.display().to_string(),
             settings_rows,
+            meter_width: 160,
+            audio_cache: HashMap::new(),
+            confirm: None,
         }
     }
 
@@ -231,9 +244,9 @@ impl App {
                     .push(format!("{name} {status} {duration_ms:.1}ms  {detail}"));
             }
             Event::AudioMeter { meter, .. } => {
-                self.meters.push(meter);
-                if self.meters.len() > 160 {
-                    self.meters.drain(..self.meters.len() - 160);
+                if self.page == Page::Status {
+                    self.meters.push(meter);
+                    trim_meters_to_capacity(&mut self.meters);
                 }
             }
             Event::SessionMeta { meta, .. } => {
@@ -243,6 +256,7 @@ impl App {
                 self.session_phase = Some(phase);
             }
             Event::HistoryAppended { record } => {
+                self.refresh_audio_cache_for_record(&record);
                 self.history.insert(0, *record);
                 self.selected_history = self
                     .selected_history
@@ -250,6 +264,7 @@ impl App {
             }
             Event::History { records } => {
                 self.history = records;
+                self.refresh_audio_cache_for_history();
                 self.selected_history = 0;
             }
             Event::DaemonStatus { .. } => {}
@@ -261,6 +276,38 @@ impl App {
             }
         }
     }
+
+    fn refresh_audio_cache_for_history(&mut self) {
+        self.audio_cache.clear();
+        let records = self.history.clone();
+        for record in &records {
+            self.refresh_audio_cache_for_record(record);
+        }
+    }
+
+    fn refresh_audio_cache_for_record(&mut self, record: &HistoryRecord) {
+        self.audio_cache
+            .insert(record.id.clone(), audio::audio_info_for_record(record));
+    }
+
+    pub fn audio_info_for_record(&self, record: &HistoryRecord) -> audio::AudioInfo {
+        self.audio_cache
+            .get(&record.id)
+            .cloned()
+            .unwrap_or_else(|| audio::missing_audio_info_for_record(record))
+    }
+}
+
+const MAX_METER_HISTORY: usize = 1024;
+
+fn trim_meters_to_capacity(meters: &mut Vec<crate::state::AudioMeter>) {
+    if meters.len() > MAX_METER_HISTORY {
+        meters.drain(..meters.len() - MAX_METER_HISTORY);
+    }
+}
+
+fn meter_capacity_for_terminal_width(width: u16) -> usize {
+    (width.saturating_sub(11).max(16) as usize).min(MAX_METER_HISTORY)
 }
 
 fn parse_time(value: Option<&str>) -> Option<time::OffsetDateTime> {
@@ -299,30 +346,40 @@ pub async fn run() -> Result<()> {
     });
 
     let mut app = App::new();
-    let mut tick = tokio::time::interval(Duration::from_millis(100));
     loop {
+        app.meter_width = terminal
+            .size()
+            .map(|area| meter_capacity_for_terminal_width(area.width))
+            .unwrap_or(160);
         terminal.draw(|frame| panes::render(frame, &app))?;
-        tokio::select! {
-            _ = tick.tick() => {}
-            maybe_key = key_rx.recv() => {
-                let Some(key) = maybe_key else { break; };
-                if handle_key(&mut app, key)? {
-                    break;
+
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_millis(crate::voice::meter::METER_INTERVAL_MS);
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep_until(deadline) => break,
+                maybe_key = key_rx.recv() => {
+                    let Some(key) = maybe_key else { return Ok(()); };
+                    if handle_key(&mut app, key)? {
+                        return Ok(());
+                    }
                 }
-            }
-            event = client.recv() => {
-                match event.context("read IPC event")? {
-                    Some(event) => app.apply_event(event),
-                    None => break,
+                event = client.recv() => {
+                    match event.context("read IPC event")? {
+                        Some(e) => app.apply_event(e),
+                        None => return Ok(()),
+                    }
                 }
             }
         }
     }
-    Ok(())
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
     use keybindings::Action;
+    if handle_confirm_key(app, key)? {
+        return Ok(false);
+    }
     match keybindings::action_for(key, app.searching) {
         Action::Quit => return Ok(true),
         Action::NextPage => {
@@ -330,16 +387,23 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 Page::Status => Page::History,
                 Page::History => Page::Settings,
                 Page::Settings => Page::Status,
-            }
+            };
+            on_page_changed(app);
         }
         Action::PrevPage => {
             app.page = match app.page {
                 Page::Status => Page::Settings,
                 Page::History => Page::Status,
                 Page::Settings => Page::History,
+            };
+            on_page_changed(app);
+        }
+        Action::SetPage(page) => {
+            if app.page != page {
+                app.page = page;
+                on_page_changed(app);
             }
         }
-        Action::SetPage(page) => app.page = page,
         Action::MoveDown => {
             let len = app.filtered_history().len();
             if len > 0 {
@@ -373,6 +437,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             app.search.clear();
             app.searching = false;
             app.selected_history = 0;
+            app.confirm = None;
         }
         Action::SearchChar(ch) => {
             app.search.push(ch);
@@ -406,9 +471,108 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 }
             }
         }
+        Action::OpenAudio => run_audio_action(app, audio::open_audio, "tui.history.audio.opening"),
+        Action::RevealAudio => {
+            run_audio_action(app, audio::reveal_audio, "tui.history.audio.revealing")
+        }
+        Action::DeleteAudio => {
+            if app.page == Page::History {
+                if let Some(record_id) =
+                    selected_history_record(app).map(|record| record.id.clone())
+                {
+                    let info = selected_history_record(app)
+                        .map(|record| app.audio_info_for_record(record))
+                        .expect("selected record exists");
+                    if info.exists() {
+                        app.confirm = Some(Confirm::DeleteAudio { record_id });
+                        app.status = crate::t!("tui.confirm.delete_audio");
+                    } else {
+                        app.status = crate::t!("tui.history.audio.missing_status");
+                    }
+                }
+            }
+        }
         Action::None => {}
     }
     Ok(false)
+}
+
+fn on_page_changed(app: &mut App) {
+    if app.page == Page::Status {
+        app.meters.clear();
+    }
+}
+
+fn handle_confirm_key(app: &mut App, key: KeyEvent) -> Result<bool> {
+    use crossterm::event::{KeyCode, KeyEventKind};
+    if key.kind != KeyEventKind::Press || app.confirm.is_none() {
+        return Ok(false);
+    }
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => {
+            confirm_yes(app)?;
+            Ok(true)
+        }
+        KeyCode::Char('n') | KeyCode::Esc => {
+            app.confirm = None;
+            app.status = crate::t!("tui.confirm.cancelled");
+            Ok(true)
+        }
+        _ => Ok(true),
+    }
+}
+
+fn confirm_yes(app: &mut App) -> Result<()> {
+    let Some(confirm) = app.confirm.take() else {
+        return Ok(());
+    };
+    match confirm {
+        Confirm::DeleteAudio { record_id } => {
+            let Some(record) = app.history.iter().find(|record| record.id == record_id) else {
+                app.status = crate::t!("tui.history.audio.record_missing");
+                return Ok(());
+            };
+            let path = audio::audio_path_for_record(record);
+            match audio::delete_audio_path(&path)? {
+                audio::DeleteAudioResult::Deleted => {
+                    let info = audio::missing_audio_info_for_record(record);
+                    app.audio_cache.insert(record.id.clone(), info);
+                    app.status = crate::t!("tui.history.audio.deleted", path = path.display());
+                }
+                audio::DeleteAudioResult::Missing => {
+                    let info = audio::missing_audio_info_for_record(record);
+                    app.audio_cache.insert(record.id.clone(), info);
+                    app.status = crate::t!("tui.history.audio.missing_status");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_audio_action(app: &mut App, action: fn(&std::path::Path) -> Result<()>, status_key: &str) {
+    if app.page != Page::History {
+        return;
+    }
+    let Some(record) = selected_history_record(app) else {
+        app.status = crate::t!("tui.no_history_selected");
+        return;
+    };
+    let info = app.audio_info_for_record(record);
+    if !info.exists() {
+        app.status = crate::t!("tui.history.audio.missing_status");
+        return;
+    }
+    match action(&info.path) {
+        Ok(()) => {
+            app.status = crate::i18n::tr(status_key, &[("path", info.path.display().to_string())])
+        }
+        Err(e) => app.status = crate::t!("tui.error.audio_action", error = e),
+    }
+}
+
+fn selected_history_record(app: &App) -> Option<&HistoryRecord> {
+    app.filtered_history().get(app.selected_history).copied()
 }
 
 struct TerminalGuard;
@@ -425,5 +589,38 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
         let _ = disable_raw_mode();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn meter(peak: f32) -> AudioMeter {
+        AudioMeter {
+            rms: peak,
+            peak,
+            clipped: false,
+            vad_probability: None,
+            vad_speech: None,
+        }
+    }
+
+    #[test]
+    fn trim_meters_to_capacity_keeps_large_tail() {
+        let mut meters = (0..1100).map(|idx| meter(idx as f32)).collect::<Vec<_>>();
+
+        trim_meters_to_capacity(&mut meters);
+
+        assert_eq!(meters.len(), MAX_METER_HISTORY);
+        assert_eq!(meters.first().unwrap().peak, 76.0);
+        assert_eq!(meters.last().unwrap().peak, 1099.0);
+    }
+
+    #[test]
+    fn meter_capacity_tracks_terminal_width_with_minimum_and_4k_cap() {
+        assert_eq!(meter_capacity_for_terminal_width(200), 189);
+        assert_eq!(meter_capacity_for_terminal_width(20), 16);
+        assert_eq!(meter_capacity_for_terminal_width(3840), MAX_METER_HISTORY);
     }
 }

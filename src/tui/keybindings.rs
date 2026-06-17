@@ -21,6 +21,9 @@ pub enum Action {
     Backspace,
     CopySelected,
     CopySelectedRaw,
+    OpenAudio,
+    RevealAudio,
+    DeleteAudio,
     None,
 }
 
@@ -57,6 +60,35 @@ pub fn action_for(key: KeyEvent, searching: bool) -> Action {
         KeyCode::Esc => Action::ClearSearch,
         KeyCode::Enter | KeyCode::Char('y') => Action::CopySelected,
         KeyCode::Char('Y') => Action::CopySelectedRaw,
+        KeyCode::Char('o') => Action::OpenAudio,
+        KeyCode::Char('r') => Action::RevealAudio,
+        KeyCode::Char('d') => Action::DeleteAudio,
         _ => Action::None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn audio_shortcuts_are_open_reveal_and_delete_only() {
+        assert_eq!(
+            action_for(press(KeyCode::Char('o')), false),
+            Action::OpenAudio
+        );
+        assert_eq!(
+            action_for(press(KeyCode::Char('r')), false),
+            Action::RevealAudio
+        );
+        assert_eq!(
+            action_for(press(KeyCode::Char('d')), false),
+            Action::DeleteAudio
+        );
+        assert_eq!(action_for(press(KeyCode::Char('p')), false), Action::None);
     }
 }

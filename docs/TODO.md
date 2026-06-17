@@ -1,5 +1,10 @@
 # TODO
 
+## TUI
+
+- Follow [TUI_PLAN.md](TUI_PLAN.md) for Status, History, i18n, and Configure
+  work. Start with Phase 1 and Phase 2 before touching Configure.
+
 ## Configuration
 
 - Move overlay visual parameters into a theme system:
@@ -10,7 +15,5 @@
   the default user config.
 - Add `doctor` reporting for retained audio: total size, file count, oldest and
   newest recording.
-- Add TUI history actions for retained audio: play, reveal, delete one item, and
-  clean by age or size.
 - Add a TUI or overlay-assisted route workflow for assigning the current app
-  bundle id to a profile.
+  bundle id to a profile. See [TUI_PLAN.md](TUI_PLAN.md) Phase 7.

@@ -4,6 +4,10 @@ const SAMPLE_RATE: usize = 16_000;
 const WINDOW_MS: usize = 50;
 const WINDOW_SAMPLES: usize = SAMPLE_RATE * WINDOW_MS / 1000;
 
+/// Interval at which `AudioMeter` events are emitted, in milliseconds.
+/// The TUI render tick should match this to avoid wasted frames.
+pub const METER_INTERVAL_MS: u64 = WINDOW_MS as u64;
+
 #[derive(Debug, Clone)]
 pub struct MeterCollector {
     sum_squares: f64,

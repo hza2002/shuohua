@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-17 - First TUI status/history audio pass
+
+- Added the first usable TUI retained-audio workflow: History derives audio paths from `state_dir()/audio/<recording_id>.wav`, shows cached audio status, opens audio files, reveals them in Finder, and deletes one `.wav` with confirmation without touching history JSONL.
+- Reworked History presentation with colored stats/list/details, page-specific footer shortcuts, inline audio metadata in `History details`, and minimal zh-CN/en-US i18n coverage with key-alignment tests.
+- Made Status meter width responsive and aligned TUI rendering to the 50ms audio meter cadence while draining IPC/key events between frames, fixing the previous audio-meter backlog that could fill the IPC client queue.
+- Added 1s throttling for `IPC client queue full` warnings so abnormal client backpressure stays diagnosable without flooding logs.
+- Observed that occasional Recording → Idle pauses can still happen before the Idle UI update because VAD pause must finalize the current ASR session first; logs/traces point to provider finalize/open tail latency rather than TUI rendering.
+
 ## 2026-06-17 - Doubao wire protocol corrected to sequenced frames
 
 - Switched Doubao `bigmodel_async` client framing from "no-sequence + LastNoSeq(0x02)" to "PositiveSeq for every frame + NegativeSeq end frame with negated sequence".

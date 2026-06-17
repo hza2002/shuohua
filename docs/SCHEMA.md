@@ -176,7 +176,8 @@ ${XDG_STATE_HOME:-~/.local/state}/shuohua/audio/<recording_id>.wav
 - **一次 recording = 一个 wav**，含静音段。段边界从 `history.asr.sessions[].started_at/ended_at` 时间戳切分（`ffmpeg -ss <start> -t <dur>` 重放某段，零信息丢失）。M10 后相邻 session 可因 pre-roll overlap 重叠；按各自时间戳切分即可复现 provider input。
 - **关闭路径 (`record_audio = false`, 默认)** 完全跳过写入逻辑：cpal callback 拿到 PCM 直接喂 ASR，不复制一份到落盘 buffer。
 - **写入失败**：跟 history JSONL 同语义——写 daemon 诊断日志 + UDS `error` 事件，daemon 不崩，这次录音不留 wav，下次继续尝试。
-- **不存 history 字段**：路径完全由 ULID + 目录约定推出，无需在 history record 加 `audio_path`。文件不存在 = `record_audio` 当时是 false（或写失败）。
+- **不存 history 字段**：路径完全由 ULID + 目录约定推出，无需在 history record 加 `audio_path`。文件不存在 = `record_audio` 当时是 false、写失败，或之后被 TUI/用户删除。
+- **删除语义**：TUI 删除 retained audio 时只删除对应 `.wav`，不重写、不追加、不删除 history JSONL。history 文本记录和音频文件是两个独立资源，用 recording id join。
 
 ---
 

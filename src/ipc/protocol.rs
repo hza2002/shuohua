@@ -199,7 +199,7 @@ mod tests {
             recording_id: "01HXYZ".to_string(),
             meta: SessionMeta {
                 provider: "doubao".to_string(),
-                chain: "rule:filler → llm:deepseek".to_string(),
+                chain: "rule:zh_filter → llm:deepseek".to_string(),
                 vad: "silero".to_string(),
                 hotwords: 3,
             },

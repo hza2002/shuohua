@@ -1,6 +1,6 @@
 //! 文本后处理流水线（DESIGN §2.10）。
 //!
-//! M2.5 只装一个内置 processor [`RuleBasedFiller`]（去口语词）。M7 再加 LLM 清洗
+//! M2.5 只装一个内置 processor [`ZhFilter`]（去口语词）。M7 再加 LLM 清洗
 //! 和 per-app 链路配置。
 //!
 //! 数据契约：
@@ -13,14 +13,14 @@
 
 pub mod app_context;
 pub mod config;
-pub mod filler;
 pub mod llm;
+pub mod zh_filter;
 
 use async_trait::async_trait;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
-pub use filler::RuleBasedFiller;
+pub use zh_filter::ZhFilter;
 
 #[derive(Debug, Clone)]
 pub struct PipelineText {

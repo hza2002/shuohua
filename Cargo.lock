@@ -2830,7 +2830,6 @@ dependencies = [
  "os_pipe",
  "proptest",
  "ratatui",
- "regex",
  "reqwest",
  "serde",
  "serde_json",

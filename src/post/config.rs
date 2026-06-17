@@ -6,7 +6,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use toml::value::Table;
 
 use super::llm::{LlmCleanup, LlmCleanupConfig, ProviderFormat};
-use super::{PostProcessor, RuleBasedFiller};
+use super::{PostProcessor, ZhFilter};
 
 pub struct PostChain {
     pub name: String,
@@ -15,7 +15,7 @@ pub struct PostChain {
 
 #[derive(Debug, Clone)]
 pub struct PostDirs {
-    pub rules: PathBuf,
+    pub rule: PathBuf,
     pub llm: PathBuf,
 }
 
@@ -50,7 +50,7 @@ fn load_component(
         .split_once(':')
         .with_context(|| format!("post chain item {id:?} must be kind:name"))?;
     let path = match kind {
-        "rule" => dirs.rules.join(format!("{name}.toml")),
+        "rule" => dirs.rule.join(format!("{name}.toml")),
         "llm" => dirs.llm.join(format!("{name}.toml")),
         other => anyhow::bail!("unknown post component kind {other:?} in {id:?}"),
     };
@@ -121,7 +121,7 @@ impl ProcessorCfg {
         match self {
             ProcessorCfg::Rule { patterns } => {
                 let borrowed = patterns.iter().map(String::as_str).collect::<Vec<_>>();
-                Ok(Box::new(RuleBasedFiller::with_name(id, &borrowed)))
+                Ok(Box::new(ZhFilter::with_name(id, &borrowed)))
             }
             ProcessorCfg::Llm {
                 format,
@@ -263,7 +263,7 @@ prompt = "{{text}}"
         )
         .unwrap();
         let dirs = PostDirs {
-            rules: dir.join("rules"),
+            rule: dir.join("rule"),
             llm,
         };
 
@@ -287,12 +287,12 @@ prompt = "{{text}}"
     #[test]
     fn loads_rule_and_llm_components_from_post_dirs() {
         let dir = temp_dir();
-        let rules = dir.join("rules");
+        let rule = dir.join("rule");
         let llm = dir.join("llm");
-        fs::create_dir_all(&rules).unwrap();
+        fs::create_dir_all(&rule).unwrap();
         fs::create_dir_all(&llm).unwrap();
         fs::write(
-            rules.join("filler.toml"),
+            rule.join("zh_filter.toml"),
             r#"
 type = "rule"
 patterns = ["嗯", "啊"]
@@ -311,19 +311,45 @@ prompt = "{{text}}"
 "#,
         )
         .unwrap();
-        let dirs = PostDirs { rules, llm };
+        let dirs = PostDirs { rule, llm };
 
         let chain = load_components(
-            &["rule:filler".to_string(), "llm:deepseek".to_string()],
+            &["rule:zh_filter".to_string(), "llm:deepseek".to_string()],
             &dirs,
             &Table::new(),
         )
         .unwrap();
 
-        assert_eq!(chain.name, "rule:filler → llm:deepseek");
+        assert_eq!(chain.name, "rule:zh_filter → llm:deepseek");
         assert_eq!(chain.processors.len(), 2);
-        assert_eq!(chain.processors[0].name(), "rule:filler");
+        assert_eq!(chain.processors[0].name(), "rule:zh_filter");
         assert_eq!(chain.processors[1].name(), "llm:deepseek");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn loads_named_rule_component() {
+        let dir = temp_dir();
+        let rule = dir.join("rule");
+        fs::create_dir_all(&rule).unwrap();
+        fs::write(
+            rule.join("zh_filter.toml"),
+            r#"
+type = "rule"
+patterns = ["嗯", "呃", "啊"]
+"#,
+        )
+        .unwrap();
+        let dirs = PostDirs {
+            rule,
+            llm: dir.join("llm"),
+        };
+
+        let chain = load_components(&["rule:zh_filter".to_string()], &dirs, &Table::new()).unwrap();
+
+        assert_eq!(chain.name, "rule:zh_filter");
+        assert_eq!(chain.processors.len(), 1);
+        assert_eq!(chain.processors[0].name(), "rule:zh_filter");
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -354,7 +380,7 @@ prompt = "{{text}}"
             }),
         );
         let dirs = PostDirs {
-            rules: dir.join("rules"),
+            rule: dir.join("rule"),
             llm,
         };
 

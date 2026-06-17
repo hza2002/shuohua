@@ -118,7 +118,7 @@ fn push_asr_rows(rows: &mut Vec<SettingsRow>) {
 
 fn push_post_rows(rows: &mut Vec<SettingsRow>) {
     let dir = crate::post::config::default_dir();
-    for subdir in ["rules", "llm"] {
+    for subdir in ["rule", "llm"] {
         for path in toml_files(&dir.join(subdir)) {
             push_toml_summary(rows, "post", &path);
         }

@@ -341,7 +341,7 @@ async fn run_daemon(
                         let post_chain = match post::config::load_components(
                             &profile.post.chain,
                             &post::config::PostDirs {
-                                rules: post_dir.join("rules"),
+                                rule: post_dir.join("rule"),
                                 llm: post_dir.join("llm"),
                             },
                             &profile.post.llm,

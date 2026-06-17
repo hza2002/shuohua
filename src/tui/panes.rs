@@ -856,7 +856,15 @@ fn configure_rows(app: &App) -> String {
         crate::t!("tui.configure.no_entries")
     } else {
         rows.iter()
-            .map(|row| format!("{:<28} {:<32} {}", row.key, row.value, row.source))
+            .enumerate()
+            .map(|(idx, row)| {
+                let marker = if idx == app.selected_settings {
+                    ">"
+                } else {
+                    " "
+                };
+                format!("{marker} {:<28} {:<32} {}", row.key, row.value, row.source)
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }

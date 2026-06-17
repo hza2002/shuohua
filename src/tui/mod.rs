@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod config_actions;
 pub mod keybindings;
 pub mod panes;
 pub mod settings;
@@ -142,6 +143,7 @@ pub struct App {
     pub status: String,
     pub config_path: String,
     pub settings_rows: Vec<settings::SettingsRow>,
+    pub selected_settings: usize,
     pub configure_module: ConfigureModule,
     pub doctor: DoctorState,
     pub meter_width: usize,
@@ -188,6 +190,7 @@ impl App {
             status: "connected".to_string(),
             config_path: config_path.display().to_string(),
             settings_rows,
+            selected_settings: 0,
             configure_module: ConfigureModule::Overview,
             doctor: DoctorState {
                 ran_once: false,
@@ -331,6 +334,7 @@ impl App {
             Event::DaemonStatus { .. } => {}
             Event::ConfigReloaded { path } => {
                 self.status = format!("config reloaded: {path}");
+                self.refresh_configure();
             }
             Event::Error { kind, msg, .. } => {
                 self.status = format!("{kind}: {msg}");
@@ -356,6 +360,36 @@ impl App {
             .get(&record.id)
             .cloned()
             .unwrap_or_else(|| audio::missing_audio_info_for_record(record))
+    }
+
+    fn configure_rows_for_current_module(&self) -> Vec<&settings::SettingsRow> {
+        let module = self.configure_module.inventory_module();
+        self.settings_rows
+            .iter()
+            .filter(|row| row.group == module.label())
+            .collect()
+    }
+
+    fn selected_config_source(&self) -> Option<std::path::PathBuf> {
+        self.configure_rows_for_current_module()
+            .get(self.selected_settings)
+            .map(|row| std::path::PathBuf::from(&row.source))
+    }
+
+    fn config_directory(&self) -> Option<std::path::PathBuf> {
+        crate::config::default_path()
+            .parent()
+            .map(|path| path.to_path_buf())
+    }
+
+    fn clamp_selected_settings(&mut self) {
+        let len = self.configure_rows_for_current_module().len();
+        self.selected_settings = self.selected_settings.min(len.saturating_sub(1));
+    }
+
+    fn refresh_configure(&mut self) {
+        self.settings_rows = settings::load_rows();
+        self.clamp_selected_settings();
     }
 }
 
@@ -421,7 +455,7 @@ pub async fn run() -> Result<()> {
                 _ = tokio::time::sleep_until(deadline) => break,
                 maybe_key = key_rx.recv() => {
                     let Some(key) = maybe_key else { return Ok(()); };
-                    if handle_key(&mut app, key)? {
+                    if handle_key(&mut app, &mut client, key).await? {
                         return Ok(());
                     }
                 }
@@ -436,7 +470,7 @@ pub async fn run() -> Result<()> {
     }
 }
 
-fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
+async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Result<bool> {
     use keybindings::Action;
     if handle_confirm_key(app, key)? {
         return Ok(false);
@@ -466,24 +500,45 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             }
         }
         Action::MoveDown => {
-            let len = app.filtered_history().len();
-            if len > 0 {
-                app.selected_history = (app.selected_history + 1).min(len - 1);
+            if app.page == Page::Settings {
+                let len = app.configure_rows_for_current_module().len();
+                if len > 0 {
+                    app.selected_settings = (app.selected_settings + 1).min(len - 1);
+                }
+            } else {
+                let len = app.filtered_history().len();
+                if len > 0 {
+                    app.selected_history = (app.selected_history + 1).min(len - 1);
+                }
             }
         }
         Action::MoveUp => {
-            app.selected_history = app.selected_history.saturating_sub(1);
+            if app.page == Page::Settings {
+                app.selected_settings = app.selected_settings.saturating_sub(1);
+            } else {
+                app.selected_history = app.selected_history.saturating_sub(1);
+            }
         }
         Action::MoveTop => {
-            app.selected_history = 0;
+            if app.page == Page::Settings {
+                app.selected_settings = 0;
+            } else {
+                app.selected_history = 0;
+            }
         }
         Action::MoveBottom => {
-            let len = app.filtered_history().len();
-            app.selected_history = len.saturating_sub(1);
+            if app.page == Page::Settings {
+                let len = app.configure_rows_for_current_module().len();
+                app.selected_settings = len.saturating_sub(1);
+            } else {
+                let len = app.filtered_history().len();
+                app.selected_history = len.saturating_sub(1);
+            }
         }
         Action::NextDetail => {
             if app.page == Page::Settings {
                 app.configure_module = app.configure_module.next();
+                app.clamp_selected_settings();
                 maybe_run_doctor(app);
             } else {
                 app.history_detail = app.history_detail.next();
@@ -492,6 +547,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         Action::PrevDetail => {
             if app.page == Page::Settings {
                 app.configure_module = app.configure_module.prev();
+                app.clamp_selected_settings();
                 maybe_run_doctor(app);
             } else {
                 app.history_detail = app.history_detail.prev();
@@ -542,9 +598,19 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 }
             }
         }
-        Action::OpenAudio => run_audio_action(app, audio::open_audio, "tui.history.audio.opening"),
+        Action::OpenAudio => {
+            if app.page == Page::Settings {
+                run_config_action(app, config_actions::open_in_editor, "tui.configure.opening")
+            } else {
+                run_audio_action(app, audio::open_audio, "tui.history.audio.opening")
+            }
+        }
         Action::RevealAudio => {
-            run_audio_action(app, audio::reveal_audio, "tui.history.audio.revealing")
+            if app.page == Page::Settings {
+                run_config_reveal_action(app)
+            } else {
+                run_audio_action(app, audio::reveal_audio, "tui.history.audio.revealing")
+            }
         }
         Action::DeleteAudio => {
             if app.page == Page::History {
@@ -563,6 +629,20 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 }
             }
         }
+        Action::ValidateConfig => {
+            if app.page == Page::Settings {
+                app.refresh_configure();
+                app.doctor = run_doctor();
+                app.status = crate::t!("tui.configure.validated");
+            }
+        }
+        Action::ReloadConfig => {
+            if app.page == Page::Settings {
+                client.send(&Command::ReloadConfig).await?;
+                app.refresh_configure();
+                app.status = crate::t!("tui.configure.reload_requested");
+            }
+        }
         Action::None => {}
     }
     Ok(false)
@@ -573,7 +653,7 @@ fn on_page_changed(app: &mut App) {
         app.meters.clear();
     }
     if app.page == Page::Settings {
-        app.settings_rows = settings::load_rows();
+        app.refresh_configure();
         maybe_run_doctor(app);
     }
 }
@@ -685,6 +765,41 @@ fn run_audio_action(app: &mut App, action: fn(&std::path::Path) -> Result<()>, s
     }
 }
 
+fn run_config_action(app: &mut App, action: fn(&std::path::Path) -> Result<()>, status_key: &str) {
+    if app.page != Page::Settings {
+        return;
+    }
+    let Some(path) = app.selected_config_source() else {
+        app.status = crate::t!("tui.configure.no_config_selected");
+        return;
+    };
+    match action(&path) {
+        Ok(()) => {
+            app.status = crate::i18n::tr(status_key, &[("path", path.display().to_string())]);
+        }
+        Err(e) => app.status = crate::t!("tui.error.config_action", error = e),
+    }
+}
+
+fn run_config_reveal_action(app: &mut App) {
+    if app.page != Page::Settings {
+        return;
+    }
+    let Some(path) = app
+        .selected_config_source()
+        .or_else(|| app.config_directory())
+    else {
+        app.status = crate::t!("tui.configure.no_config_selected");
+        return;
+    };
+    match config_actions::reveal_in_finder(&path) {
+        Ok(()) => {
+            app.status = crate::t!("tui.configure.revealing", path = path.display());
+        }
+        Err(e) => app.status = crate::t!("tui.error.config_action", error = e),
+    }
+}
+
 fn selected_history_record(app: &App) -> Option<&HistoryRecord> {
     app.filtered_history().get(app.selected_history).copied()
 }
@@ -746,6 +861,39 @@ mod tests {
         assert_eq!(
             ConfigureModule::AsrProvider.inventory_module(),
             crate::config::inventory::InventoryModule::AsrProvider
+        );
+    }
+
+    #[test]
+    fn selected_config_source_tracks_current_module_row() {
+        let mut app = App::new();
+        app.configure_module = ConfigureModule::Main;
+        app.settings_rows = vec![
+            settings::SettingsRow {
+                group: "main".to_string(),
+                key: "config".to_string(),
+                value: "ok".to_string(),
+                source: "/tmp/shuohua/config.toml".to_string(),
+            },
+            settings::SettingsRow {
+                group: "asr".to_string(),
+                key: "apple.idle_pause".to_string(),
+                value: "true".to_string(),
+                source: "/tmp/shuohua/asr/apple.toml".to_string(),
+            },
+        ];
+        app.selected_settings = 0;
+
+        assert_eq!(
+            app.selected_config_source().unwrap(),
+            std::path::PathBuf::from("/tmp/shuohua/config.toml")
+        );
+
+        app.configure_module = ConfigureModule::AsrProvider;
+        app.clamp_selected_settings();
+        assert_eq!(
+            app.selected_config_source().unwrap(),
+            std::path::PathBuf::from("/tmp/shuohua/asr/apple.toml")
         );
     }
 }

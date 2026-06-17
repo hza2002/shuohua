@@ -24,6 +24,8 @@ pub enum Action {
     OpenAudio,
     RevealAudio,
     DeleteAudio,
+    ValidateConfig,
+    ReloadConfig,
     None,
 }
 
@@ -63,6 +65,8 @@ pub fn action_for(key: KeyEvent, searching: bool) -> Action {
         KeyCode::Char('o') => Action::OpenAudio,
         KeyCode::Char('r') => Action::RevealAudio,
         KeyCode::Char('d') => Action::DeleteAudio,
+        KeyCode::Char('v') => Action::ValidateConfig,
+        KeyCode::Char('R') => Action::ReloadConfig,
         _ => Action::None,
     }
 }
@@ -90,5 +94,17 @@ mod tests {
             Action::DeleteAudio
         );
         assert_eq!(action_for(press(KeyCode::Char('p')), false), Action::None);
+    }
+
+    #[test]
+    fn configure_shortcuts_include_validate_and_reload() {
+        assert_eq!(
+            action_for(press(KeyCode::Char('v')), false),
+            Action::ValidateConfig
+        );
+        assert_eq!(
+            action_for(press(KeyCode::Char('R')), false),
+            Action::ReloadConfig
+        );
     }
 }

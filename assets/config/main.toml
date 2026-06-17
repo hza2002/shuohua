@@ -1,0 +1,20 @@
+[hotkey]
+trigger = "f16"
+cancel = "escape"
+
+[voice]
+stop_delay_ms = 800
+record_audio = false
+auto_paste = true
+
+[voice.vad]
+backend = "off"
+
+[post]
+timeout_ms = 2000
+
+[profile]
+default = "default"
+
+[ui]
+language = "auto"

@@ -1,0 +1,8 @@
+name = "default"
+
+[asr]
+provider = "apple"
+hotwords = []
+
+[post]
+chain = ["rule:zh_filter"]

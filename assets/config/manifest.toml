@@ -1,0 +1,56 @@
+[[templates]]
+id = "main"
+kind = "main"
+path = "main.toml"
+title = "Main config"
+description = "Top-level shuohua config.toml."
+
+[[templates]]
+id = "profile/default"
+kind = "profile"
+path = "profile/default.toml"
+title = "Default profile"
+description = "Default profile using Apple ASR and the zh_filter rule."
+
+[[templates]]
+id = "post/rule/zh_filter"
+kind = "post_rule"
+path = "post/rule/zh_filter.toml"
+title = "Chinese speech cleanup rule"
+description = "Rule processor for common Chinese filler words."
+
+[[templates]]
+id = "post/llm/deepseek"
+kind = "post_llm"
+path = "post/llm/deepseek.toml"
+title = "DeepSeek"
+description = "OpenAI-compatible DeepSeek post-processing preset."
+
+[[templates]]
+id = "post/llm/openai"
+kind = "post_llm"
+path = "post/llm/openai.toml"
+title = "OpenAI"
+description = "OpenAI post-processing preset."
+
+[[templates]]
+id = "post/llm/anthropic"
+kind = "post_llm"
+path = "post/llm/anthropic.toml"
+title = "Anthropic"
+description = "Anthropic post-processing preset."
+
+[[templates]]
+id = "post/llm/custom-openai"
+kind = "post_llm"
+path = "post/llm/custom-openai.toml"
+title = "Custom OpenAI-compatible"
+description = "Custom OpenAI-compatible provider template."
+
+[[templates]]
+id = "post/llm/custom-anthropic"
+kind = "post_llm"
+path = "post/llm/custom-anthropic.toml"
+title = "Custom Anthropic"
+description = "Custom Anthropic-compatible provider template."
+

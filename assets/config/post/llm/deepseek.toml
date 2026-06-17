@@ -1,0 +1,10 @@
+type = "llm"
+format = "openai"
+name = "deepseek"
+base_url = "https://api.deepseek.com"
+api_key = ""
+model = "deepseek-chat"
+prompt = "{{text}}"
+
+[extra_body]
+thinking = { type = "disabled" }

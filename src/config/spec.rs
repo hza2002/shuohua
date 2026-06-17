@@ -129,6 +129,22 @@ impl FieldSpec {
             other => other.to_string(),
         }
     }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn required_without_default(&self) -> bool {
+        self.required && self.default.is_none()
+    }
+
+    pub fn is_secret(&self) -> bool {
+        self.secret
+    }
+
+    pub fn kind(&self) -> ValueKind {
+        self.kind
+    }
 }
 
 impl ConfigSpec {
@@ -146,6 +162,10 @@ impl ConfigSpec {
 
     pub fn field_for_path(&self, path: &str) -> Option<&FieldSpec> {
         self.fields.iter().find(|field| field.name == path)
+    }
+
+    pub fn fields(&self) -> &[FieldSpec] {
+        &self.fields
     }
 }
 

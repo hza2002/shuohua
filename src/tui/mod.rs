@@ -4,6 +4,7 @@ pub mod panes;
 pub mod settings;
 
 use std::collections::HashMap;
+use std::process::Command as ProcessCommand;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -142,9 +143,17 @@ pub struct App {
     pub config_path: String,
     pub settings_rows: Vec<settings::SettingsRow>,
     pub configure_module: ConfigureModule,
+    pub doctor: DoctorState,
     pub meter_width: usize,
     pub audio_cache: HashMap<String, audio::AudioInfo>,
     pub confirm: Option<Confirm>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoctorState {
+    pub ran_once: bool,
+    pub status: Option<String>,
+    pub output: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,6 +189,11 @@ impl App {
             config_path: config_path.display().to_string(),
             settings_rows,
             configure_module: ConfigureModule::Overview,
+            doctor: DoctorState {
+                ran_once: false,
+                status: None,
+                output: String::new(),
+            },
             meter_width: 160,
             audio_cache: HashMap::new(),
             confirm: None,
@@ -470,6 +484,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         Action::NextDetail => {
             if app.page == Page::Settings {
                 app.configure_module = app.configure_module.next();
+                maybe_run_doctor(app);
             } else {
                 app.history_detail = app.history_detail.next();
             }
@@ -477,6 +492,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         Action::PrevDetail => {
             if app.page == Page::Settings {
                 app.configure_module = app.configure_module.prev();
+                maybe_run_doctor(app);
             } else {
                 app.history_detail = app.history_detail.prev();
             }
@@ -558,6 +574,46 @@ fn on_page_changed(app: &mut App) {
     }
     if app.page == Page::Settings {
         app.settings_rows = settings::load_rows();
+        maybe_run_doctor(app);
+    }
+}
+
+fn maybe_run_doctor(app: &mut App) {
+    if app.configure_module != ConfigureModule::Overview || app.doctor.ran_once {
+        return;
+    }
+    app.doctor = run_doctor();
+}
+
+fn run_doctor() -> DoctorState {
+    let output = ProcessCommand::new(std::env::current_exe().unwrap_or_else(|_| "shuo".into()))
+        .arg("doctor")
+        .output();
+    match output {
+        Ok(output) => {
+            let mut text = String::new();
+            text.push_str(&String::from_utf8_lossy(&output.stdout));
+            if !output.stderr.is_empty() {
+                if !text.is_empty() && !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                text.push_str(&String::from_utf8_lossy(&output.stderr));
+            }
+            DoctorState {
+                ran_once: true,
+                status: Some(if output.status.success() {
+                    "ok".to_string()
+                } else {
+                    format!("exit {}", output.status)
+                }),
+                output: text,
+            }
+        }
+        Err(e) => DoctorState {
+            ran_once: true,
+            status: Some("error".to_string()),
+            output: format!("failed to run doctor: {e}"),
+        },
     }
 }
 

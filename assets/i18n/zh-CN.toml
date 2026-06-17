@@ -61,6 +61,8 @@ source = "来源：{path}"
 read_only = "只读。配置文件仍是唯一事实源。"
 refresh_hint = "外部编辑后重新进入配置页刷新。"
 no_entries = "没有配置条目"
+doctor_status = "doctor：{status}"
+doctor_not_run = "doctor 尚未运行"
 
 [tui.history.detail]
 details = "历史详情"

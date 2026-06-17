@@ -61,6 +61,8 @@ source = "source: {path}"
 read_only = "Read-only. Config files remain the source of truth."
 refresh_hint = "Re-enter Configure to refresh after external edits."
 no_entries = "no config entries found"
+doctor_status = "doctor: {status}"
+doctor_not_run = "doctor has not run yet"
 
 [tui.history.detail]
 details = "History details"

@@ -815,7 +815,11 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         ),
         chunks[0],
     );
-    let rows = configure_rows(app);
+    let rows = if app.configure_module == ConfigureModule::Overview {
+        configure_overview_text(app)
+    } else {
+        configure_rows(app)
+    };
     frame.render_widget(
         Paragraph::new(rows).wrap(Wrap { trim: false }).block(
             Block::default()
@@ -828,7 +832,7 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         Paragraph::new(format!(
             "{}\n{}\n{}",
             crate::t!("tui.configure.source", path = app.config_path.clone()),
-            crate::t!("tui.configure.read_only"),
+            doctor_status_text(app),
             crate::t!("tui.configure.refresh_hint")
         ))
         .wrap(Wrap { trim: false })
@@ -855,6 +859,20 @@ fn configure_rows(app: &App) -> String {
             .map(|row| format!("{:<28} {:<32} {}", row.key, row.value, row.source))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+fn configure_overview_text(app: &App) -> String {
+    if app.doctor.output.trim().is_empty() {
+        return crate::t!("tui.configure.doctor_not_run");
+    }
+    app.doctor.output.clone()
+}
+
+fn doctor_status_text(app: &App) -> String {
+    match &app.doctor.status {
+        Some(status) => crate::t!("tui.configure.doctor_status", status = status.clone()),
+        None => crate::t!("tui.configure.doctor_not_run"),
     }
 }
 

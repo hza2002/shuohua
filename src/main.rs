@@ -240,7 +240,9 @@ async fn run_daemon(
     // drop the event for the foreground app) and the daemon main loop (updates
     // the trigger code on `[hotkey].trigger` reload). Lock contention is
     // human-rate; std Mutex is fine.
-    let suppressor = Arc::new(Mutex::new(Suppressor::new(initial_hotkeys.trigger.clone())));
+    let mut initial_suppressor = Suppressor::new(initial_hotkeys.trigger.clone());
+    initial_suppressor.set_cancel(initial_hotkeys.cancel.clone());
+    let suppressor = Arc::new(Mutex::new(initial_suppressor));
     let suppressor_for_tap = suppressor.clone();
 
     thread::Builder::new()
@@ -285,6 +287,7 @@ async fn run_daemon(
                 cancel_tracker.set_trigger(new_hotkeys.cancel.clone());
                 if let Ok(mut s) = suppressor.lock() {
                     s.set_trigger(new_hotkeys.trigger);
+                    s.set_cancel(new_hotkeys.cancel);
                 }
                 continue;
             }
@@ -296,6 +299,9 @@ async fn run_daemon(
                     // 先清掉已经结束的 session，避免对死 watch 发 Cancel。
                     if active.as_ref().is_some_and(|session| session.join.is_finished()) {
                         active = None;
+                        if let Ok(mut s) = suppressor.lock() {
+                            s.set_cancel_active(false);
+                        }
                     }
                     if let Some(session) = active.as_ref() {
                         let _ = session.control.send(SessionControl::Cancel);
@@ -310,6 +316,9 @@ async fn run_daemon(
                 }
                 if active.as_ref().is_some_and(|session| session.join.is_finished()) {
                     active = None;
+                    if let Ok(mut s) = suppressor.lock() {
+                        s.set_cancel_active(false);
+                    }
                 }
                 match active.as_ref() {
                     None => {
@@ -370,10 +379,17 @@ async fn run_daemon(
                             state: state_store.clone(),
                         };
                         let provider = runtime.provider;
+                        let suppressor_for_task = suppressor.clone();
                         let join = tokio::spawn(async move {
                             voice::finish::run_recording(provider.as_ref(), params, control_rx).await;
+                            if let Ok(mut s) = suppressor_for_task.lock() {
+                                s.set_cancel_active(false);
+                            }
                         });
                         active = Some(ActiveSession { control: control_tx, join });
+                        if let Ok(mut s) = suppressor.lock() {
+                            s.set_cancel_active(true);
+                        }
                     }
                     Some(session) => {
                         let _ = session.control.send(SessionControl::Stop);

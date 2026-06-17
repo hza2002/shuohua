@@ -16,9 +16,13 @@
 //!   sees a brief modifier flash when the user taps the trigger —
 //!   imperceptible in practice and matches macOS Dictation's behavior.
 //!
+//! Cancel uses the same reserved-key behavior while recording is active.
+//! Outside recording, cancel is not suppressed so normal Escape / Delete /
+//! app shortcuts keep working.
+//!
 //! The held-key set is independent of `trigger.key`: once a code is
 //! suppressed on `KeyDown`, its `KeyUp` is suppressed too, even if the
-//! trigger has been re-bound mid-hold (§5 invariant 8). Auto-repeat
+//! binding has been re-bound mid-hold (§5 invariant 8). Auto-repeat
 //! `KeyDown`s of a held code are also suppressed.
 
 use super::combo::Combo;
@@ -27,6 +31,8 @@ use super::{EventKind, RawEvent};
 #[derive(Debug)]
 pub struct Suppressor {
     trigger: Combo,
+    cancel: Option<Combo>,
+    cancel_active: bool,
     /// Physical keycodes we've eaten the down of and not yet seen the up.
     held: Vec<u16>,
 }
@@ -35,6 +41,8 @@ impl Suppressor {
     pub fn new(trigger: Combo) -> Self {
         Self {
             trigger,
+            cancel: None,
+            cancel_active: false,
             held: Vec::new(),
         }
     }
@@ -46,6 +54,15 @@ impl Suppressor {
         // trigger has changed.
     }
 
+    pub fn set_cancel(&mut self, cancel: Combo) {
+        self.cancel = Some(cancel);
+        // Intentionally keep `held`; see `set_trigger`.
+    }
+
+    pub fn set_cancel_active(&mut self, active: bool) {
+        self.cancel_active = active;
+    }
+
     /// Returns `true` when the OS-level event should be dropped.
     pub fn on_raw(&mut self, ev: RawEvent) -> bool {
         let already_held = self.held.contains(&ev.code);
@@ -54,10 +71,7 @@ impl Suppressor {
                 if already_held {
                     return true; // auto-repeat of a key whose down was eaten
                 }
-                let Some(key) = self.trigger.key else {
-                    return false; // modifier-only trigger: nothing to suppress
-                };
-                if ev.code == key && ev.mods.matches_combo(&self.trigger) {
+                if self.should_suppress_fresh_down(ev) {
                     self.held.push(ev.code);
                     return true;
                 }
@@ -77,10 +91,26 @@ impl Suppressor {
         }
     }
 
+    fn should_suppress_fresh_down(&self, ev: RawEvent) -> bool {
+        matches_keyed_binding(&self.trigger, ev)
+            || (self.cancel_active
+                && self
+                    .cancel
+                    .as_ref()
+                    .is_some_and(|cancel| matches_keyed_binding(cancel, ev)))
+    }
+
     #[cfg(test)]
     pub fn held(&self) -> &[u16] {
         &self.held
     }
+}
+
+fn matches_keyed_binding(binding: &Combo, ev: RawEvent) -> bool {
+    let Some(key) = binding.key else {
+        return false; // modifier-only binding: nothing to suppress
+    };
+    ev.code == key && ev.mods.matches_combo(binding)
 }
 
 #[cfg(test)]
@@ -99,6 +129,14 @@ mod tests {
             mods: [ModMatcher::NotPresent; 4],
             key: Some(code),
             double: false,
+        }
+    }
+
+    fn pure_key_double(code: u16) -> Combo {
+        Combo {
+            mods: [ModMatcher::NotPresent; 4],
+            key: Some(code),
+            double: true,
         }
     }
 
@@ -181,6 +219,28 @@ mod tests {
         assert!(!s.on_raw(down(F16, m)));
         // KeyUp not held → also pass through.
         assert!(!s.on_raw(up(F16, m)));
+    }
+
+    #[test]
+    fn active_cancel_double_suppresses_both_press_cycles() {
+        let mut s = Suppressor::new(pure_key(F16));
+        s.set_cancel(pure_key_double(0x35));
+        s.set_cancel_active(true);
+
+        assert!(s.on_raw(down(0x35, ModMask::empty())));
+        assert!(s.on_raw(up(0x35, ModMask::empty())));
+        assert!(s.on_raw(down(0x35, ModMask::empty())));
+        assert!(s.on_raw(up(0x35, ModMask::empty())));
+    }
+
+    #[test]
+    fn inactive_cancel_passes_through() {
+        let mut s = Suppressor::new(pure_key(F16));
+        s.set_cancel(pure_key_double(0x35));
+        s.set_cancel_active(false);
+
+        assert!(!s.on_raw(down(0x35, ModMask::empty())));
+        assert!(!s.on_raw(up(0x35, ModMask::empty())));
     }
 
     // ---------- combo ----------

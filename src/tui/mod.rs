@@ -9,7 +9,7 @@ use std::process::Command as ProcessCommand;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
+use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -145,6 +145,7 @@ pub struct App {
     pub settings_rows: Vec<settings::SettingsRow>,
     pub selected_settings: usize,
     pub configure_module: ConfigureModule,
+    pub llm_wizard: Option<LlmWizard>,
     pub doctor: DoctorState,
     pub meter_width: usize,
     pub audio_cache: HashMap<String, audio::AudioInfo>,
@@ -161,6 +162,24 @@ pub struct DoctorState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Confirm {
     DeleteAudio { record_id: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmWizardStep {
+    Template,
+    FileId,
+    ProviderName,
+    Format,
+    BaseUrl,
+    Model,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmWizard {
+    pub step: LlmWizardStep,
+    pub templates: Vec<String>,
+    pub selected_template: usize,
+    pub draft: crate::config::template::LlmComponentDraft,
 }
 
 impl App {
@@ -192,6 +211,7 @@ impl App {
             settings_rows,
             selected_settings: 0,
             configure_module: ConfigureModule::Overview,
+            llm_wizard: None,
             doctor: DoctorState {
                 ran_once: false,
                 status: None,
@@ -391,6 +411,27 @@ impl App {
         self.settings_rows = settings::load_rows();
         self.clamp_selected_settings();
     }
+
+    fn start_llm_wizard(&mut self) {
+        let templates = crate::config::template::llm_templates()
+            .map(|template| template.id.to_string())
+            .collect::<Vec<_>>();
+        let Some(first_template) = templates.first() else {
+            self.status = crate::t!("tui.configure.wizard.no_templates");
+            return;
+        };
+        let Some(draft) = crate::config::template::llm_draft_from_template(first_template) else {
+            self.status = crate::t!("tui.configure.wizard.no_templates");
+            return;
+        };
+        self.llm_wizard = Some(LlmWizard {
+            step: LlmWizardStep::Template,
+            templates,
+            selected_template: 0,
+            draft,
+        });
+        self.status = crate::t!("tui.configure.wizard.started");
+    }
 }
 
 const MAX_METER_HISTORY: usize = 1024;
@@ -472,6 +513,9 @@ pub async fn run() -> Result<()> {
 
 async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Result<bool> {
     use keybindings::Action;
+    if handle_llm_wizard_key(app, key)? {
+        return Ok(false);
+    }
     if handle_confirm_key(app, key)? {
         return Ok(false);
     }
@@ -643,9 +687,149 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
                 app.status = crate::t!("tui.configure.reload_requested");
             }
         }
+        Action::NewConfig => {
+            if app.page == Page::Settings && app.configure_module == ConfigureModule::PostProcessor
+            {
+                app.start_llm_wizard();
+            }
+        }
         Action::None => {}
     }
     Ok(false)
+}
+
+fn handle_llm_wizard_key(app: &mut App, key: KeyEvent) -> Result<bool> {
+    if app.llm_wizard.is_none() {
+        return Ok(false);
+    }
+    if key.kind != crossterm::event::KeyEventKind::Press {
+        return Ok(true);
+    }
+    match key.code {
+        KeyCode::Esc => {
+            app.llm_wizard = None;
+            app.status = crate::t!("tui.configure.wizard.cancelled");
+        }
+        KeyCode::Enter => advance_llm_wizard(app)?,
+        KeyCode::Down | KeyCode::Right => move_llm_wizard_selection(app, 1),
+        KeyCode::Up | KeyCode::Left => move_llm_wizard_selection(app, -1),
+        KeyCode::Char('j') | KeyCode::Char('l') if llm_wizard_allows_selection(app) => {
+            move_llm_wizard_selection(app, 1);
+        }
+        KeyCode::Char('k') | KeyCode::Char('h') if llm_wizard_allows_selection(app) => {
+            move_llm_wizard_selection(app, -1);
+        }
+        KeyCode::Backspace => edit_llm_wizard_field(app, WizardEdit::Backspace),
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            edit_llm_wizard_field(app, WizardEdit::Clear);
+        }
+        KeyCode::Char(ch) => edit_llm_wizard_field(app, WizardEdit::Push(ch)),
+        _ => {}
+    }
+    Ok(true)
+}
+
+fn llm_wizard_allows_selection(app: &App) -> bool {
+    app.llm_wizard.as_ref().is_some_and(|wizard| {
+        matches!(wizard.step, LlmWizardStep::Template | LlmWizardStep::Format)
+    })
+}
+
+enum WizardEdit {
+    Push(char),
+    Backspace,
+    Clear,
+}
+
+fn move_llm_wizard_selection(app: &mut App, delta: isize) {
+    let Some(wizard) = &mut app.llm_wizard else {
+        return;
+    };
+    match wizard.step {
+        LlmWizardStep::Template => {
+            let len = wizard.templates.len();
+            if len == 0 {
+                return;
+            }
+            let next = (wizard.selected_template as isize + delta).rem_euclid(len as isize);
+            wizard.selected_template = next as usize;
+            if let Some(template_id) = wizard.templates.get(wizard.selected_template) {
+                if let Some(draft) = crate::config::template::llm_draft_from_template(template_id) {
+                    wizard.draft = draft;
+                }
+            }
+        }
+        LlmWizardStep::Format => {
+            wizard.draft.format = if wizard.draft.format == "openai" {
+                "anthropic".to_string()
+            } else {
+                "openai".to_string()
+            };
+        }
+        _ => {}
+    }
+}
+
+fn edit_llm_wizard_field(app: &mut App, edit: WizardEdit) {
+    let Some(wizard) = &mut app.llm_wizard else {
+        return;
+    };
+    let target = match wizard.step {
+        LlmWizardStep::FileId => Some(&mut wizard.draft.file_id),
+        LlmWizardStep::ProviderName => Some(&mut wizard.draft.provider_name),
+        LlmWizardStep::BaseUrl => Some(&mut wizard.draft.base_url),
+        LlmWizardStep::Model => Some(&mut wizard.draft.model),
+        _ => None,
+    };
+    let Some(value) = target else {
+        return;
+    };
+    match edit {
+        WizardEdit::Push(ch) => value.push(ch),
+        WizardEdit::Backspace => {
+            value.pop();
+        }
+        WizardEdit::Clear => value.clear(),
+    }
+}
+
+fn advance_llm_wizard(app: &mut App) -> Result<()> {
+    let Some(wizard) = &mut app.llm_wizard else {
+        return Ok(());
+    };
+    wizard.step = match wizard.step {
+        LlmWizardStep::Template => LlmWizardStep::FileId,
+        LlmWizardStep::FileId => LlmWizardStep::ProviderName,
+        LlmWizardStep::ProviderName => LlmWizardStep::Format,
+        LlmWizardStep::Format => LlmWizardStep::BaseUrl,
+        LlmWizardStep::BaseUrl => LlmWizardStep::Model,
+        LlmWizardStep::Model => {
+            finish_llm_wizard(app)?;
+            return Ok(());
+        }
+    };
+    Ok(())
+}
+
+fn finish_llm_wizard(app: &mut App) -> Result<()> {
+    let Some(wizard) = app.llm_wizard.take() else {
+        return Ok(());
+    };
+    match crate::config::template::create_llm_component(
+        &crate::config::post::default_dir(),
+        &wizard.draft,
+    ) {
+        Ok(path) => {
+            app.refresh_configure();
+            app.status = crate::t!("tui.configure.wizard.created", path = path.display());
+            let _ = config_actions::open_in_editor(&path);
+        }
+        Err(e) => {
+            app.status = crate::t!("tui.configure.wizard.error", error = e);
+            app.llm_wizard = Some(wizard);
+        }
+    }
+    Ok(())
 }
 
 fn on_page_changed(app: &mut App) {
@@ -895,5 +1079,28 @@ mod tests {
             app.selected_config_source().unwrap(),
             std::path::PathBuf::from("/tmp/shuohua/asr/apple.toml")
         );
+    }
+
+    #[test]
+    fn llm_wizard_starts_with_template_defaults_and_allows_text_j() {
+        let mut app = App::new();
+        app.page = Page::Settings;
+        app.configure_module = ConfigureModule::PostProcessor;
+
+        app.start_llm_wizard();
+
+        let wizard = app.llm_wizard.as_ref().unwrap();
+        assert_eq!(wizard.step, LlmWizardStep::Template);
+        assert_eq!(wizard.draft.format, "openai");
+
+        advance_llm_wizard(&mut app).unwrap();
+        app.llm_wizard.as_mut().unwrap().draft.file_id.clear();
+        edit_llm_wizard_field(&mut app, WizardEdit::Push('j'));
+        edit_llm_wizard_field(&mut app, WizardEdit::Push('1'));
+
+        let wizard = app.llm_wizard.as_ref().unwrap();
+        assert_eq!(wizard.step, LlmWizardStep::FileId);
+        assert_eq!(wizard.draft.file_id, "j1");
+        assert!(!llm_wizard_allows_selection(&app));
     }
 }

@@ -26,6 +26,7 @@ pub enum Action {
     DeleteAudio,
     ValidateConfig,
     ReloadConfig,
+    NewConfig,
     None,
 }
 
@@ -67,6 +68,7 @@ pub fn action_for(key: KeyEvent, searching: bool) -> Action {
         KeyCode::Char('d') => Action::DeleteAudio,
         KeyCode::Char('v') => Action::ValidateConfig,
         KeyCode::Char('R') => Action::ReloadConfig,
+        KeyCode::Char('n') => Action::NewConfig,
         _ => Action::None,
     }
 }
@@ -105,6 +107,14 @@ mod tests {
         assert_eq!(
             action_for(press(KeyCode::Char('R')), false),
             Action::ReloadConfig
+        );
+    }
+
+    #[test]
+    fn configure_shortcuts_include_new_config() {
+        assert_eq!(
+            action_for(press(KeyCode::Char('n')), false),
+            Action::NewConfig
         );
     }
 }

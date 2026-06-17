@@ -1,5 +1,10 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+
 use crate::config::spec::{ConfigSpec, FieldSpec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +62,154 @@ pub fn render_by_id(id: &str) -> Option<String> {
         .iter()
         .find(|template| template.id == id)
         .map(render)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmComponentDraft {
+    pub template_id: String,
+    pub file_id: String,
+    pub provider_name: String,
+    pub format: String,
+    pub base_url: String,
+    pub model: String,
+}
+
+pub fn llm_templates() -> impl Iterator<Item = &'static Template> {
+    registry()
+        .iter()
+        .filter(|template| template.kind == TemplateKind::PostLlm)
+}
+
+pub fn llm_draft_from_template(template_id: &str) -> Option<LlmComponentDraft> {
+    let template = llm_templates().find(|template| template.id == template_id)?;
+    let values = template_values(template);
+    Some(LlmComponentDraft {
+        template_id: template_id.to_string(),
+        file_id: template
+            .path
+            .strip_prefix("post/llm/")
+            .and_then(|path| path.strip_suffix(".toml"))
+            .unwrap_or("llm")
+            .to_string(),
+        provider_name: string_value(values, "name")
+            .unwrap_or("provider")
+            .to_string(),
+        format: string_value(values, "format")
+            .unwrap_or("openai")
+            .to_string(),
+        base_url: string_value(values, "base_url")
+            .unwrap_or_default()
+            .to_string(),
+        model: string_value(values, "model")
+            .unwrap_or_default()
+            .to_string(),
+    })
+}
+
+pub fn render_llm_component(draft: &LlmComponentDraft) -> Result<String> {
+    validate_component_id(&draft.file_id).context("invalid file id")?;
+    validate_component_id(&draft.provider_name).context("invalid provider name")?;
+    anyhow::ensure!(
+        matches!(draft.format.as_str(), "openai" | "anthropic"),
+        "format must be openai or anthropic"
+    );
+    anyhow::ensure!(!draft.model.trim().is_empty(), "model is required");
+
+    let template = llm_templates()
+        .find(|template| template.id == draft.template_id)
+        .with_context(|| format!("unknown LLM template {}", draft.template_id))?;
+    let body = render_llm_component_body(template, draft);
+    toml::from_str::<toml::Value>(&body).context("rendered LLM template is invalid TOML")?;
+    Ok(body)
+}
+
+pub fn create_llm_component(post_dir: &Path, draft: &LlmComponentDraft) -> Result<PathBuf> {
+    let llm_dir = post_dir.join("llm");
+    let path = llm_dir.join(format!("{}.toml", draft.file_id));
+    anyhow::ensure!(
+        !path.exists(),
+        "post/llm/{}.toml already exists",
+        draft.file_id
+    );
+    ensure_provider_name_available(&llm_dir, &draft.provider_name)?;
+    let body = render_llm_component(draft)?;
+    std::fs::create_dir_all(&llm_dir).with_context(|| format!("create {}", llm_dir.display()))?;
+    std::fs::write(&path, body).with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
+}
+
+fn ensure_provider_name_available(llm_dir: &Path, provider_name: &str) -> Result<()> {
+    let mut names = BTreeSet::new();
+    for path in toml_files(llm_dir) {
+        let body = std::fs::read_to_string(&path)
+            .with_context(|| format!("read existing LLM component {}", path.display()))?;
+        let value: toml::Value = toml::from_str(&body)
+            .with_context(|| format!("parse existing LLM component {}", path.display()))?;
+        if let Some(name) = value.get("name").and_then(toml::Value::as_str) {
+            names.insert(name.to_string());
+        }
+    }
+    anyhow::ensure!(
+        !names.contains(provider_name),
+        "provider name {provider_name:?} already exists"
+    );
+    Ok(())
+}
+
+fn validate_component_id(value: &str) -> Result<()> {
+    anyhow::ensure!(!value.trim().is_empty(), "value is required");
+    anyhow::ensure!(
+        value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'),
+        "use only ASCII letters, digits, '-' and '_'"
+    );
+    Ok(())
+}
+
+fn toml_files(dir: &Path) -> Vec<PathBuf> {
+    let mut paths = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
+            .collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    paths.sort();
+    paths
+}
+
+fn template_values(template: &Template) -> &[(&'static str, TemplateValue)] {
+    template.values
+}
+
+fn string_value<'a>(values: &'a [(&str, TemplateValue)], key: &str) -> Option<&'a str> {
+    values.iter().find_map(|(name, value)| match (name, value) {
+        (name, TemplateValue::String(value)) if *name == key => Some(*value),
+        _ => None,
+    })
+}
+
+fn render_llm_component_body(template: &Template, draft: &LlmComponentDraft) -> String {
+    let mut body = String::new();
+    body.push_str("type = \"llm\"\n");
+    body.push_str(&format!("format = {:?}\n", draft.format));
+    body.push_str(&format!("name = {:?}\n", draft.provider_name));
+    body.push_str(&format!("base_url = {:?}\n", draft.base_url));
+    body.push_str("api_key = \"\"\n");
+    body.push_str(&format!("model = {:?}\n", draft.model));
+    body.push_str("prompt = \"{{text}}\"\n");
+
+    if template
+        .values
+        .iter()
+        .any(|(name, _)| *name == "extra_body")
+    {
+        body.push_str("\n[extra_body]\n");
+        body.push_str("thinking = { type = \"disabled\" }\n");
+    }
+    body
 }
 
 fn render_from_spec(spec: &ConfigSpec, values: &[(&str, TemplateValue)]) -> String {
@@ -455,5 +608,77 @@ mod tests {
             assert!(render(template).contains("api_key = \"\""));
             assert_eq!(api_key.kind(), ValueKind::String);
         }
+    }
+
+    fn temp_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("shuohua-template-test-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn llm_draft_uses_template_defaults_and_renders_overrides() {
+        let mut draft = llm_draft_from_template("post/llm/deepseek").unwrap();
+        draft.file_id = "cleaner".to_string();
+        draft.provider_name = "team-deepseek".to_string();
+        draft.model = "deepseek-chat-v3".to_string();
+
+        let body = render_llm_component(&draft).unwrap();
+
+        assert!(body.contains("format = \"openai\""));
+        assert!(body.contains("name = \"team-deepseek\""));
+        assert!(body.contains("model = \"deepseek-chat-v3\""));
+        assert!(body.contains("[extra_body]"));
+        toml::from_str::<toml::Value>(&body).unwrap();
+    }
+
+    #[test]
+    fn create_llm_component_refuses_duplicate_file_and_provider_name() {
+        let dir = temp_dir();
+        let post = dir.join("post");
+        let llm = post.join("llm");
+        std::fs::create_dir_all(&llm).unwrap();
+        std::fs::write(
+            llm.join("existing.toml"),
+            "type = \"llm\"\nname = \"taken\"\napi_key = \"sk-test\"\nmodel = \"m\"\nprompt = \"{{text}}\"\n",
+        )
+        .unwrap();
+
+        let mut draft = llm_draft_from_template("post/llm/openai").unwrap();
+        draft.file_id = "existing".to_string();
+        draft.provider_name = "fresh".to_string();
+        draft.model = "gpt-test".to_string();
+        assert!(create_llm_component(&post, &draft)
+            .unwrap_err()
+            .to_string()
+            .contains("already exists"));
+
+        draft.file_id = "new_component".to_string();
+        draft.provider_name = "taken".to_string();
+        assert!(create_llm_component(&post, &draft)
+            .unwrap_err()
+            .to_string()
+            .contains("provider name"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn create_llm_component_writes_valid_file() {
+        let dir = temp_dir();
+        let post = dir.join("post");
+        let mut draft = llm_draft_from_template("post/llm/anthropic").unwrap();
+        draft.file_id = "claude_cleanup".to_string();
+        draft.provider_name = "anthropic-team".to_string();
+        draft.model = "claude-test".to_string();
+
+        let path = create_llm_component(&post, &draft).unwrap();
+
+        assert_eq!(path, post.join("llm/claude_cleanup.toml"));
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.contains("format = \"anthropic\""));
+        assert!(body.contains("name = \"anthropic-team\""));
+        toml::from_str::<toml::Value>(&body).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

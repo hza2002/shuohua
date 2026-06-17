@@ -6,7 +6,7 @@ use ratatui::Frame;
 
 use crate::ipc::protocol::WireState;
 use crate::state::SessionPhase;
-use crate::tui::{App, ConfigureModule, Confirm, HistoryDetail, Page};
+use crate::tui::{App, ConfigureModule, Confirm, HistoryDetail, LlmWizardStep, Page};
 
 pub fn render(frame: &mut Frame, app: &App) {
     let root = Layout::default()
@@ -815,7 +815,9 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         ),
         chunks[0],
     );
-    let rows = if app.configure_module == ConfigureModule::Overview {
+    let rows = if app.llm_wizard.is_some() {
+        configure_wizard_text(app)
+    } else if app.configure_module == ConfigureModule::Overview {
         configure_overview_text(app)
     } else {
         configure_rows(app)
@@ -833,7 +835,7 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             "{}\n{}\n{}",
             crate::t!("tui.configure.source", path = app.config_path.clone()),
             doctor_status_text(app),
-            crate::t!("tui.configure.refresh_hint")
+            configure_hint_text(app)
         ))
         .wrap(Wrap { trim: false })
         .block(
@@ -843,6 +845,96 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         ),
         chunks[2],
     );
+}
+
+fn configure_hint_text(app: &App) -> String {
+    if app.llm_wizard.is_some() {
+        crate::t!("tui.configure.wizard.hint")
+    } else if app.configure_module == ConfigureModule::PostProcessor {
+        crate::t!("tui.configure.refresh_hint_post")
+    } else {
+        crate::t!("tui.configure.refresh_hint")
+    }
+}
+
+fn configure_wizard_text(app: &App) -> String {
+    let Some(wizard) = &app.llm_wizard else {
+        return String::new();
+    };
+    let template_lines = wizard
+        .templates
+        .iter()
+        .enumerate()
+        .map(|(idx, id)| {
+            let marker =
+                if wizard.step == LlmWizardStep::Template && idx == wizard.selected_template {
+                    ">"
+                } else {
+                    " "
+                };
+            format!("{marker} {id}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "{}\n{}\n\n{}\n{}\n{}\n{}\n{}\n{}\n\n{}",
+        crate::t!("tui.configure.wizard.title"),
+        wizard_step_label(wizard.step),
+        template_lines,
+        wizard_field_line(
+            LlmWizardStep::FileId,
+            wizard.step,
+            crate::t!("tui.configure.wizard.file_id"),
+            &wizard.draft.file_id
+        ),
+        wizard_field_line(
+            LlmWizardStep::ProviderName,
+            wizard.step,
+            crate::t!("tui.configure.wizard.provider_name"),
+            &wizard.draft.provider_name
+        ),
+        wizard_field_line(
+            LlmWizardStep::Format,
+            wizard.step,
+            crate::t!("tui.configure.wizard.format"),
+            &wizard.draft.format
+        ),
+        wizard_field_line(
+            LlmWizardStep::BaseUrl,
+            wizard.step,
+            crate::t!("tui.configure.wizard.base_url"),
+            &wizard.draft.base_url
+        ),
+        wizard_field_line(
+            LlmWizardStep::Model,
+            wizard.step,
+            crate::t!("tui.configure.wizard.model"),
+            &wizard.draft.model
+        ),
+        crate::t!("tui.configure.wizard.no_profile_attach")
+    )
+}
+
+fn wizard_step_label(step: LlmWizardStep) -> String {
+    let key = match step {
+        LlmWizardStep::Template => "tui.configure.wizard.step_template",
+        LlmWizardStep::FileId => "tui.configure.wizard.step_file_id",
+        LlmWizardStep::ProviderName => "tui.configure.wizard.step_provider_name",
+        LlmWizardStep::Format => "tui.configure.wizard.step_format",
+        LlmWizardStep::BaseUrl => "tui.configure.wizard.step_base_url",
+        LlmWizardStep::Model => "tui.configure.wizard.step_model",
+    };
+    crate::i18n::tr(key, &[])
+}
+
+fn wizard_field_line(
+    field: LlmWizardStep,
+    current: LlmWizardStep,
+    label: String,
+    value: &str,
+) -> String {
+    let marker = if field == current { ">" } else { " " };
+    format!("{marker} {label}: {value}")
 }
 
 fn configure_rows(app: &App) -> String {

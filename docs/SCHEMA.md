@@ -26,7 +26,7 @@
 {"event":"snapshot","proto_version":2,"state":"idle","recording":null,"started_at":null,"app":null,"app_name":null,"dur_ms":0,"words":0,"segments":[],"partial":"","stats":{...}}   // subscribe 回包第一条，含协议版本
 {"event":"state_changed","state":"recording","recording_id":"01HXYZ...","started_at":"..."}
 {"event":"app_changed","app":"com.apple.dt.Xcode","app_name":"Xcode"}
-{"event":"session_meta","recording_id":"01HXYZ...","meta":{"provider":"doubao","chain":"rule:filler → llm:deepseek","vad":"silero","hotwords":3}}
+{"event":"session_meta","recording_id":"01HXYZ...","meta":{"provider":"doubao","chain":"rule:zh_filter → llm:deepseek","vad":"silero","hotwords":3}}
 {"event":"session_phase","recording_id":"01HXYZ...","phase":"idle"} // 多 session 路径下 TUI 子状态：active / idle / stopping
 {"event":"stats_changed","dur_ms":3200,"words":32}
 {"event":"partial","recording_id":"01HXYZ...","text":"今天天气真"}      // ASR 增量

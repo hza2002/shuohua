@@ -35,7 +35,7 @@
 
 ```
 ╭───────────────────────────────────────────────────────────╮
-│ ● Recording · 3.2s · 84字          Xcode  ·  filler→llm   │  ← 第 1 排 状态条
+│ ● Recording · 3.2s · 84字          Xcode  ·  zh_filter→llm│  ← 第 1 排 状态条
 │ 今天我想写一篇关于分布式系统的一致性算法的文章｜             │  ← 第 2 排 ASR 实时文字
 ╰───────────────────────────────────────────────────────────╯
    ↑ Liquid Glass variant=19
@@ -46,7 +46,7 @@
 - **状态点**：`Idle=灰` / `Connecting=橙` / `Active=红` / `Idle子状态(思考中)=蓝` / `Stopping=黄` / `Error=红闪`
 - **状态文字**：跟点同步切换
 - **时长**（mm:ss 或 N.Ns）+ **当前字数**
-- 右对齐：**当前 App 名称** · **当前 chain summary**（比如 `filler→llm`）
+- 右对齐：**当前 App 名称** · **当前 chain summary**（比如 `zh_filter→llm`）
 
 第 2 排：
 - 当前 partial 文本（实时变化）
@@ -207,7 +207,7 @@ key         := f1..f20 | a..z | 0..9
 | 纯按键 | `f16` / `escape` / `a` | KeyDown 时（mods 必须**完全无**），auto-repeat 不重复触发 | 该 key 的 down + 配对 up |
 | 修饰键 + 键 | `cmd+r` / `left_cmd+shift+r` / `cmd+;` | KeyDown 时 mods **精确匹配**（指定的必须按下、未指定的必须松开） | 仅 key 部分的 down/up；modifier 事件全放行 |
 | 修饰键单按 | `right_shift` / `cmd` / `cmd+shift`（多修饰键也可） | "clean tap"：required mods 按下到松开期间无中间普通键 + 无额外修饰键 + 时长 < 500ms | 不吞任何事件（modifier 太常用） |
-| 双击 | 上面任一种 + `:double` 后缀 | 两次 tap 在 400ms 内连发 | 同对应基础类型 |
+| 双击 | 上面任一种 + `:double` 后缀 | 两次 tap 在 400ms 内连发 | keyed hotkey 两次候选 press cycle 都按 reserved 规则吞；modifier-only 仍不吞 |
 
 **关键规则**：
 - 全小写，大小写不敏感（normalize 到小写后处理）
@@ -234,7 +234,7 @@ key         := f1..f20 | a..z | 0..9
 
 > **`ModMask` 设计**：8-bit 紧凑 packed mask，L/R per modifier。pipe 线协议 4 字节 `[kind, code_lo, code_hi, mods]`。`Instant` 不上线协议（Tracker 收到事件时 `Instant::now()`，亚毫秒延迟远低于 250/400ms 窗口）。
 >
-> **当前 Suppressor 注册表**：只 suppress `[hotkey].trigger`，单 `Combo` 包在 `std::sync::Mutex<Suppressor>` 里跟主循环共享。`[hotkey].cancel` 由 daemon 侧第二个 `Tracker` 识别但不 suppress，避免默认 Escape 影响 Vim/前台 App。CGEventTap callback 频率远低于 Mutex 竞争阈值。未来若需要 cancel 也 suppress，可换多 binding 快照。
+> **当前 Suppressor 注册表**：suppress `[hotkey].trigger`，并在 recording task 存活期间 suppress `[hotkey].cancel`。keyed hotkey 采用 reserved 语义：配置成 shuohua hotkey 的候选 press cycle 不再泄漏给前台 App；`:double` 的第一次候选也吞。modifier-only hotkey 仍不 suppress `FlagsChanged`，避免破坏前台 App / 系统 modifier 状态。`Suppressor` 包在 `std::sync::Mutex` 里跟主循环共享，CGEventTap callback 频率远低于 Mutex 竞争阈值。
 
 ### 2.5 去掉 Plugin 抽象
 
@@ -335,12 +335,12 @@ pub enum AsrError {
 ```
 ~/.config/shuohua/
 ├── config.toml              # 全局：hotkey / voice / post timeout
-├── apps/
-│   ├── default.toml         # 默认 app profile：选择 ASR + post chain + 覆盖项
-│   └── com.mitchellh.ghostty.toml
+├── profile/
+│   ├── default.toml         # 默认 profile：选择 ASR + post chain + 覆盖项
+│   └── agent.toml
 ├── post/
-│   ├── rules/
-│   │   └── filler.toml      # 后处理组件定义：规则
+│   ├── rule/
+│   │   └── zh_filter.toml   # 后处理组件定义：规则
 │   └── llm/
 │       └── deepseek.toml    # 后处理组件定义：LLM provider/model/prompt 默认值
 └── asr/
@@ -348,7 +348,7 @@ pub enum AsrError {
     └── apple.toml           # 可省略；无 secret，缺省值可直接工作
 ```
 
-`config.toml` 只保留全局行为开关；apps/post 目录固定走 XDG 路径：
+`config.toml` 保留全局行为开关，并集中维护 App bundle id → profile 的路由；profile/post 目录固定走 XDG 路径：
 
 ```toml
 [hotkey]
@@ -370,9 +370,13 @@ min_start_voiced_frames = 2
 
 [post]
 timeout_ms = 2000
+
+[profile]
+default = "default"
+agent = ["com.mitchellh.ghostty", "com.googlecode.iterm2", "com.apple.Terminal"]
 ```
 
-`apps/default.toml`（app profile，负责组合；app 相关热词和局部覆盖优先放这里）：
+`profile/default.toml`（默认 profile，负责组合；场景相关热词和局部覆盖优先放这里）：
 
 ```toml
 name = "Default"
@@ -382,7 +386,7 @@ provider = "apple"                          # → 加载 asr/apple.toml
 hotwords = ["Rust", "tokio", "Kubernetes"]   # provider 自由解释；不支持的 provider 静默忽略
 
 [post]
-chain = ["rule:filler", "llm:deepseek"]
+chain = ["rule:zh_filter", "llm:deepseek"]
 ```
 
 `asr/doubao.toml`（provider 私有，voice 模块永远不见）：
@@ -408,9 +412,9 @@ install_assets = true     # 首次使用时允许系统下载/安装本地 Speec
 
 AppleProvider 保持 `AsrSession::send_pcm(&[i16])` 的 canonical 输入不变。SpeechAnalyzer 在 macOS 26 上通常返回 `16kHz mono int16` 或 `float32` 兼容格式；具体 `AVAudioPCMBuffer` 适配发生在 provider 的 Swift helper 内部，Recorder 不感知 provider 私有音频格式。
 
-provider 之间**完全不共享 schema**。每个 provider impl 自己 deserialize 自家文件。hotwords 由 app profile 选择后塞进 `SessionCtx`。
+provider 之间**完全不共享 schema**。每个 provider impl 自己 deserialize 自家文件。hotwords 由 profile 选择后塞进 `SessionCtx`。
 
-配置分层原则：ASR / post component 文件描述可复用能力和默认参数；app profile 描述“这个 App 选哪套 ASR、哪些 hotwords、跑哪条 post chain，以及哪些 provider 字段要浅覆盖”。当某个 prompt、hotwords 或 ASR 旋钮明显只服务一个 App 时，归属 app profile override；当它代表一个可复用默认能力时，归属 `asr/*.toml`、`post/llm/*.toml` 或 `post/rules/*.toml`。数组/字符串/表字段都是写了就替换，不做深层智能合并。
+配置分层原则：ASR / post component 文件描述可复用能力和默认参数；profile 描述“这个 App 选哪套 ASR、哪些 hotwords、跑哪条 post chain，以及哪些 provider 字段要浅覆盖”。当某个 prompt、hotwords 或 ASR 旋钮明显只服务一个 App 时，归属 profile override；当它代表一个可复用默认能力时，归属 `asr/*.toml`、`post/llm/*.toml` 或 `post/rule/*.toml`。数组/字符串/表字段都是写了就替换，不做深层智能合并。
 
 ### 2.9 客户端 VAD + 多段 session（"思考不计费"机制）
 
@@ -537,49 +541,53 @@ pub struct PipelineStep {
 - **失败/超时都推 notice**：caller 遍历 steps，对每个非 Ok/Skipped 状态发 `OverlayCmd::Notice { text, ttl_ms }`，meta 行黄字 3s。Hide 看到 notice 活着会自动延期，避免 dispatch 后 hide 一次性把 warn 吞掉
 - 所有失败 + 时延都写进 `pipeline[]`，进 history JSONL + UDS 事件
 
-#### App Profile 与 Post Components
+#### Profile 与 Post Components
 
 ```
 ~/.config/shuohua/
 ├── config.toml                          # 全局，只指路
-├── apps/
+├── profile/
 │   ├── default.toml                     # 默认 profile
-│   ├── com.apple.dt.Xcode.toml          # Xcode 专属 profile
-│   └── com.mitchellh.ghostty.toml
+│   ├── agent.toml                       # 终端/Agent 输入场景
+│   └── coding.toml
 └── post/
-    ├── rules/
-    │   └── filler.toml
+    ├── rule/
+    │   └── zh_filter.toml
     ├── llm/
     │   └── deepseek.toml
     └── scripts/                         # 预留；M7 不执行用户脚本
 ```
 
-匹配逻辑：toggle ON 时取一次 `frontmost_bundle_id`，去 `apps/<bundle_id>.toml` 找；找到就用，找不到 fall back 到 `apps/default.toml`。该 profile 决定本次录音的 ASR provider、hotwords、provider 覆盖项和 post chain。toggle OFF 时只再取一次 AppContext 作为 prompt 变量，**不重新选择 profile**，避免录音中切 App 导致 ASR/post 配置中途变化。
+匹配逻辑：toggle ON 时取一次 `frontmost_bundle_id`，按 `config.toml` 的 `[profile]` 表查找包含该 bundle id 的 profile 名；没命中就用 `default` 指向的 profile。任一 bundle id 命中多个 profile 时报配置错误，不猜。该 profile 决定本次录音的 ASR provider、hotwords、provider 覆盖项和 post chain。toggle OFF 时只再取一次 AppContext 作为 prompt 变量，**不重新选择 profile**，避免录音中切 App 导致 ASR/post 配置中途变化。
 
 目录固定：
 
-- app profile：`~/.config/shuohua/apps/default.toml` / `~/.config/shuohua/apps/<bundle_id>.toml`
-- post components：`~/.config/shuohua/post/rules/*.toml` / `~/.config/shuohua/post/llm/*.toml`
+- profile：`~/.config/shuohua/profile/*.toml`
+- post components：`~/.config/shuohua/post/rule/*.toml` / `~/.config/shuohua/post/llm/*.toml`
 
-主 `config.toml` 只配置单步超时：
+主 `config.toml` 配置单步超时和 profile 路由：
 
 ```toml
 [post]
 timeout_ms = 2000     # 单步 processor 超时
+
+[profile]
+default = "default"
+agent = ["com.mitchellh.ghostty"]
 ```
 
-app profile 长这样：
+profile 长这样：
 
 ```toml
-# apps/com.mitchellh.ghostty.toml
-name = "Ghostty"
+# profile/agent.toml
+name = "Agent"
 
 [asr]
 provider = "doubao"
 hotwords = ["Rust", "tokio", "Kubernetes", "cargo", "git", "zsh"]
 
 [post]
-chain = ["rule:filler", "llm:deepseek"]
+chain = ["rule:zh_filter", "llm:deepseek"]
 
 [post.llm.deepseek]
 model = "deepseek-v4-flash"
@@ -589,9 +597,9 @@ system_prompt = "你是终端语音输入清洗器，只输出清洗后的文本
 Post component 长这样：
 
 ```toml
-# post/rules/filler.toml
+# post/rule/zh_filter.toml
 type     = "rule"
-patterns = ["嗯", "啊", "呃", "那个", "就是"]
+patterns = ["嗯", "呃", "啊"]
 ```
 
 ```toml
@@ -619,7 +627,7 @@ thinking = { type = "disabled" }     # DeepSeek 专属；不是 OpenAI 通用默
 | 名字 | 类型 | 何时引入 | 作用 |
 |---|---|---|---|
 | `IdentityProcessor` | 内置 | M2 | 透传，等于关后处理 |
-| `RuleBasedFiller` | 内置 | M2.5 | regex 去 嗯/啊/呃/那个/就是；可选合并重复字 |
+| `ZhFilter` | 内置 | M2.5 | 中文语音输入文本过滤：标点/空白/segment 边界/少量语气词 |
 | `LlmCleanup` | 内置 | M7 | 调 OpenAI 兼容 API（Anthropic / OpenAI / 任意兼容端点）|
 
 `LlmCleanup` 的 prompt 接受变量替换：`{{app_name}}` / `{{bundle_id}}` / `{{text}}` —— 用户可以在 prompt 模板里引用。
@@ -795,8 +803,8 @@ reload.rs
 | `ui.language` | 立即（重译 state label） | `spawn_i18n` → `i18n::init` + `Relabel` | ✓ |
 | `[hotkey].trigger` | 立即（下次按键判定） | `spawn_hotkey` → mpsc<Combo> → `tokio::select!` 换 Tracker + Suppressor | ✓ |
 | `[voice].*` 全部 | 下次起 session | daemon 主循环 `cfg_rx.borrow()` 取最新快照 | ✓ |
-| `apps/*.toml` 的 `[asr]` / `[post]` / override | 下次起 session | daemon 主循环按 toggle ON 的 App profile 选择 | ✓ |
-| `post/rules/*.toml` / `post/llm/*.toml` | 下次起 session | app profile 的 `[post].chain` 引用组件 | ✓ |
+| `[profile]` 路由、`profile/*.toml` 的 `[asr]` / `[post]` / override | 下次起 session | daemon 主循环按 toggle ON 的 Profile 选择 | ✓ |
+| `post/rule/*.toml` / `post/llm/*.toml` | 下次起 session | profile 的 `[post].chain` 引用组件 | ✓ |
 | 手动触发 `{"op":"reload_config"}` | 立即 | 走 UDS server | ✓ |
 
 #### Hotkey trigger 特别说明
@@ -810,7 +818,7 @@ parse 失败（非法 trigger 字符串）只打日志保留旧 trigger，不向
 - `shuo doctor` 已实现：打印 `effective config`，校验主 config、hotkey、默认麦克风输入、Doubao 配置、UDS 状态、launchd plist 和权限状态
 - `shuo install/uninstall/start/stop/restart/status` 已实现：launchd plist 使用当前 `shuo` 绝对路径，状态优先走 UDS `daemon_status`
 - `UDS {"op":"reload_config"}` 已接入：走 watcher 同一路径 parse + broadcast，不绕过 `watch::Sender`
-- app profile 的 `asr` 已按配置在下一次录音开始时重建，不在录音中途热替换 session
+- profile 的 `asr` 已按配置在下一次录音开始时重建，不在录音中途热替换 session
 
 ---
 
@@ -940,7 +948,7 @@ shuohua/
 │   │       └── doubao.rs             # Doubao SAUC provider
 │   ├── post/
 │   │   ├── mod.rs              # PostProcessor trait + PipelineText + run_chain（M2.5）
-│   │   ├── filler.rs           # RuleBasedFiller（M2.5）
+│   │   ├── zh_filter.rs        # ZhFilter（M2.5）
 │   │   ├── llm.rs              # M7 LLM 清洗
 │   │   └── app_context.rs      # NSWorkspace.frontmostApplication（M7）
 │   ├── state/

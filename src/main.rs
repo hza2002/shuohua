@@ -13,7 +13,6 @@
 //!     上跑 notify；各 subscriber 自取所需。
 
 mod app_context_darwin;
-mod app_profile;
 mod asr;
 mod autotype_darwin;
 mod cli;
@@ -26,6 +25,7 @@ mod ipc;
 mod log;
 mod overlay;
 mod post;
+mod profile;
 mod reload;
 mod state;
 mod text_stats;
@@ -322,17 +322,18 @@ async fn run_daemon(
                 }
                 match active.as_ref() {
                     None => {
-                        // 新 session 起来时从 cfg_rx 取最新 voice/apps/post 配置。
+                        // 新 session 起来时从 cfg_rx 取最新 voice/profile/post 配置。
                         let cfg = cfg_rx.borrow().clone();
                         let start_app_context = post::app_context::frontmost_app();
-                        let apps_dir = app_profile::default_dir();
-                        let profile = match app_profile::load_for_app(
-                            &apps_dir,
+                        let profile_dir = profile::default_dir();
+                        let profile = match profile::load_for_app(
+                            &profile_dir,
+                            &cfg.profile,
                             start_app_context.bundle_id.as_deref(),
                         ) {
                             Ok(profile) => profile,
                             Err(e) => {
-                                tracing::warn!(error = ?e, "app profile load failed");
+                                tracing::warn!(error = ?e, "profile load failed");
                                 state_store.set_error(None);
                                 continue;
                             }

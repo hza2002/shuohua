@@ -87,15 +87,16 @@ fn check_hotkey() {
 }
 
 fn check_asr_provider() {
-    if crate::config::load_from(&crate::config::default_path()).is_err() {
-        return;
-    }
-    let apps_dir = crate::app_profile::default_dir();
-    let profile = match crate::app_profile::load_for_app(&apps_dir, None) {
+    let cfg = match crate::config::load_from(&crate::config::default_path()) {
+        Ok(cfg) => cfg,
+        Err(_) => return,
+    };
+    let profile_dir = crate::profile::default_dir();
+    let profile = match crate::profile::load_for_app(&profile_dir, &cfg.profile, None) {
         Ok(profile) => profile,
         Err(e) => {
-            println!("asr: ERROR default app profile unreadable: {e:#}");
-            println!("hint: edit {}", apps_dir.join("default.toml").display());
+            println!("asr: ERROR default profile unreadable: {e:#}");
+            println!("hint: edit {}", profile_dir.join("default.toml").display());
             return;
         }
     };
@@ -148,7 +149,7 @@ fn check_asr_provider() {
         }
         other => {
             println!("asr: ERROR unsupported provider {other:?}");
-            println!("hint: use app profile [asr] provider = \"doubao\" or \"apple\"");
+            println!("hint: use profile [asr] provider = \"doubao\" or \"apple\"");
         }
     }
 }

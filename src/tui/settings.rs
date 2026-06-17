@@ -12,7 +12,7 @@ pub struct SettingsRow {
 pub fn load_rows() -> Vec<SettingsRow> {
     let mut rows = Vec::new();
     push_global_rows(&mut rows);
-    push_app_rows(&mut rows);
+    push_profile_rows(&mut rows);
     push_asr_rows(&mut rows);
     push_post_rows(&mut rows);
     rows
@@ -61,8 +61,8 @@ fn push_global_rows(rows: &mut Vec<SettingsRow>) {
     }
 }
 
-fn push_app_rows(rows: &mut Vec<SettingsRow>) {
-    let dir = crate::app_profile::default_dir();
+fn push_profile_rows(rows: &mut Vec<SettingsRow>) {
+    let dir = crate::profile::default_dir();
     for path in toml_files(&dir) {
         let source = path.display().to_string();
         match fs::read_to_string(&path)
@@ -98,13 +98,13 @@ fn push_app_rows(rows: &mut Vec<SettingsRow>) {
                     .and_then(|s| s.to_str())
                     .unwrap_or("profile");
                 rows.push(row(
-                    "app",
+                    "profile",
                     key,
                     format!("{name} | {provider} | {chain}"),
                     &source,
                 ));
             }
-            None => rows.push(row("app", "parse", "error", &source)),
+            None => rows.push(row("profile", "parse", "error", &source)),
         }
     }
 }

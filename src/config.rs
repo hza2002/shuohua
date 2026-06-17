@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -20,6 +21,8 @@ pub struct Config {
     pub overlay: OverlayCfg,
     #[serde(default)]
     pub post: PostCfg,
+    #[serde(default)]
+    pub profile: ProfileRouteCfg,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -126,6 +129,27 @@ fn default_min_start_voiced_frames() -> u32 {
 pub struct PostCfg {
     #[serde(default = "default_post_timeout_ms")]
     pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct ProfileRouteCfg {
+    #[serde(default = "default_profile_name")]
+    pub default: String,
+    #[serde(flatten)]
+    pub routes: BTreeMap<String, Vec<String>>,
+}
+
+impl Default for ProfileRouteCfg {
+    fn default() -> Self {
+        Self {
+            default: default_profile_name(),
+            routes: BTreeMap::new(),
+        }
+    }
+}
+
+fn default_profile_name() -> String {
+    "default".to_string()
 }
 
 impl Default for PostCfg {
@@ -264,7 +288,7 @@ pub fn load_from(path: &Path) -> Result<Config> {
     let body = std::fs::read_to_string(path).with_context(|| {
         format!(
             "config not found at {}\nhint: create ~/.config/shuohua/config.toml, \
-             ~/.config/shuohua/apps/default.toml, and ~/.config/shuohua/asr/<provider>.toml",
+             ~/.config/shuohua/profile/default.toml, and ~/.config/shuohua/asr/<provider>.toml",
             path.display()
         )
     })?;
@@ -293,6 +317,8 @@ trigger = "f16"
         assert!(cfg.voice.auto_paste);
         assert_eq!(cfg.ui.language, "auto");
         assert_eq!(cfg.post.timeout_ms, 2000);
+        assert_eq!(cfg.profile.default, "default");
+        assert!(cfg.profile.routes.is_empty());
         assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
         assert_eq!(cfg.overlay.glass_variant, 19);
         assert_eq!(cfg.overlay.glass_style, GlassStyle::Clear);
@@ -463,5 +489,31 @@ timeout_ms = 3500
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.post.timeout_ms, 3500);
+    }
+
+    #[test]
+    fn profile_routes_are_configurable() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+
+[profile]
+default = "default"
+agent = ["com.mitchellh.ghostty", "com.apple.Terminal"]
+coding = ["com.apple.dt.Xcode"]
+"#;
+        let cfg = parse(body).unwrap();
+        assert_eq!(cfg.profile.default, "default");
+        assert_eq!(
+            cfg.profile.routes.get("agent").unwrap(),
+            &vec![
+                "com.mitchellh.ghostty".to_string(),
+                "com.apple.Terminal".to_string()
+            ]
+        );
+        assert_eq!(
+            cfg.profile.routes.get("coding").unwrap(),
+            &vec!["com.apple.dt.Xcode".to_string()]
+        );
     }
 }

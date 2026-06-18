@@ -1,6 +1,7 @@
 use std::time::Instant;
 
-use crate::asr::types::AsrEvent;
+use crate::asr::types::{AsrError, AsrEvent};
+use crate::voice::capture;
 
 #[derive(Debug, Clone)]
 #[cfg_attr(not(feature = "dev"), allow(dead_code))]
@@ -440,6 +441,46 @@ mod imp {
 }
 
 pub use imp::RecordingObserver;
+
+#[inline]
+pub(crate) fn instant_elapsed_ms(started: Instant) -> u64 {
+    started.elapsed().as_millis() as u64
+}
+
+#[inline]
+pub(crate) fn observe_asr_event(trace: &mut RecordingObserver, started: Instant, event: &AsrEvent) {
+    trace.on_asr_event(instant_elapsed_ms(started), event);
+}
+
+#[inline]
+pub(crate) fn observe_asr_error(trace: &mut RecordingObserver, started: Instant, err: AsrError) {
+    observe_asr_event(trace, started, &AsrEvent::Error { err });
+}
+
+#[inline]
+pub(crate) fn observe_pcm(trace: &mut RecordingObserver, samples: &[i16]) {
+    trace.on_pcm(samples);
+}
+
+#[inline]
+pub(crate) fn observe_provider_opened(trace: &mut RecordingObserver, started: Instant) {
+    trace.on_provider_opened(instant_elapsed_ms(started));
+}
+
+#[inline]
+pub(crate) fn observe_session(trace: &mut RecordingObserver, phase: SessionPhase) {
+    trace.on_session(phase);
+}
+
+#[inline]
+pub(crate) fn observe_finish(trace: &mut RecordingObserver, status: &str, audio_samples: u64) {
+    trace.on_finish(status, capture::samples_to_ms(audio_samples));
+}
+
+#[inline]
+pub(crate) fn observe_finish_ms(trace: &mut RecordingObserver, status: &str, audio_ms: u64) {
+    trace.on_finish(status, audio_ms);
+}
 
 #[cfg(all(test, feature = "dev"))]
 mod tests {

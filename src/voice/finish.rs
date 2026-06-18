@@ -30,7 +30,11 @@ use crate::voice::capture::{
     wrap_single_session, SegmentCapture, SessionCapture,
 };
 use crate::voice::meter::MeterCollector;
-use crate::voice::observer::{RecordingObserver, SessionPhase, TraceStart};
+use crate::voice::observer::{
+    instant_elapsed_ms, observe_asr_error, observe_asr_event, observe_finish, observe_finish_ms,
+    observe_pcm, observe_provider_opened, observe_session, RecordingObserver, SessionPhase,
+    TraceStart,
+};
 use crate::voice::{dispatch, recorder, SessionControl};
 use std::path::PathBuf;
 use tokio::sync::{mpsc, watch};
@@ -110,38 +114,6 @@ fn send_error_overlay(params: &SessionParams, message: String) {
             kind: TextKind::Error,
         },
     );
-}
-
-fn observe_asr_event(trace: &mut RecordingObserver, started_at: Instant, event: &AsrEvent) {
-    trace.on_asr_event(instant_elapsed_ms(started_at), event);
-}
-
-fn observe_asr_error(
-    trace: &mut RecordingObserver,
-    started_at: Instant,
-    err: crate::asr::types::AsrError,
-) {
-    observe_asr_event(trace, started_at, &AsrEvent::Error { err });
-}
-
-fn observe_pcm(trace: &mut RecordingObserver, samples: &[i16]) {
-    trace.on_pcm(samples);
-}
-
-fn observe_provider_opened(trace: &mut RecordingObserver, started_at: Instant) {
-    trace.on_provider_opened(instant_elapsed_ms(started_at));
-}
-
-fn observe_session(trace: &mut RecordingObserver, phase: SessionPhase) {
-    trace.on_session(phase);
-}
-
-fn observe_finish(trace: &mut RecordingObserver, status: &str, audio_samples: u64) {
-    trace.on_finish(status, samples_to_ms(audio_samples));
-}
-
-fn observe_finish_ms(trace: &mut RecordingObserver, status: &str, audio_ms: u64) {
-    trace.on_finish(status, audio_ms);
 }
 
 pub struct SessionParams {
@@ -1869,10 +1841,6 @@ fn append_history(input: HistoryInput) -> Option<HistoryRecord> {
         "recording ended"
     );
     Some(record)
-}
-
-fn instant_elapsed_ms(recording_started_instant: Instant) -> u64 {
-    recording_started_instant.elapsed().as_millis() as u64
 }
 
 impl From<post::PipelineStep> for PipelineStepHistory {

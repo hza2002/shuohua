@@ -25,6 +25,12 @@ pub enum OverlayCmd {
     AppendSegment {
         text: String,
     },
+    /// 用 provider session 的最终全文替换本 session 已追加到 overlay 的
+    /// utterance segments。`segments` 是要从尾部替换的 segment 数。
+    ReplaceRecentSegments {
+        segments: usize,
+        text: String,
+    },
     /// 非阻断提示，进 meta 行黄字，ttl 到点自动恢复 chain_summary。
     /// 替代以前的 toast warn 用法。
     Notice {
@@ -202,6 +208,14 @@ impl OverlayModel {
                 self.segments.push(text);
                 self.partial.clear();
             }
+            OverlayCmd::ReplaceRecentSegments { segments, text } => {
+                let keep = self.segments.len().saturating_sub(segments);
+                self.segments.truncate(keep);
+                if !text.is_empty() {
+                    self.segments.push(text);
+                }
+                self.partial.clear();
+            }
             OverlayCmd::Notice { text, ttl_ms } => {
                 self.notice = Some(Notice { text, ttl_ms });
             }
@@ -322,6 +336,40 @@ mod tests {
             },
         );
         assert_eq!(model.display_text(), "请检查输入设备");
+    }
+
+    #[test]
+    fn replace_recent_segments_only_rewrites_tail_session() {
+        i18n::init("en-US");
+        let mut model = OverlayModel::default();
+        apply(
+            &mut model,
+            OverlayCmd::AppendSegment {
+                text: "第一段。".to_string(),
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::AppendSegment {
+                text: "第二".to_string(),
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::AppendSegment {
+                text: "段".to_string(),
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::ReplaceRecentSegments {
+                segments: 2,
+                text: "第二段。".to_string(),
+            },
+        );
+
+        assert_eq!(model.segments, vec!["第一段。", "第二段。"]);
+        assert_eq!(model.display_text(), "第一段。第二段。");
     }
 
     #[test]

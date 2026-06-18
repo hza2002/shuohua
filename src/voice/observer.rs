@@ -168,6 +168,13 @@ mod imp {
                         "end_ms": instant_to_ms(started_instant, *ended_at),
                     }));
                 }
+                AsrEvent::Final { text } => {
+                    self.write(json!({
+                        "event": "asr_final",
+                        "t_ms": t_ms,
+                        "text": text,
+                    }));
+                }
                 AsrEvent::Error { err } => {
                     self.write(json!({
                         "event": "asr_error",

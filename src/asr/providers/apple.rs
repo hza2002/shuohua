@@ -46,7 +46,9 @@ impl AppleProvider {
                 match event {
                     AsrEvent::Done => return Ok(()),
                     AsrEvent::Error { err } => return Err(err),
-                    AsrEvent::Partial { .. } | AsrEvent::Segment { .. } => {}
+                    AsrEvent::Partial { .. }
+                    | AsrEvent::Segment { .. }
+                    | AsrEvent::Final { .. } => {}
                 }
             }
             Err(AsrError::Protocol("apple helper closed before done".into()))

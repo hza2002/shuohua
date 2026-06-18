@@ -346,7 +346,7 @@ impl DriftProbe {
     fn check_final(&self, doubao_text: &str) {
         let ours: String = self.snapshots.concat();
         if ours != doubao_text {
-            tracing::warn!(
+            tracing::debug!(
                 ours_chars = ours.chars().count(),
                 doubao_chars = doubao_text.chars().count(),
                 "doubao final text mismatch"
@@ -444,6 +444,13 @@ async fn handle_response(
         }
         if frame.is_last {
             drift.check_final(&result.text);
+            if !result.text.is_empty() {
+                let _ = evt_tx
+                    .send(AsrEvent::Final {
+                        text: result.text.clone(),
+                    })
+                    .await;
+            }
         }
         // Partial 只取尾巴：result.text 是 cumulative 全文，会与已 emit 的
         // Segment 前缀重叠，导致 overlay (segments + partial) 复读。
@@ -822,6 +829,34 @@ access_key = "sk"
     #[test]
     fn compute_partial_empty_when_no_utterances() {
         assert_eq!(compute_partial_text(&[]), "");
+    }
+
+    #[tokio::test]
+    async fn last_response_emits_session_final_from_result_text() {
+        let body = r#"{"result":{"text":"你好，世界","utterances":[{"text":"你好","definite":true},{"text":"世界","definite":true}]}}"#;
+        let mut data = vec![0x11, 0x92, 0x10, 0x00]; // server full response + last flag
+        data.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        data.extend_from_slice(body.as_bytes());
+
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut definite_emitted = 0;
+        let mut drift = DriftProbe::new();
+        let mut seq = 0;
+        let action = handle_response(
+            &data,
+            Instant::now(),
+            &mut definite_emitted,
+            &mut drift,
+            &mut seq,
+            &tx,
+        )
+        .await;
+
+        assert!(matches!(action, ResponseAction::Done));
+        assert!(matches!(rx.recv().await, Some(AsrEvent::Segment { text, .. }) if text == "你好"));
+        assert!(matches!(rx.recv().await, Some(AsrEvent::Segment { text, .. }) if text == "世界"));
+        assert!(matches!(rx.recv().await, Some(AsrEvent::Final { text }) if text == "你好，世界"));
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

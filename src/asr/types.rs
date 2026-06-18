@@ -76,6 +76,12 @@ pub enum AsrEvent {
         started_at: Instant,
         ended_at: Instant,
     },
+    /// provider 对当前 ASR session 给出的最终全文。可选事件；provider 不支持
+    /// 时 voice 层用已收到的 Segment 拼接结果作为 fallback。
+    ///
+    /// 这个事件是 session-scoped，不替代实时 Partial/Segment；它只用于
+    /// session 收口、history 和 post chain 的原始 ASR 文本。
+    Final { text: String },
     /// 非取消类错误。voice 模块决定降级策略。
     Error { err: AsrError },
     /// session 终结：is_last + 最后一段已发完。channel 应在此之后关闭。

@@ -291,7 +291,9 @@ async fn run_single_session_recording(
     observe_provider_opened(&mut trace, recording_started_instant);
 
     let mut pending_segments: Vec<SegmentCapture> = Vec::new();
+    let mut pending_overlay_segments: usize = 0;
     let mut audio_samples_sent: u64 = 0;
+    let mut session_final_text: Option<String> = None;
     let mut stop_requested = false;
     let mut cancel_requested = false;
     let mut terminal_error: Option<HistoryError> = None;
@@ -352,6 +354,22 @@ async fn run_single_session_recording(
             ev = events.recv() => {
                 match ev {
                     None => break,
+                    Some(AsrEvent::Final { text }) => {
+                        observe_asr_event(
+                            &mut trace,
+                            recording_started_instant,
+                            &AsrEvent::Final { text: text.clone() },
+                        );
+                        session_final_text = Some(text.clone());
+                        overlay_send(
+                            &params,
+                            OverlayCmd::ReplaceRecentSegments {
+                                segments: pending_overlay_segments,
+                                text,
+                            },
+                        );
+                        pending_overlay_segments = 1;
+                    }
                     Some(AsrEvent::Partial { text, seq }) => {
                         observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Partial { text: text.clone(), seq });
                         params.state.partial(recording_id.clone(), text.clone());
@@ -376,6 +394,7 @@ async fn run_single_session_recording(
                         observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Segment { text: text.clone(), started_at, ended_at });
                         params.state.segment(recording_id.clone(), text.clone());
                         overlay_send(&params, OverlayCmd::AppendSegment { text: text.clone() });
+                        pending_overlay_segments += 1;
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Error { err }) => {
@@ -402,6 +421,7 @@ async fn run_single_session_recording(
                                 recording_started_instant,
                                 audio_samples_sent,
                                 pending_segments,
+                                session_final_text,
                             ),
                             pipeline: Vec::new(),
                             app: app_context.bundle_id.clone(),
@@ -455,6 +475,8 @@ async fn run_single_session_recording(
                 &mut session,
                 &mut events,
                 &mut pending_segments,
+                &mut session_final_text,
+                &mut pending_overlay_segments,
                 &params.state,
                 &recording_id,
                 params.stop_delay_ms,
@@ -480,10 +502,7 @@ async fn run_single_session_recording(
 
     let _ = session.close().await;
     let provider_name = provider.name().to_string();
-    let raw_text = pending_segments
-        .iter()
-        .map(|s| s.text.as_str())
-        .collect::<String>();
+    let raw_text = session_text_from_parts(&pending_segments, session_final_text.as_deref());
     if cancel_requested {
         tracing::info!(recording_id = %recording_id, "recording canceled");
         params.state.set_idle();
@@ -500,6 +519,7 @@ async fn run_single_session_recording(
                 recording_started_instant,
                 audio_samples_sent,
                 pending_segments,
+                session_final_text,
             ),
             pipeline: Vec::new(),
             app: app_context.bundle_id,
@@ -517,16 +537,21 @@ async fn run_single_session_recording(
     let (final_text, pipeline, status, error) = if terminal_error.is_some() {
         (raw_text.clone(), Vec::new(), HistoryStatus::Error, None)
     } else {
-        dispatch_with_post_chain(&pending_segments, params.auto_paste, &app_context, &params)
-            .await
-            .unwrap_or_else(|err| {
-                (
-                    raw_text.clone(),
-                    Vec::new(),
-                    HistoryStatus::Error,
-                    Some(err),
-                )
-            })
+        dispatch_with_post_chain(
+            &[raw_text.clone()],
+            params.auto_paste,
+            &app_context,
+            &params,
+        )
+        .await
+        .unwrap_or_else(|err| {
+            (
+                raw_text.clone(),
+                Vec::new(),
+                HistoryStatus::Error,
+                Some(err),
+            )
+        })
     };
     for step in &pipeline {
         params
@@ -585,6 +610,7 @@ async fn run_single_session_recording(
             recording_started_instant,
             audio_samples_sent,
             pending_segments,
+            session_final_text,
         ),
         pipeline,
         app: app_context.bundle_id,
@@ -768,6 +794,8 @@ async fn run_multi_session_recording(
     let mut current_session_start_sample: u64 = 0;
     let mut current_session_samples: u64 = 0;
     let mut current_pending_segments: Vec<SegmentCapture> = Vec::new();
+    let mut current_pending_overlay_segments: usize = 0;
+    let mut current_session_final_text: Option<String> = None;
     let mut last_sent_sample: u64 = 0;
     let mut total_audio_samples: u64 = 0;
     let mut stop_requested = false;
@@ -850,6 +878,22 @@ async fn run_multi_session_recording(
                     ev = events.recv() => {
                         match ev {
                             None => { stop_requested = true; break 'active; }
+                            Some(AsrEvent::Final { text }) => {
+                                observe_asr_event(
+                                    &mut trace,
+                                    recording_started_instant,
+                                    &AsrEvent::Final { text: text.clone() },
+                                );
+                                current_session_final_text = Some(text.clone());
+                                overlay_send(
+                                    &params,
+                                    OverlayCmd::ReplaceRecentSegments {
+                                        segments: current_pending_overlay_segments,
+                                        text,
+                                    },
+                                );
+                                current_pending_overlay_segments = 1;
+                            }
                             Some(AsrEvent::Partial { text, seq }) => {
                                 observe_asr_event(
                                     &mut trace,
@@ -876,6 +920,7 @@ async fn run_multi_session_recording(
                                 );
                                 params.state.segment(recording_id.clone(), text.clone());
                                 overlay_send(&params, OverlayCmd::AppendSegment { text: text.clone() });
+                                current_pending_overlay_segments += 1;
                                 current_pending_segments.push(SegmentCapture { text, started_at, ended_at });
                             }
                             Some(AsrEvent::Error { err }) => {
@@ -994,6 +1039,8 @@ async fn run_multi_session_recording(
                 active_session_ref,
                 &mut events,
                 &mut current_pending_segments,
+                &mut current_session_final_text,
+                &mut current_pending_overlay_segments,
                 params.finalize_timeout_ms,
                 &mut control_rx,
                 &mut terminal_error,
@@ -1055,6 +1102,7 @@ async fn run_multi_session_recording(
                 ended_at,
                 audio_samples: current_session_samples,
                 segments: std::mem::take(&mut current_pending_segments),
+                final_text: current_session_final_text.take(),
             });
             current_session_samples = 0;
 
@@ -1169,6 +1217,8 @@ async fn run_multi_session_recording(
             let replay = timeline.slice_from(send_start);
             current_session_start_sample = replay.start_sample;
             current_session_samples = replay.samples.len() as u64;
+            current_pending_overlay_segments = 0;
+            current_session_final_text = None;
             total_audio_samples += replay.samples.len() as u64;
             last_sent_sample = replay.end_sample();
             if !replay.samples.is_empty() {
@@ -1219,6 +1269,7 @@ async fn run_multi_session_recording(
             ended_at: recording_started_instant + Duration::from_millis(session_end_ms),
             audio_samples: current_session_samples,
             segments: std::mem::take(&mut current_pending_segments),
+            final_text: current_session_final_text.take(),
         });
     }
     if cancel_requested {
@@ -1229,11 +1280,8 @@ async fn run_multi_session_recording(
     }
 
     let provider_name = provider.name().to_string();
-    let raw_text: String = sessions
-        .iter()
-        .flat_map(|s| s.segments.iter())
-        .map(|s| s.text.as_str())
-        .collect();
+    let session_texts = session_texts(&sessions);
+    let raw_text: String = session_texts.concat();
 
     if cancel_requested {
         tracing::info!(recording_id = %recording_id, "recording canceled");
@@ -1259,14 +1307,10 @@ async fn run_multi_session_recording(
         return;
     }
 
-    let all_segments: Vec<SegmentCapture> = sessions
-        .iter()
-        .flat_map(|s| s.segments.iter().cloned())
-        .collect();
     let (final_text, pipeline, status, error) = if terminal_error.is_some() {
         (raw_text.clone(), Vec::new(), HistoryStatus::Error, None)
     } else {
-        dispatch_with_post_chain(&all_segments, params.auto_paste, &app_context, &params)
+        dispatch_with_post_chain(&session_texts, params.auto_paste, &app_context, &params)
             .await
             .unwrap_or_else(|err| {
                 (
@@ -1343,6 +1387,8 @@ async fn finish(
     session: &mut Box<dyn AsrSession>,
     events: &mut mpsc::Receiver<AsrEvent>,
     pending_segments: &mut Vec<SegmentCapture>,
+    session_final_text: &mut Option<String>,
+    pending_overlay_segments: &mut usize,
     state: &crate::state::StateStore,
     recording_id: &str,
     stop_delay_ms: u32,
@@ -1381,9 +1427,24 @@ async fn finish(
                 }
             }
             ev = events.recv() => {
-                match ev {
-                    None => break,
-                    Some(AsrEvent::Segment { text, started_at, ended_at }) => {
+        match ev {
+            None => break,
+            Some(AsrEvent::Final { text }) => {
+                observe_asr_event(
+                    trace,
+                    recording_started_instant,
+                    &AsrEvent::Final { text: text.clone() },
+                );
+                *session_final_text = Some(text.clone());
+                if let Some(overlay) = overlay {
+                    overlay.send(OverlayCmd::ReplaceRecentSegments {
+                        segments: *pending_overlay_segments,
+                        text,
+                    });
+                }
+                *pending_overlay_segments = 1;
+            }
+            Some(AsrEvent::Segment { text, started_at, ended_at }) => {
                         observe_asr_event(
                             trace,
                             recording_started_instant,
@@ -1393,6 +1454,7 @@ async fn finish(
                         if let Some(overlay) = overlay {
                             overlay.send(OverlayCmd::AppendSegment { text: text.clone() });
                         }
+                        *pending_overlay_segments += 1;
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Done) => {
@@ -1434,6 +1496,8 @@ async fn finish(
         session,
         events,
         pending_segments,
+        session_final_text,
+        pending_overlay_segments,
         finalize_timeout_ms,
         control_rx,
         terminal_error,
@@ -1498,6 +1562,8 @@ async fn finalize_provider_session(
     session: &mut Box<dyn AsrSession>,
     events: &mut mpsc::Receiver<AsrEvent>,
     pending_segments: &mut Vec<SegmentCapture>,
+    session_final_text: &mut Option<String>,
+    pending_overlay_segments: &mut usize,
     finalize_timeout_ms: u64,
     control_rx: &mut watch::Receiver<SessionControl>,
     terminal_error: &mut Option<HistoryError>,
@@ -1533,6 +1599,21 @@ async fn finalize_provider_session(
             ev = events.recv() => {
                 match ev {
                     None => return Ok(FinalizeOutcome::Done),
+                    Some(AsrEvent::Final { text }) => {
+                        observe_asr_event(
+                            trace,
+                            recording_started_instant,
+                            &AsrEvent::Final { text: text.clone() },
+                        );
+                        *session_final_text = Some(text.clone());
+                        if let Some(overlay) = overlay {
+                            overlay.send(OverlayCmd::ReplaceRecentSegments {
+                                segments: *pending_overlay_segments,
+                                text,
+                            });
+                        }
+                        *pending_overlay_segments = 1;
+                    }
                     Some(AsrEvent::Done) => {
                         observe_asr_event(trace, recording_started_instant, &AsrEvent::Done);
                         return Ok(FinalizeOutcome::Done);
@@ -1549,6 +1630,7 @@ async fn finalize_provider_session(
                         if let Some(overlay) = overlay {
                             overlay.send(OverlayCmd::AppendSegment { text: text.clone() });
                         }
+                        *pending_overlay_segments += 1;
                         pending_segments.push(SegmentCapture { text, started_at, ended_at });
                     }
                     Some(AsrEvent::Partial { text, seq }) => {
@@ -1595,7 +1677,7 @@ async fn cancel_session(
 }
 
 async fn dispatch_with_post_chain(
-    segments: &[SegmentCapture],
+    segment_texts: &[String],
     auto_paste: bool,
     app_context: &post::AppContext,
     params: &SessionParams,
@@ -1608,12 +1690,11 @@ async fn dispatch_with_post_chain(
     ),
     HistoryError,
 > {
-    let segment_texts: Vec<String> = segments.iter().map(|s| s.text.clone()).collect();
     let raw_text: String = segment_texts.concat();
     if raw_text.is_empty() {
         return Ok((String::new(), Vec::new(), HistoryStatus::Canceled, None));
     }
-    let initial = PipelineText::new(raw_text, segment_texts);
+    let initial = PipelineText::new(raw_text, segment_texts.to_vec());
     overlay_send(
         params,
         OverlayCmd::SetState {
@@ -1703,6 +1784,8 @@ struct SessionCapture {
     audio_samples: u64,
     /// 该 session 收到的 ASR segments，按 emit 顺序。
     segments: Vec<SegmentCapture>,
+    /// provider 对该 session 给出的最终全文。没有时 fallback 到 segments concat。
+    final_text: Option<String>,
 }
 
 /// 当前单 session 路径把整段 PCM 视作一个 `SessionCapture`。
@@ -1714,8 +1797,9 @@ fn wrap_single_session(
     started_at: Instant,
     audio_samples: u64,
     segments: Vec<SegmentCapture>,
+    final_text: Option<String>,
 ) -> Vec<SessionCapture> {
-    if segments.is_empty() && audio_samples == 0 {
+    if segments.is_empty() && final_text.as_deref().unwrap_or("").is_empty() && audio_samples == 0 {
         return Vec::new();
     }
     let ended_at = started_at + Duration::from_millis(samples_to_ms(audio_samples));
@@ -1724,11 +1808,27 @@ fn wrap_single_session(
         ended_at,
         audio_samples,
         segments,
+        final_text,
     }]
 }
 
-fn session_text(segments: &[SegmentCapture]) -> String {
+fn session_text_from_parts(segments: &[SegmentCapture], final_text: Option<&str>) -> String {
+    if let Some(text) = final_text.filter(|s| !s.is_empty()) {
+        return text.to_string();
+    }
     segments.iter().map(|s| s.text.as_str()).collect()
+}
+
+fn session_text(session: &SessionCapture) -> String {
+    session_text_from_parts(&session.segments, session.final_text.as_deref())
+}
+
+fn session_texts(sessions: &[SessionCapture]) -> Vec<String> {
+    sessions
+        .iter()
+        .map(session_text)
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn build_asr_sessions(
@@ -1739,7 +1839,7 @@ fn build_asr_sessions(
     sessions
         .iter()
         .map(|s| AsrSessionHistory {
-            text: session_text(&s.segments),
+            text: session_text(s),
             started_at: instant_to_datetime(
                 recording_started_at,
                 recording_started_instant,
@@ -1944,6 +2044,7 @@ mod tests {
             ended_at: base + std::time::Duration::from_millis(1_500),
             audio_samples: 16_000 * 1_500 / 1_000,
             segments,
+            final_text: None,
         }];
         let input = HistoryInput {
             id: "01HXYZABCDEF0123456789ABCD".to_string(),
@@ -2006,12 +2107,14 @@ mod tests {
                 ended_at: base + std::time::Duration::from_millis(800),
                 audio_samples: 16_000 * 800 / 1_000,
                 segments: vec![segment(base, "hello ", 0, 600)],
+                final_text: None,
             },
             SessionCapture {
                 started_at: base + std::time::Duration::from_millis(2_000),
                 ended_at: base + std::time::Duration::from_millis(2_900),
                 audio_samples: 16_000 * 900 / 1_000,
                 segments: vec![segment(base, "world", 2_100, 2_800)],
+                final_text: None,
             },
         ];
         let input = HistoryInput {
@@ -2080,7 +2183,7 @@ mod tests {
         let base = Instant::now();
         let segments = vec![segment(base, "hello", 0, 800)];
         let audio_samples = 16_000 * 1_500 / 1_000; // 1500ms
-        let sessions = wrap_single_session(base, audio_samples, segments);
+        let sessions = wrap_single_session(base, audio_samples, segments, None);
         assert_eq!(sessions.len(), 1);
         let s = &sessions[0];
         let span_ms = s
@@ -2095,8 +2198,21 @@ mod tests {
     #[test]
     fn empty_single_session_wrap_returns_empty_vec() {
         let base = Instant::now();
-        let sessions = wrap_single_session(base, 0, Vec::new());
+        let sessions = wrap_single_session(base, 0, Vec::new(), None);
         assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn session_text_prefers_final_text_over_segment_concat() {
+        let base = Instant::now();
+        let session = SessionCapture {
+            started_at: base,
+            ended_at: base + std::time::Duration::from_millis(900),
+            audio_samples: 16_000 * 900 / 1_000,
+            segments: vec![segment(base, "a", 0, 100), segment(base, "b", 100, 200)],
+            final_text: Some("ab.".to_string()),
+        };
+        assert_eq!(session_text(&session), "ab.");
     }
 
     #[test]
@@ -2110,12 +2226,14 @@ mod tests {
                 ended_at: base + std::time::Duration::from_millis(800),
                 audio_samples: 16_000 * 800 / 1_000,
                 segments: vec![segment(base, "a", 0, 700)],
+                final_text: None,
             },
             SessionCapture {
                 started_at: base + std::time::Duration::from_millis(700),
                 ended_at: base + std::time::Duration::from_millis(1_500),
                 audio_samples: 16_000 * 800 / 1_000,
                 segments: vec![segment(base, "b", 800, 1_400)],
+                final_text: None,
             },
         ];
         let input = HistoryInput {

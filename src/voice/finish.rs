@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 
 use crate::asr::types::{AsrEvent, AsrProvider, AsrSession, LanguageMode, SessionCtx};
 use crate::overlay::{OverlayCmd, OverlayHandle, OverlayState, TextKind};
-use crate::post::{self, PipelineStepStatus, PipelineText};
-use crate::state::history::{HistoryError, HistoryStatus, PipelineStepHistory};
+use crate::post;
+use crate::state::history::{HistoryError, HistoryStatus};
 use crate::state::{SessionMeta, SessionPhase as UiSessionPhase, StateStore};
 use crate::voice::capture::{
     samples_to_ms, session_text_from_parts, session_texts, wrap_single_session, SegmentCapture,
@@ -34,7 +34,8 @@ use crate::voice::observer::{
     observe_pcm, observe_provider_opened, observe_session, RecordingObserver, SessionPhase,
     TraceStart,
 };
-use crate::voice::{dispatch, recorder, SessionControl};
+use crate::voice::post_dispatch::dispatch_with_post_chain;
+use crate::voice::{recorder, SessionControl};
 use std::path::PathBuf;
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep_until, Instant as TokioInstant};
@@ -92,10 +93,6 @@ fn emit_session_meta(
         },
     );
 }
-
-/// 非阻断 warn 在 meta 行上显示多久。跟 overlay 的 ERROR_TTL_MS 对齐，
-/// 心智一致：错误/警告都 3s。
-const NOTICE_TTL_MS: u32 = 3000;
 
 /// 把 overlay 切到 Error 终态：状态字红色 icon + text 区显示错误文案（红字）。
 /// view 的 tick 会在 ERROR_TTL_MS 后自动 hide。所有 error 路径走这一条。
@@ -510,21 +507,21 @@ async fn run_single_session_recording(
     let (final_text, pipeline, status, error) = if terminal_error.is_some() {
         (raw_text.clone(), Vec::new(), HistoryStatus::Error, None)
     } else {
-        dispatch_with_post_chain(
+        let outcome = dispatch_with_post_chain(
             std::slice::from_ref(&raw_text),
             params.auto_paste,
             &app_context,
-            &params,
+            &params.post_chain,
+            params.post_timeout_ms,
+            params.overlay.as_ref(),
         )
-        .await
-        .unwrap_or_else(|err| {
-            (
-                raw_text.clone(),
-                Vec::new(),
-                HistoryStatus::Error,
-                Some(err),
-            )
-        })
+        .await;
+        (
+            outcome.final_text,
+            outcome.pipeline,
+            outcome.status,
+            outcome.error,
+        )
     };
     for step in &pipeline {
         params
@@ -1282,16 +1279,21 @@ async fn run_multi_session_recording(
     let (final_text, pipeline, status, error) = if terminal_error.is_some() {
         (raw_text.clone(), Vec::new(), HistoryStatus::Error, None)
     } else {
-        dispatch_with_post_chain(&session_texts, params.auto_paste, &app_context, &params)
-            .await
-            .unwrap_or_else(|err| {
-                (
-                    raw_text.clone(),
-                    Vec::new(),
-                    HistoryStatus::Error,
-                    Some(err),
-                )
-            })
+        let outcome = dispatch_with_post_chain(
+            &session_texts,
+            params.auto_paste,
+            &app_context,
+            &params.post_chain,
+            params.post_timeout_ms,
+            params.overlay.as_ref(),
+        )
+        .await;
+        (
+            outcome.final_text,
+            outcome.pipeline,
+            outcome.status,
+            outcome.error,
+        )
     };
     for step in &pipeline {
         params
@@ -1527,75 +1529,6 @@ async fn cancel_session(
         let _ = session.send_pcm(&samples, false).await;
         *audio_samples_sent += samples.len() as u64;
     }
-}
-
-async fn dispatch_with_post_chain(
-    segment_texts: &[String],
-    auto_paste: bool,
-    app_context: &post::AppContext,
-    params: &SessionParams,
-) -> Result<
-    (
-        String,
-        Vec<PipelineStepHistory>,
-        HistoryStatus,
-        Option<HistoryError>,
-    ),
-    HistoryError,
-> {
-    let raw_text: String = segment_texts.concat();
-    if raw_text.is_empty() {
-        return Ok((String::new(), Vec::new(), HistoryStatus::Canceled, None));
-    }
-    let initial = PipelineText::new(raw_text, segment_texts.to_vec());
-    overlay_send(
-        params,
-        OverlayCmd::SetState {
-            state: OverlayState::Thinking,
-        },
-    );
-    let (out, steps) = post::run_chain(
-        &params.post_chain.processors,
-        initial,
-        app_context,
-        Duration::from_millis(params.post_timeout_ms),
-    )
-    .await;
-    for step in &steps {
-        match step.status {
-            PipelineStepStatus::Error | PipelineStepStatus::Timeout => {
-                let text = match step.status {
-                    PipelineStepStatus::Timeout => {
-                        crate::t!("notice.step_timeout", name = step.name)
-                    }
-                    _ => crate::t!("notice.step_failed", name = step.name),
-                };
-                overlay_send(
-                    params,
-                    OverlayCmd::Notice {
-                        text,
-                        ttl_ms: NOTICE_TTL_MS,
-                    },
-                );
-            }
-            PipelineStepStatus::Ok | PipelineStepStatus::Skipped => {}
-        }
-    }
-    let dispatched = out.text.clone();
-    let pipeline = steps.into_iter().map(PipelineStepHistory::from).collect();
-    if let Err(e) = dispatch::dispatch(&out.text, auto_paste) {
-        tracing::error!(error = ?e, "dispatch failed");
-        return Ok((
-            dispatched,
-            pipeline,
-            HistoryStatus::Error,
-            Some(HistoryError {
-                kind: "dispatch".to_string(),
-                msg: format!("{e:#}"),
-            }),
-        ));
-    }
-    Ok((dispatched, pipeline, HistoryStatus::Submitted, None))
 }
 
 fn prepare_audio_path(recording_id: &str) -> anyhow::Result<PathBuf> {

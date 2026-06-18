@@ -11,6 +11,7 @@ pub mod finish;
 pub(crate) mod history_build;
 pub mod meter;
 pub mod observer;
+pub(crate) mod post_dispatch;
 pub mod recorder;
 pub mod silero;
 pub mod timeline;

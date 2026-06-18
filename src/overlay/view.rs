@@ -281,6 +281,7 @@ impl OverlayView {
                     self.notice_until = None;
                     self.error_until = None;
                     self.pending_hide = false;
+                    self.clear_rendered_session();
                 }
                 _ => {}
             },
@@ -314,6 +315,7 @@ impl OverlayView {
                 self.error_until = None;
                 self.pending_hide = false;
                 self.peak_text_lines = 1;
+                self.clear_rendered_session();
             }
             OverlayCmd::Dismiss => {
                 // ESC 强制关，绕过 notice / error 延期。
@@ -323,6 +325,7 @@ impl OverlayView {
                 self.error_until = None;
                 self.pending_hide = false;
                 self.peak_text_lines = 1;
+                self.clear_rendered_session();
             }
             _ => {}
         }
@@ -345,6 +348,7 @@ impl OverlayView {
                 self.last_text_update = None;
                 self.pending_hide = false;
                 self.peak_text_lines = 1;
+                self.clear_rendered_session();
             }
         }
         if self.error_until.is_some_and(|until| now >= until) {
@@ -356,6 +360,7 @@ impl OverlayView {
             self.notice_until = None;
             self.pending_hide = false;
             self.peak_text_lines = 1;
+            self.clear_rendered_session();
         }
         self.render();
     }
@@ -560,6 +565,15 @@ impl OverlayView {
             }
             let _: () = msg_send![&self.text, setAttributedStringValue: &*attributed];
         }
+    }
+
+    fn clear_rendered_session(&mut self) {
+        self.text.setStringValue(&NSString::from_str(""));
+        self.stats.setStringValue(&NSString::from_str(""));
+        self.meta.setStringValue(&NSString::from_str(""));
+        self.last_visible_text.clear();
+        self.last_stats_text.clear();
+        self.last_meta_text.clear();
     }
 
     fn layout(&mut self, height: f64, lines: usize) {

@@ -4,38 +4,62 @@ use objc2::msg_send;
 use objc2::runtime::AnyClass;
 use objc2_foundation::ns_string;
 
+use crate::asr::types::{LanguageMode, SessionCtx};
 use crate::asr::AsrProvider;
+use crate::config::diagnostics::{AsrRuntimeTarget, LlmRuntimeTarget};
 use crate::ipc::protocol::{Command, Event};
+use crate::post::llm::LlmCleanup;
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Reserved for future network checks. M5 never sends PCM.
+    /// Include explicit runtime checks for configured ASR and LLM components.
     #[arg(long)]
-    pub full: bool,
+    pub runtime: bool,
 }
 
 pub fn run(args: DoctorArgs) -> Result<()> {
     println!("shuo doctor");
     println!("version: {}", env!("CARGO_PKG_VERSION"));
-    if args.full {
-        println!("asr.full: skipped in M5 (no PCM is sent by doctor)");
-    }
-
     check_config();
     check_hotkey();
     check_microphone_input();
-    check_asr_provider();
     check_uds();
     check_launchd();
     check_permissions();
+    if args.runtime {
+        check_runtime();
+    } else {
+        println!("runtime: skipped (run `shuo doctor --runtime` to test configured ASR/LLM runtime paths)");
+    }
     Ok(())
 }
 
 fn check_config() {
+    let report = crate::config::diagnostics::run_local();
+    println!(
+        "config.local: checked {} files under {}",
+        report.files_checked,
+        report.root.display()
+    );
+    for diagnostic in &report.diagnostics {
+        println!(
+            "config.{:?}: {:?} {} {}: {}",
+            diagnostic.scope,
+            diagnostic.severity,
+            diagnostic.source.display(),
+            diagnostic.path,
+            diagnostic.message
+        );
+    }
+    if report.has_errors() {
+        println!("config.local: ERROR");
+    } else {
+        println!("config.local: OK");
+    }
+
     let path = crate::config::default_path();
     match crate::config::load_from(&path) {
         Ok(cfg) => {
-            println!("config: OK {}", path.display());
             println!("effective config:");
             println!("  hotkey.trigger = {:?}", cfg.hotkey.trigger);
             println!("  hotkey.cancel = {:?}", cfg.hotkey.cancel);
@@ -49,7 +73,7 @@ fn check_config() {
             println!("  overlay.glass_variant = {}", cfg.overlay.glass_variant);
         }
         Err(e) => {
-            println!("config: ERROR {e:#}");
+            println!("effective config: unavailable ({e:#})");
             println!("hint: edit {}", path.display());
         }
     }
@@ -86,70 +110,174 @@ fn check_hotkey() {
     }
 }
 
-fn check_asr_provider() {
-    let cfg = match crate::config::load_from(&crate::config::default_path()) {
-        Ok(cfg) => cfg,
-        Err(_) => return,
-    };
-    let profile_dir = crate::profile::default_dir();
-    let profile = match crate::profile::load_for_app(&profile_dir, &cfg.profile, None) {
-        Ok(profile) => profile,
-        Err(e) => {
-            println!("asr: ERROR default profile unreadable: {e:#}");
-            println!("hint: edit {}", profile_dir.join("default.toml").display());
+fn check_runtime() {
+    let plan = match crate::config::diagnostics::runtime_check_plan() {
+        Ok(plan) => plan,
+        Err(report) => {
+            println!("runtime: skipped because local config diagnostics have errors");
+            for diagnostic in &report.diagnostics {
+                println!(
+                    "runtime.blocker.{:?}: {:?} {} {}: {}",
+                    diagnostic.scope,
+                    diagnostic.severity,
+                    diagnostic.source.display(),
+                    diagnostic.path,
+                    diagnostic.message
+                );
+            }
             return;
         }
     };
-    match profile.asr.provider.as_str() {
-        "doubao" => match crate::asr::providers::doubao::DoubaoProvider::new_with_overrides(Some(
-            &profile.asr.overrides,
+    if plan.is_empty() {
+        println!("runtime: no profiles found under {}", plan.root.display());
+        return;
+    }
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("create doctor runtime")
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            println!("runtime: ERROR {e:#}");
+            return;
+        }
+    };
+    rt.block_on(async {
+        for target in plan.asr_targets() {
+            check_asr_runtime(target).await;
+        }
+        let llm_targets = plan.llm_targets();
+        if llm_targets.is_empty() {
+            println!("llm.runtime: no referenced LLM components");
+        } else {
+            for target in llm_targets {
+                check_llm_runtime(target).await;
+            }
+        }
+    });
+}
+
+async fn check_asr_runtime(target: AsrRuntimeTarget) {
+    let ctx = SessionCtx {
+        language: LanguageMode::Multilingual {
+            hint: vec!["zh-CN".to_string(), "en-US".to_string()],
+        },
+        hotwords: target.hotwords.clone(),
+    };
+    match target.provider.as_str() {
+        "apple" => match crate::asr::providers::apple::AppleProvider::new_with_overrides(Some(
+            &target.overrides,
         )) {
             Ok(provider) => {
                 let caps = provider.caps();
-                println!(
-                    "asr.doubao: OK config readable (profile={:?}, hotwords={}, overrides={}, multilingual={})",
-                    profile.name,
-                    caps.hotwords,
-                    profile.asr.overrides.len(),
-                    caps.multilingual
-                );
-                println!("asr.doubao: network/auth handshake not run; no PCM sent");
+                match provider.check_runtime(ctx).await {
+                    Ok(()) => println!(
+                        "asr.apple.runtime: OK profiles=[{}] hotwords={} multilingual={}",
+                        target.profiles.join(", "),
+                        caps.hotwords,
+                        caps.multilingual
+                    ),
+                    Err(e) => {
+                        println!(
+                            "asr.apple.runtime: ERROR profiles=[{}] {e}",
+                            target.profiles.join(", ")
+                        );
+                        println!(
+                            "hint: edit {} or verify macOS SpeechAnalyzer availability",
+                            crate::asr::providers::apple::config_path().display()
+                        );
+                    }
+                }
             }
             Err(e) => {
-                println!("asr.doubao: ERROR {e:#}");
+                println!(
+                    "asr.apple.runtime: ERROR profiles=[{}] {e:#}",
+                    target.profiles.join(", ")
+                );
+                println!(
+                    "hint: edit {}",
+                    crate::asr::providers::apple::config_path().display()
+                );
+            }
+        },
+        "doubao" => match crate::asr::providers::doubao::DoubaoProvider::new_with_overrides(Some(
+            &target.overrides,
+        )) {
+            Ok(provider) => {
+                let caps = provider.caps();
+                match provider.check_runtime(ctx).await {
+                    Ok(()) => println!(
+                        "asr.doubao.runtime: OK profiles=[{}] hotwords={} multilingual={}",
+                        target.profiles.join(", "),
+                        caps.hotwords,
+                        caps.multilingual
+                    ),
+                    Err(e) => {
+                        println!(
+                            "asr.doubao.runtime: ERROR profiles=[{}] {e}",
+                            target.profiles.join(", ")
+                        );
+                        println!(
+                            "hint: edit {} and verify app_key/access_key",
+                            crate::asr::providers::doubao::config_path().display()
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                println!(
+                    "asr.doubao.runtime: ERROR profiles=[{}] {e:#}",
+                    target.profiles.join(", ")
+                );
                 println!(
                     "hint: edit {}",
                     crate::asr::providers::doubao::config_path().display()
                 );
             }
         },
-        "apple" => {
-            match crate::asr::providers::apple::AppleProvider::new_with_overrides(Some(
-                &profile.asr.overrides,
-            )) {
-                Ok(provider) => {
-                    let caps = provider.caps();
-                    println!(
-                        "asr.apple: OK config readable (profile={:?}, hotwords={}, overrides={}, multilingual={})",
-                        profile.name,
-                        caps.hotwords,
-                        profile.asr.overrides.len(),
-                        caps.multilingual
-                    );
-                    println!("asr.apple: SpeechAnalyzer runtime check not run; no PCM sent");
-                }
+        other => {
+            println!(
+                "asr.{other}.runtime: ERROR profiles=[{}] unsupported provider",
+                target.profiles.join(", ")
+            );
+        }
+    }
+}
+
+async fn check_llm_runtime(target: LlmRuntimeTarget) {
+    let dirs = crate::config::post::PostDirs {
+        rule: crate::config::post::default_dir().join("rule"),
+        llm: crate::config::post::default_dir().join("llm"),
+    };
+    match crate::config::post::load_llm_config(&target.id, &dirs, &target.overrides) {
+        Ok(cfg) => {
+            let provider = cfg.provider_name.clone();
+            let checker = LlmCleanup::new(cfg);
+            match checker.check_runtime().await {
+                Ok(()) => println!(
+                    "llm.runtime: OK profiles=[{}] component={} provider={}",
+                    target.profiles.join(", "),
+                    target.id,
+                    provider
+                ),
                 Err(e) => {
-                    println!("asr.apple: ERROR {e:#}");
                     println!(
-                        "hint: edit {}",
-                        crate::asr::providers::apple::config_path().display()
+                        "llm.runtime: ERROR profiles=[{}] component={} provider={} {e}",
+                        target.profiles.join(", "),
+                        target.id,
+                        provider
                     );
+                    println!("hint: edit post/llm component or profile [post.llm] override");
                 }
             }
         }
-        other => {
-            println!("asr: ERROR unsupported provider {other:?}");
-            println!("hint: use profile [asr] provider = \"doubao\" or \"apple\"");
+        Err(e) => {
+            println!(
+                "llm.runtime: ERROR profiles=[{}] component={} {e:#}",
+                target.profiles.join(", "),
+                target.id
+            );
         }
     }
 }

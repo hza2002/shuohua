@@ -1,3 +1,4 @@
+pub mod config_template;
 pub mod doctor;
 pub mod service;
 
@@ -18,6 +19,8 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Doctor(doctor::DoctorArgs),
+    /// Generate reference config templates from the built-in registry.
+    ConfigTemplate(config_template::ConfigTemplateArgs),
     Install,
     Uninstall,
     Start,
@@ -34,6 +37,7 @@ pub fn parse() -> Cli {
 pub fn run_command(command: Command) -> Result<()> {
     match command {
         Command::Doctor(args) => doctor::run(args),
+        Command::ConfigTemplate(args) => config_template::run(args),
         Command::Install => service::install(),
         Command::Uninstall => service::uninstall(),
         Command::Start => service::start(),
@@ -44,5 +48,32 @@ pub fn run_command(command: Command) -> Result<()> {
             println!("{}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn doctor_flags_parse_runtime() {
+        let cli = Cli::try_parse_from(["shuo", "doctor", "--runtime"]).unwrap();
+
+        match cli.command {
+            Some(Command::Doctor(args)) => {
+                assert!(args.runtime);
+            }
+            other => panic!("expected doctor command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn doctor_rejects_removed_network_flag() {
+        assert!(Cli::try_parse_from(["shuo", "doctor", "--network"]).is_err());
+    }
+
+    #[test]
+    fn doctor_rejects_removed_full_flag() {
+        assert!(Cli::try_parse_from(["shuo", "doctor", "--full"]).is_err());
     }
 }

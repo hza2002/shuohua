@@ -25,7 +25,6 @@ mod ipc;
 mod log;
 mod overlay;
 mod post;
-mod profile;
 mod reload;
 mod state;
 mod text_stats;
@@ -325,8 +324,8 @@ async fn run_daemon(
                         // 新 session 起来时从 cfg_rx 取最新 voice/profile/post 配置。
                         let cfg = cfg_rx.borrow().clone();
                         let start_app_context = post::app_context::frontmost_app();
-                        let profile_dir = profile::default_dir();
-                        let profile = match profile::load_for_app(
+                        let profile_dir = config::profile::default_dir();
+                        let profile = match config::profile::load_for_app(
                             &profile_dir,
                             &cfg.profile,
                             start_app_context.bundle_id.as_deref(),
@@ -338,10 +337,10 @@ async fn run_daemon(
                                 continue;
                             }
                         };
-                        let post_dir = post::config::default_dir();
-                        let post_chain = match post::config::load_components(
+                        let post_dir = config::post::default_dir();
+                        let post_chain = match config::post::load_components(
                             &profile.post.chain,
-                            &post::config::PostDirs {
+                            &config::post::PostDirs {
                                 rule: post_dir.join("rule"),
                                 llm: post_dir.join("llm"),
                             },

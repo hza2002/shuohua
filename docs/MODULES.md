@@ -7,16 +7,18 @@
 ```
 src/
 ├── main.rs                              # clap 入口；smart fallback；--daemon 跑 AppKit + tokio daemon；F16 toggle 状态机
-├── profile.rs                           # compatibility re-export；实际 profile schema/loading 在 config::profile
 ├── cli/
 │   ├── mod.rs                           # clap 子命令分发
-│   ├── doctor.rs                        # shuo doctor：配置 / hotkey / ASR 配置 / UDS / launchd 检查
+│   ├── doctor.rs                        # shuo doctor：本地配置诊断；--runtime 显式跑 ASR/LLM 可运行性检查入口
+│   ├── config_template.rs               # shuo config-template：导出 registry 模板
 │   └── service.rs                       # launchd install/uninstall/start/stop/restart/status
 ├── config/
-│   ├── mod.rs                           # config public API + compatibility re-exports
+│   ├── mod.rs                           # config module root；top-level config API re-export + submodules
 │   ├── main.rs                          # ~/.config/shuohua/config.toml schema/parse/path helpers
 │   ├── spec.rs                          # shared field/spec metadata + validation diagnostics
+│   ├── schema.rs                        # shared config schema registry + description i18n keys
 │   ├── inventory.rs                     # structured Configure/doctor inventory scan
+│   ├── diagnostics.rs                   # full-tree local config diagnostics shared by doctor/Configure
 │   ├── template.rs                      # official config template registry + LLM component creation
 │   ├── profile.rs                       # profile/*.toml schema + route loading
 │   ├── post/                            # post component config namespace
@@ -48,7 +50,6 @@ src/
 ├── post/
 │   ├── mod.rs                           # PostProcessor trait + PipelineText + run_chain
 │   ├── app_context.rs                   # post 层 AppContext 入口；macOS 复用 app_context_darwin
-│   ├── config.rs                        # compatibility re-export；实际加载在 config::post::runtime
 │   ├── zh_filter.rs                     # ZhFilter
 │   └── llm.rs                           # LlmCleanup；OpenAI-compatible / Anthropic native 一次性调用
 ├── voice/

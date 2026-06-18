@@ -1,15 +1,15 @@
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::config::spec::{ConfigSpec, FieldSpec};
+use crate::config::schema::{self, SchemaId};
+use crate::config::spec::ConfigSpec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemplateKind {
-    Main,
+    Config,
+    Asr,
     Profile,
     PostRule,
     PostLlm,
@@ -22,8 +22,14 @@ pub struct Template {
     pub path: &'static str,
     pub title: &'static str,
     pub description: &'static str,
-    spec: fn() -> ConfigSpec,
+    schema: SchemaId,
     values: &'static [(&'static str, TemplateValue)],
+}
+
+impl Template {
+    pub fn spec(&self) -> ConfigSpec {
+        schema::spec_for(self.schema)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,28 +46,21 @@ pub fn registry() -> &'static [Template] {
     TEMPLATES
 }
 
-pub fn manifest() -> String {
-    let mut body = String::new();
-    for template in registry() {
-        body.push_str("[[templates]]\n");
-        body.push_str(&format!("id = {:?}\n", template.id));
-        body.push_str(&format!("kind = {:?}\n", kind_name(template.kind)));
-        body.push_str(&format!("path = {:?}\n", template.path));
-        body.push_str(&format!("title = {:?}\n", template.title));
-        body.push_str(&format!("description = {:?}\n\n", template.description));
-    }
-    body
-}
-
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn render(template: &Template) -> String {
-    render_from_spec(&(template.spec)(), template.values)
+    render_with_lang(template, crate::i18n::Lang::EnUS)
 }
 
-pub fn render_by_id(id: &str) -> Option<String> {
-    registry()
-        .iter()
-        .find(|template| template.id == id)
-        .map(render)
+pub fn render_with_lang(template: &Template, lang: crate::i18n::Lang) -> String {
+    let mut body = String::new();
+    body.push_str(&format!("# {}\n", template.title));
+    body.push_str(&format!("# {}\n\n", template.description));
+    body.push_str(&render_from_spec(
+        &template.spec(),
+        template.values,
+        Some(lang),
+    ));
+    body
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,7 +211,11 @@ fn render_llm_component_body(template: &Template, draft: &LlmComponentDraft) -> 
     body
 }
 
-fn render_from_spec(spec: &ConfigSpec, values: &[(&str, TemplateValue)]) -> String {
+fn render_from_spec(
+    spec: &ConfigSpec,
+    values: &[(&str, TemplateValue)],
+    lang: Option<crate::i18n::Lang>,
+) -> String {
     let mut body = String::new();
     let mut table_values = Vec::new();
 
@@ -224,6 +227,7 @@ fn render_from_spec(spec: &ConfigSpec, values: &[(&str, TemplateValue)]) -> Stri
             table_values.push((field.name(), *value));
             continue;
         }
+        push_field_comment(&mut body, field, lang);
         body.push_str(&format!("{} = {}\n", field.name(), render_value(value)));
     }
 
@@ -235,16 +239,42 @@ fn render_from_spec(spec: &ConfigSpec, values: &[(&str, TemplateValue)]) -> Stri
         if idx > 0 {
             body.push('\n');
         }
+        if let Some(field) = spec.field_for_path(name) {
+            push_field_comment(&mut body, field, lang);
+        }
         body.push_str(&format!("[{name}]\n"));
         let TemplateValue::Table(entries) = value else {
             continue;
         };
         for (key, value) in *entries {
+            let field_path = format!("{name}.{key}");
+            if let Some(field) = spec.field_for_path(&field_path) {
+                push_field_comment(&mut body, field, lang);
+            }
             body.push_str(&format!("{key} = {}\n", render_value(value)));
         }
     }
 
     body
+}
+
+fn push_field_comment(
+    body: &mut String,
+    field: &crate::config::spec::FieldSpec,
+    lang: Option<crate::i18n::Lang>,
+) {
+    let Some(lang) = lang else {
+        return;
+    };
+    let Some(key) = field.description_key_value() else {
+        return;
+    };
+    let text = crate::i18n::tr_lang(lang, key, &[]);
+    for line in text.lines() {
+        body.push_str("# ");
+        body.push_str(line);
+        body.push('\n');
+    }
 }
 
 fn render_value(value: &TemplateValue) -> String {
@@ -272,61 +302,7 @@ fn render_value(value: &TemplateValue) -> String {
     }
 }
 
-fn kind_name(kind: TemplateKind) -> &'static str {
-    match kind {
-        TemplateKind::Main => "main",
-        TemplateKind::Profile => "profile",
-        TemplateKind::PostRule => "post_rule",
-        TemplateKind::PostLlm => "post_llm",
-    }
-}
-
-fn main_spec() -> ConfigSpec {
-    ConfigSpec::new("main")
-        .field(FieldSpec::table("hotkey").required())
-        .field(FieldSpec::table("voice").optional())
-        .field(FieldSpec::table("voice.vad").optional())
-        .field(FieldSpec::table("post").optional())
-        .field(FieldSpec::table("profile").optional().free_table())
-        .field(FieldSpec::table("ui").optional())
-        .field(FieldSpec::table("overlay").optional())
-}
-
-fn profile_spec() -> ConfigSpec {
-    ConfigSpec::new("profile")
-        .field(FieldSpec::string("name").required())
-        .field(FieldSpec::table("asr").required())
-        .field(FieldSpec::table("post").optional())
-}
-
-fn post_rule_spec() -> ConfigSpec {
-    ConfigSpec::new("post.rule")
-        .field(
-            FieldSpec::string("type")
-                .required()
-                .allowed_values(["rule"]),
-        )
-        .field(FieldSpec::array("patterns").required())
-}
-
-fn post_llm_spec() -> ConfigSpec {
-    ConfigSpec::new("post.llm")
-        .field(FieldSpec::string("type").required().allowed_values(["llm"]))
-        .field(
-            FieldSpec::string("format")
-                .default("openai")
-                .allowed_values(["openai", "anthropic"]),
-        )
-        .field(FieldSpec::string("name").required())
-        .field(FieldSpec::string("base_url").optional())
-        .field(FieldSpec::string("api_key").required().secret())
-        .field(FieldSpec::string("model").required())
-        .field(FieldSpec::string("system_prompt").optional())
-        .field(FieldSpec::string("prompt").required())
-        .field(FieldSpec::table("extra_body").optional().free_table())
-}
-
-const MAIN_VALUES: &[(&str, TemplateValue)] = &[
+const CONFIG_VALUES: &[(&str, TemplateValue)] = &[
     (
         "hotkey",
         TemplateValue::Table(&[
@@ -360,12 +336,36 @@ const MAIN_VALUES: &[(&str, TemplateValue)] = &[
     ),
 ];
 
+const ASR_APPLE_VALUES: &[(&str, TemplateValue)] = &[
+    ("language", TemplateValue::String("zh-CN")),
+    ("install_assets", TemplateValue::Bool(true)),
+    ("idle_pause", TemplateValue::Bool(false)),
+    ("finalize_timeout_ms", TemplateValue::Integer(5000)),
+];
+
+const ASR_DOUBAO_VALUES: &[(&str, TemplateValue)] = &[
+    ("app_key", TemplateValue::String("")),
+    ("access_key", TemplateValue::String("")),
+    (
+        "resource_id",
+        TemplateValue::String("volc.bigasr.sauc.duration"),
+    ),
+    ("language", TemplateValue::String("")),
+    ("enable_itn", TemplateValue::Bool(true)),
+    ("enable_punc", TemplateValue::Bool(true)),
+    ("enable_ddc", TemplateValue::Bool(true)),
+    ("stream_mode", TemplateValue::Integer(2)),
+    ("ai_vad", TemplateValue::Bool(false)),
+    ("idle_pause", TemplateValue::Bool(false)),
+    ("finalize_timeout_ms", TemplateValue::Integer(12_000)),
+];
+
 const DEFAULT_PROFILE_VALUES: &[(&str, TemplateValue)] = &[
     ("name", TemplateValue::String("default")),
     (
         "asr",
         TemplateValue::Table(&[
-            ("provider", TemplateValue::String("apple")),
+            ("provider", TemplateValue::String("doubao")),
             ("hotwords", TemplateValue::StringArray(&[])),
         ]),
     ),
@@ -429,49 +429,41 @@ const ANTHROPIC_VALUES: &[(&str, TemplateValue)] = &[
     ("prompt", TemplateValue::String("{{text}}")),
 ];
 
-const CUSTOM_OPENAI_VALUES: &[(&str, TemplateValue)] = &[
-    ("type", TemplateValue::String("llm")),
-    ("format", TemplateValue::String("openai")),
-    ("name", TemplateValue::String("custom-openai")),
-    (
-        "base_url",
-        TemplateValue::String("https://api.openai.com/v1"),
-    ),
-    ("api_key", TemplateValue::String("")),
-    ("model", TemplateValue::String("")),
-    ("prompt", TemplateValue::String("{{text}}")),
-];
-
-const CUSTOM_ANTHROPIC_VALUES: &[(&str, TemplateValue)] = &[
-    ("type", TemplateValue::String("llm")),
-    ("format", TemplateValue::String("anthropic")),
-    ("name", TemplateValue::String("custom-anthropic")),
-    (
-        "base_url",
-        TemplateValue::String("https://api.anthropic.com"),
-    ),
-    ("api_key", TemplateValue::String("")),
-    ("model", TemplateValue::String("")),
-    ("prompt", TemplateValue::String("{{text}}")),
-];
-
 const TEMPLATES: &[Template] = &[
     Template {
-        id: "main",
-        kind: TemplateKind::Main,
-        path: "main.toml",
-        title: "Main config",
+        id: "config",
+        kind: TemplateKind::Config,
+        path: "config.toml",
+        title: "Config",
         description: "Top-level shuohua config.toml.",
-        spec: main_spec,
-        values: MAIN_VALUES,
+        schema: SchemaId::Main,
+        values: CONFIG_VALUES,
+    },
+    Template {
+        id: "asr/apple",
+        kind: TemplateKind::Asr,
+        path: "asr/apple.toml",
+        title: "Apple ASR",
+        description: "Starter config for the local Apple SpeechAnalyzer provider.",
+        schema: SchemaId::AsrApple,
+        values: ASR_APPLE_VALUES,
+    },
+    Template {
+        id: "asr/doubao",
+        kind: TemplateKind::Asr,
+        path: "asr/doubao.toml",
+        title: "Doubao ASR",
+        description: "Starter config for the Doubao provider.",
+        schema: SchemaId::AsrDoubao,
+        values: ASR_DOUBAO_VALUES,
     },
     Template {
         id: "profile/default",
         kind: TemplateKind::Profile,
         path: "profile/default.toml",
         title: "Default profile",
-        description: "Default profile using Apple ASR and the zh_filter rule.",
-        spec: profile_spec,
+        description: "Default profile using Doubao ASR and the zh_filter rule.",
+        schema: SchemaId::Profile,
         values: DEFAULT_PROFILE_VALUES,
     },
     Template {
@@ -480,7 +472,7 @@ const TEMPLATES: &[Template] = &[
         path: "post/rule/zh_filter.toml",
         title: "Chinese speech cleanup rule",
         description: "Rule processor for common Chinese filler words.",
-        spec: post_rule_spec,
+        schema: SchemaId::PostRule,
         values: ZH_FILTER_VALUES,
     },
     Template {
@@ -489,7 +481,7 @@ const TEMPLATES: &[Template] = &[
         path: "post/llm/deepseek.toml",
         title: "DeepSeek",
         description: "OpenAI-compatible DeepSeek post-processing preset.",
-        spec: post_llm_spec,
+        schema: SchemaId::PostLlm,
         values: DEEPSEEK_VALUES,
     },
     Template {
@@ -498,7 +490,7 @@ const TEMPLATES: &[Template] = &[
         path: "post/llm/openai.toml",
         title: "OpenAI",
         description: "OpenAI post-processing preset.",
-        spec: post_llm_spec,
+        schema: SchemaId::PostLlm,
         values: OPENAI_VALUES,
     },
     Template {
@@ -507,36 +499,23 @@ const TEMPLATES: &[Template] = &[
         path: "post/llm/anthropic.toml",
         title: "Anthropic",
         description: "Anthropic post-processing preset.",
-        spec: post_llm_spec,
+        schema: SchemaId::PostLlm,
         values: ANTHROPIC_VALUES,
-    },
-    Template {
-        id: "post/llm/custom-openai",
-        kind: TemplateKind::PostLlm,
-        path: "post/llm/custom-openai.toml",
-        title: "Custom OpenAI-compatible",
-        description: "Custom OpenAI-compatible provider template.",
-        spec: post_llm_spec,
-        values: CUSTOM_OPENAI_VALUES,
-    },
-    Template {
-        id: "post/llm/custom-anthropic",
-        kind: TemplateKind::PostLlm,
-        path: "post/llm/custom-anthropic.toml",
-        title: "Custom Anthropic",
-        description: "Custom Anthropic-compatible provider template.",
-        spec: post_llm_spec,
-        values: CUSTOM_ANTHROPIC_VALUES,
     },
 ];
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use crate::config::spec::ValueKind;
 
     use super::*;
+
+    fn render_by_id(id: &str) -> Option<String> {
+        registry()
+            .iter()
+            .find(|template| template.id == id)
+            .map(render)
+    }
 
     #[test]
     fn registry_renders_expected_llm_template() {
@@ -551,38 +530,41 @@ mod tests {
     }
 
     #[test]
-    fn all_assets_match_rendered_registry_templates() {
+    fn rendered_registry_templates_are_valid_toml() {
         for template in registry() {
-            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("assets/config")
-                .join(template.path);
-            let asset = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-            assert_eq!(asset, render(template), "{}", template.id);
+            assert!(
+                render(template).starts_with("# "),
+                "{} missing header comment",
+                template.id
+            );
+            toml::from_str::<toml::Value>(&render(template))
+                .unwrap_or_else(|e| panic!("{} renders invalid TOML: {e}", template.id));
         }
     }
 
     #[test]
-    fn manifest_asset_matches_registry() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/config/manifest.toml");
-        let asset = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    fn rendered_templates_include_field_comments_from_schema() {
+        let body = render_by_id("config").unwrap();
 
-        assert_eq!(asset, manifest());
-        let parsed: toml::Value = toml::from_str(&asset).unwrap();
-        assert_eq!(
-            parsed
-                .get("templates")
-                .and_then(toml::Value::as_array)
-                .unwrap()
-                .len(),
-            registry().len()
-        );
+        assert!(body.contains("# Hotkey that toggles recording."));
+        assert!(body.contains("trigger = \"f16\""));
+    }
+
+    #[test]
+    fn rendered_templates_can_use_zh_cn_field_comments() {
+        let template = registry()
+            .iter()
+            .find(|template| template.id == "config")
+            .unwrap();
+        let body = render_with_lang(template, crate::i18n::Lang::ZhCN);
+
+        assert!(body.contains("# 用于开始或结束录音的快捷键。"));
+        toml::from_str::<toml::Value>(&body).unwrap();
     }
 
     #[test]
     fn runtime_parsers_accept_core_templates_after_required_secrets_are_filled() {
-        crate::config::parse(&render_by_id("main").unwrap()).unwrap();
+        crate::config::parse(&render_by_id("config").unwrap()).unwrap();
 
         let profile: crate::config::profile::Profile =
             toml::from_str(&render_by_id("profile/default").unwrap()).unwrap();
@@ -601,7 +583,7 @@ mod tests {
             .iter()
             .filter(|template| template.kind == TemplateKind::PostLlm)
         {
-            let spec = (template.spec)();
+            let spec = template.spec();
             let api_key = spec.field_for_path("api_key").unwrap();
             assert!(api_key.required_without_default());
             assert!(api_key.is_secret());

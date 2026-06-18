@@ -15,13 +15,14 @@ shuo --daemon         # 纯 daemon，不开 TUI（launchd plist 用这个）
 shuo doctor           # 环境检查：
                       #   - 权限：Accessibility / Microphone 是否授权
                       #   - 录音输入：默认麦克风设备是否存在、格式是否可用
-                      #   - 终端识别：识别当前终端 App，提示授权对象
                       #   - 配置校验：解析主 config.toml、profile/*.toml、
-                      #               asr/*.toml 和 post/**/*.toml（不跑 daemon）
+                      #               asr/*.toml 和 post/**/*.toml（本地，不跑 daemon）
                       #   - 打印 effective config：merge 后实际生效的配置
-                      #   - ASR 连通性：只测 WebSocket handshake + auth（不发 PCM，
-                      #                 避免触发计费）；--full 才真发 1s 静音 PCM
+                      #   - ASR / LLM Provider：`--runtime` 显式触发；走实际可运行性检查
                       #   - launchd 状态：plist 是否装、daemon 是否在跑
+
+shuo config-template  # 导出内置模板 registry 到指定目录（默认 $XDG_CONFIG_HOME/shuohua/templates）
+                      #   --lang <auto|en-US|zh-CN> 控制生成注释语言
 
 shuo install          # 装 launchd plist（~/Library/LaunchAgents/）+ launchctl bootstrap
                       # plist ProgramArguments = ["shuo", "--daemon"]

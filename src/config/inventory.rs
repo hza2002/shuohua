@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -37,6 +38,7 @@ pub enum InventoryStatus {
 pub struct InventoryEntry {
     pub module: InventoryModule,
     pub key: String,
+    pub field_path: Option<String>,
     pub summary: String,
     pub source: PathBuf,
     pub status: InventoryStatus,
@@ -86,21 +88,22 @@ pub fn load_from_config_home(config_home: &Path) -> ConfigInventory {
         .collect(),
     };
 
-    push_overview(&mut inventory);
     push_main(&mut inventory, &root);
     push_profiles(&mut inventory, &root);
     push_post(&mut inventory, &root);
     push_asr(&mut inventory, &root);
     push_theme_placeholder(&mut inventory, &root);
+    push_overview(&mut inventory);
     inventory
 }
 
 fn push_overview(inventory: &mut ConfigInventory) {
     let total_files = inventory
-        .modules
-        .iter()
-        .map(|section| section.entries.len())
-        .sum::<usize>();
+        .entries()
+        .filter(|entry| entry.module != InventoryModule::Overview)
+        .map(|entry| entry.source.clone())
+        .collect::<BTreeSet<_>>()
+        .len();
     push_entry(
         inventory,
         InventoryModule::Overview,
@@ -114,10 +117,11 @@ fn push_overview(inventory: &mut ConfigInventory) {
 fn push_main(inventory: &mut ConfigInventory, root: &Path) {
     let path = root.join("config.toml");
     match crate::config::load_from(&path) {
-        Ok(cfg) => push_entry(
+        Ok(cfg) => push_entry_with_field(
             inventory,
             InventoryModule::Main,
             "config",
+            Some("hotkey.trigger".to_string()),
             format!(
                 "hotkey.trigger={} | voice.vad.backend={:?} | post.timeout_ms={}",
                 cfg.hotkey.trigger, cfg.voice.vad.backend, cfg.post.timeout_ms
@@ -228,10 +232,11 @@ fn push_toml_summary(inventory: &mut ConfigInventory, module: InventoryModule, p
                 } else {
                     display_value(&key, &value)
                 };
-                push_entry(
+                push_entry_with_field(
                     inventory,
                     module,
                     format!("{name}.{key}"),
+                    Some(key.clone()),
                     summary,
                     path.to_path_buf(),
                     InventoryStatus::Ok,
@@ -257,6 +262,18 @@ fn push_entry(
     source: PathBuf,
     status: InventoryStatus,
 ) {
+    push_entry_with_field(inventory, module, key, None, summary, source, status);
+}
+
+fn push_entry_with_field(
+    inventory: &mut ConfigInventory,
+    module: InventoryModule,
+    key: impl Into<String>,
+    field_path: Option<String>,
+    summary: impl Into<String>,
+    source: PathBuf,
+    status: InventoryStatus,
+) {
     let section = inventory
         .modules
         .iter_mut()
@@ -265,6 +282,7 @@ fn push_entry(
     section.entries.push(InventoryEntry {
         module,
         key: key.into(),
+        field_path,
         summary: summary.into(),
         source,
         status,
@@ -397,6 +415,7 @@ chain = ["rule:zh_filter", "llm:deepseek"]
         assert!(inventory.entries().any(|entry| {
             entry.module == InventoryModule::AsrProvider
                 && entry.key == "apple.idle_pause"
+                && entry.field_path.as_deref() == Some("idle_pause")
                 && entry.summary == "true"
         }));
         assert!(inventory.entries().any(|entry| {
@@ -429,6 +448,28 @@ chain = ["rule:zh_filter", "llm:deepseek"]
                 && entry.status == InventoryStatus::Error
         }));
 
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn overview_summary_counts_scanned_sources_not_zero() {
+        let home = temp_config_home();
+        let root = home.join("shuohua");
+        fs::create_dir_all(root.join("profile")).unwrap();
+        fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
+        fs::write(
+            root.join("profile/default.toml"),
+            "name = \"default\"\n[asr]\nprovider = \"apple\"\n",
+        )
+        .unwrap();
+
+        let inventory = load_from_config_home(&home);
+        let overview = inventory
+            .entries()
+            .find(|entry| entry.module == InventoryModule::Overview && entry.key == "summary")
+            .unwrap();
+
+        assert!(!overview.summary.starts_with("0 "), "{overview:?}");
         let _ = fs::remove_dir_all(home);
     }
 }

@@ -12,7 +12,6 @@
 //! - M2.5 不接 toast / step_tx；M3 加 overlay 时再扩参数。失败/超时走诊断日志。
 
 pub mod app_context;
-pub mod config;
 pub mod llm;
 pub mod zh_filter;
 

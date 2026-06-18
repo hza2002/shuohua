@@ -73,6 +73,61 @@ fn load_component(
     cfg.build(id)
 }
 
+pub fn load_llm_config(
+    id: &str,
+    dirs: &PostDirs,
+    llm_overrides: &Table,
+) -> Result<LlmCleanupConfig> {
+    let (kind, name) = id
+        .split_once(':')
+        .with_context(|| format!("post chain item {id:?} must be kind:name"))?;
+    anyhow::ensure!(
+        kind == "llm",
+        "runtime LLM check only supports llm components"
+    );
+    let path = dirs.llm.join(format!("{name}.toml"));
+    let body = std::fs::read_to_string(&path)
+        .with_context(|| format!("read post component {}", path.display()))?;
+    let mut value: toml::Value = toml::from_str(&body)
+        .with_context(|| format!("parse post component {}", path.display()))?;
+    if let Some(override_value) = llm_overrides.get(name) {
+        let override_table = override_value
+            .as_table()
+            .with_context(|| format!("post.llm.{name} override for {id:?} must be a TOML table"))?;
+        merge_table(&mut value, override_table)
+            .with_context(|| format!("merge post.llm.{name} override into {id:?}"))?;
+    }
+    let cfg: ProcessorCfg = value
+        .try_into()
+        .with_context(|| format!("parse post component {}", path.display()))?;
+    match cfg {
+        ProcessorCfg::Llm {
+            format,
+            name,
+            base_url,
+            api_key,
+            model,
+            extra_body,
+            system_prompt,
+            prompt,
+        } => Ok(LlmCleanupConfig {
+            name: id.to_string(),
+            format: match format {
+                ProviderFormatCfg::Openai => ProviderFormat::OpenAi,
+                ProviderFormatCfg::Anthropic => ProviderFormat::Anthropic,
+            },
+            provider_name: name.clone(),
+            base_url: base_url.unwrap_or_else(|| default_base_url(format, &name)),
+            api_key,
+            model,
+            extra_body,
+            system_prompt,
+            prompt,
+        }),
+        ProcessorCfg::Rule { .. } => anyhow::bail!("expected llm config"),
+    }
+}
+
 fn merge_table(value: &mut toml::Value, overrides: &Table) -> Result<()> {
     let table = value
         .as_table_mut()
@@ -158,51 +213,7 @@ fn load_llm_config_for_test(
     dirs: &PostDirs,
     llm_overrides: &Table,
 ) -> Result<LlmCleanupConfig> {
-    let (kind, name) = id
-        .split_once(':')
-        .with_context(|| format!("post chain item {id:?} must be kind:name"))?;
-    anyhow::ensure!(kind == "llm", "test helper only supports llm components");
-    let path = dirs.llm.join(format!("{name}.toml"));
-    let body = std::fs::read_to_string(&path)
-        .with_context(|| format!("read post component {}", path.display()))?;
-    let mut value: toml::Value = toml::from_str(&body)
-        .with_context(|| format!("parse post component {}", path.display()))?;
-    if let Some(override_value) = llm_overrides.get(name) {
-        let override_table = override_value
-            .as_table()
-            .with_context(|| format!("post.llm.{name} override for {id:?} must be a TOML table"))?;
-        merge_table(&mut value, override_table)
-            .with_context(|| format!("merge post.llm.{name} override into {id:?}"))?;
-    }
-    let cfg: ProcessorCfg = value
-        .try_into()
-        .with_context(|| format!("parse post component {}", path.display()))?;
-    match cfg {
-        ProcessorCfg::Llm {
-            format,
-            name,
-            base_url,
-            api_key,
-            model,
-            extra_body,
-            system_prompt,
-            prompt,
-        } => Ok(LlmCleanupConfig {
-            name: id.to_string(),
-            format: match format {
-                ProviderFormatCfg::Openai => ProviderFormat::OpenAi,
-                ProviderFormatCfg::Anthropic => ProviderFormat::Anthropic,
-            },
-            provider_name: name.clone(),
-            base_url: base_url.unwrap_or_else(|| default_base_url(format, &name)),
-            api_key,
-            model,
-            extra_body,
-            system_prompt,
-            prompt,
-        }),
-        ProcessorCfg::Rule { .. } => anyhow::bail!("expected llm config"),
-    }
+    load_llm_config(id, dirs, llm_overrides)
 }
 
 fn default_base_url(format: ProviderFormatCfg, name: &str) -> String {

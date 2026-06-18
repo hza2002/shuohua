@@ -832,9 +832,10 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     );
     frame.render_widget(
         Paragraph::new(format!(
-            "{}\n{}\n{}",
+            "{}\n{}\n{}\n{}",
             crate::t!("tui.configure.source", path = app.config_path.clone()),
             doctor_status_text(app),
+            configure_selected_description(app),
             configure_hint_text(app)
         ))
         .wrap(Wrap { trim: false })
@@ -845,6 +846,20 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         ),
         chunks[2],
     );
+}
+
+fn configure_selected_description(app: &App) -> String {
+    if app.llm_wizard.is_some() || app.configure_module == ConfigureModule::Overview {
+        return crate::t!("tui.configure.read_only");
+    }
+    let module = app.configure_module.inventory_module();
+    app.settings_rows
+        .iter()
+        .filter(|row| row.group == module.label())
+        .nth(app.selected_settings)
+        .and_then(|row| row.description_key)
+        .map(|key| crate::i18n::tr(key, &[]))
+        .unwrap_or_else(|| crate::t!("tui.configure.read_only"))
 }
 
 fn configure_hint_text(app: &App) -> String {

@@ -37,6 +37,26 @@ impl AppleProvider {
     pub fn finalize_timeout_ms(&self) -> u64 {
         self.config.finalize_timeout_ms
     }
+
+    pub async fn check_runtime(&self, ctx: SessionCtx) -> Result<(), AsrError> {
+        let (mut session, mut events) = self.open(ctx).await?;
+        session.send_pcm(&[], true).await?;
+        let done = tokio::time::timeout(Duration::from_millis(self.finalize_timeout_ms()), async {
+            while let Some(event) = events.recv().await {
+                match event {
+                    AsrEvent::Done => return Ok(()),
+                    AsrEvent::Error { err } => return Err(err),
+                    AsrEvent::Partial { .. } | AsrEvent::Segment { .. } => {}
+                }
+            }
+            Err(AsrError::Protocol("apple helper closed before done".into()))
+        })
+        .await
+        .map_err(|_| AsrError::Timeout);
+        let close_result = session.close().await;
+        done??;
+        close_result
+    }
 }
 
 #[async_trait]

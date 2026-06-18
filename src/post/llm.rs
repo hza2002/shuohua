@@ -33,6 +33,18 @@ impl LlmCleanup {
             client: reqwest::Client::new(),
         }
     }
+
+    pub async fn check_runtime(&self) -> Result<(), PostError> {
+        let ctx = AppContext {
+            bundle_id: Some("doctor.runtime".to_string()),
+            app_name: Some("shuo doctor".to_string()),
+        };
+        let prompt = render_prompt(&self.cfg.prompt, &ctx, "doctor runtime check");
+        match self.cfg.format {
+            ProviderFormat::OpenAi => self.call_openai(&prompt).await.map(|_| ()),
+            ProviderFormat::Anthropic => self.call_anthropic(&prompt).await.map(|_| ()),
+        }
+    }
 }
 
 #[async_trait]

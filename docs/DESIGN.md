@@ -817,7 +817,8 @@ parse 失败（非法 trigger 字符串）只打日志保留旧 trigger，不向
 
 #### M5 收口结果
 
-- `shuo doctor` 已实现：打印 `effective config`，校验主 config、hotkey、默认麦克风输入、Doubao 配置、UDS 状态、launchd plist 和权限状态
+- `shuo doctor` 已实现：打印 `effective config`，本地校验 `config.toml`、`profile/*.toml`、`asr/*.toml`、`post/**/*.toml`、hotkey、默认麦克风输入、UDS 状态、launchd plist 和权限状态；ASR/LLM runtime 检查走显式 `--runtime`，会实际触发配置对应的可运行性验证
+- `shuo config-template` 已实现：从 `config::template` registry 导出参考模板；字段注释来自 `config::schema` 的 description i18n key
 - `shuo install/uninstall/start/stop/restart/status` 已实现：launchd plist 使用当前 `shuo` 绝对路径，状态优先走 UDS `daemon_status`
 - `UDS {"op":"reload_config"}` 已接入：走 watcher 同一路径 parse + broadcast，不绕过 `watch::Sender`
 - profile 的 `asr` 已按配置在下一次录音开始时重建，不在录音中途热替换 session
@@ -928,10 +929,12 @@ shuohua/
 ├── src/
 │   ├── main.rs                 # smart fallback；--daemon 跑 AppKit + tokio daemon
 │   ├── config/
-│   │   ├── mod.rs              # public API + compatibility re-exports
+│   │   ├── mod.rs              # module root；top-level config API re-export + submodules
 │   │   ├── main.rs             # top-level config.toml schema/parse/path helpers
 │   │   ├── spec.rs             # shared config spec metadata + diagnostics
+│   │   ├── schema.rs           # shared config schema registry + description i18n keys
 │   │   ├── inventory.rs        # structured Configure inventory
+│   │   ├── diagnostics.rs      # full-tree local config diagnostics
 │   │   ├── template.rs         # official templates + LLM component creation
 │   │   ├── profile.rs          # profile/*.toml schema/routes
 │   │   ├── post/               # post component config namespace
@@ -958,7 +961,6 @@ shuohua/
 │   │       └── doubao.rs             # Doubao SAUC provider
 │   ├── post/
 │   │   ├── mod.rs              # PostProcessor trait + PipelineText + run_chain（M2.5）
-│   │   ├── config.rs           # compatibility re-export for config::post::runtime
 │   │   ├── zh_filter.rs        # ZhFilter（M2.5）
 │   │   ├── llm.rs              # M7 LLM 清洗
 │   │   └── app_context.rs      # NSWorkspace.frontmostApplication（M7）
@@ -978,6 +980,7 @@ shuohua/
 │   ├── cli/
 │   │   ├── mod.rs              # clap derive，子命令分发
 │   │   ├── doctor.rs           # shuo doctor（包含配置 validate + 打印 effective config）
+│   │   ├── config_template.rs  # shuo config-template（导出带注释的参考模板）
 │   │   └── service.rs          # install / uninstall / start / stop / restart / status
 │   ├── i18n/
 │   │   └── mod.rs              # t!() 宏 + 字典加载，~100 行
@@ -989,7 +992,6 @@ shuohua/
 │       ├── settings.rs         # Configure inventory row adapter
 │       └── keybindings.rs      # Tab/Shift-Tab + 1/2/3 翻页；page-specific actions
 ├── assets/
-│   ├── config/                 # official config templates + manifest
 │   └── i18n/
 │       ├── zh-CN.toml
 │       └── en-US.toml

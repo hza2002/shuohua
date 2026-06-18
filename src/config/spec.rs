@@ -39,6 +39,7 @@ pub struct FieldSpec {
     secret: bool,
     allowed_values: Vec<String>,
     free_table: bool,
+    description_key: Option<&'static str>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +82,7 @@ impl FieldSpec {
             secret: false,
             allowed_values: Vec::new(),
             free_table: false,
+            description_key: None,
         }
     }
 
@@ -116,6 +118,11 @@ impl FieldSpec {
         self
     }
 
+    pub fn description_key(mut self, key: &'static str) -> Self {
+        self.description_key = Some(key);
+        self
+    }
+
     pub fn display_value(&self, value: &toml::Value) -> String {
         if self.secret {
             return match value.as_str() {
@@ -145,6 +152,10 @@ impl FieldSpec {
     pub fn kind(&self) -> ValueKind {
         self.kind
     }
+
+    pub fn description_key_value(&self) -> Option<&'static str> {
+        self.description_key
+    }
 }
 
 impl ConfigSpec {
@@ -170,7 +181,7 @@ impl ConfigSpec {
 }
 
 pub fn validate_value(spec: &ConfigSpec, value: &toml::Value) -> Vec<Diagnostic> {
-    let Some(table) = value.as_table() else {
+    if !value.is_table() {
         return vec![Diagnostic {
             severity: Severity::Error,
             path: spec.name.clone(),
@@ -181,7 +192,7 @@ pub fn validate_value(spec: &ConfigSpec, value: &toml::Value) -> Vec<Diagnostic>
     let mut diagnostics = Vec::new();
 
     for field in &spec.fields {
-        match table.get(&field.name) {
+        match value_at_path(value, field.name()) {
             Some(actual) => validate_field(field, actual, &mut diagnostics),
             None if field.required && field.default.is_none() => diagnostics.push(Diagnostic {
                 severity: Severity::Error,
@@ -192,17 +203,79 @@ pub fn validate_value(spec: &ConfigSpec, value: &toml::Value) -> Vec<Diagnostic>
         }
     }
 
-    for key in table.keys() {
-        if spec.field_for_path(key).is_none() {
-            diagnostics.push(Diagnostic {
-                severity: Severity::Warning,
-                path: key.clone(),
-                message: "unknown field".to_string(),
-            });
-        }
-    }
+    collect_unknown_fields(spec, value, "", &mut diagnostics);
 
     diagnostics
+}
+
+fn value_at_path<'a>(value: &'a toml::Value, path: &str) -> Option<&'a toml::Value> {
+    let mut current = value;
+    for part in path.split('.') {
+        current = current.as_table()?.get(part)?;
+    }
+    Some(current)
+}
+
+fn parent_path(path: &str) -> Option<&str> {
+    path.rsplit_once('.').map(|(parent, _)| parent)
+}
+
+fn collect_unknown_fields(
+    spec: &ConfigSpec,
+    value: &toml::Value,
+    prefix: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(table) = value.as_table() else {
+        return;
+    };
+
+    for (key, child) in table {
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+
+        if spec.field_for_path(&path).is_some() {
+            collect_unknown_fields(spec, child, &path, diagnostics);
+            continue;
+        }
+        if is_under_free_table(spec, &path) {
+            continue;
+        }
+        if child.is_table() && has_descendant_field(spec, &path) {
+            collect_unknown_fields(spec, child, &path, diagnostics);
+            continue;
+        }
+
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            path,
+            message: "unknown field".to_string(),
+        });
+    }
+}
+
+fn is_under_free_table(spec: &ConfigSpec, path: &str) -> bool {
+    let mut current = parent_path(path);
+    while let Some(parent) = current {
+        if spec
+            .field_for_path(parent)
+            .is_some_and(|field| field.free_table)
+        {
+            return true;
+        }
+        current = parent_path(parent);
+    }
+    false
+}
+
+fn has_descendant_field(spec: &ConfigSpec, path: &str) -> bool {
+    let prefix = format!("{path}.");
+    spec.fields
+        .iter()
+        .any(|field| field.name().starts_with(&prefix))
 }
 
 fn validate_field(field: &FieldSpec, value: &toml::Value, diagnostics: &mut Vec<Diagnostic>) {
@@ -227,7 +300,7 @@ fn validate_field(field: &FieldSpec, value: &toml::Value, diagnostics: &mut Vec<
             }
         }
         ValueKind::Float => {
-            if !value.is_float() {
+            if !value.is_float() && !value.is_integer() {
                 push_type_error(field, "float", diagnostics);
                 return;
             }
@@ -304,6 +377,18 @@ mod tests {
             )
             .field(FieldSpec::integer("timeout_ms").optional())
             .field(FieldSpec::table("extra_body").optional().free_table())
+    }
+
+    #[test]
+    fn field_spec_keeps_description_key_through_builder_chain() {
+        let field = FieldSpec::string("hotkey.trigger")
+            .required()
+            .description_key("config.field.hotkey.trigger.description");
+
+        assert_eq!(
+            field.description_key_value(),
+            Some("config.field.hotkey.trigger.description")
+        );
     }
 
     #[test]
@@ -395,6 +480,54 @@ mod tests {
     }
 
     #[test]
+    fn validate_reads_nested_dotted_paths() {
+        let spec = ConfigSpec::new("main")
+            .field(FieldSpec::string("hotkey.trigger").required())
+            .field(
+                FieldSpec::string("voice.vad.backend")
+                    .default("off")
+                    .allowed_values(["off", "silero"]),
+            );
+        let value: toml::Value = toml::toml! {
+            [hotkey]
+            trigger = "f16"
+
+            [voice.vad]
+            backend = "silero"
+        }
+        .into();
+
+        let diagnostics = validate_value(&spec, &value);
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn validate_reports_nested_unknown_fields() {
+        let spec = ConfigSpec::new("main")
+            .field(FieldSpec::string("hotkey.trigger").required())
+            .field(FieldSpec::table("voice").optional())
+            .field(FieldSpec::string("voice.vad.backend").optional());
+        let value: toml::Value = toml::toml! {
+            [hotkey]
+            trigger = "f16"
+
+            [voice.vad]
+            backend = "off"
+            typo = true
+        }
+        .into();
+
+        let diagnostics = validate_value(&spec, &value);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Warning
+                && diagnostic.path == "voice.vad.typo"
+                && diagnostic.message.contains("unknown")
+        }));
+    }
+
+    #[test]
     fn free_table_allows_nested_unknown_fields() {
         let value: toml::Value = toml::toml! {
             name = "deepseek"
@@ -444,6 +577,21 @@ mod tests {
             enabled = true
             threshold = 0.5
             items = ["a", "b"]
+        }
+        .into();
+
+        let diagnostics = validate_value(&spec, &value);
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn validate_accepts_integer_for_float_fields() {
+        let spec =
+            ConfigSpec::new("main").field(FieldSpec::float("voice.vad.threshold").required());
+        let value: toml::Value = toml::toml! {
+            [voice.vad]
+            threshold = 1
         }
         .into();
 

@@ -8,9 +8,12 @@
   Profile, PostProcessor, ASR Provider, and Theme.
 - Integrated Overview doctor output, config file open/reveal actions, manual
   refresh/validate, and daemon `reload_config` from Configure.
-- Added official `assets/config/**` templates and a first LLM post component
-  wizard that writes `post/llm/<file_id>.toml` without auto-attaching it to
-  profile chains.
+- Repaired Configure diagnostics after review: nested TOML path validation,
+  full-tree local config diagnostics, manual-only TUI doctor trigger, safer
+  editor/Finder actions, and explicit `doctor --network` separation.
+- Added generated config templates via `shuo config-template` and a first LLM
+  post component wizard that writes `post/llm/<file_id>.toml` without
+  auto-attaching it to profile chains.
 
 ## 2026-06-17 - First TUI status/history audio pass
 

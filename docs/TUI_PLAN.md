@@ -184,7 +184,7 @@
 - 配置文件仍是 source of truth。
 - TUI 负责发现、展示、创建 LLM post component、打开编辑器、Finder 定位、刷新和验证配置文件。
 - 复杂编辑交给 `$EDITOR` / `$VISUAL` / macOS 默认编辑器。
-- 官方模板位于 `assets/config/**`；`config::template` registry 渲染并测试校验这些文件，避免模板与 spec 静默漂移。
+- 官方模板由 `config::template` registry 生成；`shuo config-template` 可导出成一份可安装参考模板。
 
 第一步范围：
 
@@ -202,29 +202,7 @@
 
 ### 模板与配置文件布局
 
-模板文件当前放在：
-
-```text
-assets/config/
-  manifest.toml
-  main.toml
-  profile/default.toml
-  post/rule/zh_filter.toml
-  post/llm/
-    deepseek.toml
-    openai.toml
-    anthropic.toml
-    custom-openai.toml
-    custom-anthropic.toml
-```
-
-语义：
-
-- `main.toml` / `profile/default.toml` / `post/rule/zh_filter.toml`：官方基础模板。
-- `post/llm/`：TUI 新建 LLM component 使用的模板。
-- `manifest.toml` 只描述模板元信息，不重复模板正文。
-
-模板内容由 `config::template` registry 渲染，并由测试逐字节校验 `assets/config/**`。文档不要复制大片配置内容。
+模板由 `config::template` registry 生成；`shuo config-template` 可以导出包含 `config.toml`、`profile/default.toml`、`asr/apple.toml`、`asr/doubao.toml`、`post/rule/zh_filter.toml` 和 `post/llm/*.toml` 的目录。文档不要复制大片配置内容。
 
 ### 新建 LLM post component 向导
 
@@ -236,7 +214,7 @@ assets/config/
 
 交互：
 
-1. 选择模板：DeepSeek / OpenAI compatible / Anthropic / Custom。
+1. 选择模板：DeepSeek / OpenAI compatible / Anthropic。
 2. 输入 file id。不能和现有文件重复。
 3. 输入 provider name。默认等于 file id；不能和现有 `post/llm/*.toml` 里的 `name` 重复。
 4. 选择接口形式：`openai` 或 `anthropic`。模板可预选。
@@ -250,7 +228,7 @@ assets/config/
 当前已实现：
 
 - Configure 模块导航：Overview / Main / Profile / PostProcessor / ASR Provider / Theme。
-- Overview 首次进入运行 `shuo doctor` 并显示输出；`v` 手动刷新 inventory 并重跑 doctor。
+- Configure 进入时只刷新 inventory；`v` 手动刷新 inventory 并运行 `shuo doctor`。
 - `o` 打开选中配置文件，`r` Finder 定位选中配置文件或配置目录。
 - `R` 发送现有 UDS `reload_config`，并刷新 Configure inventory。
 - PostProcessor 模块按 `n` 启动 LLM component wizard，创建 `post/llm/<file_id>.toml` 后打开编辑器。
@@ -258,6 +236,6 @@ assets/config/
 ## 当前剩余项
 
 - History 时间范围筛选、批量标记、批量音频清理仍未实现。
-- Configure 仍需把 `doctor` 和 TUI Overview 收敛到同一套结构化 diagnostics，而不是只显示 `shuo doctor` stdout。
+- Configure 仍需把 TUI Overview 从显示 `shuo doctor` stdout 进一步收敛为直接渲染 `config::diagnostics` 结构化对象。
 - Profile route 辅助 workflow 仍未实现；新增 LLM component 不会自动修改 profile chain。
 - 打开文件、Finder reveal、创建后自动打开编辑器这些 macOS 交互需要用户手动验证。

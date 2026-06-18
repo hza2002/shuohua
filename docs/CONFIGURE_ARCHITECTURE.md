@@ -38,10 +38,10 @@ The Configure page uses these sections:
 
 Doctor behavior in TUI:
 
-- First entry into `Overview` runs diagnostics once.
-- Later entries show the last result.
-- Manual refresh runs diagnostics again.
-- Diagnostics do not run on every page entry.
+- Entering Configure refreshes inventory only.
+- Diagnostics run only when the user presses `v`.
+- Later entries show the last result from this TUI session.
+- Runtime checks are not run from TUI by default; use `shuo doctor --runtime`.
 
 ## Source Of Truth
 
@@ -66,7 +66,9 @@ src/config/
   mod.rs
   main.rs
   spec.rs
+  schema.rs
   inventory.rs
+  diagnostics.rs
   template.rs
   profile.rs
   post/
@@ -82,11 +84,13 @@ src/config/
 
 Responsibilities:
 
-- `mod.rs`: public API and compatibility re-exports.
+- `mod.rs`: config module root; re-exports only the top-level `config.toml` API and declares submodules.
 - `main.rs`: top-level `config.toml` schema, parse, defaults, and path helpers.
 - `spec.rs`: `ConfigSpec`, `FieldSpec`, validation helpers, diagnostics.
+- `schema.rs`: shared config schema registry; owns field metadata, including description i18n keys.
 - `inventory.rs`: one scan of config files into structured TUI/doctor data.
-- `template.rs`: template registry, rendering, validation, and LLM component creation.
+- `diagnostics.rs`: full local config diagnostics shared by `doctor` and Configure.
+- `template.rs`: template registry, rendering, validation, and LLM component creation; consumes `schema.rs`.
 - `profile.rs`: profile schema and route summaries.
 - `post/rule.rs`: rule post-processor schema.
 - `post/llm.rs`: LLM post-processor schema and LLM template presets.
@@ -111,10 +115,12 @@ A field spec needs to represent:
 - Whether the field is secret.
 - Whether the field should appear in generated templates.
 - Allowed enum values, where applicable.
-- Human summary label for TUI/doctor output.
+- Stable description i18n key for TUI help and generated template comments.
 
 The spec layer must support nested tables because current config uses sections
 such as `[hotkey]`, `[voice.vad]`, `[post.llm.deepseek]`, and `[extra_body]`.
+Config keys are not localized. Only descriptions are localized through
+`assets/i18n/*.toml`; generated TOML comments are fixed at export time.
 
 ## Diagnostic Semantics
 
@@ -159,44 +165,23 @@ as authoritative.
 
 ## Templates
 
-Official templates live under `assets/config/`.
-
-Implemented layout:
-
-```text
-assets/config/
-  manifest.toml
-  main.toml
-  profile/
-    default.toml
-  post/
-    rule/
-      zh_filter.toml
-    llm/
-      deepseek.toml
-      openai.toml
-      anthropic.toml
-      custom-openai.toml
-      custom-anthropic.toml
-```
+The registry in `config::template` is the source of truth for built-in template
+values. `config::schema` is the source of truth for field metadata and
+descriptions. The repository does not keep a second persisted template tree.
 
 Template rules:
 
 - Templates must validate against the spec.
-- Templates should omit default values unless the preset intentionally overrides
-  them.
+- Templates should omit default values unless the preset intentionally overrides them.
 - Templates should include required fields.
 - Templates should not include unsupported fields.
-- Template docs should reference template file paths instead of copying bodies.
+- Template docs should reference registry output or generated files, not duplicate bodies.
 
-Current implementation:
+Generated output:
 
-- `assets/config/manifest.toml` describes all official templates.
-- `assets/config/main.toml`, `assets/config/profile/default.toml`,
-  `assets/config/post/rule/zh_filter.toml`, and `assets/config/post/llm/*.toml`
-  are checked against `config::template` render output in tests.
-- LLM component creation renders from a selected template and validates the
-  generated TOML before writing.
+- `shuo config-template` exports the registry to a chosen directory.
+- `shuo config-template --lang <auto|en-US|zh-CN>` chooses the language used for generated comments.
+- LLM component creation renders from a selected template and validates the generated TOML before writing.
 
 DeepSeek is a preset, not a distinct LLM config type. It uses:
 
@@ -240,7 +225,7 @@ The first useful loop is:
 2. Open the relevant file in `$VISUAL`, `$EDITOR`, or the macOS default editor.
 3. Return to TUI.
 4. Refresh inventory.
-5. Run diagnostics.
+5. Press `v` to run local diagnostics when needed.
 6. Reload daemon config when appropriate.
 
 This intentionally avoids a full form editor while still giving users a guided
@@ -252,7 +237,7 @@ Implemented TUI actions:
 - `j/k` selects a visible config inventory row.
 - `o` opens the selected file with `$VISUAL`, `$EDITOR`, or macOS `open`.
 - `r` reveals the selected file, or the config directory from Overview.
-- `v` refreshes inventory and reruns doctor.
+- `v` refreshes inventory and runs doctor manually.
 - `R` sends daemon `reload_config`.
 - In PostProcessor, `n` starts the LLM component wizard.
 
@@ -272,5 +257,6 @@ Implemented first-pass phases:
 4. Replace TUI ad hoc settings rows with structured inventory.
 5. Rework TUI Configure layout.
 
-Remaining work is to deepen structured diagnostics so TUI and `doctor` consume
-the same diagnostic objects instead of showing doctor stdout in Overview.
+Current limitation: TUI Overview still displays captured `shuo doctor` output.
+The underlying local config diagnostics are now structured in
+`config::diagnostics`; a future pass can render those objects directly in TUI.

@@ -453,6 +453,7 @@ fn parse_time(value: Option<&str>) -> Option<time::OffsetDateTime> {
 }
 
 pub async fn run() -> Result<()> {
+    init_i18n_from_config();
     let mut client = IpcClient::connect(crate::ipc::server::default_socket_path()).await?;
     client.send(&Command::Subscribe).await?;
     client
@@ -509,6 +510,13 @@ pub async fn run() -> Result<()> {
             }
         }
     }
+}
+
+fn init_i18n_from_config() {
+    let language = crate::config::load_from(&crate::config::default_path())
+        .map(|cfg| cfg.ui.language)
+        .unwrap_or_else(|_| "auto".to_string());
+    crate::i18n::init(&language);
 }
 
 async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Result<bool> {
@@ -583,7 +591,6 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
             if app.page == Page::Settings {
                 app.configure_module = app.configure_module.next();
                 app.clamp_selected_settings();
-                maybe_run_doctor(app);
             } else {
                 app.history_detail = app.history_detail.next();
             }
@@ -592,7 +599,6 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
             if app.page == Page::Settings {
                 app.configure_module = app.configure_module.prev();
                 app.clamp_selected_settings();
-                maybe_run_doctor(app);
             } else {
                 app.history_detail = app.history_detail.prev();
             }
@@ -838,15 +844,7 @@ fn on_page_changed(app: &mut App) {
     }
     if app.page == Page::Settings {
         app.refresh_configure();
-        maybe_run_doctor(app);
     }
-}
-
-fn maybe_run_doctor(app: &mut App) {
-    if app.configure_module != ConfigureModule::Overview || app.doctor.ran_once {
-        return;
-    }
-    app.doctor = run_doctor();
 }
 
 fn run_doctor() -> DoctorState {
@@ -1058,12 +1056,14 @@ mod tests {
                 key: "config".to_string(),
                 value: "ok".to_string(),
                 source: "/tmp/shuohua/config.toml".to_string(),
+                description_key: None,
             },
             settings::SettingsRow {
                 group: "asr".to_string(),
                 key: "apple.idle_pause".to_string(),
                 value: "true".to_string(),
                 source: "/tmp/shuohua/asr/apple.toml".to_string(),
+                description_key: None,
             },
         ];
         app.selected_settings = 0;
@@ -1079,6 +1079,36 @@ mod tests {
             app.selected_config_source().unwrap(),
             std::path::PathBuf::from("/tmp/shuohua/asr/apple.toml")
         );
+    }
+
+    #[test]
+    fn init_i18n_from_config_uses_configured_language() {
+        let home = std::env::temp_dir().join(format!("shuohua-tui-i18n-{}", ulid::Ulid::new()));
+        let config_home = home.join("config");
+        let root = config_home.join("shuohua");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("config.toml"),
+            r#"
+[hotkey]
+trigger = "f16"
+
+[ui]
+language = "zh-CN"
+"#,
+        )
+        .unwrap();
+        let old = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+
+        init_i18n_from_config();
+
+        assert_eq!(crate::i18n::tr("tui.tab_settings", &[]), "3 配置");
+        match old {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]

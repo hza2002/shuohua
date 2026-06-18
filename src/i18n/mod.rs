@@ -47,6 +47,15 @@ pub fn tr(key: &str, vars: &[(&str, String)]) -> String {
         .get()
         .map(|lock| lock.read().expect("i18n dict lock poisoned").clone())
         .unwrap_or_else(|| Arc::new(load_dict(Lang::EnUS)));
+    tr_from_dict(&dict, key, vars)
+}
+
+pub fn tr_lang(lang: Lang, key: &str, vars: &[(&str, String)]) -> String {
+    let dict = load_dict(lang);
+    tr_from_dict(&dict, key, vars)
+}
+
+fn tr_from_dict(dict: &Dict, key: &str, vars: &[(&str, String)]) -> String {
     let template = dict
         .entries
         .get(key)

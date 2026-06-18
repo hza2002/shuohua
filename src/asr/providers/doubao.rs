@@ -73,6 +73,11 @@ impl DoubaoProvider {
     pub fn finalize_timeout_ms(&self) -> u64 {
         self.config.finalize_timeout_ms
     }
+
+    pub async fn check_runtime(&self, ctx: SessionCtx) -> Result<(), AsrError> {
+        let (session, _events) = self.open(ctx).await?;
+        session.close().await
+    }
 }
 
 #[async_trait]

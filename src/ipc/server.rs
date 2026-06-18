@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, error::TrySendError};
+use tokio_util::sync::CancellationToken;
 
 use crate::ipc::protocol::{Command, Event, Stats, WireState, PROTO_VERSION};
 use crate::state::history::{self, HistoryRecord, PipelineStepHistory, PipelineStepStatus};
@@ -63,9 +64,18 @@ async fn handle_client(
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     let (tx, mut rx) = mpsc::channel::<Event>(CLIENT_QUEUE);
+    let cancel = CancellationToken::new();
 
+    let writer_cancel = cancel.clone();
     let writer = tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
+        loop {
+            let event = tokio::select! {
+                _ = writer_cancel.cancelled() => break,
+                event = rx.recv() => {
+                    let Some(event) = event else { break };
+                    event
+                }
+            };
             let line = match crate::ipc::protocol::encode_event(&event) {
                 Ok(line) => line,
                 Err(e) => {
@@ -74,24 +84,36 @@ async fn handle_client(
                 }
             };
             if writer.write_all(line.as_bytes()).await.is_err() {
+                writer_cancel.cancel();
                 break;
             }
         }
     });
 
     let mut subscribed = false;
-    while let Some(line) = lines.next_line().await? {
+    let mut state_forwarder = None;
+    loop {
+        let line = tokio::select! {
+            _ = cancel.cancelled() => break,
+            line = lines.next_line() => {
+                let Some(line) = line? else { break };
+                line
+            }
+        };
         let command = match crate::ipc::protocol::decode_command(&line) {
             Ok(command) => command,
             Err(e) => {
-                send_or_drop(
+                if !send_or_drop(
                     &tx,
                     Event::Error {
                         recording_id: None,
                         kind: "bad_command".to_string(),
                         msg: e.to_string(),
                     },
-                );
+                ) {
+                    cancel.cancel();
+                    break;
+                }
                 continue;
             }
         };
@@ -100,8 +122,11 @@ async fn handle_client(
             Command::Subscribe if !subscribed => {
                 subscribed = true;
                 let (snapshot, rx) = state.subscribe_with_snapshot();
-                send_or_drop(&tx, snapshot_event(snapshot));
-                spawn_state_forwarder(rx, tx.clone());
+                if !send_or_drop(&tx, snapshot_event(snapshot)) {
+                    cancel.cancel();
+                    break;
+                }
+                state_forwarder = Some(spawn_state_forwarder(rx, tx.clone(), cancel.clone()));
             }
             Command::Subscribe => {}
             Command::GetHistory {
@@ -114,11 +139,14 @@ async fn handle_client(
                         tracing::warn!(error = ?e, "history read failed");
                         Vec::new()
                     });
-                send_or_drop(&tx, Event::History { records });
+                if !send_or_drop(&tx, Event::History { records }) {
+                    cancel.cancel();
+                    break;
+                }
             }
             Command::DaemonStatus => {
                 let snapshot = state.snapshot();
-                send_or_drop(
+                if !send_or_drop(
                     &tx,
                     Event::DaemonStatus {
                         pid: std::process::id(),
@@ -126,37 +154,57 @@ async fn handle_client(
                         state: snapshot.state.into(),
                         recording_id: snapshot.recording_id,
                     },
-                );
+                ) {
+                    cancel.cancel();
+                    break;
+                }
             }
             Command::ReloadConfig => match control.reload.reload_now() {
-                Ok(()) => send_or_drop(
-                    &tx,
-                    Event::ConfigReloaded {
-                        path: crate::config::default_path().display().to_string(),
-                    },
-                ),
-                Err(e) => send_or_drop(
-                    &tx,
-                    Event::Error {
-                        recording_id: None,
-                        kind: "reload_config_failed".to_string(),
-                        msg: e.to_string(),
-                    },
-                ),
+                Ok(()) => {
+                    if !send_or_drop(
+                        &tx,
+                        Event::ConfigReloaded {
+                            path: crate::config::default_path().display().to_string(),
+                        },
+                    ) {
+                        cancel.cancel();
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if !send_or_drop(
+                        &tx,
+                        Event::Error {
+                            recording_id: None,
+                            kind: "reload_config_failed".to_string(),
+                            msg: e.to_string(),
+                        },
+                    ) {
+                        cancel.cancel();
+                        break;
+                    }
+                }
             },
             Command::StartRecording | Command::StopRecording | Command::CancelRecording => {
-                send_or_drop(
+                if !send_or_drop(
                     &tx,
                     Event::Error {
                         recording_id: None,
                         kind: "unsupported".to_string(),
                         msg: "command is not wired in M4".to_string(),
                     },
-                );
+                ) {
+                    cancel.cancel();
+                    break;
+                }
             }
         }
     }
 
+    cancel.cancel();
+    if let Some(task) = state_forwarder {
+        let _ = task.await;
+    }
     drop(tx);
     let _ = writer.await;
     Ok(())
@@ -165,46 +213,57 @@ async fn handle_client(
 fn spawn_state_forwarder(
     mut rx: tokio::sync::broadcast::Receiver<StateEvent>,
     tx: mpsc::Sender<Event>,
-) {
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            match rx.recv().await {
-                Ok(event) => send_or_drop(&tx, event.into()),
+            let event = tokio::select! {
+                _ = cancel.cancelled() => break,
+                event = rx.recv() => event,
+            };
+            match event {
+                Ok(event) => {
+                    if !send_or_drop(&tx, event.into()) {
+                        cancel.cancel();
+                        break;
+                    }
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(lagged = n, "IPC client lagged");
-                    send_or_drop(
+                    if !send_or_drop(
                         &tx,
                         Event::Error {
                             recording_id: None,
                             kind: "lag".to_string(),
                             msg: format!("client lagged by {n} events"),
                         },
-                    );
+                    ) {
+                        cancel.cancel();
+                        break;
+                    }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
-    });
+    })
 }
 
 static LAST_QUEUE_FULL_WARN: Mutex<Option<Instant>> = Mutex::new(None);
 
-fn send_or_drop(tx: &mpsc::Sender<Event>, event: Event) {
-    if tx.try_send(event).is_err() {
-        // Throttle: the queue stays full across many consecutive sends,
-        // so warn at most once per second to avoid flooding the log.
-        let mut last = LAST_QUEUE_FULL_WARN.lock().unwrap();
-        let now = Instant::now();
-        let should_warn = last.map_or(true, |t| now.duration_since(t) > Duration::from_secs(1));
-        if should_warn {
-            tracing::warn!("IPC client queue full");
-            *last = Some(now);
+fn send_or_drop(tx: &mpsc::Sender<Event>, event: Event) -> bool {
+    match tx.try_send(event) {
+        Ok(()) => true,
+        Err(TrySendError::Closed(_)) => false,
+        Err(TrySendError::Full(_)) => {
+            let mut last = LAST_QUEUE_FULL_WARN.lock().unwrap();
+            let now = Instant::now();
+            let should_warn = last.map_or(true, |t| now.duration_since(t) > Duration::from_secs(1));
+            if should_warn {
+                tracing::warn!("IPC client queue full");
+                *last = Some(now);
+            }
+            false
         }
-        let _ = tx.try_send(Event::Error {
-            recording_id: None,
-            kind: "lag".to_string(),
-            msg: "client queue full".to_string(),
-        });
     }
 }
 
@@ -446,6 +505,52 @@ mod tests {
 
         server.abort();
         fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn state_forwarder_stops_when_client_disconnects() {
+        let (tx, rx) = mpsc::channel::<Event>(1);
+        let (state_tx, state_rx) = tokio::sync::broadcast::channel::<StateEvent>(1);
+        let cancel = CancellationToken::new();
+        let task = spawn_state_forwarder(state_rx, tx.clone(), cancel.clone());
+
+        drop(rx);
+        let _ = state_tx.send(StateEvent::StatsChanged {
+            dur_ms: 1,
+            words: 1,
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn state_forwarder_stops_when_client_queue_is_full() {
+        let (tx, _rx) = mpsc::channel::<Event>(1);
+        tx.try_send(Event::StatsChanged {
+            dur_ms: 0,
+            words: 0,
+        })
+        .unwrap();
+        let (state_tx, state_rx) = tokio::sync::broadcast::channel::<StateEvent>(1);
+        let cancel = CancellationToken::new();
+        let task = spawn_state_forwarder(state_rx, tx.clone(), cancel.clone());
+
+        let _ = state_tx.send(StateEvent::StatsChanged {
+            dur_ms: 1,
+            words: 1,
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(cancel.is_cancelled());
     }
 
     #[test]

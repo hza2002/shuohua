@@ -110,6 +110,11 @@ pub enum StateEvent {
         recording_id: String,
         phase: SessionPhase,
     },
+    Error {
+        recording_id: Option<String>,
+        kind: String,
+        msg: String,
+    },
     HistoryAppended {
         record: Box<HistoryRecord>,
     },
@@ -225,6 +230,19 @@ impl StateStore {
         let _ = self.tx.send(StateEvent::SessionPhase {
             recording_id,
             phase,
+        });
+    }
+
+    pub fn error(
+        &self,
+        recording_id: Option<String>,
+        kind: impl Into<String>,
+        msg: impl Into<String>,
+    ) {
+        let _ = self.tx.send(StateEvent::Error {
+            recording_id,
+            kind: kind.into(),
+            msg: msg.into(),
         });
     }
 
@@ -371,5 +389,27 @@ mod tests {
 
         store.segment("01HXYZ".to_string(), "hello".to_string());
         assert!(matches!(rx.try_recv().unwrap(), StateEvent::Segment { .. }));
+    }
+
+    #[test]
+    fn error_broadcast_does_not_change_daemon_state() {
+        let store = StateStore::new();
+        let (_, mut rx) = store.subscribe_with_snapshot();
+
+        store.error(Some("01HXYZ".to_string()), "history_append", "disk full");
+
+        assert_eq!(store.snapshot().state, DaemonState::Idle);
+        match rx.try_recv().unwrap() {
+            StateEvent::Error {
+                recording_id,
+                kind,
+                msg,
+            } => {
+                assert_eq!(recording_id.as_deref(), Some("01HXYZ"));
+                assert_eq!(kind, "history_append");
+                assert_eq!(msg, "disk full");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 }

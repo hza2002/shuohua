@@ -58,6 +58,7 @@ const FIRST_AUDIO_TIMEOUT_MS: u64 = 1000;
 /// 在安静房间的本底噪声（约 -50 ~ -60 dBFS，对应 i16 ≈ 32~100），同时严格
 /// 大于"完美零"（合盖 / 设备被屏蔽时的 silence buffer 是精确 0）。
 const MIN_NONZERO_AMPLITUDE: i16 = 8;
+const HISTORY_NOTICE_TTL_MS: u32 = 3_000;
 
 /// 当前 PCM 帧里是否至少有一个样本超过静音阈值。
 fn frame_has_signal(samples: &[i16]) -> bool {
@@ -323,7 +324,10 @@ async fn run_single_session_recording(
             }
             ev = events.recv() => {
                 match ev {
-                    None => break,
+                    None => {
+                        terminal_error = Some(asr_stream_closed_error());
+                        break;
+                    }
                     Some(AsrEvent::Final { text }) => {
                         observe_asr_event(
                             &mut trace,
@@ -379,8 +383,8 @@ async fn run_single_session_recording(
                             .iter()
                             .map(|s| s.text.as_str())
                             .collect();
-                        if let Some(record) = append_history(HistoryInput {
-                            id: recording_id,
+                        let history_result = append_history(HistoryInput {
+                            id: recording_id.clone(),
                             provider: provider.name().to_string(),
                             started_at: recording_started_at,
                             ended_at,
@@ -400,9 +404,13 @@ async fn run_single_session_recording(
                                 kind: "asr_error".to_string(),
                                 msg: err.to_string(),
                             }),
-                        }) {
-                            params.state.history_appended(record);
-                        }
+                        });
+                        publish_history_result(
+                            &params.state,
+                            params.overlay.as_ref(),
+                            &recording_id,
+                            history_result,
+                        );
                         observe_finish(&mut trace, "asr_error", audio_samples_sent);
                         return;
                     }
@@ -476,9 +484,8 @@ async fn run_single_session_recording(
     if cancel_requested {
         tracing::info!(recording_id = %recording_id, "recording canceled");
         params.state.set_idle();
-        overlay_send(&params, OverlayCmd::Hide);
-        if let Some(record) = append_history(HistoryInput {
-            id: recording_id,
+        let history_result = append_history(HistoryInput {
+            id: recording_id.clone(),
             provider: provider_name,
             started_at: recording_started_at,
             ended_at: time::OffsetDateTime::now_utc(),
@@ -495,9 +502,14 @@ async fn run_single_session_recording(
             app: app_context.bundle_id,
             status: HistoryStatus::Canceled,
             error: None,
-        }) {
-            params.state.history_appended(record);
-        }
+        });
+        publish_history_result(
+            &params.state,
+            params.overlay.as_ref(),
+            &recording_id,
+            history_result,
+        );
+        overlay_send(&params, OverlayCmd::Hide);
         observe_finish(&mut trace, "canceled", audio_samples_sent);
         return;
     }
@@ -548,10 +560,6 @@ async fn run_single_session_recording(
             );
         }
         params.state.set_idle();
-        // 不发 SetState{Idle}：它会让 model.visible=false，渲染时立刻 orderOut
-        // panel，把 notice 在显示前就关掉。Hide 内部已经把 state 切回 Idle，
-        // 而且 notice 活着时会延期到 ttl 到点再真隐藏。
-        overlay_send(&params, OverlayCmd::Hide);
     }
     let ended_at = time::OffsetDateTime::now_utc();
     let history_status = terminal_error
@@ -568,8 +576,9 @@ async fn run_single_session_recording(
             HistoryStatus::Timeout => "timeout",
         }
     };
-    if let Some(record) = append_history(HistoryInput {
-        id: recording_id,
+    let should_hide = terminal_error.is_none() && error.is_none();
+    let history_result = append_history(HistoryInput {
+        id: recording_id.clone(),
         provider: provider_name,
         started_at: recording_started_at,
         ended_at,
@@ -586,8 +595,17 @@ async fn run_single_session_recording(
         app: app_context.bundle_id,
         status: history_status,
         error: terminal_error.or(error),
-    }) {
-        params.state.history_appended(record);
+    });
+    publish_history_result(
+        &params.state,
+        params.overlay.as_ref(),
+        &recording_id,
+        history_result,
+    );
+    if should_hide {
+        // History warning 必须先发，再 Hide；overlay 会把 Hide 延期到 notice TTL
+        // 到期，避免“文本已输出但历史未保存”的提示一闪而过。
+        overlay_send(&params, OverlayCmd::Hide);
     }
     observe_finish(&mut trace, trace_status, audio_samples_sent);
 }
@@ -846,7 +864,10 @@ async fn run_multi_session_recording(
                     }
                     ev = events.recv() => {
                         match ev {
-                            None => { stop_requested = true; break 'active; }
+                            None => {
+                                terminal_error = Some(asr_stream_closed_error());
+                                break 'outer;
+                            }
                             Some(AsrEvent::Final { text }) => {
                                 observe_asr_event(
                                     &mut trace,
@@ -966,10 +987,16 @@ async fn run_multi_session_recording(
                                     emit_meters(&params.state, &recording_id, &mut meter, &samples);
                                     let chunk = timeline.push(&samples);
                                     if let Some(s) = session.as_mut() {
-                                        let _ = s.send_pcm(&samples, false).await;
+                                        if let Err(error) =
+                                            send_pcm_chunk(s, &samples, &mut total_audio_samples)
+                                                .await
+                                        {
+                                            terminal_error = Some(error);
+                                            rec.stop();
+                                            break 'outer;
+                                        }
                                     }
                                     current_session_samples += samples.len() as u64;
-                                    total_audio_samples += samples.len() as u64;
                                     last_sent_sample = chunk.end_sample();
                                 }
                             }
@@ -984,11 +1011,15 @@ async fn run_multi_session_recording(
                     observe_pcm(&mut trace, &samples);
                     emit_meters(&params.state, &recording_id, &mut meter, &samples);
                     if let Some(s) = session.as_mut() {
-                        let _ = s.send_pcm(&samples, false).await;
+                        if let Err(error) =
+                            send_pcm_chunk(s, &samples, &mut total_audio_samples).await
+                        {
+                            terminal_error = Some(error);
+                            break 'outer;
+                        }
                     }
                     let chunk = timeline.push(&samples);
                     current_session_samples += samples.len() as u64;
-                    total_audio_samples += samples.len() as u64;
                     last_sent_sample = chunk.end_sample();
                 }
             }
@@ -1255,9 +1286,8 @@ async fn run_multi_session_recording(
     if cancel_requested {
         tracing::info!(recording_id = %recording_id, "recording canceled");
         params.state.set_idle();
-        overlay_send(&params, OverlayCmd::Hide);
-        if let Some(record) = append_history(HistoryInput {
-            id: recording_id,
+        let history_result = append_history(HistoryInput {
+            id: recording_id.clone(),
             provider: provider_name,
             started_at: recording_started_at,
             ended_at: time::OffsetDateTime::now_utc(),
@@ -1269,9 +1299,14 @@ async fn run_multi_session_recording(
             app: app_context.bundle_id,
             status: HistoryStatus::Canceled,
             error: None,
-        }) {
-            params.state.history_appended(record);
-        }
+        });
+        publish_history_result(
+            &params.state,
+            params.overlay.as_ref(),
+            &recording_id,
+            history_result,
+        );
+        overlay_send(&params, OverlayCmd::Hide);
         observe_finish(&mut trace, "canceled", total_audio_samples);
         return;
     }
@@ -1319,7 +1354,6 @@ async fn run_multi_session_recording(
             );
         }
         params.state.set_idle();
-        overlay_send(&params, OverlayCmd::Hide);
     }
     let ended_at = time::OffsetDateTime::now_utc();
     let history_status = terminal_error
@@ -1336,8 +1370,9 @@ async fn run_multi_session_recording(
             HistoryStatus::Timeout => "timeout",
         }
     };
-    if let Some(record) = append_history(HistoryInput {
-        id: recording_id,
+    let should_hide = terminal_error.is_none() && error.is_none();
+    let history_result = append_history(HistoryInput {
+        id: recording_id.clone(),
         provider: provider_name,
         started_at: recording_started_at,
         ended_at,
@@ -1349,8 +1384,15 @@ async fn run_multi_session_recording(
         app: app_context.bundle_id,
         status: history_status,
         error: terminal_error.or(error),
-    }) {
-        params.state.history_appended(record);
+    });
+    publish_history_result(
+        &params.state,
+        params.overlay.as_ref(),
+        &recording_id,
+        history_result,
+    );
+    if should_hide {
+        overlay_send(&params, OverlayCmd::Hide);
     }
     observe_finish(&mut trace, trace_status, total_audio_samples);
 }
@@ -1394,8 +1436,13 @@ async fn finish(
                 match pcm {
                     Some(samples) => {
                         observe_pcm(trace, &samples);
-                        let _ = session.send_pcm(&samples, false).await;
-                        *audio_samples_sent += samples.len() as u64;
+                        if let Err(error) =
+                            send_pcm_chunk(session, &samples, audio_samples_sent).await
+                        {
+                            rec.stop();
+                            *terminal_error = Some(error);
+                            return false;
+                        }
                     }
                     None => break,
                 }
@@ -1462,8 +1509,10 @@ async fn finish(
     rec.stop();
     while let Some(samples) = rec.try_recv() {
         observe_pcm(trace, &samples);
-        let _ = session.send_pcm(&samples, false).await;
-        *audio_samples_sent += samples.len() as u64;
+        if let Err(error) = send_pcm_chunk(session, &samples, audio_samples_sent).await {
+            *terminal_error = Some(error);
+            return false;
+        }
     }
 
     match finalize_provider_session(
@@ -1519,6 +1568,29 @@ async fn finish(
     }
 }
 
+fn asr_stream_closed_error() -> HistoryError {
+    HistoryError {
+        kind: "asr_stream_closed".to_string(),
+        msg: "ASR event stream closed before Done".to_string(),
+    }
+}
+
+async fn send_pcm_chunk(
+    session: &mut Box<dyn AsrSession>,
+    samples: &[i16],
+    audio_samples_sent: &mut u64,
+) -> Result<(), HistoryError> {
+    session
+        .send_pcm(samples, false)
+        .await
+        .map_err(|error| HistoryError {
+            kind: "asr_send".to_string(),
+            msg: error.to_string(),
+        })?;
+    *audio_samples_sent += samples.len() as u64;
+    Ok(())
+}
+
 async fn cancel_session(
     rec: &mut recorder::RecordingStream,
     session: &mut Box<dyn AsrSession>,
@@ -1547,9 +1619,101 @@ fn overlay_send(params: &SessionParams, cmd: OverlayCmd) {
     }
 }
 
+fn publish_history_result(
+    state: &StateStore,
+    overlay: Option<&OverlayHandle>,
+    recording_id: &str,
+    result: anyhow::Result<crate::state::history::HistoryRecord>,
+) {
+    match result {
+        Ok(record) => state.history_appended(record),
+        Err(error) => {
+            tracing::error!(
+                recording_id,
+                error = ?error,
+                "history append failed"
+            );
+            state.error(
+                Some(recording_id.to_string()),
+                "history_append",
+                format!("{error:#}"),
+            );
+            if let Some(overlay) = overlay {
+                overlay.send(OverlayCmd::Notice {
+                    text: crate::t!("notice.history_save_failed"),
+                    ttl_ms: HISTORY_NOTICE_TTL_MS,
+                });
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+
+    use crate::asr::types::AsrError;
+
+    struct FailingSendSession;
+
+    #[async_trait]
+    impl AsrSession for FailingSendSession {
+        async fn send_pcm(&mut self, _pcm: &[i16], _is_last: bool) -> Result<(), AsrError> {
+            Err(AsrError::Network("send failed".to_string()))
+        }
+
+        async fn close(self: Box<Self>) -> Result<(), AsrError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn pcm_send_failure_does_not_count_unsent_audio() {
+        let mut session: Box<dyn AsrSession> = Box::new(FailingSendSession);
+        let mut audio_samples_sent = 7;
+
+        let error = send_pcm_chunk(&mut session, &[1, 2, 3], &mut audio_samples_sent)
+            .await
+            .expect_err("failed PCM delivery must stop normal completion");
+
+        assert_eq!(error.kind, "asr_send");
+        assert_eq!(audio_samples_sent, 7);
+    }
+
+    #[test]
+    fn history_append_failure_emits_error_and_notice() {
+        let state = StateStore::new();
+        let (_, mut state_rx) = state.subscribe_with_snapshot();
+        let (overlay, mut overlay_rx) = OverlayHandle::channel();
+
+        publish_history_result(
+            &state,
+            Some(&overlay),
+            "01HXYZ",
+            Err(anyhow::anyhow!("disk full")),
+        );
+
+        match state_rx.try_recv().unwrap() {
+            crate::state::StateEvent::Error {
+                recording_id,
+                kind,
+                msg,
+            } => {
+                assert_eq!(recording_id.as_deref(), Some("01HXYZ"));
+                assert_eq!(kind, "history_append");
+                assert!(msg.contains("disk full"));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        match overlay_rx.try_recv().unwrap() {
+            OverlayCmd::Notice { text, ttl_ms } => {
+                assert_eq!(text, crate::t!("notice.history_save_failed"));
+                assert_eq!(ttl_ms, HISTORY_NOTICE_TTL_MS);
+            }
+            other => panic!("unexpected overlay command: {other:?}"),
+        }
+    }
 
     #[test]
     fn resume_start_uses_pre_roll_when_buffer_has_headroom() {

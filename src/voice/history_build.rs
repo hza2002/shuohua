@@ -78,16 +78,9 @@ pub(crate) fn build_record(input: HistoryInput) -> HistoryRecord {
     }
 }
 
-pub(crate) fn append_history(input: HistoryInput) -> Option<HistoryRecord> {
+pub(crate) fn append_history(input: HistoryInput) -> anyhow::Result<HistoryRecord> {
     let record = build_record(input);
-    if let Err(e) = history::append_default(&record) {
-        tracing::error!(
-            recording_id = %record.id,
-            error = ?e,
-            "history append failed"
-        );
-        return None;
-    }
+    history::append_default(&record)?;
     tracing::info!(
         recording_id = %record.id,
         status = ?record.status,
@@ -97,7 +90,7 @@ pub(crate) fn append_history(input: HistoryInput) -> Option<HistoryRecord> {
         pipeline_steps = record.pipeline.len(),
         "recording ended"
     );
-    Some(record)
+    Ok(record)
 }
 
 fn build_asr_sessions(

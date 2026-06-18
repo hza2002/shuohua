@@ -336,6 +336,15 @@ impl From<StateEvent> for Event {
                 recording_id,
                 phase,
             },
+            StateEvent::Error {
+                recording_id,
+                kind,
+                msg,
+            } => Event::Error {
+                recording_id,
+                kind,
+                msg,
+            },
             StateEvent::HistoryAppended { record } => Event::HistoryAppended { record },
         }
     }
@@ -551,6 +560,24 @@ mod tests {
             .unwrap();
 
         assert!(cancel.is_cancelled());
+    }
+
+    #[test]
+    fn state_error_maps_to_wire_error() {
+        let event = Event::from(StateEvent::Error {
+            recording_id: Some("01HXYZ".to_string()),
+            kind: "history_append".to_string(),
+            msg: "disk full".to_string(),
+        });
+
+        assert_eq!(
+            event,
+            Event::Error {
+                recording_id: Some("01HXYZ".to_string()),
+                kind: "history_append".to_string(),
+                msg: "disk full".to_string(),
+            }
+        );
     }
 
     #[test]

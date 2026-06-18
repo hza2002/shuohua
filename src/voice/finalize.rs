@@ -26,10 +26,11 @@ pub(crate) enum FinalizeOutcome {
 /// 把 voice 视角的 ASR session 收尾原子化。
 ///
 /// 返回值：
-///   - `Ok(Done)`：收到 `Done` 或事件通道关闭。
+///   - `Ok(Done)`：收到 `Done`。
 ///   - `Ok(Canceled)`：等待期间收到 `SessionControl::Cancel`；调用方负责清理。
 ///   - `Err(asr_send_last)`：`send_pcm(&[], true)` 失败。
 ///   - `Err(asr_timeout)`：`finalize_timeout_ms` 内未收到 `Done`。
+///   - `Err(asr_stream_closed)`：provider 未发 `Done` 就关闭事件通道。
 ///
 /// 期间出现的 `AsrEvent::Error` 不中断等待，但写入 `terminal_error`，
 /// 调用方据此决定 history status。
@@ -74,7 +75,12 @@ pub(crate) async fn finalize_provider_session(
             }
             ev = events.recv() => {
                 match ev {
-                    None => return Ok(FinalizeOutcome::Done),
+                    None => {
+                        return Err(HistoryError {
+                            kind: "asr_stream_closed".to_string(),
+                            msg: "ASR event stream closed before Done".to_string(),
+                        });
+                    }
                     Some(AsrEvent::Final { text }) => {
                         observe_asr_event(
                             trace,
@@ -135,5 +141,67 @@ pub(crate) async fn finalize_provider_session(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+
+    use crate::asr::types::AsrError;
+    use crate::voice::observer::TraceStart;
+
+    struct NoopSession;
+
+    #[async_trait]
+    impl AsrSession for NoopSession {
+        async fn send_pcm(&mut self, _pcm: &[i16], _is_last: bool) -> Result<(), AsrError> {
+            Ok(())
+        }
+
+        async fn close(self: Box<Self>) -> Result<(), AsrError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn channel_close_before_done_is_an_error() {
+        let mut session: Box<dyn AsrSession> = Box::new(NoopSession);
+        let (event_tx, mut events) = mpsc::channel(1);
+        drop(event_tx);
+        let mut pending_segments = Vec::new();
+        let mut session_final_text = None;
+        let mut pending_overlay_segments = 0;
+        let (_control_tx, mut control_rx) = watch::channel(SessionControl::Idle);
+        let mut terminal_error = None;
+        let started = Instant::now();
+        let mut trace = RecordingObserver::start(TraceStart {
+            enabled: false,
+            recording_id: "test-recording".to_string(),
+            provider: "test".to_string(),
+            started_at: "2026-06-19T00:00:00Z".to_string(),
+            started_instant: started,
+        });
+
+        let error = finalize_provider_session(
+            &mut session,
+            &mut events,
+            &mut pending_segments,
+            &mut session_final_text,
+            &mut pending_overlay_segments,
+            100,
+            &mut control_rx,
+            &mut terminal_error,
+            &mut trace,
+            started,
+            &StateStore::new(),
+            "test-recording",
+            None,
+        )
+        .await
+        .expect_err("channel close without Done must fail");
+
+        assert_eq!(error.kind, "asr_stream_closed");
     }
 }

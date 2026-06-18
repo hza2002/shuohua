@@ -257,6 +257,7 @@ key         := f1..f20 | a..z | 0..9
 - **单事件流**：partial / segment / final / error / done 走同一根 channel（`AsrEvent` enum），voice 模块只 select 一臂
 - provider 私有配置类型化分离在自己的 TOML 文件，voice 模块永远不见
 - provider 必须保证：`send_pcm(is_last=true)` 之后**至少**会出一个 `AsrEvent::Segment`，然后 `AsrEvent::Done`
+- provider 未发 `Done` 就关闭事件流，或 voice 向 provider 发送 PCM 失败，均视为 ASR terminal error：保留已经确认的 segment 到 error history，跳过 post/dispatch，避免把截断文本当成功结果粘贴
 - `AsrEvent::Final` 是可选的 session-scoped 最终全文；provider 不支持时 voice 用已收到的 Segment 拼接结果作为 fallback
 - **音频 codec 在 provider 实现里写死**，不暴露给用户。codec 是工程权衡（CPU/带宽/server 兼容性），由 provider 作者拍板而非配置项
 
@@ -650,6 +651,7 @@ thinking = { type = "disabled" }     # DeepSeek 专属；不是 OpenAI 通用默
 
 - **链路进行中**：每完成一步 processor，daemon 推一条 `pipeline_step` 事件到 UDS。TUI 实时显示每步 status + duration + text。
 - **链路结束 + dispatch 完成**：daemon 把整条 `HistoryRecord`（schema 见 [SCHEMA.md](./SCHEMA.md)）append 到 history JSONL，同时推一条 `history_appended` 事件。**不再有独立的 `final` 事件**——会话完成即 history_appended。
+- **History append 失败**：dispatch 结果不回滚；daemon 记录诊断日志、推 UDS `error(kind=history_append)`，overlay meta 行显示本地化 Notice，并在 Notice TTL 到期后隐藏。
 - **TUI 默认显示完整流水线**：raw → 每个 processor 的 output → 最终上屏文本。不切换模式，全可见，方便观测整条链。
 - **Overlay 只显示最终上屏文本**（chain 最后一项的 text；chain 空则 = raw），单步失败/超时通过 meta 行 notice 通知；致命错误（ASR 中断 / 剪贴板失败 / mic watchdog）通过 text 区 error 红字反馈，并跳过 dispatch。
 

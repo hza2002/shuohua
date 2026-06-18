@@ -10,6 +10,7 @@ word_count = "{n} words"
 [notice]
 step_timeout = "{name} timed out, skipped"
 step_failed = "{name} failed, skipped"
+history_save_failed = "Text was delivered, but history could not be saved"
 
 [error]
 no_audio = "No microphone audio — check input device"

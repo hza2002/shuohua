@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-19 - Voice completion failure handling
+
+- Treat ASR event-stream closure before `Done` and PCM delivery failures during
+  normal completion as terminal errors, preserving confirmed segments in error
+  history while skipping post-processing and dispatch.
+- Surface history append failures through daemon logs, UDS
+  `error(kind=history_append)`, and a localized overlay Notice without rolling
+  back text that was already delivered.
+
 ## 2026-06-17 - Configure refactor foundation
 
 - Moved configuration parsing into a `config/` module tree and added shared

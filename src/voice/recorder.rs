@@ -64,10 +64,7 @@ impl RecordingStream {
 
     /// 非 await 的 try_recv（finishing 阶段一次性吸干残余帧用）。
     pub fn try_recv(&mut self) -> Option<Vec<i16>> {
-        match self.pcm_rx.try_recv() {
-            Ok(v) => Some(v),
-            Err(_) => None,
-        }
+        self.pcm_rx.try_recv().ok()
     }
 }
 

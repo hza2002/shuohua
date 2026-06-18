@@ -6,27 +6,31 @@
 //! 协议要点（与 Hypnus-Yuan/doubao-speech、chaitin/MonkeyCode、openless、
 //! yyyzl/push-2-talk 四份独立实现交叉验证一致）：
 //!
-//!   - 鉴权走 HTTP upgrade header：X-Api-App-Key / X-Api-Access-Key /
-//!     X-Api-Resource-Id / X-Api-Request-Id / X-Api-Connect-Id / X-Api-Sequence
-//!   - 客户端二进制帧 = [4 字节 header][4 字节 sequence BE][4 字节 size BE][payload]
-//!       byte0 = 0x11 (proto v1 << 4 | header_size=1)
-//!       byte1 = msg_type << 4 | flags
-//!              msg_type: 0x1=full client req, 0x2=audio-only
-//!              flags:    0x1=PositiveSeq（普通帧）, 0x3=NegativeSeq（末帧）
-//!       byte2 = serialize << 4 | compress
-//!              serialize: 0x1=JSON, 0x0=raw bytes
-//!              compress:  0x0=none (raw PCM 高熵 gzip 仅 ~30%，DESIGN §2.8 不压)
-//!       byte3 = 0x00 reserved
-//!     **所有客户端帧都带 sequence**：FullClientRequest=1，audio 帧从 2 起单调递增，
-//!     末帧 flag 改为 NegativeSeq + 取负序号（如已发到 5，末帧 seq=-6）。
-//!     不带 sequence 的"裸末帧"（flags=0x02）会让 Doubao 走 server 自分配 fallback
-//!     路径，偶发 finalize 慢到 5s+。
-//!   - 服务端帧 = [4 字节 header][4 字节 sequence (跳过)][4 字节 size BE][payload]
-//!     payload 是 result/utterances/audio_info JSON。flag bit 0x02 = 末帧
-//!     （server 也可能用 NegativeSeq=0x03，has_seq + is_last 两位都会置上）
-//!   - `enable_nonstream=true` + `show_utterances=true` 是定型 (`definite=true`)
-//!     的必要条件，DESIGN §2.8 表里 Doubao 行依赖这两个 flag
-//!   - 音频 codec 写死 raw PCM 16kHz s16le mono；gzip 收益小不做
+//! - 鉴权走 HTTP upgrade header：X-Api-App-Key / X-Api-Access-Key /
+//!   X-Api-Resource-Id / X-Api-Request-Id / X-Api-Connect-Id / X-Api-Sequence
+//! - 客户端二进制帧 = [4 字节 header][4 字节 sequence BE][4 字节 size BE][payload]
+//!
+//!   ```text
+//!   byte0 = 0x11 (proto v1 << 4 | header_size=1)
+//!   byte1 = msg_type << 4 | flags
+//!           msg_type: 0x1=full client req, 0x2=audio-only
+//!           flags:    0x1=PositiveSeq（普通帧）, 0x3=NegativeSeq（末帧）
+//!   byte2 = serialize << 4 | compress
+//!           serialize: 0x1=JSON, 0x0=raw bytes
+//!           compress:  0x0=none (raw PCM 高熵 gzip 仅 ~30%，DESIGN §2.8 不压)
+//!   byte3 = 0x00 reserved
+//!   ```
+//!
+//!   **所有客户端帧都带 sequence**：FullClientRequest=1，audio 帧从 2 起单调递增，
+//!   末帧 flag 改为 NegativeSeq + 取负序号（如已发到 5，末帧 seq=-6）。
+//!   不带 sequence 的"裸末帧"（flags=0x02）会让 Doubao 走 server 自分配 fallback
+//!   路径，偶发 finalize 慢到 5s+。
+//! - 服务端帧 = [4 字节 header][4 字节 sequence (跳过)][4 字节 size BE][payload]
+//!   payload 是 result/utterances/audio_info JSON。flag bit 0x02 = 末帧
+//!   （server 也可能用 NegativeSeq=0x03，has_seq + is_last 两位都会置上）
+//! - `enable_nonstream=true` + `show_utterances=true` 是定型 (`definite=true`)
+//!   的必要条件，DESIGN §2.8 表里 Doubao 行依赖这两个 flag
+//! - 音频 codec 写死 raw PCM 16kHz s16le mono；gzip 收益小不做
 
 use crate::asr::types::*;
 use crate::config::asr::doubao::{load_config_with_overrides, DoubaoConfig};

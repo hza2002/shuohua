@@ -111,7 +111,7 @@ fn run_watcher(dir: PathBuf, path: PathBuf, tx: watch::Sender<Cfg>) -> Result<()
     }
 }
 
-fn load_and_broadcast(path: &PathBuf, tx: &watch::Sender<Cfg>) -> Result<()> {
+fn load_and_broadcast(path: &Path, tx: &watch::Sender<Cfg>) -> Result<()> {
     let cfg = load_runtime_config(path)?;
     tx.send(Arc::new(cfg)).context("broadcast config reload")?;
     tracing::info!(path = %path.display(), "config reloaded");

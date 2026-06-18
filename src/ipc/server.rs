@@ -257,7 +257,7 @@ fn send_or_drop(tx: &mpsc::Sender<Event>, event: Event) -> bool {
         Err(TrySendError::Full(_)) => {
             let mut last = LAST_QUEUE_FULL_WARN.lock().unwrap();
             let now = Instant::now();
-            let should_warn = last.map_or(true, |t| now.duration_since(t) > Duration::from_secs(1));
+            let should_warn = last.is_none_or(|t| now.duration_since(t) > Duration::from_secs(1));
             if should_warn {
                 tracing::warn!("IPC client queue full");
                 *last = Some(now);

@@ -137,6 +137,7 @@ impl DaemonLock {
         let file = std::fs::OpenOptions::new()
             .create(true)
             .read(true)
+            .truncate(false)
             .write(true)
             .open(&path)
             .with_context(|| format!("open daemon lock {}", path.display()))?;

@@ -42,7 +42,7 @@ pub fn parse(s: &str) -> Result<Combo> {
     // both rejected (no further colon allowed; suffix must be exactly the
     // literal).
     let (body, double) = match s.rsplit_once(':') {
-        Some((body, suffix)) if suffix == "double" => (body.to_string(), true),
+        Some((body, "double")) => (body.to_string(), true),
         Some((_, suffix)) => bail!("unknown hotkey suffix {suffix:?}; only :double is recognized"),
         None => (s, false),
     };

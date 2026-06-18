@@ -1233,9 +1233,11 @@ mod tests {
 
     #[test]
     fn base_overlay_spacing_is_compact() {
-        assert!(layout::BASE_HEIGHT <= 68.0);
-        assert!(layout::H_PAD <= 16.0);
-        assert!(layout::BOTTOM_PAD <= 8.0);
+        const {
+            assert!(layout::BASE_HEIGHT <= 68.0);
+            assert!(layout::H_PAD <= 16.0);
+            assert!(layout::BOTTOM_PAD <= 8.0);
+        }
     }
 
     #[test]
@@ -1250,8 +1252,10 @@ mod tests {
 
     #[test]
     fn meta_typography_is_readable_but_secondary() {
-        assert!(typography::META >= 13.0);
-        assert!(typography::META < typography::STATE);
+        const {
+            assert!(typography::META >= 13.0);
+            assert!(typography::META < typography::STATE);
+        }
         assert_eq!(
             crate::config::theme::OverlayTextTheme::default().tertiary,
             crate::config::theme::palette::FG3

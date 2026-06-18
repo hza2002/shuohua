@@ -252,9 +252,8 @@ fn should_keep_single_space(prev: Option<char>, next: Option<char>) -> bool {
 }
 
 fn clean_edge_punctuation(text: &str) -> String {
-    let text =
-        text.trim_start_matches(|c| matches!(c, '，' | '。' | '！' | '？' | '、' | '；' | '：'));
-    let text = text.trim_end_matches(|c| matches!(c, '，' | '、' | '；' | '：'));
+    let text = text.trim_start_matches(['，', '。', '！', '？', '、', '；', '：']);
+    let text = text.trim_end_matches(['，', '、', '；', '：']);
     text.to_string()
 }
 

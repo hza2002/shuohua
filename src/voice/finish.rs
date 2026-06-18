@@ -12,10 +12,9 @@
 //!   5. Finishing：drain stop_delay_ms → stop recorder → is_last → 等 Done
 //!   6. 拼文本 → filler pipeline → dispatch
 //!
-//! 设计上"一次用户会话可能包含多次 ASR session"（见 DESIGN §2.9），但 v1
-//! 暂不实现客户端 VAD。webrtc-vad 在真实声学环境里误判率高，不适合生产。
-//! 后续用更好的模型（如 Silero VAD ONNX）时再启用多 session，控制开关是
-//! DESIGN §2.9 的 `voice.pause_asr_silence_ms` 等配置字段。
+//! 设计上"一次用户会话可能包含多次 ASR session"（见 DESIGN §2.9）。当前实现
+//! 用 Silero VAD 驱动多 session：`voice.vad.backend = "silero"` 且
+//! `asr/<provider>.toml` 里 `idle_pause = true` 时启用，否则保持单 session。
 
 use std::time::{Duration, Instant};
 
@@ -538,7 +537,7 @@ async fn run_single_session_recording(
         (raw_text.clone(), Vec::new(), HistoryStatus::Error, None)
     } else {
         dispatch_with_post_chain(
-            &[raw_text.clone()],
+            std::slice::from_ref(&raw_text),
             params.auto_paste,
             &app_context,
             &params,
@@ -850,12 +849,11 @@ async fn run_multi_session_recording(
                                         frame.probability,
                                         matches!(frame.frame, VadFrame::Speech),
                                     );
-                                    match controller.accept(frame.frame) {
-                                        VadTransition::SilenceStarted => {
-                                            pause_triggered = true;
-                                            break;
-                                        }
-                                        _ => {}
+                                    if controller.accept(frame.frame)
+                                        == VadTransition::SilenceStarted
+                                    {
+                                        pause_triggered = true;
+                                        break;
                                     }
                                 }
                                 if pause_triggered { break 'active; }

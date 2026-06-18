@@ -63,21 +63,16 @@ impl Side {
 }
 
 /// Per-modifier requirement inside a [`Combo`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ModMatcher {
     /// The modifier must be entirely UP (neither side pressed).
+    #[default]
     NotPresent,
     /// The modifier must be DOWN on either side.
     EitherSide,
     /// The modifier must be DOWN on the specified side. The opposite side
     /// is unconstrained (may be up or down).
     Specific(Side),
-}
-
-impl Default for ModMatcher {
-    fn default() -> Self {
-        Self::NotPresent
-    }
 }
 
 /// Static trigger description. See module docs for the three shapes.

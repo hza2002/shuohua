@@ -219,18 +219,13 @@ impl Default for OverlayCfg {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum OverlayPosition {
     Top,
     Middle,
+    #[default]
     Bottom,
-}
-
-impl Default for OverlayPosition {
-    fn default() -> Self {
-        Self::Bottom
-    }
 }
 
 fn default_max_text_lines() -> usize {

@@ -2,7 +2,7 @@
 name = "shuohua"
 version = "0.1.0"
 edition = "2021"
-description = "macOS voice input assistant (M1: hotkey + recorder skeleton)"
+description = "macOS voice input assistant with realtime ASR, post-processing, overlay, and TUI"
 license = "MIT"
 publish = false
 

@@ -148,7 +148,7 @@ pub fn probe_glass_state_ranges(glass: &NSGlassEffectView) {
                 .find(|(w, r)| (*w as i64) != **r);
             let summary = match first_mismatch {
                 None => format!("0..={PROBE_MAX} stored as-is (no clamp probed)"),
-                Some((w, &r)) if w == 0 => {
+                Some((0, &r)) => {
                     format!("storage anomaly: wrote 0 read back {r}")
                 }
                 Some((w, &r)) => {
@@ -177,7 +177,7 @@ fn encoding_for_selector(obj: &AnyObject, sel: Sel) -> String {
         fn object_getClass(obj: *const AnyObject) -> *const AnyClass;
     }
     unsafe {
-        let cls = object_getClass(obj as *const _ as *const AnyObject);
+        let cls = object_getClass(obj as *const _);
         let method = class_getInstanceMethod(cls, sel);
         if method.is_null() {
             return String::new();

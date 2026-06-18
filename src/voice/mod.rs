@@ -8,6 +8,7 @@ pub(crate) mod capture;
 pub mod dispatch;
 pub(crate) mod finalize;
 pub mod finish;
+pub(crate) mod history_build;
 pub mod meter;
 pub mod observer;
 pub mod recorder;

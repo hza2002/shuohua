@@ -4,8 +4,10 @@ use crate::config::inventory::{self, InventoryEntry};
 pub struct SettingsRow {
     pub group: String,
     pub key: String,
+    pub display_key: String,
     pub value: String,
     pub source: String,
+    pub status: inventory::InventoryStatus,
     pub description_key: Option<&'static str>,
 }
 
@@ -17,6 +19,7 @@ fn row_from_entry(entry: &InventoryEntry) -> SettingsRow {
     SettingsRow {
         group: entry.module.label().to_string(),
         key: entry.key.clone(),
+        display_key: display_key_for_entry(entry),
         value: match entry.status {
             inventory::InventoryStatus::Ok => entry.summary.clone(),
             inventory::InventoryStatus::Warning => format!("warning: {}", entry.summary),
@@ -24,8 +27,17 @@ fn row_from_entry(entry: &InventoryEntry) -> SettingsRow {
             inventory::InventoryStatus::Missing => format!("missing: {}", entry.summary),
         },
         source: entry.source.display().to_string(),
+        status: entry.status,
         description_key: description_key_for_entry(entry),
     }
+}
+
+fn display_key_for_entry(entry: &InventoryEntry) -> String {
+    entry.field_path.clone().unwrap_or_else(|| {
+        field_path_from_key(&entry.key)
+            .unwrap_or(&entry.key)
+            .to_string()
+    })
 }
 
 fn description_key_for_entry(entry: &InventoryEntry) -> Option<&'static str> {
@@ -87,5 +99,6 @@ mod tests {
             row.description_key,
             Some("config.field.idle_pause.description")
         );
+        assert_eq!(row.display_key, "idle_pause");
     }
 }

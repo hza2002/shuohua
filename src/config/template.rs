@@ -32,7 +32,7 @@ impl Template {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TemplateValue {
     String(&'static str),
     Integer(i64),
@@ -60,6 +60,41 @@ pub fn render_with_lang(template: &Template, lang: crate::i18n::Lang) -> String 
         template.values,
         Some(lang),
     ));
+    body
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ThemePreset {
+    pub id: &'static str,
+    pub path: &'static str,
+    pub title: &'static str,
+    pub description: &'static str,
+    body: &'static str,
+}
+
+pub fn theme_presets() -> &'static [ThemePreset] {
+    THEME_PRESETS
+}
+
+pub fn theme_preset_body(name: &str) -> Option<&'static str> {
+    let id = if name == crate::config::theme::DEFAULT_THEME_NAME
+        || name == crate::config::theme::LEGACY_DEFAULT_THEME_NAME
+    {
+        "gruvbox-dark"
+    } else {
+        name
+    };
+    theme_presets()
+        .iter()
+        .find(|preset| preset.id == id)
+        .map(|preset| preset.body)
+}
+
+pub fn render_theme_preset(preset: &ThemePreset) -> String {
+    let mut body = String::new();
+    body.push_str(&format!("# {}\n", preset.title));
+    body.push_str(&format!("# {}\n\n", preset.description));
+    body.push_str(preset.body);
     body
 }
 
@@ -332,7 +367,12 @@ const CONFIG_VALUES: &[(&str, TemplateValue)] = &[
     ),
     (
         "ui",
-        TemplateValue::Table(&[("language", TemplateValue::String("auto"))]),
+        TemplateValue::Table(&[
+            ("language", TemplateValue::String("auto")),
+            ("theme", TemplateValue::String("gruvbox-dark")),
+            ("theme_tui", TemplateValue::String("")),
+            ("theme_overlay", TemplateValue::String("")),
+        ]),
     ),
 ];
 
@@ -427,6 +467,949 @@ const ANTHROPIC_VALUES: &[(&str, TemplateValue)] = &[
     ("api_key", TemplateValue::String("")),
     ("model", TemplateValue::String("claude-haiku-4-5")),
     ("prompt", TemplateValue::String("{{text}}")),
+];
+
+const GRUVBOX_DARK_THEME: &str = r##"# Palette: Gruvbox dark (https://github.com/morhetz/gruvbox)
+name = "Gruvbox Dark"
+
+[palette]
+bg = 0x282828
+fg0 = 0xFBF1C7
+fg1 = 0xEBDBB2
+fg2 = 0xD5C4A1
+fg3 = 0xBDAE93
+muted = 0x928374
+red = 0xFB4934
+dark_red = 0xCC241D
+orange = 0xFE8019
+yellow = 0xFABD2F
+green = 0xB8BB26
+aqua = 0x8EC07C
+blue = 0x83A598
+purple = 0xD3869B
+
+[tui]
+foreground = "fg0"
+muted = "muted"
+accent = "aqua"
+success = "aqua"
+warning = "yellow"
+error = "red"
+info = "blue"
+highlight = "aqua"
+border = "muted"
+border_focus = "aqua"
+segment = "fg1"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "bg"
+background_alpha = 0.70
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "fg0"
+secondary = "fg1"
+tertiary = "fg3"
+segment = "fg1"
+notice = "yellow"
+error = "red"
+
+[overlay.state]
+idle = "aqua"
+connecting = "orange"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "dark_red"
+"##;
+
+const GRUVBOX_LIGHT_THEME: &str = r##"# Palette: Gruvbox light (https://github.com/morhetz/gruvbox)
+name = "Gruvbox Light"
+
+[palette]
+bg = 0xFBF1C7
+fg0 = 0x282828
+fg1 = 0x3C3836
+fg2 = 0x504945
+fg3 = 0x665C54
+muted = 0x928374
+red = 0x9D0006
+dark_red = 0xCC241D
+orange = 0xAF3A03
+yellow = 0xB57614
+green = 0x79740E
+aqua = 0x427B58
+blue = 0x076678
+purple = 0x8F3F71
+
+[tui]
+foreground = "fg1"
+muted = "muted"
+accent = "blue"
+success = "aqua"
+warning = "yellow"
+error = "red"
+info = "blue"
+highlight = "blue"
+border = "muted"
+border_focus = "blue"
+segment = "fg3"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "bg"
+background_alpha = 0.70
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "fg0"
+secondary = "fg2"
+tertiary = "fg3"
+segment = "fg2"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "aqua"
+connecting = "orange"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "dark_red"
+"##;
+
+const CATPPUCCIN_LATTE_THEME: &str = r##"# Palette: Catppuccin Latte (https://catppuccin.com/palette/)
+name = "Catppuccin Latte"
+
+[palette]
+rosewater = 0xDC8A78
+flamingo = 0xDD7878
+pink = 0xEA76CB
+mauve = 0x8839EF
+red = 0xD20F39
+maroon = 0xE64553
+peach = 0xFE640B
+yellow = 0xDF8E1D
+green = 0x40A02B
+teal = 0x179299
+sky = 0x04A5E5
+blue = 0x1E66F5
+lavender = 0x7287FD
+text = 0x4C4F69
+subtext1 = 0x5C5F77
+subtext0 = 0x6C6F85
+overlay1 = 0x8C8FA1
+base = 0xEFF1F5
+
+[tui]
+foreground = "text"
+muted = "overlay1"
+accent = "mauve"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "blue"
+highlight = "mauve"
+border = "overlay1"
+border_focus = "mauve"
+segment = "subtext0"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "base"
+background_alpha = 0.80
+background_blur_radius = 3
+corner_radius = 18.0
+
+[overlay.text]
+primary = "text"
+secondary = "subtext1"
+tertiary = "subtext0"
+segment = "subtext1"
+notice = "peach"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "peach"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "maroon"
+"##;
+
+const CATPPUCCIN_MOCHA_THEME: &str = r##"# Palette: Catppuccin Mocha (https://catppuccin.com/palette/)
+name = "Catppuccin Mocha"
+
+[palette]
+rosewater = 0xF5E0DC
+flamingo = 0xF2CDCD
+pink = 0xF5C2E7
+mauve = 0xCBA6F7
+red = 0xF38BA8
+maroon = 0xEBA0AC
+peach = 0xFAB387
+yellow = 0xF9E2AF
+green = 0xA6E3A1
+teal = 0x94E2D5
+sky = 0x89DCED
+blue = 0x89B4FA
+lavender = 0xB4BEFE
+text = 0xCDD6F4
+subtext1 = 0xBAC2DE
+subtext0 = 0xA6ADC8
+overlay1 = 0x7F849C
+base = 0x1E1E2E
+
+[tui]
+foreground = "text"
+muted = "overlay1"
+accent = "mauve"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "blue"
+highlight = "mauve"
+border = "overlay1"
+border_focus = "mauve"
+segment = "subtext0"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "base"
+background_alpha = 0.60
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "text"
+secondary = "subtext1"
+tertiary = "subtext0"
+segment = "subtext1"
+notice = "peach"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "peach"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "maroon"
+"##;
+
+const NORD_THEME: &str = r##"# Palette: Nord (https://www.nordtheme.com/docs/colors-and-palettes)
+name = "Nord"
+
+[palette]
+polar0 = 0x2E3440
+polar1 = 0x3B4252
+polar2 = 0x434C5E
+polar3 = 0x4C566A
+snow0 = 0xD8DEE9
+snow1 = 0xE5E9F0
+snow2 = 0xECEFF4
+frost0 = 0x8FBCBB
+frost1 = 0x88C0D0
+frost2 = 0x81A1C1
+frost3 = 0x5E81AC
+red = 0xBF616A
+orange = 0xD08770
+yellow = 0xEBCB8B
+green = 0xA3BE8C
+purple = 0xB48EAD
+
+[tui]
+foreground = "snow0"
+muted = "polar3"
+accent = "frost1"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "frost2"
+highlight = "frost1"
+border = "polar3"
+border_focus = "frost1"
+segment = "snow1"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "polar0"
+background_alpha = 0.70
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "snow2"
+secondary = "snow0"
+tertiary = "snow1"
+segment = "snow0"
+notice = "yellow"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "orange"
+recording = "red"
+thinking = "frost2"
+stopping = "yellow"
+error = "red"
+"##;
+
+const DRACULA_THEME: &str = r##"# Palette: Dracula (https://draculatheme.com/spec)
+name = "Dracula"
+
+[palette]
+background = 0x282A36
+current_line = 0x44475A
+foreground = 0xF8F8F2
+comment = 0x6272A4
+cyan = 0x8BE9FD
+green = 0x50FA7B
+orange = 0xFFB86C
+pink = 0xFF79C6
+purple = 0xBD93F9
+red = 0xFF5555
+yellow = 0xF1FA8C
+
+[tui]
+foreground = "foreground"
+muted = "comment"
+accent = "purple"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "cyan"
+highlight = "pink"
+border = "comment"
+border_focus = "purple"
+segment = "comment"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "background"
+background_alpha = 0.80
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "foreground"
+secondary = "cyan"
+tertiary = "comment"
+segment = "cyan"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "orange"
+recording = "red"
+thinking = "purple"
+stopping = "yellow"
+error = "red"
+"##;
+
+const SOLARIZED_DARK_THEME: &str = r##"# Palette: Solarized (https://ethanschoonover.com/solarized/)
+name = "Solarized Dark"
+
+[palette]
+base03 = 0x002B36
+base02 = 0x073642
+base01 = 0x586E75
+base00 = 0x657B83
+base0 = 0x839496
+base1 = 0x93A1A1
+base2 = 0xEEE8D5
+base3 = 0xFDF6E3
+yellow = 0xB58900
+orange = 0xCB4B16
+red = 0xDC322F
+magenta = 0xD33682
+violet = 0x6C71C4
+blue = 0x268BD2
+cyan = 0x2AA198
+green = 0x859900
+
+[tui]
+foreground = "base0"
+muted = "base01"
+accent = "cyan"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "blue"
+highlight = "cyan"
+border = "base01"
+border_focus = "cyan"
+segment = "base1"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "base03"
+background_alpha = 0.7
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "base2"
+secondary = "base1"
+tertiary = "base0"
+segment = "base1"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "orange"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "red"
+"##;
+
+const SOLARIZED_LIGHT_THEME: &str = r##"# Palette: Solarized (https://ethanschoonover.com/solarized/)
+name = "Solarized Light"
+
+[palette]
+base03 = 0x002B36
+base02 = 0x073642
+base01 = 0x586E75
+base00 = 0x657B83
+base0 = 0x839496
+base1 = 0x93A1A1
+base2 = 0xEEE8D5
+base3 = 0xFDF6E3
+yellow = 0xB58900
+orange = 0xCB4B16
+red = 0xDC322F
+magenta = 0xD33682
+violet = 0x6C71C4
+blue = 0x268BD2
+cyan = 0x2AA198
+green = 0x859900
+
+[tui]
+foreground = "base00"
+muted = "base1"
+accent = "blue"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "cyan"
+highlight = "blue"
+border = "base1"
+border_focus = "blue"
+segment = "base01"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "base3"
+background_alpha = 0.70
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "base03"
+secondary = "base00"
+tertiary = "base01"
+segment = "base00"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "orange"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "red"
+"##;
+
+const TOKYO_NIGHT_THEME: &str = r##"# Palette: Tokyo Night Night (https://github.com/folke/tokyonight.nvim)
+name = "Tokyo Night"
+
+[palette]
+bg = 0x1A1B26
+fg = 0xC0CAF5
+fg_dark = 0xA9B1D6
+comment = 0x565F89
+blue = 0x7AA2F7
+cyan = 0x7DCFFF
+green = 0x9ECE6A
+yellow = 0xE0AF68
+orange = 0xFF9E64
+red = 0xF7768E
+magenta = 0xBB9AF7
+purple = 0x9D7CD8
+
+[tui]
+foreground = "fg"
+muted = "comment"
+accent = "blue"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "cyan"
+highlight = "magenta"
+border = "comment"
+border_focus = "blue"
+segment = "fg_dark"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "bg"
+background_alpha = 0.80
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "fg"
+secondary = "fg_dark"
+tertiary = "comment"
+segment = "fg_dark"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "orange"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "red"
+"##;
+
+const TOKYO_DAY_THEME: &str = r##"# Palette: Tokyo Night Day (https://github.com/folke/tokyonight.nvim)
+name = "Tokyo Day"
+
+[palette]
+bg = 0xE1E2E7
+fg = 0x3760BF
+fg_dark = 0x6172B0
+comment = 0x848CB5
+blue = 0x2E7DE9
+cyan = 0x007197
+green = 0x587539
+yellow = 0x8C6C3E
+orange = 0xB15C00
+red = 0xF52A65
+magenta = 0x9854F1
+purple = 0x7847BD
+
+[tui]
+foreground = "fg"
+muted = "comment"
+accent = "blue"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "cyan"
+highlight = "blue"
+border = "comment"
+border_focus = "blue"
+segment = "fg_dark"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "bg"
+background_alpha = 0.80
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "fg"
+secondary = "fg_dark"
+tertiary = "comment"
+segment = "fg_dark"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "orange"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "red"
+"##;
+
+const ROSE_PINE_THEME: &str = r##"# Palette: Rosé Pine Main (https://rosepinetheme.com/palette/)
+name = "Rose Pine"
+
+[palette]
+base = 0x191724
+surface = 0x1F1D2E
+overlay = 0x26233A
+muted = 0x6E6A86
+subtle = 0x908CAA
+text = 0xE0DEF4
+love = 0xEB6F92
+gold = 0xF6C177
+rose = 0xEBBCBA
+pine = 0x31748F
+foam = 0x9CCFD8
+iris = 0xC4A7E7
+
+[tui]
+foreground = "text"
+muted = "muted"
+accent = "iris"
+success = "foam"
+warning = "gold"
+error = "love"
+info = "pine"
+highlight = "rose"
+border = "muted"
+border_focus = "iris"
+segment = "subtle"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "base"
+background_alpha = 0.7
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "text"
+secondary = "subtle"
+tertiary = "muted"
+segment = "subtle"
+notice = "gold"
+error = "love"
+
+[overlay.state]
+idle = "foam"
+connecting = "gold"
+recording = "love"
+thinking = "iris"
+stopping = "rose"
+error = "love"
+"##;
+
+const ROSE_PINE_DAWN_THEME: &str = r##"# Palette: Rosé Pine Dawn (https://rosepinetheme.com/palette/)
+name = "Rose Pine Dawn"
+
+[palette]
+base = 0xFAF4ED
+surface = 0xFFFAF3
+overlay = 0xF2E9E1
+muted = 0x9893A5
+subtle = 0x797593
+text = 0x575279
+love = 0xB4637A
+gold = 0xEA9D34
+rose = 0xD7827E
+pine = 0x286983
+foam = 0x56949F
+iris = 0x907AA9
+
+[tui]
+foreground = "text"
+muted = "muted"
+accent = "iris"
+success = "foam"
+warning = "gold"
+error = "love"
+info = "pine"
+highlight = "iris"
+border = "muted"
+border_focus = "iris"
+segment = "subtle"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "base"
+background_alpha = 0.60
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "text"
+secondary = "subtle"
+tertiary = "muted"
+segment = "subtle"
+notice = "gold"
+error = "love"
+
+[overlay.state]
+idle = "foam"
+connecting = "gold"
+recording = "love"
+thinking = "iris"
+stopping = "rose"
+error = "love"
+"##;
+
+const EVERFOREST_DARK_THEME: &str = r##"# Palette: Everforest dark medium (https://github.com/sainnhe/everforest/blob/master/palette.md)
+name = "Everforest Dark"
+
+[palette]
+bg = 0x2D353B
+fg = 0xD3C6AA
+gray0 = 0x7A8478
+gray1 = 0x859289
+red = 0xE67E80
+orange = 0xE69875
+yellow = 0xDBBC7F
+green = 0xA7C080
+aqua = 0x83C092
+blue = 0x7FBBB3
+purple = 0xD699B6
+
+[tui]
+foreground = "fg"
+muted = "gray0"
+accent = "blue"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "aqua"
+highlight = "blue"
+border = "gray0"
+border_focus = "blue"
+segment = "gray1"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "bg"
+background_alpha = 0.70
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "fg"
+secondary = "gray1"
+tertiary = "gray0"
+segment = "gray1"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "aqua"
+connecting = "orange"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "red"
+"##;
+
+const EVERFOREST_LIGHT_THEME: &str = r##"# Palette: Everforest light medium (https://github.com/sainnhe/everforest/blob/master/palette.md)
+name = "Everforest Light"
+
+[palette]
+bg = 0xFDF6E3
+fg = 0x5C6A72
+gray0 = 0xA6B0A0
+gray1 = 0x939F91
+surface = 0xFFFBEF
+gray2 = 0x829181
+status_green = 0x93B259
+status_fg = 0x708089
+status_red = 0xE66868
+red = 0xF85552
+orange = 0xF57D26
+yellow = 0xDFA000
+green = 0x8DA101
+aqua = 0x35A77C
+blue = 0x3A94C5
+purple = 0xDF69BA
+
+[tui]
+foreground = "fg"
+muted = "gray1"
+accent = "blue"
+success = "aqua"
+warning = "yellow"
+error = "red"
+info = "blue"
+highlight = "blue"
+border = "gray0"
+border_focus = "blue"
+segment = "gray1"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "surface"
+background_alpha = 0.78
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "fg"
+secondary = "fg"
+tertiary = "status_fg"
+segment = "fg"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "status_green"
+connecting = "orange"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "status_red"
+"##;
+
+const THEME_PRESETS: &[ThemePreset] = &[
+    ThemePreset {
+        id: "gruvbox-dark",
+        path: "theme/gruvbox-dark.toml",
+        title: "Gruvbox Dark theme",
+        description: "Community Gruvbox dark palette mapped to shuohua tokens.",
+        body: GRUVBOX_DARK_THEME,
+    },
+    ThemePreset {
+        id: "gruvbox-light",
+        path: "theme/gruvbox-light.toml",
+        title: "Gruvbox Light theme",
+        description: "Community Gruvbox light palette mapped to shuohua tokens.",
+        body: GRUVBOX_LIGHT_THEME,
+    },
+    ThemePreset {
+        id: "catppuccin-latte",
+        path: "theme/catppuccin-latte.toml",
+        title: "Catppuccin Latte theme",
+        description: "Catppuccin Latte palette mapped to shuohua tokens.",
+        body: CATPPUCCIN_LATTE_THEME,
+    },
+    ThemePreset {
+        id: "catppuccin-mocha",
+        path: "theme/catppuccin-mocha.toml",
+        title: "Catppuccin Mocha theme",
+        description: "Catppuccin Mocha palette mapped to shuohua tokens.",
+        body: CATPPUCCIN_MOCHA_THEME,
+    },
+    ThemePreset {
+        id: "nord",
+        path: "theme/nord.toml",
+        title: "Nord theme",
+        description: "Nord palette mapped to shuohua tokens.",
+        body: NORD_THEME,
+    },
+    ThemePreset {
+        id: "dracula",
+        path: "theme/dracula.toml",
+        title: "Dracula theme",
+        description: "Dracula palette mapped to shuohua tokens.",
+        body: DRACULA_THEME,
+    },
+    ThemePreset {
+        id: "solarized-dark",
+        path: "theme/solarized-dark.toml",
+        title: "Solarized Dark theme",
+        description: "Solarized dark palette mapped to shuohua tokens.",
+        body: SOLARIZED_DARK_THEME,
+    },
+    ThemePreset {
+        id: "solarized-light",
+        path: "theme/solarized-light.toml",
+        title: "Solarized Light theme",
+        description: "Solarized light palette mapped to shuohua tokens.",
+        body: SOLARIZED_LIGHT_THEME,
+    },
+    ThemePreset {
+        id: "tokyo-night",
+        path: "theme/tokyo-night.toml",
+        title: "Tokyo Night theme",
+        description: "Tokyo Night palette mapped to shuohua tokens.",
+        body: TOKYO_NIGHT_THEME,
+    },
+    ThemePreset {
+        id: "tokyo-day",
+        path: "theme/tokyo-day.toml",
+        title: "Tokyo Day theme",
+        description: "Tokyo Night Day palette mapped to shuohua tokens.",
+        body: TOKYO_DAY_THEME,
+    },
+    ThemePreset {
+        id: "rose-pine",
+        path: "theme/rose-pine.toml",
+        title: "Rose Pine theme",
+        description: "Rosé Pine Main palette mapped to shuohua tokens.",
+        body: ROSE_PINE_THEME,
+    },
+    ThemePreset {
+        id: "rose-pine-dawn",
+        path: "theme/rose-pine-dawn.toml",
+        title: "Rose Pine Dawn theme",
+        description: "Rosé Pine Dawn palette mapped to shuohua tokens.",
+        body: ROSE_PINE_DAWN_THEME,
+    },
+    ThemePreset {
+        id: "everforest-dark",
+        path: "theme/everforest-dark.toml",
+        title: "Everforest Dark theme",
+        description: "Everforest dark palette mapped to shuohua tokens.",
+        body: EVERFOREST_DARK_THEME,
+    },
+    ThemePreset {
+        id: "everforest-light",
+        path: "theme/everforest-light.toml",
+        title: "Everforest Light theme",
+        description: "Everforest light palette mapped to shuohua tokens.",
+        body: EVERFOREST_LIGHT_THEME,
+    },
 ];
 
 const TEMPLATES: &[Template] = &[
@@ -539,6 +1522,22 @@ mod tests {
             );
             toml::from_str::<toml::Value>(&render(template))
                 .unwrap_or_else(|e| panic!("{} renders invalid TOML: {e}", template.id));
+        }
+    }
+
+    #[test]
+    fn rendered_theme_presets_are_valid_toml() {
+        for preset in theme_presets() {
+            let body = render_theme_preset(preset);
+            assert!(
+                body.starts_with("# "),
+                "{} missing header comment",
+                preset.id
+            );
+            let theme: crate::config::theme::ThemeFile = toml::from_str(&body)
+                .unwrap_or_else(|e| panic!("{} renders invalid TOML: {e}", preset.id));
+            crate::config::theme::validate_theme_file(&theme)
+                .unwrap_or_else(|e| panic!("{} renders invalid theme: {e}", preset.id));
         }
     }
 

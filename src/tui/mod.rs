@@ -45,31 +45,27 @@ pub enum ConfigureModule {
     Overview,
     Main,
     Profile,
-    PostProcessor,
     AsrProvider,
-    Theme,
+    PostProcessor,
 }
 
 impl ConfigureModule {
     fn next(self) -> Self {
         match self {
-            Self::Overview => Self::Main,
-            Self::Main => Self::Profile,
-            Self::Profile => Self::PostProcessor,
-            Self::PostProcessor => Self::AsrProvider,
-            Self::AsrProvider => Self::Theme,
-            Self::Theme => Self::Overview,
+            Self::Overview | Self::Main => Self::Profile,
+            Self::Profile => Self::AsrProvider,
+            Self::AsrProvider => Self::PostProcessor,
+            Self::PostProcessor => Self::Overview,
         }
     }
 
     fn prev(self) -> Self {
         match self {
-            Self::Overview => Self::Theme,
+            Self::Overview => Self::PostProcessor,
             Self::Main => Self::Overview,
-            Self::Profile => Self::Main,
-            Self::PostProcessor => Self::Profile,
-            Self::AsrProvider => Self::PostProcessor,
-            Self::Theme => Self::AsrProvider,
+            Self::Profile => Self::Overview,
+            Self::AsrProvider => Self::Profile,
+            Self::PostProcessor => Self::AsrProvider,
         }
     }
 
@@ -78,11 +74,16 @@ impl ConfigureModule {
             Self::Overview => crate::config::inventory::InventoryModule::Overview,
             Self::Main => crate::config::inventory::InventoryModule::Main,
             Self::Profile => crate::config::inventory::InventoryModule::Profile,
-            Self::PostProcessor => crate::config::inventory::InventoryModule::PostProcessor,
             Self::AsrProvider => crate::config::inventory::InventoryModule::AsrProvider,
-            Self::Theme => crate::config::inventory::InventoryModule::Theme,
+            Self::PostProcessor => crate::config::inventory::InventoryModule::PostProcessor,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigureFocus {
+    Modules,
+    Items,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,8 +144,10 @@ pub struct App {
     pub status: String,
     pub config_path: String,
     pub settings_rows: Vec<settings::SettingsRow>,
+    pub theme: crate::config::theme::TuiTheme,
     pub selected_settings: usize,
     pub configure_module: ConfigureModule,
+    pub configure_focus: ConfigureFocus,
     pub llm_wizard: Option<LlmWizard>,
     pub doctor: DoctorState,
     pub meter_width: usize,
@@ -186,6 +189,9 @@ impl App {
     fn new() -> Self {
         let config_path = crate::config::default_path();
         let settings_rows = settings::load_rows();
+        let theme = crate::config::load_from(&config_path)
+            .map(|cfg| crate::config::theme::load_effective(&cfg, &config_path).tui)
+            .unwrap_or_default();
         Self {
             page: Page::Status,
             state: WireState::Idle,
@@ -209,8 +215,10 @@ impl App {
             status: "connected".to_string(),
             config_path: config_path.display().to_string(),
             settings_rows,
+            theme,
             selected_settings: 0,
             configure_module: ConfigureModule::Overview,
+            configure_focus: ConfigureFocus::Modules,
             llm_wizard: None,
             doctor: DoctorState {
                 ran_once: false,
@@ -390,10 +398,28 @@ impl App {
             .collect()
     }
 
-    fn selected_config_source(&self) -> Option<std::path::PathBuf> {
-        self.configure_rows_for_current_module()
-            .get(self.selected_settings)
+    fn configure_sources_for_current_module(&self) -> Vec<std::path::PathBuf> {
+        let mut sources = self
+            .configure_rows_for_current_module()
+            .into_iter()
             .map(|row| std::path::PathBuf::from(&row.source))
+            .collect::<Vec<_>>();
+        sources.sort();
+        sources.dedup();
+        sources
+    }
+
+    fn selected_config_source(&self) -> Option<std::path::PathBuf> {
+        match self.configure_module {
+            ConfigureModule::Overview => Some(crate::config::default_path()),
+            ConfigureModule::Main => Some(crate::config::default_path()),
+            ConfigureModule::Profile
+            | ConfigureModule::PostProcessor
+            | ConfigureModule::AsrProvider => self
+                .configure_sources_for_current_module()
+                .get(self.selected_settings)
+                .cloned(),
+        }
     }
 
     fn config_directory(&self) -> Option<std::path::PathBuf> {
@@ -403,12 +429,58 @@ impl App {
     }
 
     fn clamp_selected_settings(&mut self) {
-        let len = self.configure_rows_for_current_module().len();
+        let len = match self.configure_module {
+            ConfigureModule::Profile
+            | ConfigureModule::PostProcessor
+            | ConfigureModule::AsrProvider => self.configure_sources_for_current_module().len(),
+            _ => self.configure_rows_for_current_module().len(),
+        };
         self.selected_settings = self.selected_settings.min(len.saturating_sub(1));
+    }
+
+    fn move_configure_selection(&mut self, delta: isize) {
+        if self.configure_focus == ConfigureFocus::Modules {
+            self.configure_module = if delta >= 0 {
+                self.configure_module.next()
+            } else {
+                self.configure_module.prev()
+            };
+            self.selected_settings = 0;
+            self.clamp_selected_settings();
+            return;
+        }
+        let len = match self.configure_module {
+            ConfigureModule::Profile
+            | ConfigureModule::PostProcessor
+            | ConfigureModule::AsrProvider => self.configure_sources_for_current_module().len(),
+            _ => self.configure_rows_for_current_module().len(),
+        };
+        if len == 0 {
+            self.selected_settings = 0;
+            return;
+        }
+        if delta >= 0 {
+            self.selected_settings = (self.selected_settings + 1).min(len - 1);
+        } else {
+            self.selected_settings = self.selected_settings.saturating_sub(1);
+        }
+    }
+
+    fn move_configure_focus(&mut self, delta: isize) {
+        self.configure_focus = if delta >= 0 {
+            ConfigureFocus::Items
+        } else {
+            ConfigureFocus::Modules
+        };
     }
 
     fn refresh_configure(&mut self) {
         self.settings_rows = settings::load_rows();
+        self.theme = crate::config::load_from(&crate::config::default_path())
+            .map(|cfg| {
+                crate::config::theme::load_effective(&cfg, &crate::config::default_path()).tui
+            })
+            .unwrap_or_default();
         self.clamp_selected_settings();
     }
 
@@ -553,10 +625,7 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
         }
         Action::MoveDown => {
             if app.page == Page::Settings {
-                let len = app.configure_rows_for_current_module().len();
-                if len > 0 {
-                    app.selected_settings = (app.selected_settings + 1).min(len - 1);
-                }
+                app.move_configure_selection(1);
             } else {
                 let len = app.filtered_history().len();
                 if len > 0 {
@@ -566,7 +635,7 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
         }
         Action::MoveUp => {
             if app.page == Page::Settings {
-                app.selected_settings = app.selected_settings.saturating_sub(1);
+                app.move_configure_selection(-1);
             } else {
                 app.selected_history = app.selected_history.saturating_sub(1);
             }
@@ -580,25 +649,30 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
         }
         Action::MoveBottom => {
             if app.page == Page::Settings {
-                let len = app.configure_rows_for_current_module().len();
+                let len = match app.configure_module {
+                    ConfigureModule::Profile
+                    | ConfigureModule::PostProcessor
+                    | ConfigureModule::AsrProvider => {
+                        app.configure_sources_for_current_module().len()
+                    }
+                    _ => app.configure_rows_for_current_module().len(),
+                };
                 app.selected_settings = len.saturating_sub(1);
             } else {
                 let len = app.filtered_history().len();
                 app.selected_history = len.saturating_sub(1);
             }
         }
-        Action::NextDetail => {
+        Action::NextFocus => {
             if app.page == Page::Settings {
-                app.configure_module = app.configure_module.next();
-                app.clamp_selected_settings();
+                app.move_configure_focus(1);
             } else {
                 app.history_detail = app.history_detail.next();
             }
         }
-        Action::PrevDetail => {
+        Action::PrevFocus => {
             if app.page == Page::Settings {
-                app.configure_module = app.configure_module.prev();
-                app.clamp_selected_settings();
+                app.move_configure_focus(-1);
             } else {
                 app.history_detail = app.history_detail.prev();
             }
@@ -1037,9 +1111,23 @@ mod tests {
 
     #[test]
     fn configure_modules_cycle_in_order() {
-        assert_eq!(ConfigureModule::Overview.next(), ConfigureModule::Main);
-        assert_eq!(ConfigureModule::Theme.next(), ConfigureModule::Overview);
-        assert_eq!(ConfigureModule::Overview.prev(), ConfigureModule::Theme);
+        assert_eq!(ConfigureModule::Overview.next(), ConfigureModule::Profile);
+        assert_eq!(
+            ConfigureModule::Profile.next(),
+            ConfigureModule::AsrProvider
+        );
+        assert_eq!(
+            ConfigureModule::AsrProvider.next(),
+            ConfigureModule::PostProcessor
+        );
+        assert_eq!(
+            ConfigureModule::PostProcessor.next(),
+            ConfigureModule::Overview
+        );
+        assert_eq!(
+            ConfigureModule::Overview.prev(),
+            ConfigureModule::PostProcessor
+        );
         assert_eq!(
             ConfigureModule::AsrProvider.inventory_module(),
             crate::config::inventory::InventoryModule::AsrProvider
@@ -1054,23 +1142,30 @@ mod tests {
             settings::SettingsRow {
                 group: "main".to_string(),
                 key: "config".to_string(),
+                display_key: "config".to_string(),
                 value: "ok".to_string(),
                 source: "/tmp/shuohua/config.toml".to_string(),
+                status: crate::config::inventory::InventoryStatus::Ok,
                 description_key: None,
             },
             settings::SettingsRow {
                 group: "asr".to_string(),
                 key: "apple.idle_pause".to_string(),
+                display_key: "idle_pause".to_string(),
                 value: "true".to_string(),
                 source: "/tmp/shuohua/asr/apple.toml".to_string(),
+                status: crate::config::inventory::InventoryStatus::Ok,
                 description_key: None,
             },
         ];
         app.selected_settings = 0;
 
         assert_eq!(
-            app.selected_config_source().unwrap(),
-            std::path::PathBuf::from("/tmp/shuohua/config.toml")
+            app.selected_config_source()
+                .unwrap()
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("config.toml")
         );
 
         app.configure_module = ConfigureModule::AsrProvider;
@@ -1079,6 +1174,47 @@ mod tests {
             app.selected_config_source().unwrap(),
             std::path::PathBuf::from("/tmp/shuohua/asr/apple.toml")
         );
+    }
+
+    #[test]
+    fn configure_vertical_navigation_moves_focused_column() {
+        let mut app = App::new();
+        app.page = Page::Settings;
+        app.configure_module = ConfigureModule::Overview;
+        app.configure_focus = ConfigureFocus::Modules;
+
+        app.move_configure_selection(1);
+
+        assert_eq!(app.configure_module, ConfigureModule::Profile);
+
+        app.configure_focus = ConfigureFocus::Items;
+        app.settings_rows = vec![
+            settings::SettingsRow {
+                group: "profile".to_string(),
+                key: "default".to_string(),
+                display_key: "default".to_string(),
+                value: "default".to_string(),
+                source: "/tmp/shuohua/profile/default.toml".to_string(),
+                status: crate::config::inventory::InventoryStatus::Ok,
+                description_key: None,
+            },
+            settings::SettingsRow {
+                group: "profile".to_string(),
+                key: "coding".to_string(),
+                display_key: "coding".to_string(),
+                value: "coding".to_string(),
+                source: "/tmp/shuohua/profile/coding.toml".to_string(),
+                status: crate::config::inventory::InventoryStatus::Ok,
+                description_key: None,
+            },
+        ];
+        app.configure_module = ConfigureModule::Profile;
+        app.selected_settings = 0;
+
+        app.move_configure_selection(1);
+
+        assert_eq!(app.configure_module, ConfigureModule::Profile);
+        assert_eq!(app.selected_settings, 1);
     }
 
     #[test]

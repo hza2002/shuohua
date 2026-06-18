@@ -19,11 +19,11 @@ src/
 │   ├── schema.rs                        # shared config schema registry + description i18n keys
 │   ├── inventory.rs                     # structured Configure/doctor inventory scan
 │   ├── diagnostics.rs                   # full-tree local config diagnostics shared by doctor/Configure
-│   ├── template.rs                      # official config template registry + LLM component creation
+│   ├── template.rs                      # official config template registry + theme presets + LLM component creation
 │   ├── profile.rs                       # profile/*.toml schema + route loading
 │   ├── post/                            # post component config namespace
 │   ├── asr/                             # ASR provider config loaders
-│   └── theme.rs                         # reserved theme namespace
+│   └── theme.rs                         # theme TOML parse/merge + builtin fallback + effective TUI/overlay theme
 ├── log.rs                                # tracing 初始化：daily file appender、本地时间格式、TTY mirror
 ├── reload.rs                             # notify watcher + watch::Sender 广播；overlay/i18n/hotkey subscriber；UDS 手动 reload 复用同一路径
 ├── clipboard_darwin.rs                  # NSPasteboard 写文本

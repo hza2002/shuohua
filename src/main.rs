@@ -160,7 +160,8 @@ fn run_daemon_process() -> Result<()> {
     let cfg_path = config::default_path();
     let (cfg_rx, reload_handle) =
         reload::watch_with_handle(cfg_path.clone()).context("start config watcher")?;
-    let cfg: Arc<config::Config> = cfg_rx.borrow().clone();
+    let runtime_cfg = cfg_rx.borrow().clone();
+    let cfg = &runtime_cfg.config;
     i18n::init(&cfg.ui.language);
     let hotkeys = HotkeyBindings::parse(&cfg.hotkey)?;
 
@@ -205,7 +206,7 @@ fn run_daemon_process() -> Result<()> {
         })
         .context("spawn tokio daemon thread")?;
 
-    overlay::view::run(_overlay_rx, cfg.overlay.clone());
+    overlay::view::run(_overlay_rx, runtime_cfg.theme.overlay.clone());
     Ok(())
 }
 
@@ -262,7 +263,7 @@ async fn run_daemon(
 
     tracing::info!(
         uds = %socket_path.display(),
-        trigger = %cfg_rx.borrow().hotkey.trigger,
+        trigger = %cfg_rx.borrow().config.hotkey.trigger,
         "daemon ready"
     );
 
@@ -322,7 +323,8 @@ async fn run_daemon(
                 match active.as_ref() {
                     None => {
                         // 新 session 起来时从 cfg_rx 取最新 voice/profile/post 配置。
-                        let cfg = cfg_rx.borrow().clone();
+                        let runtime_cfg = cfg_rx.borrow().clone();
+                        let cfg = &runtime_cfg.config;
                         let start_app_context = post::app_context::frontmost_app();
                         let profile_dir = config::profile::default_dir();
                         let profile = match config::profile::load_for_app(

@@ -14,8 +14,7 @@
 //!   - UDS `{"op":"reload_config"}` 手动触发（依赖 M4 的 UDS server）
 //!   - `shuo doctor` / launchd 自启（M5 同包的另两个 feature，跟 reload 无关）
 
-use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,10 +23,17 @@ use anyhow::{Context, Result};
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
+use crate::config::theme::EffectiveTheme;
 use crate::config::{self, Config};
 use crate::overlay::{OverlayCmd, OverlayHandle};
 
-pub type Cfg = Arc<Config>;
+#[derive(Debug, Clone)]
+pub struct RuntimeConfig {
+    pub config: Config,
+    pub theme: EffectiveTheme,
+}
+
+pub type Cfg = Arc<RuntimeConfig>;
 pub type Rx = watch::Receiver<Cfg>;
 
 #[derive(Clone)]
@@ -43,20 +49,15 @@ impl Handle {
 }
 
 /// 起 watcher 线程，返回带初值的 `watch::Receiver` 和手动 reload handle。
-/// 初值 = `config::load_from(path)`。
+/// 初值 = `config::load_from(path)` + active theme.
 pub fn watch_with_handle(path: PathBuf) -> Result<(Rx, Handle)> {
-    let initial = Arc::new(config::load_from(&path).context("initial config load")?);
+    let initial = Arc::new(load_runtime_config(&path).context("initial config load")?);
     let (tx, rx) = watch::channel(initial);
 
     let dir = path
         .parent()
         .context("config path has no parent dir")?
         .to_path_buf();
-    let file_name = path
-        .file_name()
-        .context("config path has no file name")?
-        .to_os_string();
-
     let handle = Handle {
         path: path.clone(),
         tx: tx.clone(),
@@ -65,7 +66,7 @@ pub fn watch_with_handle(path: PathBuf) -> Result<(Rx, Handle)> {
     std::thread::Builder::new()
         .name("config-watcher".into())
         .spawn(move || {
-            if let Err(e) = run_watcher(dir, file_name, path, tx) {
+            if let Err(e) = run_watcher(dir, path, tx) {
                 tracing::error!(error = ?e, "config watcher exited");
             }
         })
@@ -74,12 +75,7 @@ pub fn watch_with_handle(path: PathBuf) -> Result<(Rx, Handle)> {
     Ok((rx, handle))
 }
 
-fn run_watcher(
-    dir: PathBuf,
-    file_name: OsString,
-    path: PathBuf,
-    tx: watch::Sender<Cfg>,
-) -> Result<()> {
+fn run_watcher(dir: PathBuf, path: PathBuf, tx: watch::Sender<Cfg>) -> Result<()> {
     use notify::{RecursiveMode, Watcher};
 
     let (event_tx, event_rx) = std_mpsc::channel::<notify::Result<notify::Event>>();
@@ -88,7 +84,7 @@ fn run_watcher(
     })
     .context("create notify watcher")?;
     watcher
-        .watch(&dir, RecursiveMode::NonRecursive)
+        .watch(&dir, RecursiveMode::Recursive)
         .with_context(|| format!("watch {}", dir.display()))?;
 
     let debounce = Duration::from_millis(150);
@@ -101,11 +97,7 @@ fn run_watcher(
             }
             Err(_) => return Ok(()),
         };
-        if !event
-            .paths
-            .iter()
-            .any(|p| p.file_name() == Some(file_name.as_os_str()))
-        {
+        if !event.paths.iter().any(|p| is_reload_relevant(&dir, p)) {
             continue;
         }
         while event_rx.recv_timeout(debounce).is_ok() {}
@@ -120,20 +112,50 @@ fn run_watcher(
 }
 
 fn load_and_broadcast(path: &PathBuf, tx: &watch::Sender<Cfg>) -> Result<()> {
-    let cfg = config::load_from(path)?;
+    let cfg = load_runtime_config(path)?;
     tx.send(Arc::new(cfg)).context("broadcast config reload")?;
     tracing::info!(path = %path.display(), "config reloaded");
     Ok(())
 }
 
+fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
+    let config = config::load_from(path)?;
+    let theme = config::theme::load_effective(&config, path);
+    Ok(RuntimeConfig { config, theme })
+}
+
+fn is_reload_relevant(root: &Path, path: &Path) -> bool {
+    if path.file_name().and_then(|name| name.to_str()) == Some("config.toml") {
+        return true;
+    }
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    let mut components = relative.components();
+    matches!(
+        components.next().and_then(|c| c.as_os_str().to_str()),
+        Some("theme")
+    ) && path.extension().is_some_and(|ext| ext == "toml")
+}
+
 /// Overlay subscriber：`[overlay]` 段变化 → `OverlayCmd::ReloadConfig`。
 pub fn spawn_overlay(mut rx: Rx, handle: OverlayHandle) {
     tokio::spawn(async move {
-        let mut prev = rx.borrow().overlay.clone();
+        let initial = rx.borrow().clone();
+        let mut prev = (
+            initial.config.overlay.clone(),
+            initial.theme.overlay.clone(),
+        );
         while rx.changed().await.is_ok() {
-            let next = rx.borrow().overlay.clone();
+            let current = rx.borrow().clone();
+            let next = (
+                current.config.overlay.clone(),
+                current.theme.overlay.clone(),
+            );
             if next != prev {
-                handle.send(OverlayCmd::ReloadConfig { cfg: next.clone() });
+                handle.send(OverlayCmd::ReloadConfig {
+                    cfg: next.1.clone(),
+                });
                 prev = next;
             }
         }
@@ -143,9 +165,9 @@ pub fn spawn_overlay(mut rx: Rx, handle: OverlayHandle) {
 /// i18n subscriber：`ui.language` 变化 → 重置字典 + 推 Relabel 让 overlay 刷新当前 state label。
 pub fn spawn_i18n(mut rx: Rx, handle: OverlayHandle) {
     tokio::spawn(async move {
-        let mut prev = rx.borrow().ui.language.clone();
+        let mut prev = rx.borrow().config.ui.language.clone();
         while rx.changed().await.is_ok() {
-            let next = rx.borrow().ui.language.clone();
+            let next = rx.borrow().config.ui.language.clone();
             if next != prev {
                 crate::i18n::init(&next);
                 handle.send(OverlayCmd::Relabel);
@@ -161,9 +183,9 @@ pub fn spawn_i18n(mut rx: Rx, handle: OverlayHandle) {
 /// 与 Suppressor）。parse 失败保留旧 trigger，只打日志。
 pub fn spawn_hotkey(mut rx: Rx, combo_tx: mpsc::UnboundedSender<crate::HotkeyBindings>) {
     tokio::spawn(async move {
-        let mut prev = rx.borrow().hotkey.clone();
+        let mut prev = rx.borrow().config.hotkey.clone();
         while rx.changed().await.is_ok() {
-            let next = rx.borrow().hotkey.clone();
+            let next = rx.borrow().config.hotkey.clone();
             if next.trigger == prev.trigger && next.cancel == prev.cancel {
                 continue;
             }

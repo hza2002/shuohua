@@ -1,12 +1,57 @@
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 
+use crate::config::theme::TuiTheme;
 use crate::ipc::protocol::WireState;
 use crate::state::SessionPhase;
-use crate::tui::{App, ConfigureModule, Confirm, HistoryDetail, LlmWizardStep, Page};
+use crate::tui::{
+    App, ConfigureFocus, ConfigureModule, Confirm, HistoryDetail, LlmWizardStep, Page,
+};
+
+mod ui {
+    use ratatui::style::Color;
+
+    use crate::config::theme::TuiTheme;
+
+    fn rgb(value: u32) -> Color {
+        Color::Rgb(
+            ((value >> 16) & 0xff) as u8,
+            ((value >> 8) & 0xff) as u8,
+            (value & 0xff) as u8,
+        )
+    }
+
+    pub fn fg(theme: &TuiTheme) -> Color {
+        rgb(theme.foreground)
+    }
+    pub fn muted(theme: &TuiTheme) -> Color {
+        rgb(theme.muted)
+    }
+    pub fn accent(theme: &TuiTheme) -> Color {
+        rgb(theme.accent)
+    }
+    pub fn success(theme: &TuiTheme) -> Color {
+        rgb(theme.success)
+    }
+    pub fn warning(theme: &TuiTheme) -> Color {
+        rgb(theme.warning)
+    }
+    pub fn error(theme: &TuiTheme) -> Color {
+        rgb(theme.error)
+    }
+    pub fn info(theme: &TuiTheme) -> Color {
+        rgb(theme.info)
+    }
+    pub fn highlight(theme: &TuiTheme) -> Color {
+        rgb(theme.highlight)
+    }
+    pub fn segment(theme: &TuiTheme) -> Color {
+        rgb(theme.segment)
+    }
+}
 
 pub fn render(frame: &mut Frame, app: &App) {
     let root = Layout::default()
@@ -24,10 +69,10 @@ pub fn render(frame: &mut Frame, app: &App) {
         crate::t!("tui.tab_settings"),
     ])
     .select(app.page.index())
-    .style(Style::default().fg(Color::Gray))
+    .style(Style::default().fg(ui::muted(&app.theme)))
     .highlight_style(
         Style::default()
-            .fg(Color::Cyan)
+            .fg(ui::highlight(&app.theme))
             .add_modifier(Modifier::BOLD),
     )
     .block(Block::default().borders(Borders::BOTTOM));
@@ -133,24 +178,24 @@ fn status_header_lines(
                     .fg(phase_color(app))
                     .add_modifier(Modifier::BOLD),
             ),
-            label_span(" app "),
-            value_span(app_label.to_string(), Color::Cyan),
-            label_span(" bundle "),
-            value_span(bundle.to_string(), Color::DarkGray),
+            label_span(" app ", &app.theme),
+            value_span(app_label.to_string(), ui::accent(&app.theme)),
+            label_span(" bundle ", &app.theme),
+            value_span(bundle.to_string(), ui::muted(&app.theme)),
         ]),
         Line::from(vec![
-            label_span("id "),
-            value_span(recording_id_label(app), Color::Blue),
-            label_span(" duration "),
-            value_span(format_duration(elapsed_ms), Color::Yellow),
-            label_span(" words "),
-            value_span(app.words.to_string(), Color::Green),
+            label_span("id ", &app.theme),
+            value_span(recording_id_label(app), ui::info(&app.theme)),
+            label_span(" duration ", &app.theme),
+            value_span(format_duration(elapsed_ms), ui::warning(&app.theme)),
+            label_span(" words ", &app.theme),
+            value_span(app.words.to_string(), ui::success(&app.theme)),
         ]),
         Line::from(vec![
-            label_span("asr "),
-            value_span(provider.to_string(), Color::Blue),
-            label_span(" chain "),
-            value_span(chain.to_string(), Color::Magenta),
+            label_span("asr ", &app.theme),
+            value_span(provider.to_string(), ui::info(&app.theme)),
+            label_span(" chain ", &app.theme),
+            value_span(chain.to_string(), ui::highlight(&app.theme)),
         ]),
     ]
 }
@@ -165,16 +210,16 @@ fn meter_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     if !matches!(app.state, WireState::Recording | WireState::Stopping) && app.meters.is_empty() {
         return vec![
             Line::from(vec![
-                Span::styled("Audio  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("idle", Style::default().fg(Color::DarkGray)),
+                Span::styled("Audio  ", Style::default().fg(ui::muted(&app.theme))),
+                Span::styled("idle", Style::default().fg(ui::muted(&app.theme))),
             ]),
             Line::from(vec![
-                Span::styled("       ", Style::default().fg(Color::DarkGray)),
-                Span::styled("────", Style::default().fg(Color::DarkGray)),
+                Span::styled("       ", Style::default().fg(ui::muted(&app.theme))),
+                Span::styled("────", Style::default().fg(ui::muted(&app.theme))),
             ]),
             Line::from(vec![
-                Span::styled("VAD    ", Style::default().fg(Color::DarkGray)),
-                Span::styled("idle", Style::default().fg(Color::DarkGray)),
+                Span::styled("VAD    ", Style::default().fg(ui::muted(&app.theme))),
+                Span::styled("idle", Style::default().fg(ui::muted(&app.theme))),
             ]),
         ];
     }
@@ -183,16 +228,16 @@ fn meter_lines(app: &App, width: usize) -> Vec<Line<'static>> {
     let meters = &app.meters[start..];
     vec![
         Line::from(vec![
-            Span::styled("Peak   ", Style::default().fg(Color::DarkGray)),
-            meter_span(audio_upper(meters), Color::Cyan),
+            Span::styled("Peak   ", Style::default().fg(ui::muted(&app.theme))),
+            meter_span(audio_upper(meters), ui::accent(&app.theme)),
         ]),
         Line::from(vec![
-            Span::styled("RMS    ", Style::default().fg(Color::DarkGray)),
-            meter_span(audio_lower(meters), Color::Blue),
+            Span::styled("RMS    ", Style::default().fg(ui::muted(&app.theme))),
+            meter_span(audio_lower(meters), ui::info(&app.theme)),
         ]),
         Line::from(vec![
-            Span::styled("VAD    ", Style::default().fg(Color::DarkGray)),
-            vad_spans(meters),
+            Span::styled("VAD    ", Style::default().fg(ui::muted(&app.theme))),
+            vad_spans(meters, &app.theme),
         ]),
     ]
 }
@@ -203,8 +248,14 @@ fn live_speech_lines(app: &App, width: usize, max_lines: usize) -> Vec<Line<'sta
     let segments = app.segments.join("");
     let mut all_lines = wrap_spans(
         vec![
-            Span::styled(segments.clone(), Style::default().fg(Color::Gray)),
-            Span::styled(app.partial.clone(), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                segments.clone(),
+                Style::default().fg(ui::segment(&app.theme)),
+            ),
+            Span::styled(
+                app.partial.clone(),
+                Style::default().fg(ui::accent(&app.theme)),
+            ),
         ],
         width,
     );
@@ -224,8 +275,8 @@ fn live_speech_lines(app: &App, width: usize, max_lines: usize) -> Vec<Line<'sta
         };
         all_lines = wrap_spans_with_widths(
             vec![
-                Span::styled(segment_tail, Style::default().fg(Color::Gray)),
-                Span::styled(partial_tail, Style::default().fg(Color::Cyan)),
+                Span::styled(segment_tail, Style::default().fg(ui::segment(&app.theme))),
+                Span::styled(partial_tail, Style::default().fg(ui::accent(&app.theme))),
             ],
             first_width,
             width,
@@ -233,7 +284,10 @@ fn live_speech_lines(app: &App, width: usize, max_lines: usize) -> Vec<Line<'sta
         let first = all_lines.first_mut().expect("tail has at least one line");
         first.spans.insert(
             0,
-            Span::styled("... ".to_string(), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "... ".to_string(),
+                Style::default().fg(ui::muted(&app.theme)),
+            ),
         );
     }
     all_lines
@@ -264,14 +318,14 @@ fn status_label(app: &App) -> String {
 
 fn phase_color(app: &App) -> Color {
     match app.session_phase {
-        Some(SessionPhase::Active) => Color::Red,
-        Some(SessionPhase::Idle) => Color::Blue,
-        Some(SessionPhase::Stopping) => Color::Yellow,
+        Some(SessionPhase::Active) => ui::error(&app.theme),
+        Some(SessionPhase::Idle) => ui::info(&app.theme),
+        Some(SessionPhase::Stopping) => ui::warning(&app.theme),
         None => match app.state {
-            WireState::Idle => Color::Green,
-            WireState::Recording => Color::Red,
-            WireState::Stopping => Color::Yellow,
-            WireState::Error => Color::LightRed,
+            WireState::Idle => ui::success(&app.theme),
+            WireState::Recording => ui::error(&app.theme),
+            WireState::Stopping => ui::warning(&app.theme),
+            WireState::Error => ui::error(&app.theme),
         },
     }
 }
@@ -330,7 +384,7 @@ fn audio_lower(meters: &[crate::state::AudioMeter]) -> String {
     meters.iter().map(|meter| lower_level(meter.rms)).collect()
 }
 
-fn vad_spans(meters: &[crate::state::AudioMeter]) -> Span<'static> {
+fn vad_spans(meters: &[crate::state::AudioMeter], theme: &TuiTheme) -> Span<'static> {
     let mut text = String::with_capacity(meters.len());
     let mut active = false;
     for meter in meters {
@@ -345,9 +399,9 @@ fn vad_spans(meters: &[crate::state::AudioMeter]) -> Span<'static> {
         text.push(upper_level(probability));
     }
     let color = if active {
-        Color::Green
+        ui::success(theme)
     } else {
-        Color::DarkGray
+        ui::muted(theme)
     };
     Span::styled(text, Style::default().fg(color))
 }
@@ -382,7 +436,11 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         format!("/{}", app.search)
     };
     frame.render_widget(
-        Paragraph::new(vec![Line::from(search), history_stats_line(&summary)]).block(
+        Paragraph::new(vec![
+            Line::from(search),
+            history_stats_line(&summary, &app.theme),
+        ])
+        .block(
             Block::default()
                 .title(crate::t!("tui.history_stats"))
                 .borders(Borders::ALL),
@@ -419,7 +477,7 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         let mut lines = vec![Line::styled(
             confirm_text(confirm),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(ui::warning(&app.theme))
                 .add_modifier(Modifier::BOLD),
         )];
         lines.push(Line::from(""));
@@ -438,18 +496,21 @@ fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     );
 }
 
-fn history_stats_line(summary: &HistorySummary) -> Line<'static> {
+fn history_stats_line(summary: &HistorySummary, theme: &TuiTheme) -> Line<'static> {
     Line::from(vec![
-        label_span("records "),
-        value_span(summary.shown.to_string(), Color::Cyan),
-        label_span(" shown / "),
-        value_span(summary.total.to_string(), Color::Cyan),
-        label_span(" total    duration "),
-        value_span(format_duration(summary.total_duration_ms), Color::Yellow),
-        label_span("    words "),
-        value_span(summary.total_words.to_string(), Color::Green),
-        label_span("    avg "),
-        value_span(format_duration(summary.avg_duration_ms), Color::Yellow),
+        label_span("records ", theme),
+        value_span(summary.shown.to_string(), ui::accent(theme)),
+        label_span(" shown / ", theme),
+        value_span(summary.total.to_string(), ui::accent(theme)),
+        label_span(" total    duration ", theme),
+        value_span(
+            format_duration(summary.total_duration_ms),
+            ui::warning(theme),
+        ),
+        label_span("    words ", theme),
+        value_span(summary.total_words.to_string(), ui::success(theme)),
+        label_span("    avg ", theme),
+        value_span(format_duration(summary.avg_duration_ms), ui::warning(theme)),
     ])
 }
 
@@ -461,18 +522,18 @@ fn history_list_line(
     let marker = if selected { "> " } else { "  " };
     let audio = history_audio_marker(app, record);
     let audio_color = if app.audio_info_for_record(record).exists() {
-        Color::Green
+        ui::success(&app.theme)
     } else {
-        Color::DarkGray
+        ui::muted(&app.theme)
     };
     Line::from(vec![
         Span::styled(
             marker.to_string(),
             Style::default()
                 .fg(if selected {
-                    Color::Cyan
+                    ui::accent(&app.theme)
                 } else {
-                    Color::DarkGray
+                    ui::muted(&app.theme)
                 })
                 .add_modifier(if selected {
                     Modifier::BOLD
@@ -482,7 +543,7 @@ fn history_list_line(
         ),
         Span::styled(
             format!("{:<19}", format_local_time(record.started_at)),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(ui::muted(&app.theme)),
         ),
         Span::raw(" "),
         Span::styled(
@@ -490,12 +551,12 @@ fn history_list_line(
                 "{:<10}",
                 truncate_display(&short_app_label(record.app.as_deref()), 10)
             ),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(ui::accent(&app.theme)),
         ),
         Span::raw(" "),
         Span::styled(
             format!("{:>5}", format_duration(record.duration_ms)),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(ui::warning(&app.theme)),
         ),
         Span::raw(" "),
         Span::styled(format!("{audio:<1}"), Style::default().fg(audio_color)),
@@ -613,34 +674,54 @@ fn history_details_lines(
         .map(format_system_time)
         .unwrap_or_else(|| "-".to_string());
     let mut lines = vec![
-        kv_line("status", format!("{:?}", record.status), Color::Green),
-        kv_line("app", short_app_label(record.app.as_deref()), Color::Cyan),
+        kv_line(
+            "status",
+            format!("{:?}", record.status),
+            ui::success(&app.theme),
+        ),
+        kv_line(
+            "app",
+            short_app_label(record.app.as_deref()),
+            ui::accent(&app.theme),
+        ),
         kv_line(
             "started",
             format_local_time(record.started_at),
-            Color::White,
+            ui::fg(&app.theme),
         ),
         kv_line(
             "duration",
             format_duration(record.duration_ms),
-            Color::Yellow,
+            ui::warning(&app.theme),
         ),
-        kv_line("words", record.text_stats().words.to_string(), Color::Cyan),
-        kv_line("asr", record.asr.provider.clone(), Color::Blue),
-        kv_line("pipeline", pipeline_summary(record), Color::White),
+        kv_line(
+            "words",
+            record.text_stats().words.to_string(),
+            ui::accent(&app.theme),
+        ),
+        kv_line("asr", record.asr.provider.clone(), ui::info(&app.theme)),
+        kv_line("pipeline", pipeline_summary(record), ui::fg(&app.theme)),
         kv_line(
             "audio",
             status,
             if info.exists() {
-                Color::Green
+                ui::success(&app.theme)
             } else {
-                Color::DarkGray
+                ui::muted(&app.theme)
             },
         ),
-        kv_line(crate::t!("tui.history.audio.size"), size, Color::White),
-        kv_line(crate::t!("tui.history.audio.mtime"), modified, Color::White),
+        kv_line(
+            crate::t!("tui.history.audio.size"),
+            size,
+            ui::fg(&app.theme),
+        ),
+        kv_line(
+            crate::t!("tui.history.audio.mtime"),
+            modified,
+            ui::fg(&app.theme),
+        ),
         Line::from(""),
-        kv_line("text", "", Color::White),
+        kv_line("text", "", ui::fg(&app.theme)),
     ];
     lines.extend(text_lines(record.text.clone()));
     lines
@@ -656,13 +737,16 @@ fn confirm_text(confirm: &Confirm) -> String {
 
 fn kv_line(label: impl Into<String>, value: impl Into<String>, color: Color) -> Line<'static> {
     Line::from(vec![
-        label_span(format!("{}: ", label.into())),
+        Span::styled(
+            format!("{}: ", label.into()),
+            Style::default().fg(Color::DarkGray),
+        ),
         value_span(value.into(), color),
     ])
 }
 
-fn label_span(text: impl Into<String>) -> Span<'static> {
-    Span::styled(text.into(), Style::default().fg(Color::DarkGray))
+fn label_span(text: impl Into<String>, theme: &TuiTheme) -> Span<'static> {
+    Span::styled(text.into(), Style::default().fg(ui::muted(theme)))
 }
 
 fn value_span(text: impl Into<String>, color: Color) -> Span<'static> {
@@ -799,67 +883,148 @@ fn format_local_time(value: time::OffsetDateTime) -> String {
 }
 
 fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
+    if app.llm_wizard.is_some() {
+        render_configure_wizard(frame, app, area);
+        return;
+    }
+
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-            Constraint::Length(5),
+            Constraint::Length(24),
+            Constraint::Percentage(44),
+            Constraint::Percentage(56),
         ])
         .split(area);
+
     frame.render_widget(
-        Paragraph::new(configure_module_line(app)).block(
-            Block::default()
+        Paragraph::new(configure_module_nav_lines(app)).block(
+            configure_block(app, ConfigureFocus::Modules)
                 .title(crate::t!("tui.configure.modules"))
                 .borders(Borders::ALL),
         ),
+        body[0],
+    );
+
+    if app.configure_module == ConfigureModule::Overview {
+        render_configure_overview(
+            frame,
+            app,
+            Rect::new(
+                body[1].x,
+                body[1].y,
+                body[1].width + body[2].width,
+                body[1].height,
+            ),
+        );
+    } else if app.configure_module == ConfigureModule::Main {
+        frame.render_widget(
+            Paragraph::new(configure_item_lines(app))
+                .wrap(Wrap { trim: false })
+                .block(
+                    configure_block(app, ConfigureFocus::Items)
+                        .title(focused_title(
+                            app,
+                            ConfigureFocus::Items,
+                            configure_module_title(app.configure_module),
+                        ))
+                        .borders(Borders::ALL),
+                ),
+            Rect::new(
+                body[1].x,
+                body[1].y,
+                body[1].width + body[2].width,
+                body[1].height,
+            ),
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new(configure_item_lines(app))
+                .wrap(Wrap { trim: false })
+                .block(
+                    configure_block(app, ConfigureFocus::Items)
+                        .title(focused_title(
+                            app,
+                            ConfigureFocus::Items,
+                            configure_module_title(app.configure_module),
+                        ))
+                        .borders(Borders::ALL),
+                ),
+            body[1],
+        );
+        frame.render_widget(
+            Paragraph::new(configure_detail_lines(app))
+                .wrap(Wrap { trim: false })
+                .block(
+                    configure_block(app, ConfigureFocus::Items)
+                        .title(crate::t!("tui.configure.detail"))
+                        .borders(Borders::ALL),
+                ),
+            body[2],
+        );
+    }
+}
+
+fn render_configure_wizard(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(4)])
+        .split(area);
+    frame.render_widget(
+        Paragraph::new(configure_wizard_text(app))
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .title(crate::t!("tui.configure.wizard.title"))
+                    .borders(Borders::ALL),
+            ),
         chunks[0],
     );
-    let rows = if app.llm_wizard.is_some() {
-        configure_wizard_text(app)
-    } else if app.configure_module == ConfigureModule::Overview {
-        configure_overview_text(app)
-    } else {
-        configure_rows(app)
-    };
     frame.render_widget(
-        Paragraph::new(rows).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .title(configure_module_title(app.configure_module))
-                .borders(Borders::ALL),
-        ),
+        Paragraph::new(configure_status_lines(app))
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .title(crate::t!("tui.configure.status"))
+                    .borders(Borders::ALL),
+            ),
         chunks[1],
-    );
-    frame.render_widget(
-        Paragraph::new(format!(
-            "{}\n{}\n{}\n{}",
-            crate::t!("tui.configure.source", path = app.config_path.clone()),
-            doctor_status_text(app),
-            configure_selected_description(app),
-            configure_hint_text(app)
-        ))
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .title(crate::t!("tui.configure.overview"))
-                .borders(Borders::ALL),
-        ),
-        chunks[2],
     );
 }
 
-fn configure_selected_description(app: &App) -> String {
-    if app.llm_wizard.is_some() || app.configure_module == ConfigureModule::Overview {
-        return crate::t!("tui.configure.read_only");
-    }
+fn render_configure_overview(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(9), Constraint::Min(0)])
+        .split(area);
+    frame.render_widget(
+        Paragraph::new(configure_overview_lines(app))
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .title(crate::t!("tui.configure.main"))
+                    .borders(Borders::ALL),
+            ),
+        chunks[0],
+    );
+    frame.render_widget(
+        Paragraph::new(configure_main_grouped_lines(app))
+            .wrap(Wrap { trim: false })
+            .block(
+                configure_block(app, ConfigureFocus::Items)
+                    .title(configure_module_title(ConfigureModule::Main))
+                    .borders(Borders::ALL),
+            ),
+        chunks[1],
+    );
+}
+
+fn configure_selected_row(app: &App) -> Option<&crate::tui::settings::SettingsRow> {
     let module = app.configure_module.inventory_module();
     app.settings_rows
         .iter()
         .filter(|row| row.group == module.label())
         .nth(app.selected_settings)
-        .and_then(|row| row.description_key)
-        .map(|key| crate::i18n::tr(key, &[]))
-        .unwrap_or_else(|| crate::t!("tui.configure.read_only"))
 }
 
 fn configure_hint_text(app: &App) -> String {
@@ -870,6 +1035,80 @@ fn configure_hint_text(app: &App) -> String {
     } else {
         crate::t!("tui.configure.refresh_hint")
     }
+}
+
+fn configure_module_nav_lines(app: &App) -> Vec<Line<'static>> {
+    all_configure_modules()
+        .into_iter()
+        .map(|module| {
+            let selected = module == app.configure_module;
+            let count = module_entry_count(app, module);
+            let marker = if selected {
+                if app.configure_focus == ConfigureFocus::Modules {
+                    "> "
+                } else {
+                    "* "
+                }
+            } else {
+                "  "
+            };
+            let style = if selected {
+                Style::default()
+                    .fg(ui::accent(&app.theme))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(ui::segment(&app.theme))
+            };
+            Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(configure_module_title(module), style),
+                Span::raw(" "),
+                Span::styled(
+                    format!("{count:>2}"),
+                    Style::default().fg(ui::muted(&app.theme)),
+                ),
+            ])
+        })
+        .collect()
+}
+
+fn focused_title(app: &App, focus: ConfigureFocus, title: String) -> String {
+    if app.configure_focus == focus {
+        format!("> {title}")
+    } else {
+        title
+    }
+}
+
+fn configure_block(app: &App, focus: ConfigureFocus) -> Block<'static> {
+    if app.configure_focus == focus {
+        Block::default().border_style(Style::default().fg(ui::accent(&app.theme)))
+    } else {
+        Block::default()
+            .border_style(Style::default().fg(ui::muted(&app.theme)))
+            .title_style(Style::default().fg(ui::muted(&app.theme)))
+    }
+}
+
+fn all_configure_modules() -> Vec<ConfigureModule> {
+    vec![
+        ConfigureModule::Overview,
+        ConfigureModule::Profile,
+        ConfigureModule::AsrProvider,
+        ConfigureModule::PostProcessor,
+    ]
+}
+
+fn module_entry_count(app: &App, module: ConfigureModule) -> usize {
+    let label = if module == ConfigureModule::Overview {
+        ConfigureModule::Main.inventory_module().label()
+    } else {
+        module.inventory_module().label()
+    };
+    app.settings_rows
+        .iter()
+        .filter(|row| row.group == label)
+        .count()
 }
 
 fn configure_wizard_text(app: &App) -> String {
@@ -952,75 +1191,359 @@ fn wizard_field_line(
     format!("{marker} {label}: {value}")
 }
 
-fn configure_rows(app: &App) -> String {
-    let module = app.configure_module.inventory_module();
+fn configure_item_lines(app: &App) -> Vec<Line<'static>> {
+    if matches!(
+        app.configure_module,
+        ConfigureModule::Profile | ConfigureModule::PostProcessor | ConfigureModule::AsrProvider
+    ) {
+        return configure_source_lines(app);
+    }
+    if app.configure_module == ConfigureModule::Main {
+        return configure_main_grouped_lines(app);
+    }
+    configure_field_lines(app.configure_rows_for_current_module(), None, &app.theme)
+}
+
+fn configure_main_grouped_lines(app: &App) -> Vec<Line<'static>> {
     let rows = app
         .settings_rows
         .iter()
-        .filter(|row| row.group == module.label())
+        .filter(|row| row.group == ConfigureModule::Main.inventory_module().label())
         .collect::<Vec<_>>();
     if rows.is_empty() {
-        crate::t!("tui.configure.no_entries")
-    } else {
-        rows.iter()
-            .enumerate()
-            .map(|(idx, row)| {
-                let marker = if idx == app.selected_settings {
-                    ">"
-                } else {
-                    " "
-                };
-                format!("{marker} {:<28} {:<32} {}", row.key, row.value, row.source)
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        return vec![Line::from(crate::t!("tui.configure.no_entries"))];
     }
+    let mut lines = Vec::new();
+    let mut current_section = String::new();
+    for row in rows {
+        let (section, item_key) = split_main_display_key(&row.display_key);
+        if section != current_section {
+            if !lines.is_empty() {
+                lines.push(Line::from(""));
+            }
+            current_section = section.clone();
+            lines.push(Line::styled(
+                section,
+                Style::default()
+                    .fg(ui::accent(&app.theme))
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        lines.push(configure_field_line(
+            row,
+            Some(&item_key),
+            false,
+            &app.theme,
+        ));
+    }
+    lines
 }
 
-fn configure_overview_text(app: &App) -> String {
-    if app.doctor.output.trim().is_empty() {
-        return crate::t!("tui.configure.doctor_not_run");
-    }
-    app.doctor.output.clone()
+fn split_main_display_key(key: &str) -> (String, String) {
+    key.split_once('.')
+        .map(|(section, rest)| (section.to_string(), rest.to_string()))
+        .unwrap_or_else(|| ("root".to_string(), key.to_string()))
 }
 
-fn doctor_status_text(app: &App) -> String {
+fn configure_source_lines(app: &App) -> Vec<Line<'static>> {
+    let sources = app.configure_sources_for_current_module();
+    if sources.is_empty() {
+        return vec![Line::from(crate::t!("tui.configure.no_entries"))];
+    }
+    sources
+        .iter()
+        .enumerate()
+        .map(|(idx, source)| {
+            let selected = idx == app.selected_settings;
+            let row_count = app
+                .configure_rows_for_current_module()
+                .into_iter()
+                .filter(|row| std::path::Path::new(&row.source) == source)
+                .count();
+            let marker_style = if selected {
+                Style::default()
+                    .fg(ui::accent(&app.theme))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(ui::muted(&app.theme))
+            };
+            Line::from(vec![
+                Span::styled(if selected { "> " } else { "  " }, marker_style),
+                Span::styled(
+                    format!("{row_count:>2}"),
+                    Style::default().fg(ui::success(&app.theme)),
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    source_name(source),
+                    if selected {
+                        Style::default()
+                            .fg(ui::accent(&app.theme))
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(ui::fg(&app.theme))
+                    },
+                ),
+            ])
+        })
+        .collect()
+}
+
+fn configure_field_lines(
+    rows: Vec<&crate::tui::settings::SettingsRow>,
+    selected: Option<usize>,
+    theme: &TuiTheme,
+) -> Vec<Line<'static>> {
+    if rows.is_empty() {
+        return vec![Line::from(crate::t!("tui.configure.no_entries"))];
+    }
+    rows.iter()
+        .enumerate()
+        .map(|(idx, row)| {
+            let is_selected = selected.is_some_and(|selected| selected == idx);
+            configure_field_line(row, None, is_selected, theme)
+        })
+        .collect()
+}
+
+fn configure_field_line(
+    row: &crate::tui::settings::SettingsRow,
+    key_override: Option<&str>,
+    selected: bool,
+    theme: &TuiTheme,
+) -> Line<'static> {
+    let display_key = key_override.unwrap_or(&row.display_key);
+    Line::from(vec![
+        Span::styled(
+            if selected { "> " } else { "" }.to_string(),
+            Style::default().fg(if selected {
+                ui::accent(theme)
+            } else {
+                ui::muted(theme)
+            }),
+        ),
+        Span::styled(
+            status_glyph(row.status),
+            Style::default().fg(status_color(row.status, theme)),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!("{:<24}", truncate_display(display_key, 24)),
+            Style::default().fg(if selected {
+                ui::accent(theme)
+            } else {
+                ui::fg(theme)
+            }),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!("{:<24}", truncate_display(&compact_value(&row.value), 24)),
+            Style::default().fg(ui::segment(theme)),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            row.description_key
+                .map(|key| crate::i18n::tr(key, &[]))
+                .unwrap_or_default(),
+            Style::default().fg(ui::muted(theme)),
+        ),
+    ])
+}
+
+fn compact_value(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn configure_detail_lines(app: &App) -> Vec<Line<'static>> {
+    let rows = match app.configure_module {
+        ConfigureModule::Profile
+        | ConfigureModule::PostProcessor
+        | ConfigureModule::AsrProvider => configure_selected_source_rows(app),
+        _ => configure_selected_row(app)
+            .map(|row| vec![row])
+            .unwrap_or_default(),
+    };
+    if rows.is_empty() {
+        return vec![Line::from(crate::t!("tui.configure.no_config_selected"))];
+    }
+    let source = rows
+        .first()
+        .map(|row| row.source.clone())
+        .unwrap_or_else(|| "-".to_string());
+    let mut lines = vec![
+        kv_line("source path", source, ui::warning(&app.theme)),
+        Line::from(""),
+    ];
+    lines.extend(configure_detail_field_lines(rows.clone(), &app.theme));
+    lines
+}
+
+fn configure_detail_field_lines(
+    rows: Vec<&crate::tui::settings::SettingsRow>,
+    theme: &TuiTheme,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for row in rows {
+        let description = row
+            .description_key
+            .map(|key| crate::i18n::tr(key, &[]))
+            .unwrap_or_default();
+        if row.value.contains('\n') || display_width(&row.value) > 56 {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    row.display_key.clone(),
+                    Style::default()
+                        .fg(ui::accent(theme))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(description, Style::default().fg(ui::muted(theme))),
+            ]));
+            lines.extend(text_lines(row.value.clone()));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{:<24}", truncate_display(&row.display_key, 24)),
+                    Style::default().fg(ui::accent(theme)),
+                ),
+                Span::styled(
+                    format!("{:<24}", row.value.clone()),
+                    Style::default().fg(ui::segment(theme)),
+                ),
+                Span::raw("  "),
+                Span::styled(description, Style::default().fg(ui::muted(theme))),
+            ]));
+        }
+    }
+    lines
+}
+
+fn configure_selected_source_rows(app: &App) -> Vec<&crate::tui::settings::SettingsRow> {
+    let Some(source) = app.selected_config_source() else {
+        return Vec::new();
+    };
+    let module = app.configure_module.inventory_module();
+    app.settings_rows
+        .iter()
+        .filter(|row| row.group == module.label() && std::path::Path::new(&row.source) == source)
+        .collect()
+}
+
+fn configure_overview_lines(app: &App) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        kv_line(
+            "config root",
+            app.config_path.clone(),
+            ui::warning(&app.theme),
+        ),
+        Line::from(""),
+        Line::from(vec![
+            label_span("module", &app.theme),
+            Span::raw("        "),
+            label_span("items", &app.theme),
+            Span::raw("  "),
+            label_span("errors", &app.theme),
+            Span::raw("  "),
+            label_span("missing", &app.theme),
+        ]),
+    ];
+    for module in all_configure_modules()
+        .into_iter()
+        .filter(|module| *module != ConfigureModule::Overview)
+    {
+        let label = module.inventory_module().label();
+        let rows = app
+            .settings_rows
+            .iter()
+            .filter(|row| row.group == label)
+            .collect::<Vec<_>>();
+        let errors = rows
+            .iter()
+            .filter(|row| row.status == crate::config::inventory::InventoryStatus::Error)
+            .count();
+        let missing = rows
+            .iter()
+            .filter(|row| row.status == crate::config::inventory::InventoryStatus::Missing)
+            .count();
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:<13}", configure_module_title(module)),
+                Style::default().fg(ui::accent(&app.theme)),
+            ),
+            Span::styled(
+                format!("{:>5}", rows.len()),
+                Style::default().fg(ui::fg(&app.theme)),
+            ),
+            Span::styled(
+                format!("{:>8}", errors),
+                Style::default().fg(status_count_color(errors, &app.theme)),
+            ),
+            Span::styled(
+                format!("{:>9}", missing),
+                Style::default().fg(status_count_color(missing, &app.theme)),
+            ),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.extend(configure_status_lines(app));
+    lines
+}
+
+fn configure_status_lines(app: &App) -> Vec<Line<'static>> {
+    vec![
+        kv_line("doctor", doctor_status_value(app), ui::success(&app.theme)),
+        kv_line("reload/status", app.status.clone(), ui::fg(&app.theme)),
+        kv_line("actions", configure_hint_text(app), ui::muted(&app.theme)),
+    ]
+}
+
+fn doctor_status_value(app: &App) -> String {
     match &app.doctor.status {
-        Some(status) => crate::t!("tui.configure.doctor_status", status = status.clone()),
+        Some(status) => status.clone(),
         None => crate::t!("tui.configure.doctor_not_run"),
     }
 }
 
-fn configure_module_line(app: &App) -> String {
-    [
-        ConfigureModule::Overview,
-        ConfigureModule::Main,
-        ConfigureModule::Profile,
-        ConfigureModule::PostProcessor,
-        ConfigureModule::AsrProvider,
-        ConfigureModule::Theme,
-    ]
-    .into_iter()
-    .map(|module| {
-        let label = configure_module_title(module);
-        if module == app.configure_module {
-            format!("[{label}]")
-        } else {
-            format!(" {label} ")
-        }
-    })
-    .collect::<Vec<_>>()
-    .join("  ")
+fn status_glyph(status: crate::config::inventory::InventoryStatus) -> &'static str {
+    match status {
+        crate::config::inventory::InventoryStatus::Ok => "ok",
+        crate::config::inventory::InventoryStatus::Warning => "!!",
+        crate::config::inventory::InventoryStatus::Error => "xx",
+        crate::config::inventory::InventoryStatus::Missing => "--",
+    }
+}
+
+fn status_color(status: crate::config::inventory::InventoryStatus, theme: &TuiTheme) -> Color {
+    match status {
+        crate::config::inventory::InventoryStatus::Ok => ui::success(theme),
+        crate::config::inventory::InventoryStatus::Warning => ui::warning(theme),
+        crate::config::inventory::InventoryStatus::Error => ui::error(theme),
+        crate::config::inventory::InventoryStatus::Missing => ui::muted(theme),
+    }
+}
+
+fn status_count_color(count: usize, theme: &TuiTheme) -> Color {
+    if count == 0 {
+        ui::muted(theme)
+    } else {
+        ui::error(theme)
+    }
+}
+
+fn source_name(path: &std::path::Path) -> String {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 fn configure_module_title(module: ConfigureModule) -> String {
     match module {
-        ConfigureModule::Overview => crate::t!("tui.configure.overview"),
+        ConfigureModule::Overview => crate::t!("tui.configure.main"),
         ConfigureModule::Main => crate::t!("tui.configure.main"),
         ConfigureModule::Profile => crate::t!("tui.configure.profile"),
-        ConfigureModule::PostProcessor => crate::t!("tui.configure.post_processor"),
-        ConfigureModule::AsrProvider => crate::t!("tui.configure.asr_provider"),
-        ConfigureModule::Theme => crate::t!("tui.configure.theme"),
+        ConfigureModule::AsrProvider => crate::t!("tui.configure.asr"),
+        ConfigureModule::PostProcessor => crate::t!("tui.configure.post"),
     }
 }
 
@@ -1090,7 +1613,8 @@ mod tests {
         assert!(!footer_text(&app).contains("open audio"));
 
         app.page = Page::History;
-        assert!(footer_text(&app).contains("open audio"));
+        let footer = footer_text(&app);
+        assert!(footer.contains("open audio") || footer.contains("打开音频"));
     }
 
     #[test]
@@ -1145,5 +1669,283 @@ mod tests {
         assert!(text.starts_with("... "));
         assert!(text.ends_with("最新的部分"));
         assert!(display_width(&text) <= 16);
+    }
+
+    #[test]
+    fn configure_navigation_shows_module_counts() {
+        crate::i18n::init("en-US");
+        let mut app = App::new();
+        app.settings_rows = vec![crate::tui::settings::SettingsRow {
+            group: "asr".to_string(),
+            key: "apple.idle_pause".to_string(),
+            display_key: "idle_pause".to_string(),
+            value: "true".to_string(),
+            source: "/tmp/shuohua/asr/apple.toml".to_string(),
+            status: crate::config::inventory::InventoryStatus::Ok,
+            description_key: Some("config.field.idle_pause.description"),
+        }];
+        app.configure_module = ConfigureModule::AsrProvider;
+
+        let text = configure_module_nav_lines(&app)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.contains("> ASR"));
+        assert!(text.contains("1"));
+    }
+
+    #[test]
+    fn configure_item_list_keeps_source_out_of_dense_rows() {
+        crate::i18n::init("en-US");
+        let mut app = App::new();
+        app.configure_module = ConfigureModule::AsrProvider;
+        app.settings_rows = vec![crate::tui::settings::SettingsRow {
+            group: "asr".to_string(),
+            key: "apple.idle_pause".to_string(),
+            display_key: "idle_pause".to_string(),
+            value: "true".to_string(),
+            source: "/tmp/shuohua/asr/apple.toml".to_string(),
+            status: crate::config::inventory::InventoryStatus::Ok,
+            description_key: Some("config.field.idle_pause.description"),
+        }];
+
+        let text = configure_item_lines(&app)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.contains("apple"));
+        assert!(!text.contains("apple.idle_pause"));
+        assert!(!text.contains("true"));
+        assert!(!text.contains("/tmp/shuohua/asr/apple.toml"));
+    }
+
+    #[test]
+    fn configure_detail_uses_schema_description_and_source() {
+        crate::i18n::init("en-US");
+        let mut app = App::new();
+        app.configure_module = ConfigureModule::AsrProvider;
+        app.settings_rows = vec![crate::tui::settings::SettingsRow {
+            group: "asr".to_string(),
+            key: "apple.idle_pause".to_string(),
+            display_key: "idle_pause".to_string(),
+            value: "true".to_string(),
+            source: "/tmp/shuohua/asr/apple.toml".to_string(),
+            status: crate::config::inventory::InventoryStatus::Ok,
+            description_key: Some("config.field.idle_pause.description"),
+        }];
+
+        let text = configure_detail_lines(&app)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.contains("/tmp/shuohua/asr/apple.toml"));
+        assert!(text.contains("pause and reopen ASR sessions"));
+    }
+
+    #[test]
+    fn configure_main_uses_single_field_list() {
+        crate::i18n::init("en-US");
+        let mut app = App::new();
+        app.configure_module = ConfigureModule::Main;
+        app.settings_rows = vec![crate::tui::settings::SettingsRow {
+            group: "main".to_string(),
+            key: "config.hotkey.trigger".to_string(),
+            display_key: "hotkey.trigger".to_string(),
+            value: "f16".to_string(),
+            source: "/tmp/shuohua/config.toml".to_string(),
+            status: crate::config::inventory::InventoryStatus::Ok,
+            description_key: Some("config.field.hotkey.trigger.description"),
+        }];
+
+        let text = configure_item_lines(&app)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.contains("hotkey"));
+        assert!(text.contains("trigger"));
+        assert!(!text.contains("hotkey.trigger"));
+        assert!(!text.contains("config.hotkey.trigger"));
+        assert!(text.contains("f16"));
+        assert!(!text.contains("/tmp/shuohua/config.toml"));
+    }
+
+    #[test]
+    fn configure_main_groups_fields_by_section() {
+        crate::i18n::init("en-US");
+        let mut app = App::new();
+        app.configure_module = ConfigureModule::Main;
+        app.settings_rows = vec![
+            crate::tui::settings::SettingsRow {
+                group: "main".to_string(),
+                key: "config.overlay.position".to_string(),
+                display_key: "overlay.position".to_string(),
+                value: "bottom".to_string(),
+                source: "/tmp/shuohua/config.toml".to_string(),
+                status: crate::config::inventory::InventoryStatus::Ok,
+                description_key: Some("config.field.overlay.position.description"),
+            },
+            crate::tui::settings::SettingsRow {
+                group: "main".to_string(),
+                key: "config.overlay.max_text_lines".to_string(),
+                display_key: "overlay.max_text_lines".to_string(),
+                value: "5".to_string(),
+                source: "/tmp/shuohua/config.toml".to_string(),
+                status: crate::config::inventory::InventoryStatus::Ok,
+                description_key: Some("config.field.overlay.max_text_lines.description"),
+            },
+        ];
+
+        let text = configure_main_grouped_lines(&app)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.contains("overlay"));
+        assert!(text.contains("position"));
+        assert!(text.contains("max_text_lines"));
+        assert!(!text.contains("overlay.position"));
+        assert!(!text.contains("overlay.max_text_lines"));
+    }
+
+    #[test]
+    fn configure_main_still_renders_module_nav() {
+        crate::i18n::init("en-US");
+        let mut app = App::new();
+        app.configure_module = ConfigureModule::Overview;
+
+        let text = configure_module_nav_lines(&app)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.contains("Main"));
+        assert!(text.contains("Profile"));
+        assert_eq!(text.matches("Main").count(), 1);
+    }
+
+    #[test]
+    fn configure_overview_can_render_main_fields() {
+        crate::i18n::init("en-US");
+        let mut app = App::new();
+        app.configure_module = ConfigureModule::Overview;
+        app.settings_rows = vec![crate::tui::settings::SettingsRow {
+            group: "main".to_string(),
+            key: "config.hotkey.trigger".to_string(),
+            display_key: "hotkey.trigger".to_string(),
+            value: "f16".to_string(),
+            source: "/tmp/shuohua/config.toml".to_string(),
+            status: crate::config::inventory::InventoryStatus::Ok,
+            description_key: Some("config.field.hotkey.trigger.description"),
+        }];
+
+        let text = configure_field_lines(
+            app.settings_rows
+                .iter()
+                .filter(|row| row.group == "main")
+                .collect(),
+            None,
+            &app.theme,
+        )
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+        assert!(text.contains("hotkey.trigger"));
+        assert!(text.contains("f16"));
+    }
+
+    #[test]
+    fn configure_profile_list_is_file_selection_and_detail_expands_fields() {
+        crate::i18n::init("en-US");
+        let mut app = App::new();
+        app.configure_module = ConfigureModule::Profile;
+        app.settings_rows = vec![
+            crate::tui::settings::SettingsRow {
+                group: "profile".to_string(),
+                key: "default.name".to_string(),
+                display_key: "name".to_string(),
+                value: "default".to_string(),
+                source: "/tmp/shuohua/profile/default.toml".to_string(),
+                status: crate::config::inventory::InventoryStatus::Ok,
+                description_key: Some("config.field.name.description"),
+            },
+            crate::tui::settings::SettingsRow {
+                group: "profile".to_string(),
+                key: "coding.asr.provider".to_string(),
+                display_key: "asr.provider".to_string(),
+                value: "doubao".to_string(),
+                source: "/tmp/shuohua/profile/coding.toml".to_string(),
+                status: crate::config::inventory::InventoryStatus::Ok,
+                description_key: Some("config.field.asr.provider.description"),
+            },
+            crate::tui::settings::SettingsRow {
+                group: "profile".to_string(),
+                key: "coding.post.chain".to_string(),
+                display_key: "post.chain".to_string(),
+                value: "[\"llm:deepseek\"]".to_string(),
+                source: "/tmp/shuohua/profile/coding.toml".to_string(),
+                status: crate::config::inventory::InventoryStatus::Ok,
+                description_key: Some("config.field.post.chain.description"),
+            },
+        ];
+        app.selected_settings = 0;
+
+        let list = configure_item_lines(&app)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        let detail = configure_detail_lines(&app)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(list.contains("coding"));
+        assert!(!list.contains("llm:deepseek"));
+        assert!(detail.contains("/tmp/shuohua/profile/coding.toml"));
+        assert!(detail.contains("asr.provider"));
+        assert!(!detail.contains("coding.asr.provider"));
+        assert!(detail.contains("llm:deepseek"));
+        assert!(detail.contains("Provider name matching"));
+        assert!(!detail.contains("reload/status"));
+        assert!(!detail.contains("actions"));
+    }
+
+    #[test]
+    fn configure_detail_preserves_multiline_values() {
+        crate::i18n::init("en-US");
+        let mut app = App::new();
+        app.configure_module = ConfigureModule::PostProcessor;
+        app.settings_rows = vec![crate::tui::settings::SettingsRow {
+            group: "post".to_string(),
+            key: "cleanup.prompt".to_string(),
+            display_key: "prompt".to_string(),
+            value: "line one\nline two".to_string(),
+            source: "/tmp/shuohua/post/llm/cleanup.toml".to_string(),
+            status: crate::config::inventory::InventoryStatus::Ok,
+            description_key: Some("config.field.prompt.description"),
+        }];
+
+        let detail = configure_detail_lines(&app)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(detail.contains("line one"));
+        assert!(detail.contains("line two"));
     }
 }

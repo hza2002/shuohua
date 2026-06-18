@@ -21,7 +21,7 @@ shuo doctor           # 环境检查：
                       #   - ASR / LLM Provider：`--runtime` 显式触发；走实际可运行性检查
                       #   - launchd 状态：plist 是否装、daemon 是否在跑
 
-shuo config-template  # 导出内置模板 registry 到指定目录（默认 $XDG_CONFIG_HOME/shuohua/templates）
+shuo config-template  # 导出内置模板 registry + theme presets 到指定目录（默认 $XDG_CONFIG_HOME/shuohua/templates）
                       #   --lang <auto|en-US|zh-CN> 控制生成注释语言
 
 shuo install          # 装 launchd plist（~/Library/LaunchAgents/）+ launchctl bootstrap

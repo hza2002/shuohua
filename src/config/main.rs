@@ -173,12 +173,21 @@ fn default_post_timeout_ms() -> u64 {
 pub struct UiCfg {
     #[serde(default = "default_language")]
     pub language: String,
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    #[serde(default)]
+    pub theme_tui: String,
+    #[serde(default)]
+    pub theme_overlay: String,
 }
 
 impl Default for UiCfg {
     fn default() -> Self {
         Self {
             language: default_language(),
+            theme: default_theme(),
+            theme_tui: String::new(),
+            theme_overlay: String::new(),
         }
     }
 }
@@ -186,26 +195,14 @@ impl Default for UiCfg {
 fn default_language() -> String {
     "auto".to_string()
 }
+fn default_theme() -> String {
+    crate::config::theme::DEFAULT_THEME_NAME.to_string()
+}
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct OverlayCfg {
     #[serde(default)]
     pub position: OverlayPosition,
-    #[serde(default = "default_glass_variant")]
-    pub glass_variant: i64,
-    #[serde(default)]
-    pub glass_style: GlassStyle,
-    #[serde(default = "default_background_rgb")]
-    pub background_rgb: u32,
-    #[serde(default = "default_background_alpha")]
-    pub background_alpha: f64,
-    #[serde(default)]
-    pub background_blur_radius: i64,
-    #[serde(default = "default_corner_radius")]
-    pub corner_radius: f64,
-    /// 私有 SPI `set_subduedState:` 入参（0 = 正常，1 = 降亮度饱和度；理论可能有更高状态）。
-    #[serde(default)]
-    pub subdued: i64,
     #[serde(default = "default_max_text_lines")]
     pub max_text_lines: usize,
     #[serde(default = "default_thinking_delay_ms")]
@@ -216,13 +213,6 @@ impl Default for OverlayCfg {
     fn default() -> Self {
         Self {
             position: OverlayPosition::default(),
-            glass_variant: default_glass_variant(),
-            glass_style: GlassStyle::default(),
-            background_rgb: default_background_rgb(),
-            background_alpha: default_background_alpha(),
-            background_blur_radius: 0,
-            corner_radius: default_corner_radius(),
-            subdued: 0,
             max_text_lines: default_max_text_lines(),
             thinking_delay_ms: default_thinking_delay_ms(),
         }
@@ -241,35 +231,6 @@ impl Default for OverlayPosition {
     fn default() -> Self {
         Self::Bottom
     }
-}
-
-/// 液态玻璃的 `setStyle:` 预设。
-/// - `Clear` ── 不调 setStyle，只走 variant，最透
-/// - `Blur`  ── 调 `NSGlassEffectViewStyle::Clear`，带轻量模糊（不带暗化）
-///
-/// 命名以"用户视觉效果"为准，AppKit 内部的 `Clear` 常量在我们这里对应 `Blur`。
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum GlassStyle {
-    #[default]
-    Clear,
-    Blur,
-}
-
-fn default_glass_variant() -> i64 {
-    19
-}
-
-fn default_background_rgb() -> u32 {
-    0x000000
-}
-
-fn default_corner_radius() -> f64 {
-    18.0
-}
-
-fn default_background_alpha() -> f64 {
-    0.18
 }
 
 fn default_max_text_lines() -> usize {
@@ -321,17 +282,13 @@ trigger = "f16"
         assert!(!cfg.voice.record_audio);
         assert!(cfg.voice.auto_paste);
         assert_eq!(cfg.ui.language, "auto");
+        assert_eq!(cfg.ui.theme, "gruvbox-dark");
+        assert_eq!(cfg.ui.theme_tui, "");
+        assert_eq!(cfg.ui.theme_overlay, "");
         assert_eq!(cfg.post.timeout_ms, 2000);
         assert_eq!(cfg.profile.default, "default");
         assert!(cfg.profile.routes.is_empty());
         assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
-        assert_eq!(cfg.overlay.glass_variant, 19);
-        assert_eq!(cfg.overlay.glass_style, GlassStyle::Clear);
-        assert_eq!(cfg.overlay.background_rgb, 0x000000);
-        assert!((cfg.overlay.background_alpha - 0.18).abs() < 1e-9);
-        assert_eq!(cfg.overlay.background_blur_radius, 0);
-        assert!((cfg.overlay.corner_radius - 18.0).abs() < 1e-9);
-        assert_eq!(cfg.overlay.subdued, 0);
         assert_eq!(cfg.overlay.max_text_lines, 5);
         assert_eq!(cfg.overlay.thinking_delay_ms, 1200);
     }
@@ -414,9 +371,15 @@ trigger = "f16"
 
 [ui]
 language = "zh-CN"
+theme = "catppuccin-latte"
+theme_tui = "terminal-dark"
+theme_overlay = "nord"
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.ui.language, "zh-CN");
+        assert_eq!(cfg.ui.theme, "catppuccin-latte");
+        assert_eq!(cfg.ui.theme_tui, "terminal-dark");
+        assert_eq!(cfg.ui.theme_overlay, "nord");
     }
 
     #[test]
@@ -427,25 +390,11 @@ trigger = "f16"
 
 [overlay]
 position          = "top"
-glass_variant     = 13
-glass_style       = "blur"
-background_rgb    = 0x111111
-background_alpha  = 0.24
-background_blur_radius = 24
-corner_radius     = 22.0
-subdued           = 1
 max_text_lines    = 6
 thinking_delay_ms = 900
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.overlay.position, OverlayPosition::Top);
-        assert_eq!(cfg.overlay.glass_variant, 13);
-        assert_eq!(cfg.overlay.glass_style, GlassStyle::Blur);
-        assert_eq!(cfg.overlay.background_rgb, 0x111111);
-        assert!((cfg.overlay.background_alpha - 0.24).abs() < 1e-9);
-        assert_eq!(cfg.overlay.background_blur_radius, 24);
-        assert!((cfg.overlay.corner_radius - 22.0).abs() < 1e-9);
-        assert_eq!(cfg.overlay.subdued, 1);
         assert_eq!(cfg.overlay.max_text_lines, 6);
         assert_eq!(cfg.overlay.thinking_delay_ms, 900);
     }

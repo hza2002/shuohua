@@ -69,8 +69,10 @@ fn check_config() {
             println!("  voice.auto_paste = {}", cfg.voice.auto_paste);
             println!("  dev.vad_trace = {}", cfg.dev.vad_trace);
             println!("  ui.language = {:?}", cfg.ui.language);
+            println!("  ui.theme = {:?}", cfg.ui.theme);
+            println!("  ui.theme_tui = {:?}", cfg.ui.theme_tui);
+            println!("  ui.theme_overlay = {:?}", cfg.ui.theme_overlay);
             println!("  overlay.position = {:?}", cfg.overlay.position);
-            println!("  overlay.glass_variant = {}", cfg.overlay.glass_variant);
         }
         Err(e) => {
             println!("effective config: unavailable ({e:#})");

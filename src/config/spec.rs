@@ -26,6 +26,7 @@ pub enum ValueKind {
     Enum,
     #[allow(dead_code)]
     Array,
+    Color,
     Table,
     FreeTable,
 }
@@ -67,6 +68,10 @@ impl FieldSpec {
 
     pub fn array(name: impl Into<String>) -> Self {
         Self::new(name, ValueKind::Array)
+    }
+
+    pub fn color(name: impl Into<String>) -> Self {
+        Self::new(name, ValueKind::Color)
     }
 
     pub fn table(name: impl Into<String>) -> Self {
@@ -330,6 +335,19 @@ fn validate_field(field: &FieldSpec, value: &toml::Value, diagnostics: &mut Vec<
         ValueKind::Array => {
             if !value.is_array() {
                 push_type_error(field, "array", diagnostics);
+                return;
+            }
+        }
+        ValueKind::Color => {
+            let valid_hex = value
+                .as_integer()
+                .is_some_and(|value| (0..=0xFF_FFFF).contains(&value));
+            if !value.is_str() && !valid_hex {
+                push_type_error(
+                    field,
+                    "palette name string or 0xRRGGBB integer",
+                    diagnostics,
+                );
                 return;
             }
         }

@@ -4,8 +4,8 @@
 
 - Moved configuration parsing into a `config/` module tree and added shared
   spec, validation, inventory, and template registry foundations.
-- Reworked the TUI Settings tab into Configure modules: Overview, Main,
-  Profile, PostProcessor, ASR Provider, and Theme.
+- Reworked the TUI Settings tab into Configure modules: Overview, Profile,
+  ASR, and Post.
 - Integrated Overview doctor output, config file open/reveal actions, manual
   refresh/validate, and daemon `reload_config` from Configure.
 - Repaired Configure diagnostics after review: nested TOML path validation,

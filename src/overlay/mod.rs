@@ -4,32 +4,6 @@ use tokio::sync::mpsc;
 pub mod debug;
 pub mod view;
 
-// Gruvbox dark palette (https://github.com/morhetz/gruvbox).
-// 颜色不放进 config：状态色是语义、文字色是排版层级，都是设计决策不是用户偏好。
-// 想换主题改这里。
-#[allow(dead_code)]
-pub mod palette {
-    pub const FG0: u32 = 0xFBF1C7;
-    pub const FG1: u32 = 0xEBDBB2;
-    pub const FG2: u32 = 0xD5C4A1;
-    pub const FG3: u32 = 0xBDAE93;
-    pub const FG4: u32 = 0xA89984;
-    pub const GRAY: u32 = 0x928374;
-    pub const BRIGHT_RED: u32 = 0xFB4934;
-    pub const RED: u32 = 0xCC241D;
-    pub const BRIGHT_ORANGE: u32 = 0xFE8019;
-    pub const BRIGHT_YELLOW: u32 = 0xFABD2F;
-    pub const BRIGHT_BLUE: u32 = 0x83A598;
-    pub const BRIGHT_AQUA: u32 = 0x8EC07C;
-}
-
-pub const COLOR_PRIMARY_TEXT: u32 = palette::FG0;
-pub const COLOR_SECONDARY_TEXT: u32 = palette::FG1;
-pub const COLOR_TERTIARY_TEXT: u32 = palette::FG3;
-pub const COLOR_SEGMENT_TEXT: u32 = palette::FG1;
-pub const COLOR_NOTICE: u32 = palette::BRIGHT_YELLOW;
-pub const COLOR_ERROR_TEXT: u32 = palette::BRIGHT_RED;
-
 #[derive(Debug, Clone)]
 pub enum OverlayCmd {
     SetState {
@@ -65,7 +39,7 @@ pub enum OverlayCmd {
     /// 配置热重载：替换 chrome（glass / tint / 文本布局相关参数）。
     /// model 不消费，view 单独处理。
     ReloadConfig {
-        cfg: crate::config::OverlayCfg,
+        cfg: crate::config::theme::EffectiveOverlayCfg,
     },
     /// 语言切换后让 view 重新翻译当前 state label 并刷新。i18n 字典已经被
     /// `reload::spawn_i18n` 在到达 view 之前换好。
@@ -94,15 +68,14 @@ impl OverlayState {
         }
     }
 
-    pub fn color_rgb(self) -> u32 {
-        // Gruvbox semantic colors.
+    pub fn color_rgb(self, theme: &crate::config::theme::OverlayStateTheme) -> u32 {
         match self {
-            OverlayState::Idle => palette::BRIGHT_AQUA,
-            OverlayState::Connecting => palette::BRIGHT_ORANGE,
-            OverlayState::Recording => palette::BRIGHT_RED,
-            OverlayState::Thinking => palette::BRIGHT_BLUE,
-            OverlayState::Stopping => palette::BRIGHT_YELLOW,
-            OverlayState::Error => palette::RED,
+            OverlayState::Idle => theme.idle,
+            OverlayState::Connecting => theme.connecting,
+            OverlayState::Recording => theme.recording,
+            OverlayState::Thinking => theme.thinking,
+            OverlayState::Stopping => theme.stopping,
+            OverlayState::Error => theme.error,
         }
     }
 }
@@ -157,12 +130,12 @@ pub struct OverlayModel {
     pub visible: bool,
 }
 
-impl Default for OverlayModel {
-    fn default() -> Self {
+impl OverlayModel {
+    pub fn new(theme: &crate::config::theme::OverlayStateTheme) -> Self {
         Self {
             state: OverlayState::Idle,
             state_label: crate::t!("overlay.state_idle"),
-            state_color: OverlayState::Idle.color_rgb(),
+            state_color: OverlayState::Idle.color_rgb(theme),
             dur_ms: 0,
             words: 0,
             bundle_id: None,
@@ -178,8 +151,14 @@ impl Default for OverlayModel {
     }
 }
 
+impl Default for OverlayModel {
+    fn default() -> Self {
+        Self::new(&crate::config::theme::OverlayStateTheme::default())
+    }
+}
+
 impl OverlayModel {
-    pub fn apply(&mut self, cmd: OverlayCmd) {
+    pub fn apply(&mut self, cmd: OverlayCmd, theme: &crate::config::theme::OverlayStateTheme) {
         match cmd {
             OverlayCmd::SetState { state } => {
                 // `Connecting` 是 session 起点；只有它把 overlay 拉起来。
@@ -193,7 +172,7 @@ impl OverlayModel {
                 }
                 self.state = state;
                 self.state_label = crate::t!(state.label_key());
-                self.state_color = state.color_rgb();
+                self.state_color = state.color_rgb(theme);
             }
             OverlayCmd::SetStats { dur_ms, words } => {
                 self.dur_ms = dur_ms;
@@ -231,7 +210,7 @@ impl OverlayModel {
                 self.visible = false;
                 self.state = OverlayState::Idle;
                 self.state_label = crate::t!("overlay.state_idle");
-                self.state_color = OverlayState::Idle.color_rgb();
+                self.state_color = OverlayState::Idle.color_rgb(theme);
             }
             OverlayCmd::ReloadConfig { .. } => {
                 // 仅 view 关心；model 无状态变更。
@@ -273,29 +252,48 @@ mod tests {
 
     use super::*;
 
+    fn apply(model: &mut OverlayModel, cmd: OverlayCmd) {
+        model.apply(cmd, &crate::config::theme::OverlayStateTheme::default());
+    }
+
     #[test]
     fn model_applies_state_text_stats_and_notice() {
         i18n::init("en-US");
         let mut model = OverlayModel::default();
 
-        model.apply(OverlayCmd::SetState {
-            state: OverlayState::Recording,
-        });
-        model.apply(OverlayCmd::SetStats {
-            dur_ms: 3200,
-            words: 14,
-        });
-        model.apply(OverlayCmd::AppendSegment {
-            text: "今天".to_string(),
-        });
-        model.apply(OverlayCmd::SetText {
-            text: "今天天气".to_string(),
-            kind: TextKind::Partial,
-        });
-        model.apply(OverlayCmd::Notice {
-            text: "filler skipped".to_string(),
-            ttl_ms: 3000,
-        });
+        apply(
+            &mut model,
+            OverlayCmd::SetState {
+                state: OverlayState::Recording,
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::SetStats {
+                dur_ms: 3200,
+                words: 14,
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::AppendSegment {
+                text: "今天".to_string(),
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::SetText {
+                text: "今天天气".to_string(),
+                kind: TextKind::Partial,
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::Notice {
+                text: "filler skipped".to_string(),
+                ttl_ms: 3000,
+            },
+        );
 
         assert_eq!(model.state, OverlayState::Recording);
         assert_eq!(model.state_label, "Recording");
@@ -310,13 +308,19 @@ mod tests {
     fn error_text_overrides_partial_and_final_in_display() {
         i18n::init("en-US");
         let mut model = OverlayModel::default();
-        model.apply(OverlayCmd::AppendSegment {
-            text: "已识别一半".to_string(),
-        });
-        model.apply(OverlayCmd::SetText {
-            text: "请检查输入设备".to_string(),
-            kind: TextKind::Error,
-        });
+        apply(
+            &mut model,
+            OverlayCmd::AppendSegment {
+                text: "已识别一半".to_string(),
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::SetText {
+                text: "请检查输入设备".to_string(),
+                kind: TextKind::Error,
+            },
+        );
         assert_eq!(model.display_text(), "请检查输入设备");
     }
 
@@ -331,14 +335,20 @@ mod tests {
     fn hide_clears_transient_recording_text() {
         i18n::init("en-US");
         let mut model = OverlayModel::default();
-        model.apply(OverlayCmd::AppendSegment {
-            text: "old".to_string(),
-        });
-        model.apply(OverlayCmd::SetText {
-            text: "old final".to_string(),
-            kind: TextKind::Final,
-        });
-        model.apply(OverlayCmd::Hide);
+        apply(
+            &mut model,
+            OverlayCmd::AppendSegment {
+                text: "old".to_string(),
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::SetText {
+                text: "old final".to_string(),
+                kind: TextKind::Final,
+            },
+        );
+        apply(&mut model, OverlayCmd::Hide);
 
         assert_eq!(model.display_text(), "");
         assert_eq!(model.dur_ms, 0);
@@ -352,20 +362,29 @@ mod tests {
         // 不能跟着 visible=false。可见性只由 Connecting 拉起 / Hide 关闭。
         i18n::init("en-US");
         let mut model = OverlayModel::default();
-        model.apply(OverlayCmd::SetState {
-            state: OverlayState::Connecting,
-        });
+        apply(
+            &mut model,
+            OverlayCmd::SetState {
+                state: OverlayState::Connecting,
+            },
+        );
         assert!(model.visible);
-        model.apply(OverlayCmd::SetState {
-            state: OverlayState::Recording,
-        });
+        apply(
+            &mut model,
+            OverlayCmd::SetState {
+                state: OverlayState::Recording,
+            },
+        );
         assert!(model.visible);
-        model.apply(OverlayCmd::SetState {
-            state: OverlayState::Idle,
-        });
+        apply(
+            &mut model,
+            OverlayCmd::SetState {
+                state: OverlayState::Idle,
+            },
+        );
         assert!(model.visible, "Idle 子状态期间 overlay 应保持可见");
         assert_eq!(model.state, OverlayState::Idle);
-        model.apply(OverlayCmd::Hide);
+        apply(&mut model, OverlayCmd::Hide);
         assert!(!model.visible);
     }
 
@@ -373,12 +392,18 @@ mod tests {
     fn connecting_starts_with_empty_text() {
         i18n::init("en-US");
         let mut model = OverlayModel::default();
-        model.apply(OverlayCmd::AppendSegment {
-            text: "old".to_string(),
-        });
-        model.apply(OverlayCmd::SetState {
-            state: OverlayState::Connecting,
-        });
+        apply(
+            &mut model,
+            OverlayCmd::AppendSegment {
+                text: "old".to_string(),
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::SetState {
+                state: OverlayState::Connecting,
+            },
+        );
 
         assert_eq!(model.display_text(), "");
         assert!(model.visible);

@@ -334,7 +334,7 @@ pub enum AsrError {
 
 ```
 ~/.config/shuohua/
-├── config.toml              # 全局：hotkey / voice / post timeout
+├── config.toml              # 全局：hotkey / voice / post timeout / active theme
 ├── profile/
 │   ├── default.toml         # 默认 profile：选择 ASR + post chain + 覆盖项
 │   └── agent.toml
@@ -343,12 +343,15 @@ pub enum AsrError {
 │   │   └── zh_filter.toml   # 后处理组件定义：规则
 │   └── llm/
 │       └── deepseek.toml    # 后处理组件定义：LLM provider/model/prompt 默认值
-└── asr/
+├── asr/
     ├── doubao.toml          # ← 文件名 == provider 名
     └── apple.toml           # 可省略；无 secret，缺省值可直接工作
+└── theme/
+    ├── gruvbox-dark.toml    # 默认 theme；文件名 == theme id
+    └── catppuccin-latte.toml
 ```
 
-`config.toml` 保留全局行为开关，并集中维护 App bundle id → profile 的路由；profile/post 目录固定走 XDG 路径：
+`config.toml` 保留全局行为开关、active theme，并集中维护 App bundle id → profile 的路由；profile/post/theme 目录固定走 XDG 路径：
 
 ```toml
 [hotkey]
@@ -373,10 +376,18 @@ min_start_voiced_frames = 2
 [post]
 timeout_ms = 2000
 
+[ui]
+language = "auto"
+theme = "gruvbox-dark"     # theme id；优先加载 theme/<id>.toml，缺文件时可回退内置 preset
+theme_tui = ""             # 可选：只覆盖 TUI theme；空字符串跟随 theme
+theme_overlay = ""         # 可选：只覆盖 overlay theme；空字符串跟随 theme
+
 [profile]
 default = "default"
 agent = ["com.mitchellh.ghostty", "com.googlecode.iterm2", "com.apple.Terminal"]
 ```
+
+`theme/<id>.toml` 描述 TUI + overlay 颜色和少量 overlay visual token。配置 key 不做 i18n；`name` 只用于展示，不参与引用。字段缺省时从程序内置 `gruvbox-dark` 默认补齐。用户 theme 文件优先于同名内置 preset。
 
 `profile/default.toml`（默认 profile，负责组合；场景相关热词和局部覆盖优先放这里）：
 
@@ -807,6 +818,7 @@ reload.rs
 | `[voice].*` 全部 | 下次起 session | daemon 主循环 `cfg_rx.borrow()` 取最新快照 | ✓ |
 | `[profile]` 路由、`profile/*.toml` 的 `[asr]` / `[post]` / override | 下次起 session | daemon 主循环按 toggle ON 的 Profile 选择 | ✓ |
 | `post/rule/*.toml` / `post/llm/*.toml` | 下次起 session | profile 的 `[post].chain` 引用组件 | ✓ |
+| `[ui].theme*` / `theme/*.toml` | 立即（next render） | `spawn_overlay` / TUI reload 重新加载 effective theme | ✓ |
 | 手动触发 `{"op":"reload_config"}` | 立即 | 走 UDS server | ✓ |
 
 #### Hotkey trigger 特别说明
@@ -818,7 +830,7 @@ parse 失败（非法 trigger 字符串）只打日志保留旧 trigger，不向
 #### M5 收口结果
 
 - `shuo doctor` 已实现：打印 `effective config`，本地校验 `config.toml`、`profile/*.toml`、`asr/*.toml`、`post/**/*.toml`、hotkey、默认麦克风输入、UDS 状态、launchd plist 和权限状态；ASR/LLM runtime 检查走显式 `--runtime`，会实际触发配置对应的可运行性验证
-- `shuo config-template` 已实现：从 `config::template` registry 导出参考模板；字段注释来自 `config::schema` 的 description i18n key
+- `shuo config-template` 已实现：从 `config::template` registry 导出参考模板和内置 theme presets；字段注释来自 `config::schema` 的 description i18n key；默认 theme id 是 `gruvbox-dark`
 - `shuo install/uninstall/start/stop/restart/status` 已实现：launchd plist 使用当前 `shuo` 绝对路径，状态优先走 UDS `daemon_status`
 - `UDS {"op":"reload_config"}` 已接入：走 watcher 同一路径 parse + broadcast，不绕过 `watch::Sender`
 - profile 的 `asr` 已按配置在下一次录音开始时重建，不在录音中途热替换 session
@@ -935,11 +947,11 @@ shuohua/
 │   │   ├── schema.rs           # shared config schema registry + description i18n keys
 │   │   ├── inventory.rs        # structured Configure inventory
 │   │   ├── diagnostics.rs      # full-tree local config diagnostics
-│   │   ├── template.rs         # official templates + LLM component creation
+│   │   ├── template.rs         # official templates + theme presets + LLM component creation
 │   │   ├── profile.rs          # profile/*.toml schema/routes
 │   │   ├── post/               # post component config namespace
 │   │   ├── asr/                # ASR provider config loaders
-│   │   └── theme.rs            # reserved theme namespace
+│   │   └── theme.rs            # theme TOML parse/merge + builtin fallback + effective TUI/overlay theme
 │   ├── log.rs                  # tracing 初始化：daily file appender、本地时间格式、TTY mirror
 │   ├── reload.rs               # notify watcher + overlay/i18n/hotkey subscribers（M3.f）
 │   ├── hotkey/

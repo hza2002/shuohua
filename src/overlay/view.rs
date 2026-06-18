@@ -21,11 +21,9 @@ use objc2_foundation::{
 use objc2_quartz_core::{kCATransitionFade, CAMediaTiming, CATransition};
 use tokio::sync::mpsc;
 
-use crate::config::{GlassStyle, OverlayCfg, OverlayPosition};
-use crate::overlay::{
-    OverlayCmd, OverlayModel, OverlayState, TextKind, COLOR_ERROR_TEXT, COLOR_NOTICE,
-    COLOR_PRIMARY_TEXT, COLOR_SECONDARY_TEXT, COLOR_SEGMENT_TEXT, COLOR_TERTIARY_TEXT,
-};
+use crate::config::theme::{EffectiveOverlayCfg, GlassStyle};
+use crate::config::OverlayPosition;
+use crate::overlay::{OverlayCmd, OverlayModel, OverlayState, TextKind};
 
 /// SetText{Error} 后多久自动 hide overlay。比 NOTICE_TTL_MS 长，因为 error 文案
 /// 用户需要读完并决定是否重试；notice 只是顺手提示，过去就过去。仍然不挂太久，
@@ -68,7 +66,7 @@ mod typography {
 struct DelegateIvars {
     overlay: OnceCell<RefCell<OverlayView>>,
     rx: OnceCell<RefCell<mpsc::UnboundedReceiver<OverlayCmd>>>,
-    cfg: OnceCell<OverlayCfg>,
+    cfg: OnceCell<EffectiveOverlayCfg>,
     timer: OnceCell<Retained<NSTimer>>,
 }
 
@@ -123,7 +121,7 @@ impl OverlayDelegate {
     fn new(
         mtm: MainThreadMarker,
         rx: mpsc::UnboundedReceiver<OverlayCmd>,
-        cfg: OverlayCfg,
+        cfg: EffectiveOverlayCfg,
     ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(DelegateIvars {
             overlay: OnceCell::new(),
@@ -135,7 +133,7 @@ impl OverlayDelegate {
     }
 }
 
-pub fn run(rx: mpsc::UnboundedReceiver<OverlayCmd>, cfg: OverlayCfg) {
+pub fn run(rx: mpsc::UnboundedReceiver<OverlayCmd>, cfg: EffectiveOverlayCfg) {
     let mtm = MainThreadMarker::new().expect("AppKit must run on main thread");
     let app = NSApplication::sharedApplication(mtm);
     let delegate = OverlayDelegate::new(mtm, rx, cfg);
@@ -145,7 +143,7 @@ pub fn run(rx: mpsc::UnboundedReceiver<OverlayCmd>, cfg: OverlayCfg) {
 
 struct OverlayView {
     mtm: MainThreadMarker,
-    cfg: OverlayCfg,
+    cfg: EffectiveOverlayCfg,
     model: OverlayModel,
     panel: Retained<NSPanel>,
     /// 装文字 / icon 的容器：glass 路径下 = `glass.contentView`；fallback 路径下 = 直接挂在 panel 的 visualEffect。
@@ -178,7 +176,7 @@ struct OverlayView {
 }
 
 impl OverlayView {
-    fn new(mtm: MainThreadMarker, cfg: OverlayCfg) -> Self {
+    fn new(mtm: MainThreadMarker, cfg: EffectiveOverlayCfg) -> Self {
         let initial_frame = NSRect::new(
             NSPoint::new(80.0, 860.0),
             NSSize::new(layout::WIDTH, layout::BASE_HEIGHT),
@@ -189,17 +187,11 @@ impl OverlayView {
         let (container, glass, background, pending_chrome_error) = build_chrome(mtm, &cfg);
 
         let row = first_row_frames(0.0);
-        let state_icon = make_state_icon(mtm, COLOR_PRIMARY_TEXT);
+        let state_icon = make_state_icon(mtm, cfg.text.primary);
         state_icon.setFrame(row.icon);
-        let status = label(mtm, row.status, typography::STATE, true, COLOR_PRIMARY_TEXT);
-        let stats = label(
-            mtm,
-            row.stats,
-            typography::META,
-            false,
-            COLOR_SECONDARY_TEXT,
-        );
-        let meta = label(mtm, row.meta, typography::META, false, COLOR_TERTIARY_TEXT);
+        let status = label(mtm, row.status, typography::STATE, true, cfg.text.primary);
+        let stats = label(mtm, row.stats, typography::META, false, cfg.text.secondary);
+        let meta = label(mtm, row.meta, typography::META, false, cfg.text.tertiary);
         meta.setAlignment(NSTextAlignment::Right);
         let text = label(
             mtm,
@@ -209,7 +201,7 @@ impl OverlayView {
             ),
             typography::BODY,
             false,
-            COLOR_PRIMARY_TEXT,
+            cfg.text.primary,
         );
         text.setUsesSingleLineMode(false);
         text.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
@@ -227,10 +219,12 @@ impl OverlayView {
         panel.setContentView(Some(&container));
         panel.orderOut(None);
 
+        let model = OverlayModel::new(&cfg.state);
+
         Self {
             mtm,
             cfg,
-            model: OverlayModel::default(),
+            model,
             panel,
             container,
             glass,
@@ -264,7 +258,7 @@ impl OverlayView {
         if matches!(cmd, OverlayCmd::Relabel) {
             // Force render() to push new translated status text.
             self.last_status_text.clear();
-            self.model.apply(cmd);
+            self.model.apply(cmd, &self.cfg.state);
             self.render();
             return;
         }
@@ -332,7 +326,7 @@ impl OverlayView {
             }
             _ => {}
         }
-        self.model.apply(cmd);
+        self.model.apply(cmd, &self.cfg.state);
         self.render();
     }
 
@@ -346,7 +340,7 @@ impl OverlayView {
             self.notice_until = None;
             if self.pending_hide {
                 // 等到的就是这一刻——notice 到期，把延期的 Hide 真正执行。
-                self.model.apply(OverlayCmd::Hide);
+                self.model.apply(OverlayCmd::Hide, &self.cfg.state);
                 self.recording_started = None;
                 self.last_text_update = None;
                 self.pending_hide = false;
@@ -356,7 +350,7 @@ impl OverlayView {
         if self.error_until.is_some_and(|until| now >= until) {
             // error 文本到期：自动关 overlay。
             self.error_until = None;
-            self.model.apply(OverlayCmd::Hide);
+            self.model.apply(OverlayCmd::Hide, &self.cfg.state);
             self.recording_started = None;
             self.last_text_update = None;
             self.notice_until = None;
@@ -447,13 +441,13 @@ impl OverlayView {
             self.last_stats_text = stats_text;
         }
         self.stats
-            .setTextColor(Some(&color_from_rgb_alpha(COLOR_SECONDARY_TEXT, 1.0)));
+            .setTextColor(Some(&color_from_rgb_alpha(self.cfg.text.secondary, 1.0)));
 
         // meta 行：notice 活跃时盖住 chain_summary，黄字。
         let (meta_text, meta_color) = if let Some(notice) = &self.model.notice {
-            (notice.text.clone(), COLOR_NOTICE)
+            (notice.text.clone(), self.cfg.text.notice)
         } else {
-            (header.meta, COLOR_TERTIARY_TEXT)
+            (header.meta, self.cfg.text.tertiary)
         };
         if self.last_meta_text != meta_text {
             fade_view(&self.meta, 0.16);
@@ -465,9 +459,9 @@ impl OverlayView {
 
         // text 区：error_text 非空时强制红字，覆盖 partial/final（display_text 已优先返回 error）。
         let text_color = if !self.model.error_text.is_empty() {
-            COLOR_ERROR_TEXT
+            self.cfg.text.error
         } else {
-            COLOR_PRIMARY_TEXT
+            self.cfg.text.primary
         };
         if self.last_visible_text != display_text {
             if !self.model.error_text.is_empty() {
@@ -547,8 +541,8 @@ impl OverlayView {
         let attributed = NSMutableAttributedString::from_nsstring(&NSString::from_str(&full));
         let segment_len = utf16_len(&plan.segments);
         let full_len = utf16_len(&full);
-        let segment_color = color_from_rgb_alpha(COLOR_SEGMENT_TEXT, 0.88);
-        let partial_color = color_from_rgb_alpha(COLOR_PRIMARY_TEXT, 1.0);
+        let segment_color = color_from_rgb_alpha(self.cfg.text.segment, 0.88);
+        let partial_color = color_from_rgb_alpha(self.cfg.text.primary, 1.0);
         unsafe {
             let _: () = msg_send![
                 &attributed,
@@ -605,7 +599,7 @@ impl OverlayView {
     }
 
     /// 热重载入口：原地调 setter，不换 view。fallback 路径下 SPI 不可用，整段 noop（已经在 init 时报过错）。
-    fn rebuild_chrome(&mut self, cfg: OverlayCfg) {
+    fn rebuild_chrome(&mut self, cfg: EffectiveOverlayCfg) {
         if cfg == self.cfg {
             return;
         }
@@ -619,6 +613,10 @@ impl OverlayView {
         apply_panel_background_blur(&self.panel, cfg.background_blur_radius);
         apply_background_settings(&self.background, &cfg);
         self.cfg = cfg;
+        self.model.state_color = self.model.state.color_rgb(&self.cfg.state);
+        self.last_status_text.clear();
+        self.last_visible_text.clear();
+        self.last_meta_text.clear();
         // peak_text_lines 用旧上限可能比新 max_text_lines 大，clamp 回去
         let cap = self.cfg.max_text_lines.clamp(1, 8);
         if self.peak_text_lines > cap {
@@ -796,7 +794,7 @@ fn label(
 /// 行为未定" 警告只针对**直接 addSubview 到 glass**，不针对 glass 的兄弟。
 fn build_chrome(
     mtm: MainThreadMarker,
-    cfg: &OverlayCfg,
+    cfg: &EffectiveOverlayCfg,
 ) -> (
     Retained<NSView>,
     Option<Retained<NSGlassEffectView>>,
@@ -851,7 +849,7 @@ fn build_chrome(
 
 /// 把 cfg 里所有 chrome 旋钮拍到 glass 上。返回检测到不可用的 SPI 列表（私有 selector 没 respond）。
 /// 公开 API（cornerRadius/style）由 typed binding 保证存在，不进 missing 列表。
-fn apply_glass_settings(glass: &NSGlassEffectView, cfg: &OverlayCfg) -> Vec<&'static str> {
+fn apply_glass_settings(glass: &NSGlassEffectView, cfg: &EffectiveOverlayCfg) -> Vec<&'static str> {
     glass.setCornerRadius(cfg.corner_radius);
     let style = match cfg.glass_style {
         GlassStyle::Clear => NSGlassEffectViewStyle::Regular,
@@ -875,7 +873,7 @@ fn apply_glass_settings(glass: &NSGlassEffectView, cfg: &OverlayCfg) -> Vec<&'st
     missing
 }
 
-fn make_background_layer(mtm: MainThreadMarker, cfg: &OverlayCfg) -> Retained<NSView> {
+fn make_background_layer(mtm: MainThreadMarker, cfg: &EffectiveOverlayCfg) -> Retained<NSView> {
     let background = NSView::new(mtm);
     background.setFrame(root_frame());
     background.setAutoresizingMask(
@@ -886,7 +884,7 @@ fn make_background_layer(mtm: MainThreadMarker, cfg: &OverlayCfg) -> Retained<NS
     background
 }
 
-fn apply_background_settings(background: &NSView, cfg: &OverlayCfg) {
+fn apply_background_settings(background: &NSView, cfg: &EffectiveOverlayCfg) {
     unsafe {
         let layer: *mut AnyObject = msg_send![background, layer];
         let color = color_from_rgb_alpha(cfg.background_rgb, cfg.background_alpha).CGColor();
@@ -1240,7 +1238,10 @@ mod tests {
     fn meta_typography_is_readable_but_secondary() {
         assert!(typography::META >= 13.0);
         assert!(typography::META < typography::STATE);
-        assert_eq!(COLOR_TERTIARY_TEXT, crate::overlay::palette::FG3);
+        assert_eq!(
+            crate::config::theme::OverlayTextTheme::default().tertiary,
+            crate::config::theme::palette::FG3
+        );
     }
 
     #[test]
@@ -1266,7 +1267,10 @@ mod tests {
 
     #[test]
     fn segment_text_uses_readable_secondary_color() {
-        assert_eq!(COLOR_SEGMENT_TEXT, crate::overlay::palette::FG1);
+        assert_eq!(
+            crate::config::theme::OverlayTextTheme::default().segment,
+            crate::config::theme::palette::FG1
+        );
     }
 
     #[test]

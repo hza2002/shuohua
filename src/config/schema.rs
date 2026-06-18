@@ -8,6 +8,7 @@ pub enum SchemaId {
     Profile,
     PostRule,
     PostLlm,
+    Theme,
 }
 
 pub fn spec_for(id: SchemaId) -> ConfigSpec {
@@ -18,6 +19,7 @@ pub fn spec_for(id: SchemaId) -> ConfigSpec {
         SchemaId::Profile => profile_spec(),
         SchemaId::PostRule => post_rule_spec(),
         SchemaId::PostLlm => post_llm_spec(),
+        SchemaId::Theme => theme_spec(),
     }
 }
 
@@ -36,6 +38,9 @@ pub fn spec_for_path(path: &str) -> Option<ConfigSpec> {
         }
         _ if path.starts_with("post/llm/") && path.ends_with(".toml") => {
             Some(spec_for(SchemaId::PostLlm))
+        }
+        _ if path.starts_with("theme/") && path.ends_with(".toml") => {
+            Some(spec_for(SchemaId::Theme))
         }
         _ => None,
     }
@@ -70,19 +75,54 @@ fn description_key(name: &str) -> &'static str {
         "profile" => "config.field.profile.description",
         "ui" => "config.field.ui.description",
         "ui.language" => "config.field.ui.language.description",
+        "ui.theme" => "config.field.ui.theme.description",
+        "ui.theme_tui" => "config.field.ui.theme_tui.description",
+        "ui.theme_overlay" => "config.field.ui.theme_overlay.description",
         "overlay" => "config.field.overlay.description",
         "overlay.position" => "config.field.overlay.position.description",
-        "overlay.glass_variant" => "config.field.overlay.glass_variant.description",
-        "overlay.glass_style" => "config.field.overlay.glass_style.description",
-        "overlay.background_rgb" => "config.field.overlay.background_rgb.description",
-        "overlay.background_alpha" => "config.field.overlay.background_alpha.description",
-        "overlay.background_blur_radius" => {
-            "config.field.overlay.background_blur_radius.description"
-        }
-        "overlay.corner_radius" => "config.field.overlay.corner_radius.description",
-        "overlay.subdued" => "config.field.overlay.subdued.description",
         "overlay.max_text_lines" => "config.field.overlay.max_text_lines.description",
         "overlay.thinking_delay_ms" => "config.field.overlay.thinking_delay_ms.description",
+        "palette" => "config.field.theme.palette.description",
+        "foreground" => "config.field.theme.foreground.description",
+        "muted" => "config.field.theme.muted.description",
+        "accent" => "config.field.theme.accent.description",
+        "success" => "config.field.theme.success.description",
+        "warning" => "config.field.theme.warning.description",
+        "error" => "config.field.theme.error.description",
+        "info" => "config.field.theme.info.description",
+        "highlight" => "config.field.theme.highlight.description",
+        "border" => "config.field.theme.border.description",
+        "border_focus" => "config.field.theme.border_focus.description",
+        "segment" => "config.field.theme.segment.description",
+        "overlay.glass" => "config.field.theme.overlay.glass.description",
+        "overlay.glass.variant" => "config.field.theme.overlay.glass.variant.description",
+        "overlay.glass.style" => "config.field.theme.overlay.glass.style.description",
+        "overlay.glass.subdued" => "config.field.theme.overlay.glass.subdued.description",
+        "overlay.surface" => "config.field.theme.overlay.surface.description",
+        "overlay.surface.background" => "config.field.theme.overlay.surface.background.description",
+        "overlay.surface.background_alpha" => {
+            "config.field.theme.overlay.surface.background_alpha.description"
+        }
+        "overlay.surface.background_blur_radius" => {
+            "config.field.theme.overlay.surface.background_blur_radius.description"
+        }
+        "overlay.surface.corner_radius" => {
+            "config.field.theme.overlay.surface.corner_radius.description"
+        }
+        "overlay.text" => "config.field.theme.overlay.text.description",
+        "overlay.text.primary" => "config.field.theme.overlay.text.primary.description",
+        "overlay.text.secondary" => "config.field.theme.overlay.text.secondary.description",
+        "overlay.text.tertiary" => "config.field.theme.overlay.text.tertiary.description",
+        "overlay.text.segment" => "config.field.theme.overlay.text.segment.description",
+        "overlay.text.notice" => "config.field.theme.overlay.text.notice.description",
+        "overlay.text.error" => "config.field.theme.overlay.text.error.description",
+        "overlay.state" => "config.field.theme.overlay.state.description",
+        "overlay.state.idle" => "config.field.theme.overlay.state.idle.description",
+        "overlay.state.connecting" => "config.field.theme.overlay.state.connecting.description",
+        "overlay.state.recording" => "config.field.theme.overlay.state.recording.description",
+        "overlay.state.thinking" => "config.field.theme.overlay.state.thinking.description",
+        "overlay.state.stopping" => "config.field.theme.overlay.state.stopping.description",
+        "overlay.state.error" => "config.field.theme.overlay.state.error.description",
         "language" => "config.field.language.description",
         "install_assets" => "config.field.install_assets.description",
         "idle_pause" => "config.field.idle_pause.description",
@@ -141,23 +181,15 @@ pub fn main_spec() -> ConfigSpec {
         .field(field(FieldSpec::table, "profile").optional().free_table())
         .field(field(FieldSpec::table, "ui").optional())
         .field(field(FieldSpec::string, "ui.language").optional())
+        .field(field(FieldSpec::string, "ui.theme").optional())
+        .field(field(FieldSpec::string, "ui.theme_tui").optional())
+        .field(field(FieldSpec::string, "ui.theme_overlay").optional())
         .field(field(FieldSpec::table, "overlay").optional())
         .field(
             field(FieldSpec::string, "overlay.position")
                 .optional()
                 .allowed_values(["top", "middle", "bottom"]),
         )
-        .field(field(FieldSpec::integer, "overlay.glass_variant").optional())
-        .field(
-            field(FieldSpec::string, "overlay.glass_style")
-                .optional()
-                .allowed_values(["clear", "blur"]),
-        )
-        .field(field(FieldSpec::integer, "overlay.background_rgb").optional())
-        .field(field(FieldSpec::float, "overlay.background_alpha").optional())
-        .field(field(FieldSpec::integer, "overlay.background_blur_radius").optional())
-        .field(field(FieldSpec::float, "overlay.corner_radius").optional())
-        .field(field(FieldSpec::integer, "overlay.subdued").optional())
         .field(field(FieldSpec::integer, "overlay.max_text_lines").optional())
         .field(field(FieldSpec::integer, "overlay.thinking_delay_ms").optional())
 }
@@ -231,6 +263,52 @@ pub fn post_llm_spec() -> ConfigSpec {
         )
 }
 
+pub fn theme_spec() -> ConfigSpec {
+    ConfigSpec::new("theme")
+        .field(field(FieldSpec::string, "name").optional())
+        .field(field(FieldSpec::table, "palette").optional().free_table())
+        .field(field(FieldSpec::table, "tui").optional())
+        .field(field(FieldSpec::color, "tui.foreground").optional())
+        .field(field(FieldSpec::color, "tui.muted").optional())
+        .field(field(FieldSpec::color, "tui.accent").optional())
+        .field(field(FieldSpec::color, "tui.success").optional())
+        .field(field(FieldSpec::color, "tui.warning").optional())
+        .field(field(FieldSpec::color, "tui.error").optional())
+        .field(field(FieldSpec::color, "tui.info").optional())
+        .field(field(FieldSpec::color, "tui.highlight").optional())
+        .field(field(FieldSpec::color, "tui.border").optional())
+        .field(field(FieldSpec::color, "tui.border_focus").optional())
+        .field(field(FieldSpec::color, "tui.segment").optional())
+        .field(field(FieldSpec::table, "overlay").optional())
+        .field(field(FieldSpec::table, "overlay.glass").optional())
+        .field(field(FieldSpec::integer, "overlay.glass.variant").optional())
+        .field(
+            field(FieldSpec::string, "overlay.glass.style")
+                .optional()
+                .allowed_values(["clear", "blur"]),
+        )
+        .field(field(FieldSpec::integer, "overlay.glass.subdued").optional())
+        .field(field(FieldSpec::table, "overlay.surface").optional())
+        .field(field(FieldSpec::color, "overlay.surface.background").optional())
+        .field(field(FieldSpec::float, "overlay.surface.background_alpha").optional())
+        .field(field(FieldSpec::integer, "overlay.surface.background_blur_radius").optional())
+        .field(field(FieldSpec::float, "overlay.surface.corner_radius").optional())
+        .field(field(FieldSpec::table, "overlay.text").optional())
+        .field(field(FieldSpec::color, "overlay.text.primary").optional())
+        .field(field(FieldSpec::color, "overlay.text.secondary").optional())
+        .field(field(FieldSpec::color, "overlay.text.tertiary").optional())
+        .field(field(FieldSpec::color, "overlay.text.segment").optional())
+        .field(field(FieldSpec::color, "overlay.text.notice").optional())
+        .field(field(FieldSpec::color, "overlay.text.error").optional())
+        .field(field(FieldSpec::table, "overlay.state").optional())
+        .field(field(FieldSpec::color, "overlay.state.idle").optional())
+        .field(field(FieldSpec::color, "overlay.state.connecting").optional())
+        .field(field(FieldSpec::color, "overlay.state.recording").optional())
+        .field(field(FieldSpec::color, "overlay.state.thinking").optional())
+        .field(field(FieldSpec::color, "overlay.state.stopping").optional())
+        .field(field(FieldSpec::color, "overlay.state.error").optional())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +339,7 @@ mod tests {
             SchemaId::Profile,
             SchemaId::PostRule,
             SchemaId::PostLlm,
+            SchemaId::Theme,
         ] {
             for field in spec_for(id).fields() {
                 assert!(

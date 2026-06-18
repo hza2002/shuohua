@@ -47,6 +47,12 @@ fn write_templates(out: &Path, lang: crate::i18n::Lang) -> Result<()> {
             crate::config::template::render_with_lang(template, lang),
         )?;
     }
+    for preset in crate::config::template::theme_presets() {
+        write_new_file(
+            &out.join(preset.path),
+            crate::config::template::render_theme_preset(preset),
+        )?;
+    }
     Ok(())
 }
 
@@ -85,6 +91,10 @@ mod tests {
         assert!(dir.join("asr/doubao.toml").exists());
         assert!(dir.join("post/rule/zh_filter.toml").exists());
         assert!(dir.join("post/llm/openai.toml").exists());
+        assert!(dir.join("theme/gruvbox-dark.toml").exists());
+        assert!(dir.join("theme/catppuccin-latte.toml").exists());
+        assert!(!dir.join("theme/light.toml").exists());
+        assert!(!dir.join("theme/default.toml").exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 

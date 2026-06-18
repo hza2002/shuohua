@@ -12,6 +12,7 @@ pub enum DiagnosticScope {
     Profile,
     AsrProvider,
     PostProcessor,
+    Theme,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +125,7 @@ pub fn run_local_from_config_home(config_home: &Path) -> ConfigDiagnosticReport 
     let profiles = scan_profiles(&mut report, &root, main.as_ref());
     scan_asr(&mut report, &root);
     scan_post(&mut report, &root, &referenced_llm_components(&profiles));
+    scan_theme(&mut report, &root);
     report
 }
 
@@ -324,6 +326,33 @@ fn scan_post(report: &mut ConfigDiagnosticReport, root: &Path, referenced_llm: &
                 })
                 .collect();
             push_spec_diagnostics(report, DiagnosticScope::PostProcessor, &path, diagnostics);
+        }
+    }
+}
+
+fn scan_theme(report: &mut ConfigDiagnosticReport, root: &Path) {
+    for path in toml_files(&root.join("theme")) {
+        let Some(value) = read_parse_validate(
+            report,
+            DiagnosticScope::Theme,
+            &path,
+            &schema::spec_for(SchemaId::Theme),
+        ) else {
+            continue;
+        };
+        match value.try_into::<crate::config::theme::ThemeFile>() {
+            Ok(theme) => {
+                if let Err(error) = crate::config::theme::validate_theme_file(&theme) {
+                    push_error(report, DiagnosticScope::Theme, &path, "", error.to_string());
+                }
+            }
+            Err(error) => push_error(
+                report,
+                DiagnosticScope::Theme,
+                &path,
+                "",
+                format!("parse theme: {error}"),
+            ),
         }
     }
 }

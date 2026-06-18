@@ -92,7 +92,7 @@ pub fn load_from_config_home(config_home: &Path) -> ConfigInventory {
     push_profiles(&mut inventory, &root);
     push_post(&mut inventory, &root);
     push_asr(&mut inventory, &root);
-    push_theme_placeholder(&mut inventory, &root);
+    push_theme(&mut inventory, &root);
     push_overview(&mut inventory);
     inventory
 }
@@ -116,19 +116,19 @@ fn push_overview(inventory: &mut ConfigInventory) {
 
 fn push_main(inventory: &mut ConfigInventory, root: &Path) {
     let path = root.join("config.toml");
-    match crate::config::load_from(&path) {
-        Ok(cfg) => push_entry_with_field(
+    match read_toml(&path).and_then(|value| {
+        value
+            .as_table()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("expected top-level table"))
+    }) {
+        Ok(table) => push_table_fields(
             inventory,
             InventoryModule::Main,
             "config",
-            Some("hotkey.trigger".to_string()),
-            format!(
-                "hotkey.trigger={} | voice.vad.backend={:?} | post.timeout_ms={}",
-                cfg.hotkey.trigger, cfg.voice.vad.backend, cfg.post.timeout_ms
-            )
-            .to_lowercase(),
-            path,
-            InventoryStatus::Ok,
+            None,
+            &table,
+            &path,
         ),
         Err(e) => push_entry(
             inventory,
@@ -144,40 +144,20 @@ fn push_main(inventory: &mut ConfigInventory, root: &Path) {
 fn push_profiles(inventory: &mut ConfigInventory, root: &Path) {
     for path in toml_files(&root.join("profile")) {
         let source = path.clone();
-        match read_toml(&path) {
-            Ok(value) => {
-                let name = value
-                    .get("name")
-                    .and_then(toml::Value::as_str)
-                    .unwrap_or("-");
-                let provider = value
-                    .get("asr")
-                    .and_then(toml::Value::as_table)
-                    .and_then(|asr| asr.get("provider"))
-                    .and_then(toml::Value::as_str)
-                    .unwrap_or("-");
-                let chain = value
-                    .get("post")
-                    .and_then(toml::Value::as_table)
-                    .and_then(|post| post.get("chain"))
-                    .and_then(toml::Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(toml::Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(" -> ")
-                    })
-                    .unwrap_or_else(|| "-".to_string());
-                push_entry(
-                    inventory,
-                    InventoryModule::Profile,
-                    file_stem(&path, "profile"),
-                    format!("{name} | {provider} | {chain}"),
-                    source,
-                    InventoryStatus::Ok,
-                );
-            }
+        match read_toml(&path).and_then(|value| {
+            value
+                .as_table()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("expected top-level table"))
+        }) {
+            Ok(table) => push_table_fields(
+                inventory,
+                InventoryModule::Profile,
+                &file_stem(&path, "profile"),
+                None,
+                &table,
+                &source,
+            ),
             Err(e) => push_entry(
                 inventory,
                 InventoryModule::Profile,
@@ -205,16 +185,45 @@ fn push_asr(inventory: &mut ConfigInventory, root: &Path) {
     }
 }
 
-fn push_theme_placeholder(inventory: &mut ConfigInventory, root: &Path) {
-    let path = root.join("theme");
-    push_entry(
-        inventory,
-        InventoryModule::Theme,
-        "theme",
-        "reserved".to_string(),
-        path,
-        InventoryStatus::Missing,
-    );
+fn push_theme(inventory: &mut ConfigInventory, root: &Path) {
+    let mut found = false;
+    for path in toml_files(&root.join("theme")) {
+        found = true;
+        let source = path.clone();
+        match read_toml(&path).and_then(|value| {
+            value
+                .as_table()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("expected top-level table"))
+        }) {
+            Ok(table) => push_table_fields(
+                inventory,
+                InventoryModule::Theme,
+                &file_stem(&path, "theme"),
+                None,
+                &table,
+                &source,
+            ),
+            Err(e) => push_entry(
+                inventory,
+                InventoryModule::Theme,
+                file_stem(&path, "theme"),
+                format!("parse error: {e}"),
+                source,
+                InventoryStatus::Error,
+            ),
+        }
+    }
+    if !found {
+        push_entry(
+            inventory,
+            InventoryModule::Theme,
+            crate::config::theme::DEFAULT_THEME_NAME,
+            "builtin default",
+            root.join("theme/gruvbox-dark.toml"),
+            InventoryStatus::Ok,
+        );
+    }
 }
 
 fn push_toml_summary(inventory: &mut ConfigInventory, module: InventoryModule, path: &Path) {
@@ -251,6 +260,43 @@ fn push_toml_summary(inventory: &mut ConfigInventory, module: InventoryModule, p
             path.to_path_buf(),
             InventoryStatus::Error,
         ),
+    }
+}
+
+fn push_table_fields(
+    inventory: &mut ConfigInventory,
+    module: InventoryModule,
+    key_prefix: &str,
+    field_prefix: Option<&str>,
+    table: &toml::map::Map<String, toml::Value>,
+    path: &Path,
+) {
+    for (key, value) in table {
+        let field_path = match field_prefix {
+            Some(prefix) => format!("{prefix}.{key}"),
+            None => key.clone(),
+        };
+        let entry_key = format!("{key_prefix}.{field_path}");
+        if let Some(table) = value.as_table() {
+            push_table_fields(
+                inventory,
+                module,
+                key_prefix,
+                Some(&field_path),
+                table,
+                path,
+            );
+        } else {
+            push_entry_with_field(
+                inventory,
+                module,
+                entry_key,
+                Some(field_path.clone()),
+                display_value(key, value),
+                path.to_path_buf(),
+                InventoryStatus::Ok,
+            );
+        }
     }
 }
 
@@ -362,6 +408,7 @@ mod tests {
         fs::create_dir_all(root.join("asr")).unwrap();
         fs::create_dir_all(root.join("post/rule")).unwrap();
         fs::create_dir_all(root.join("post/llm")).unwrap();
+        fs::create_dir_all(root.join("theme")).unwrap();
         fs::write(
             root.join("config.toml"),
             r#"
@@ -395,22 +442,33 @@ chain = ["rule:zh_filter", "llm:deepseek"]
             "type = \"llm\"\nname = \"deepseek\"\napi_key = \"sk-test\"\nmodel = \"deepseek-chat\"\nprompt = \"{{text}}\"\n",
         )
         .unwrap();
+        fs::write(
+            root.join("theme/gruvbox-dark.toml"),
+            "name = \"Gruvbox Dark\"\n[tui]\nhighlight = \"fg0\"\n",
+        )
+        .unwrap();
 
         let inventory = load_from_config_home(&home);
 
         assert_eq!(inventory.modules.len(), 6);
-        assert!(inventory
-            .entries()
-            .any(|entry| entry.module == InventoryModule::Main
-                && entry.key == "config"
+        assert!(inventory.entries().any(|entry| {
+            entry.module == InventoryModule::Main
+                && entry.key == "config.hotkey.trigger"
+                && entry.field_path.as_deref() == Some("hotkey.trigger")
                 && entry.status == InventoryStatus::Ok
-                && entry.summary.contains("hotkey.trigger=f16")));
+                && entry.summary == "f16"
+        }));
         assert!(inventory.entries().any(|entry| {
             entry.module == InventoryModule::Profile
-                && entry.key == "default"
-                && entry
-                    .summary
-                    .contains("default | apple | rule:zh_filter -> llm:deepseek")
+                && entry.key == "default.asr.provider"
+                && entry.field_path.as_deref() == Some("asr.provider")
+                && entry.summary.contains("apple")
+        }));
+        assert!(inventory.entries().any(|entry| {
+            entry.module == InventoryModule::Profile
+                && entry.key == "default.post.chain"
+                && entry.field_path.as_deref() == Some("post.chain")
+                && entry.summary.contains("llm:deepseek")
         }));
         assert!(inventory.entries().any(|entry| {
             entry.module == InventoryModule::AsrProvider
@@ -422,6 +480,12 @@ chain = ["rule:zh_filter", "llm:deepseek"]
             entry.module == InventoryModule::PostProcessor
                 && entry.key == "deepseek.api_key"
                 && entry.summary == "<set>"
+        }));
+        assert!(inventory.entries().any(|entry| {
+            entry.module == InventoryModule::Theme
+                && entry.key == "gruvbox-dark.tui.highlight"
+                && entry.field_path.as_deref() == Some("tui.highlight")
+                && entry.summary == "fg0"
         }));
 
         let _ = fs::remove_dir_all(home);

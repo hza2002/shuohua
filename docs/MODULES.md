@@ -55,7 +55,11 @@ src/
 ├── voice/
 │   ├── mod.rs
 │   ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 可选 wav 留存
-│   ├── finish.rs                        # 一次录音生命周期：单/多 session 两条主路径 + post pipeline + dispatch
+│   ├── finish.rs                        # 一次录音生命周期：单/多 session 编排顶层
+│   ├── capture.rs                       # SegmentCapture / SessionCapture 数据模型 + samples_to_ms / instant_to_datetime
+│   ├── finalize.rs                      # provider session 收口：is_last → Final/Segment/Done/timeout
+│   ├── history_build.rs                 # HistoryRecord 构造 / append + PipelineStep → PipelineStepHistory
+│   ├── post_dispatch.rs                 # post chain 执行 + dispatch::dispatch → DispatchOutcome
 │   ├── meter.rs                         # 从已有 PCM/VAD 流聚合 50ms audio meter，供 UDS/TUI 画 waveform
 │   ├── observer.rs                      # dev observer：VAD shadow trace sidecar（feature=dev；默认 ZST no-op）
 │   ├── vad.rs                           # VAD frame/state 边界 + speech/silence hysteresis controller
@@ -90,5 +94,7 @@ src/
 ## 当前实现状态
 
 多 session ASR 已接入主录音流程。`finish::run_recording` 入口按 `params.idle_pause && params.vad.backend == Silero` 二选一分派到 `run_single_session_recording` 或 `run_multi_session_recording`。`voice/silero.rs`、`voice/timeline.rs`、`voice/vad.rs` 都是默认 build 编译。`voice/observer.rs` 是 `feature=dev` 下的 trace observer，默认 build 是 ZST no-op。`cli/vad_probe.rs` 已删除；离线 threshold 评估改用保留 WAV + trace 后处理脚本。
+
+`finish.rs` 是 voice 子系统编排顶层，依赖 `capture / finalize / history_build / post_dispatch`，无模块反向依赖。`SegmentCapture / SessionCapture` 仅 `pub(crate)` 暴露在 voice 模块内部。
 
 每条路径的详细职责见 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)；关键设计决策见 [DESIGN.md §2](DESIGN.md#2-关键设计决策)。

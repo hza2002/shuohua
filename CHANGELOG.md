@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-19 - Release history and retained audio formats
+
+- Reset the current history record structure to schema version 1 as the first
+  public release baseline; development history is intentionally not migrated.
+- Replaced boolean retained-audio configuration with `off`, `lossless` (FLAC),
+  and `compact` (AAC-LC 32 kbps). Compact audio measured about 75% smaller than
+  FLAC on local voice recordings.
+- Added temporary-WAV conversion cleanup, `audio_save` feedback, and TUI lookup
+  for the single `.flac` or `.m4a` file associated with a history record ID.
+
 ## 2026-06-19 - Voice completion failure handling
 
 - Treat ASR event-stream closure before `Done` and PCM delivery failures during

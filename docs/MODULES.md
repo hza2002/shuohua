@@ -54,7 +54,8 @@ src/
 │   └── llm.rs                           # LlmCleanup；OpenAI-compatible / Anthropic native 一次性调用
 ├── voice/
 │   ├── mod.rs
-│   ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 可选 wav 留存
+│   ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 临时 WAV writer
+│   ├── audio.rs                         # retained audio：临时 WAV → FLAC/AAC，路径与失败清理
 │   ├── finish.rs                        # 一次录音生命周期：单/多 session 编排顶层
 │   ├── capture.rs                       # SegmentCapture / SessionCapture 数据模型 + samples_to_ms / instant_to_datetime
 │   ├── finalize.rs                      # provider session 收口：is_last → Final/Segment/Done/timeout

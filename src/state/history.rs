@@ -168,7 +168,7 @@ mod tests {
 
     fn sample_record() -> HistoryRecord {
         HistoryRecord {
-            version: 2,
+            version: 1,
             id: "01HXYZABCDEF0123456789ABCD".to_string(),
             started_at: datetime!(2026-06-13 12:00:00 UTC),
             ended_at: datetime!(2026-06-13 12:00:08 UTC),
@@ -201,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn append_writes_one_json_line_with_v2_schema() {
+    fn append_writes_one_json_line_with_v1_schema() {
         let dir = std::env::temp_dir().join(format!("shuohua-history-test-{}", ulid::Ulid::new()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("2026-06.jsonl");
@@ -213,7 +213,7 @@ mod tests {
         assert!(body.ends_with('\n'));
 
         let json: serde_json::Value = serde_json::from_str(body.trim_end()).unwrap();
-        assert_eq!(json["version"], 2);
+        assert_eq!(json["version"], 1);
         assert_eq!(json["text"], "今天天气真好，我们出去走走。");
         assert!(json["text_stats"]["words"].as_u64().unwrap() > 0);
         assert!(json["text_stats"].get("chars").is_none());
@@ -279,7 +279,7 @@ mod tests {
         let record = sample_record();
         let s = serde_json::to_string(&record).unwrap();
         let json: serde_json::Value = serde_json::from_str(&s).unwrap();
-        assert_eq!(json["version"], 2);
+        assert_eq!(json["version"], 1);
         let back: HistoryRecord = serde_json::from_str(&s).unwrap();
         assert_eq!(record, back);
     }

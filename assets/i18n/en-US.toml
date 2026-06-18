@@ -11,6 +11,7 @@ word_count = "{n} words"
 step_timeout = "{name} timed out, skipped"
 step_failed = "{name} failed, skipped"
 history_save_failed = "Text was delivered, but history could not be saved"
+audio_save_failed = "Recording audio could not be saved"
 
 [error]
 no_audio = "No microphone audio — check input device"
@@ -25,7 +26,7 @@ dispatch = "Paste failed — text saved in history"
 "hotkey.cancel.description" = "Hotkey that cancels the active recording."
 "voice.description" = "Recording and output behavior."
 "voice.stop_delay_ms.description" = "Milliseconds of tail audio kept after stopping."
-"voice.record_audio.description" = "Save retained recording audio for history review."
+"voice.record_audio.description" = "off=disabled; lossless=FLAC; compact=AAC 32 kbps, about 75% smaller than FLAC"
 "voice.auto_paste.description" = "Paste recognized text automatically after recognition."
 "voice.vad.description" = "Voice activity detection settings."
 "voice.vad.backend.description" = "VAD backend: off disables pause/resume, silero enables local VAD."
@@ -207,7 +208,7 @@ record_missing = "record for pending delete no longer exists"
 
 [tui.confirm]
 delete_audio = "Delete this audio file? Press y/Enter to confirm, n/Esc to cancel"
-delete_audio_detail = "Delete {id}.wav? This only removes the audio file; history JSONL stays. Press y/Enter to confirm, n/Esc to cancel."
+delete_audio_detail = "Delete the audio for {id}? This only removes the audio file; history JSONL stays. Press y/Enter to confirm, n/Esc to cancel."
 cancelled = "cancelled"
 
 [tui.error]

@@ -11,6 +11,7 @@ word_count = "{n}字"
 step_timeout = "{name} 超时，已跳过"
 step_failed = "{name} 失败，已跳过"
 history_save_failed = "文本已输出，但历史记录保存失败"
+audio_save_failed = "录音音频保存失败"
 
 [error]
 no_audio = "没有收到麦克风音频，请检查输入设备"
@@ -25,7 +26,7 @@ dispatch = "粘贴失败，可在历史里找回"
 "hotkey.cancel.description" = "用于取消当前录音的快捷键。"
 "voice.description" = "录音和输出行为。"
 "voice.stop_delay_ms.description" = "停止后保留的尾音毫秒数。"
-"voice.record_audio.description" = "是否保存录音音频，方便在历史里回看。"
+"voice.record_audio.description" = "off=不保存；lossless=FLAC 无损；compact=AAC 32 kbps，约比 FLAC 再省 75% 空间"
 "voice.auto_paste.description" = "识别完成后是否自动粘贴文本。"
 "voice.vad.description" = "语音活动检测设置。"
 "voice.vad.backend.description" = "VAD 后端：off 关闭暂停/恢复，silero 启用本地 VAD。"
@@ -207,7 +208,7 @@ record_missing = "待删除记录已不存在"
 
 [tui.confirm]
 delete_audio = "确认删除音频？按 y/Enter 确认，n/Esc 取消"
-delete_audio_detail = "确认删除 {id}.wav？只删除音频文件，不删除 history JSONL。按 y/Enter 确认，n/Esc 取消。"
+delete_audio_detail = "确认删除 {id} 对应的音频？只删除音频文件，不删除 history JSONL。按 y/Enter 确认，n/Esc 取消。"
 cancelled = "已取消"
 
 [tui.error]

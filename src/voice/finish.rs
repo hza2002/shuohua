@@ -35,8 +35,7 @@ use crate::voice::observer::{
     TraceStart,
 };
 use crate::voice::post_dispatch::dispatch_with_post_chain;
-use crate::voice::{recorder, SessionControl};
-use std::path::PathBuf;
+use crate::voice::{audio, recorder, SessionControl};
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep_until, Instant as TokioInstant};
 
@@ -58,7 +57,7 @@ const FIRST_AUDIO_TIMEOUT_MS: u64 = 1000;
 /// 在安静房间的本底噪声（约 -50 ~ -60 dBFS，对应 i16 ≈ 32~100），同时严格
 /// 大于"完美零"（合盖 / 设备被屏蔽时的 silence buffer 是精确 0）。
 const MIN_NONZERO_AMPLITUDE: i16 = 8;
-const HISTORY_NOTICE_TTL_MS: u32 = 3_000;
+const NOTICE_TTL_MS: u32 = 3_000;
 
 /// 当前 PCM 帧里是否至少有一个样本超过静音阈值。
 fn frame_has_signal(samples: &[i16]) -> bool {
@@ -115,7 +114,7 @@ fn send_error_overlay(params: &SessionParams, message: String) {
 
 pub struct SessionParams {
     pub auto_paste: bool,
-    pub record_audio: bool,
+    pub record_audio: crate::config::RecordAudioMode,
     pub vad_trace: bool,
     /// provider 私有配置，源于 `asr/<provider>.toml.idle_pause`。
     /// false 时 voice 不做多 session 切分。
@@ -199,26 +198,16 @@ async fn run_single_session_recording(
         },
     );
 
-    let audio_path = if params.record_audio {
-        match prepare_audio_path(&recording_id) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                tracing::warn!(
-                    recording_id = %recording_id,
-                    error = ?e,
-                    "record_audio enabled but audio path preparation failed"
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
-    if let Some(p) = &audio_path {
-        tracing::debug!(recording_id = %recording_id, path = %p.display(), "record audio wav enabled");
+    let audio_output = prepare_audio_output(&params, &recording_id);
+    if let Some(output) = &audio_output {
+        tracing::debug!(
+            recording_id = %recording_id,
+            path = %output.wav_path.display(),
+            "retained audio temporary wav enabled"
+        );
     }
 
-    let mut rec = match recorder::start(audio_path) {
+    let mut rec = match recorder::start(audio_output) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(recording_id = %recording_id, error = ?e, "recorder start failed");
@@ -245,7 +234,7 @@ async fn run_single_session_recording(
         Ok(t) => t,
         Err(err) => {
             tracing::error!(recording_id = %recording_id, error = %err, "ASR open failed");
-            rec.stop();
+            finish_retained_audio(&params, &recording_id, &mut rec).await;
             observe_asr_error(&mut trace, recording_started_instant, err.clone());
             observe_finish_ms(&mut trace, "asr_open_error", 0);
             params.state.set_error(Some(recording_id));
@@ -315,7 +304,7 @@ async fn run_single_session_recording(
                     timeout_ms = FIRST_AUDIO_TIMEOUT_MS,
                     "no microphone audio received before timeout"
                 );
-                rec.stop();
+                finish_retained_audio(&params, &recording_id, &mut rec).await;
                 let _ = session.close().await;
                 observe_finish(&mut trace, "no_audio", audio_samples_sent);
                 params.state.set_error(Some(recording_id));
@@ -376,7 +365,7 @@ async fn run_single_session_recording(
                         observe_asr_error(&mut trace, recording_started_instant, err.clone());
                         params.state.set_error(Some(recording_id.clone()));
                         send_error_overlay(&params, crate::t!("error.asr_runtime"));
-                        rec.stop();
+                        finish_retained_audio(&params, &recording_id, &mut rec).await;
                         let _ = session.close().await;
                         let ended_at = time::OffsetDateTime::now_utc();
                         let asr_text: String = pending_segments
@@ -479,6 +468,7 @@ async fn run_single_session_recording(
     }
 
     let _ = session.close().await;
+    finish_retained_audio(&params, &recording_id, &mut rec).await;
     let provider_name = provider.name().to_string();
     let raw_text = session_text_from_parts(&pending_segments, session_final_text.as_deref());
     if cancel_requested {
@@ -685,23 +675,9 @@ async fn run_multi_session_recording(
         },
     );
 
-    let audio_path = if params.record_audio {
-        match prepare_audio_path(&recording_id) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                tracing::warn!(
-                    recording_id = %recording_id,
-                    error = ?e,
-                    "record_audio enabled but audio path preparation failed"
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
+    let audio_output = prepare_audio_output(&params, &recording_id);
 
-    let mut rec = match recorder::start(audio_path) {
+    let mut rec = match recorder::start(audio_output) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(recording_id = %recording_id, error = ?e, "recorder start failed");
@@ -720,7 +696,7 @@ async fn run_multi_session_recording(
         Ok(v) => v,
         Err(e) => {
             tracing::error!(recording_id = %recording_id, error = ?e, "Silero VAD init failed");
-            rec.stop();
+            finish_retained_audio(&params, &recording_id, &mut rec).await;
             observe_finish_ms(&mut trace, "vad_init_error", 0);
             params.state.set_error(Some(recording_id));
             send_error_overlay(&params, crate::t!("error.asr_runtime"));
@@ -749,7 +725,7 @@ async fn run_multi_session_recording(
         Ok(t) => t,
         Err(err) => {
             tracing::error!(recording_id = %recording_id, error = %err, "ASR open failed");
-            rec.stop();
+            finish_retained_audio(&params, &recording_id, &mut rec).await;
             observe_asr_error(&mut trace, recording_started_instant, err.clone());
             observe_finish_ms(&mut trace, "asr_open_error", 0);
             params.state.set_error(Some(recording_id));
@@ -855,7 +831,7 @@ async fn run_multi_session_recording(
                             timeout_ms = FIRST_AUDIO_TIMEOUT_MS,
                             "no microphone audio received before timeout"
                         );
-                        rec.stop();
+                        finish_retained_audio(&params, &recording_id, &mut rec).await;
                         if let Some(s) = session.take() { let _ = s.close().await; }
                         observe_finish(&mut trace, "no_audio", total_audio_samples);
                         params.state.set_error(Some(recording_id));
@@ -1278,6 +1254,7 @@ async fn run_multi_session_recording(
     if let Some(s) = session.take() {
         let _ = s.close().await;
     }
+    finish_retained_audio(&params, &recording_id, &mut rec).await;
 
     let provider_name = provider.name().to_string();
     let session_texts = session_texts(&sessions);
@@ -1603,19 +1580,60 @@ async fn cancel_session(
     }
 }
 
-fn prepare_audio_path(recording_id: &str) -> anyhow::Result<PathBuf> {
-    let base = if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
-        PathBuf::from(xdg).join("shuohua/audio")
-    } else {
-        PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/state/shuohua/audio")
-    };
-    std::fs::create_dir_all(&base)?;
-    Ok(base.join(format!("{recording_id}.wav")))
-}
-
 fn overlay_send(params: &SessionParams, cmd: OverlayCmd) {
     if let Some(overlay) = &params.overlay {
         overlay.send(cmd);
+    }
+}
+
+fn prepare_audio_output(params: &SessionParams, recording_id: &str) -> Option<audio::AudioOutput> {
+    match audio::prepare(recording_id, params.record_audio) {
+        Ok(output) => output,
+        Err(error) => {
+            publish_audio_failure(&params.state, params.overlay.as_ref(), recording_id, error);
+            None
+        }
+    }
+}
+
+async fn finish_retained_audio(
+    params: &SessionParams,
+    recording_id: &str,
+    recorder: &mut recorder::RecordingStream,
+) {
+    recorder.stop();
+    match recorder.finish_audio().await {
+        Ok(Some(path)) => {
+            tracing::info!(recording_id, path = %path.display(), "retained audio saved");
+        }
+        Ok(None) => {}
+        Err(error) => {
+            publish_audio_failure(&params.state, params.overlay.as_ref(), recording_id, error);
+        }
+    }
+}
+
+fn publish_audio_failure(
+    state: &StateStore,
+    overlay: Option<&OverlayHandle>,
+    recording_id: &str,
+    error: anyhow::Error,
+) {
+    tracing::error!(
+        recording_id,
+        error = ?error,
+        "retained audio save failed"
+    );
+    state.error(
+        Some(recording_id.to_string()),
+        "audio_save",
+        format!("{error:#}"),
+    );
+    if let Some(overlay) = overlay {
+        overlay.send(OverlayCmd::Notice {
+            text: crate::t!("notice.audio_save_failed"),
+            ttl_ms: NOTICE_TTL_MS,
+        });
     }
 }
 
@@ -1641,7 +1659,7 @@ fn publish_history_result(
             if let Some(overlay) = overlay {
                 overlay.send(OverlayCmd::Notice {
                     text: crate::t!("notice.history_save_failed"),
-                    ttl_ms: HISTORY_NOTICE_TTL_MS,
+                    ttl_ms: NOTICE_TTL_MS,
                 });
             }
         }
@@ -1709,7 +1727,41 @@ mod tests {
         match overlay_rx.try_recv().unwrap() {
             OverlayCmd::Notice { text, ttl_ms } => {
                 assert_eq!(text, crate::t!("notice.history_save_failed"));
-                assert_eq!(ttl_ms, HISTORY_NOTICE_TTL_MS);
+                assert_eq!(ttl_ms, NOTICE_TTL_MS);
+            }
+            other => panic!("unexpected overlay command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audio_save_failure_emits_error_and_notice() {
+        let state = StateStore::new();
+        let (_, mut state_rx) = state.subscribe_with_snapshot();
+        let (overlay, mut overlay_rx) = OverlayHandle::channel();
+
+        publish_audio_failure(
+            &state,
+            Some(&overlay),
+            "01HXYZ",
+            anyhow::anyhow!("encode failed"),
+        );
+
+        match state_rx.try_recv().unwrap() {
+            crate::state::StateEvent::Error {
+                recording_id,
+                kind,
+                msg,
+            } => {
+                assert_eq!(recording_id.as_deref(), Some("01HXYZ"));
+                assert_eq!(kind, "audio_save");
+                assert!(msg.contains("encode failed"));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        match overlay_rx.try_recv().unwrap() {
+            OverlayCmd::Notice { text, ttl_ms } => {
+                assert_eq!(text, crate::t!("notice.audio_save_failed"));
+                assert_eq!(ttl_ms, NOTICE_TTL_MS);
             }
             other => panic!("unexpected overlay command: {other:?}"),
         }

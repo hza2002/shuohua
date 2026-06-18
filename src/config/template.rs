@@ -349,7 +349,7 @@ const CONFIG_VALUES: &[(&str, TemplateValue)] = &[
         "voice",
         TemplateValue::Table(&[
             ("stop_delay_ms", TemplateValue::Integer(800)),
-            ("record_audio", TemplateValue::Bool(false)),
+            ("record_audio", TemplateValue::String("off")),
             ("auto_paste", TemplateValue::Bool(true)),
         ]),
     ),
@@ -1523,6 +1523,21 @@ mod tests {
             toml::from_str::<toml::Value>(&render(template))
                 .unwrap_or_else(|e| panic!("{} renders invalid TOML: {e}", template.id));
         }
+    }
+
+    #[test]
+    fn config_template_documents_record_audio_modes_in_one_comment() {
+        let body = render_with_lang(
+            registry()
+                .iter()
+                .find(|template| template.id == "config")
+                .unwrap(),
+            crate::i18n::Lang::ZhCN,
+        );
+
+        assert!(body.contains(
+            "# off=不保存；lossless=FLAC 无损；compact=AAC 32 kbps，约比 FLAC 再省 75% 空间\nrecord_audio = \"off\""
+        ));
     }
 
     #[test]

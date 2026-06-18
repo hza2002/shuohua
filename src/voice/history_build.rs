@@ -1,6 +1,6 @@
 //! HistoryRecord 构造与落盘。
 //!
-//! 从 [`SessionCapture`] + post pipeline + status 构造 schema v2 record，
+//! 从 [`SessionCapture`] + post pipeline + status 构造 schema v1 record，
 //! append 到 monthly history JSONL。
 //!
 //! 输入数据全部来自 [`crate::voice::capture`] 和 orchestration 状态；本模块不
@@ -55,7 +55,7 @@ pub(crate) fn build_record(input: HistoryInput) -> HistoryRecord {
     };
 
     HistoryRecord {
-        version: 2,
+        version: 1,
         id: input.id,
         started_at: input.started_at,
         ended_at: input.ended_at,
@@ -180,7 +180,7 @@ mod tests {
             error: None,
         };
         let record = build_record(input);
-        assert_eq!(record.version, 2);
+        assert_eq!(record.version, 1);
         assert_eq!(record.text, "alpha beta gamma.");
         assert_eq!(record.asr.text, "alpha beta gamma");
         assert_eq!(record.asr.audio_ms, 1_500);

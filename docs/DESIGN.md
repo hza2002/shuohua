@@ -363,7 +363,7 @@ cancel  = "escape"  # Vim 用户可改成 "escape:double"
 
 [voice]
 stop_delay_ms = 800
-record_audio  = false                        # ← 见 §7
+record_audio = "off" # off=不保存；lossless=FLAC 无损；compact=AAC 32 kbps，约比 FLAC 再省 75% 空间
 
 [dev]
 vad_trace     = false                        # dev-only；需 feature=dev，见 SCHEMA §4
@@ -1070,5 +1070,5 @@ shuohua/
 - **API key 存储**：明文 TOML 是 v1 选择（仓库放模板，用户填）。未来可选 `keychain://` 前缀走 macOS Keychain，但 v1 不做。LLM post 配置用 `api_key = "..."`，不写入 history。
 - **日志**：见 §2.13。正式 daemon log 是诊断日志，不记录识别正文、clipboard 内容、prompt、hotwords 明细、post 输入输出正文或可能含正文的 provider 原始响应。launchd stdout/stderr 只做极早期兜底。
 - **history JSONL 明文**：是设计选择（用户唯一数据源），按本地月份写入 `~/.local/state/shuohua/history/YYYY-MM.jsonl`。用户应当知道并定期清理；v1 不自动清理。
-- **音频留存可选**：`voice.record_audio = false` 是默认。开启时写 `~/.local/state/shuohua/audio/<recording_id>.wav`（跟 history 同一根 state dir，语义 = "用户主动留档，不允许被系统 cache cleanup 清掉"；不用 `/tmp`/`~/.cache`）。文件名 = 该次 recording 的 ULID，跟 history record 天然 join。多 session 情况下整次录音仍是一个 wav（含静音停顿），段边界由 `history.asr.sessions[].started_at/ended_at` 切分。关闭路径完全跳过 wav 写入逻辑，零开销，零额外内存分配。
+- **音频留存可选**：`voice.record_audio = "off"` 是默认；`lossless` 写 `~/.local/state/shuohua/audio/<recording_id>.flac`，`compact` 写 AAC-LC 32 kbps 的 `<recording_id>.m4a`，实测约比 FLAC 再省 75% 空间。实时 callback 只写临时 canonical WAV，recorder worker 在停止后用系统 `/usr/bin/afconvert` 转换并删除临时文件。一次 recording 最多保留一个最终音频文件；转换失败不留 WAV fallback，通过 UDS error + overlay Notice 提醒，但不回滚文本输出。文件名主体 = history ULID，history 不存格式字段。
 - **PostProcessor 隔离**：LLM processor 把识别文本发给第三方 API。doctor 启动时 warn 一次"启用 LLM 后处理意味着文本会发给 {provider}"。

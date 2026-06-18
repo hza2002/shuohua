@@ -2,11 +2,12 @@
 //!
 //! 一次录音一个 [`RecordingStream`]，背后是一个专用 std 线程跑 cpal stream
 //! (cpal::Stream 是 !Send，不能跨线程移动)。callback 把 PCM 帧 push 到 tokio
-//! unbounded mpsc，async 端按需 recv。可选 wav 留存在同一线程里写。
+//! unbounded mpsc，async 端按需 recv。启用 retained audio 时，同一线程先写
+//! 临时 WAV，停止后再交给 `voice::audio` 转成最终 FLAC/AAC。
 //!
 //! Stop 协议：voice 端调 stop()（drop oneshot sender 等价语义），cpal 线程收到
-//! 信号后 drop stream 并 finalize wav。drop stream 时 cpal 自动 drain
-//! callback in-flight 的 buffer。
+//! 信号后 drop stream、finalize 临时 WAV 并完成格式转换。drop stream 时
+//! cpal 自动 drain callback in-flight 的 buffer。
 //!
 //! 这里保留简单的 linear resample：质量对识别足够好，后续只有在真实识别质量
 //! 出问题时才需要升级重采样算法。
@@ -16,7 +17,9 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SupportedStreamConfig};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+
+use crate::voice::audio::AudioOutput;
 
 const DST_RATE_HZ: u32 = 16_000;
 
@@ -24,6 +27,7 @@ pub struct RecordingStream {
     pcm_rx: mpsc::UnboundedReceiver<Vec<i16>>,
     /// drop 这边就告诉 cpal 线程退出。
     stop: Option<std::sync::mpsc::Sender<()>>,
+    audio_result: Option<oneshot::Receiver<Result<Option<PathBuf>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +70,15 @@ impl RecordingStream {
     pub fn try_recv(&mut self) -> Option<Vec<i16>> {
         self.pcm_rx.try_recv().ok()
     }
+
+    pub async fn finish_audio(&mut self) -> Result<Option<PathBuf>> {
+        let Some(receiver) = self.audio_result.take() else {
+            return Ok(None);
+        };
+        receiver
+            .await
+            .context("recorder audio result channel closed")?
+    }
 }
 
 impl Drop for RecordingStream {
@@ -74,17 +87,18 @@ impl Drop for RecordingStream {
     }
 }
 
-/// 启动一路录音。`audio_wav_path = Some(path)` 时把同一份 PCM 留存到 wav；
-/// path 父目录必须已存在（caller 负责 mkdir）。
-pub fn start(audio_wav_path: Option<PathBuf>) -> Result<RecordingStream> {
+/// 启动一路录音。`audio_output = Some(...)` 时把同一份 PCM 写入临时 WAV，
+/// 录音线程停止后转换成最终 retained-audio 文件。
+pub fn start(audio_output: Option<AudioOutput>) -> Result<RecordingStream> {
     let (pcm_tx, pcm_rx) = mpsc::unbounded_channel::<Vec<i16>>();
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
+    let (audio_result_tx, audio_result_rx) = oneshot::channel();
 
     std::thread::Builder::new()
         .name("cpal-recorder".into())
         .spawn(move || {
-            if let Err(e) = run_recorder(pcm_tx, stop_rx, audio_wav_path, ready_tx) {
+            if let Err(e) = run_recorder(pcm_tx, stop_rx, audio_output, ready_tx, audio_result_tx) {
                 tracing::warn!(error = ?e, "recorder thread exited with error");
             }
         })
@@ -98,15 +112,18 @@ pub fn start(audio_wav_path: Option<PathBuf>) -> Result<RecordingStream> {
     Ok(RecordingStream {
         pcm_rx,
         stop: Some(stop_tx),
+        audio_result: Some(audio_result_rx),
     })
 }
 
 fn run_recorder(
     pcm_tx: mpsc::UnboundedSender<Vec<i16>>,
     stop_rx: std::sync::mpsc::Receiver<()>,
-    audio_wav_path: Option<PathBuf>,
+    audio_output: Option<AudioOutput>,
     ready_tx: std::sync::mpsc::Sender<Result<()>>,
+    audio_result_tx: oneshot::Sender<Result<Option<PathBuf>>>,
 ) -> Result<()> {
+    let audio_wav_path = audio_output.as_ref().map(|output| output.wav_path.clone());
     let startup = build_recorder_stream(pcm_tx, audio_wav_path);
     match startup {
         Ok((stream, wav)) => {
@@ -115,15 +132,33 @@ fn run_recorder(
             let _ = stop_rx.recv();
             drop(stream); // cpal drain & close
 
-            if let Ok(mut guard) = wav.lock() {
+            let finalize_result = if let Ok(mut guard) = wav.lock() {
                 if let Some(w) = guard.take() {
-                    w.finalize().context("finalize wav")?;
+                    w.finalize().context("finalize wav")
+                } else {
+                    Ok(())
                 }
-            }
+            } else {
+                Err(anyhow!("retained audio writer lock poisoned"))
+            };
+            let audio_result = match (finalize_result, audio_output) {
+                (Ok(()), Some(output)) => output.finish().map(Some),
+                (Ok(()), None) => Ok(None),
+                (Err(error), Some(output)) => {
+                    output.discard();
+                    Err(error)
+                }
+                (Err(error), None) => Err(error),
+            };
+            let _ = audio_result_tx.send(audio_result);
             Ok(())
         }
         Err(e) => {
             let msg = format!("{e:#}");
+            if let Some(output) = audio_output {
+                output.discard();
+            }
+            let _ = audio_result_tx.send(Err(anyhow!(msg.clone())));
             let _ = ready_tx.send(Err(anyhow!(msg)));
             Err(e)
         }

@@ -171,7 +171,7 @@ fn run_daemon_process() -> Result<()> {
         parsed_cancel = %hotkeys.cancel,
         post_timeout_ms = cfg.post.timeout_ms,
         auto_paste = cfg.voice.auto_paste,
-        record_audio = cfg.voice.record_audio,
+        record_audio = %cfg.voice.record_audio,
         stop_delay_ms = cfg.voice.stop_delay_ms,
         vad_trace = cfg.dev.vad_trace,
         language = %cfg.ui.language,

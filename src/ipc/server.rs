@@ -647,7 +647,7 @@ mod tests {
 
     fn history_record(id: &str, started_at: time::OffsetDateTime, text: &str) -> HistoryRecord {
         HistoryRecord {
-            version: 2,
+            version: 1,
             id: id.to_string(),
             started_at,
             ended_at: started_at + time::Duration::seconds(1),

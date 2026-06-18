@@ -982,7 +982,12 @@ fn confirm_yes(app: &mut App) -> Result<()> {
                 app.status = crate::t!("tui.history.audio.record_missing");
                 return Ok(());
             };
-            let path = audio::audio_path_for_record(record);
+            let info = app.audio_info_for_record(record);
+            if !info.exists() {
+                app.status = crate::t!("tui.history.audio.missing_status");
+                return Ok(());
+            }
+            let path = info.path;
             match audio::delete_audio_path(&path)? {
                 audio::DeleteAudioResult::Deleted => {
                     let info = audio::missing_audio_info_for_record(record);

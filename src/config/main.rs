@@ -8,6 +8,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -43,7 +44,7 @@ pub struct VoiceCfg {
     #[serde(default = "default_stop_delay_ms")]
     pub stop_delay_ms: u32,
     #[serde(default)]
-    pub record_audio: bool,
+    pub record_audio: RecordAudioMode,
     /// true (默认) = 识别完成后立刻 Cmd+V 上屏；false = 只进剪贴板。
     #[serde(default = "default_auto_paste")]
     pub auto_paste: bool,
@@ -51,11 +52,30 @@ pub struct VoiceCfg {
     pub vad: VoiceVadCfg,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordAudioMode {
+    #[default]
+    Off,
+    Lossless,
+    Compact,
+}
+
+impl fmt::Display for RecordAudioMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Off => "off",
+            Self::Lossless => "lossless",
+            Self::Compact => "compact",
+        })
+    }
+}
+
 impl Default for VoiceCfg {
     fn default() -> Self {
         Self {
             stop_delay_ms: default_stop_delay_ms(),
-            record_audio: false,
+            record_audio: RecordAudioMode::Off,
             auto_paste: default_auto_paste(),
             vad: VoiceVadCfg::default(),
         }
@@ -274,7 +294,7 @@ trigger = "f16"
         assert_eq!(cfg.hotkey.trigger, "f16");
         assert_eq!(cfg.hotkey.cancel, "escape");
         assert_eq!(cfg.voice.stop_delay_ms, 800);
-        assert!(!cfg.voice.record_audio);
+        assert_eq!(cfg.voice.record_audio, RecordAudioMode::Off);
         assert!(cfg.voice.auto_paste);
         assert_eq!(cfg.ui.language, "auto");
         assert_eq!(cfg.ui.theme, "gruvbox-dark");
@@ -307,13 +327,34 @@ trigger = "f16"
 
 [voice]
 stop_delay_ms = 1200
-record_audio  = true
+record_audio  = "compact"
 auto_paste    = false
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.voice.stop_delay_ms, 1200);
-        assert!(cfg.voice.record_audio);
+        assert_eq!(cfg.voice.record_audio, RecordAudioMode::Compact);
         assert!(!cfg.voice.auto_paste);
+    }
+
+    #[test]
+    fn parses_all_record_audio_modes() {
+        for (value, expected) in [
+            ("off", RecordAudioMode::Off),
+            ("lossless", RecordAudioMode::Lossless),
+            ("compact", RecordAudioMode::Compact),
+        ] {
+            let body =
+                format!("[hotkey]\ntrigger = \"f16\"\n[voice]\nrecord_audio = \"{value}\"\n");
+            assert_eq!(parse(&body).unwrap().voice.record_audio, expected);
+        }
+    }
+
+    #[test]
+    fn rejects_boolean_record_audio_value() {
+        let error =
+            parse("[hotkey]\ntrigger = \"f16\"\n[voice]\nrecord_audio = true\n").unwrap_err();
+
+        assert!(error.to_string().contains("record_audio"));
     }
 
     #[test]

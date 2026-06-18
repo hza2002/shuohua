@@ -4,6 +4,7 @@
 //!
 //! 顶层入口：[`finish::run_recording`]，一次按 F16 起停的完整生命周期。
 
+pub(crate) mod audio;
 pub(crate) mod capture;
 pub mod dispatch;
 pub(crate) mod finalize;

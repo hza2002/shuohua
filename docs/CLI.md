@@ -18,6 +18,7 @@ shuo doctor           # 环境检查：
                       #   - 配置校验：解析主 config.toml、profile/*.toml、
                       #               asr/*.toml 和 post/**/*.toml（本地，不跑 daemon）
                       #   - 打印 effective config：merge 后实际生效的配置
+                      #     （voice.record_audio = off | lossless | compact）
                       #   - ASR / LLM Provider：`--runtime` 显式触发；走实际可运行性检查
                       #   - launchd 状态：plist 是否装、daemon 是否在跑
 

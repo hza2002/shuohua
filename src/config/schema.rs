@@ -161,7 +161,11 @@ pub fn main_spec() -> ConfigSpec {
         .field(field(FieldSpec::string, "hotkey.cancel").optional())
         .field(field(FieldSpec::table, "voice").optional())
         .field(field(FieldSpec::integer, "voice.stop_delay_ms").optional())
-        .field(field(FieldSpec::bool, "voice.record_audio").optional())
+        .field(
+            field(FieldSpec::string, "voice.record_audio")
+                .optional()
+                .allowed_values(["off", "lossless", "compact"]),
+        )
         .field(field(FieldSpec::bool, "voice.auto_paste").optional())
         .field(field(FieldSpec::table, "voice.vad").optional())
         .field(

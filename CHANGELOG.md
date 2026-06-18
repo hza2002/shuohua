@@ -29,7 +29,7 @@
 - Cross-validated against four independent open-source implementations (`Hypnus-Yuan/doubao-speech`, `chaitin/MonkeyCode`, `Open-Less/openless`, `yyyzl/push-2-talk`); the earlier framing was a defect inherited from a toy reference and forced Doubao's server-side auto-assigned-sequence fallback path, which produced rare 5s+ finalize tails.
 - Bumped `default_finalize_timeout_ms` from 5_000 to 12_000 to match openless's measured budget; with the corrected protocol the timeout should virtually never fire.
 - Voice layer untouched — VAD-pause finalize is no longer expected to time out, so no soft-failure path was added. If the timeout still fires in the wild, the original "recording marked error" behavior preserves the diagnostic signal.
-- Archived `docs/M10.md` and `docs/M10_PLAN.md` (planning + implementation docs for the multi-session ASR work that is now live).
+- Archived the multi-session ASR planning and implementation notes now that the feature is live.
 
 ## 2026-06-16 - Logging design transition
 
@@ -49,7 +49,7 @@
 
 Security note: the Apple provider uses Apple's on-device SpeechAnalyzer assets after installation. `shuohua` does not send audio to third-party ASR services when `provider = "apple"` is selected; the remaining trust boundary is the local macOS Speech framework and Apple's asset installation path.
 
-## Earlier milestones
+## Earlier changes
 
 - Built the single-process daemon + TUI architecture with UDS state fanout and append-only history.
 - Implemented global hotkey handling, recorder lifecycle, overlay feedback, clipboard dispatch, and launchd integration.

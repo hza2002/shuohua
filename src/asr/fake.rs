@@ -1,4 +1,4 @@
-//! 测试用 fake provider。给 voice 状态机单测使用（M2.f）。
+//! 测试用 fake provider。给 voice 状态机单测使用。
 //!
 //! 行为：
 //!   - 每次 send_pcm 立刻产 1 个 Partial

@@ -30,10 +30,10 @@ pub struct DoubaoConfig {
     /// 直连 WS 不接受会触发 server protocol error，到时换名重试。
     #[serde(default)]
     pub ai_vad: Option<bool>,
-    /// M10：允许 voice 层用本地 VAD 切分本 provider 的 session。默认关。
+    /// 允许 voice 层用本地 VAD 切分本 provider 的 session。默认关。
     #[serde(default)]
     pub idle_pause: bool,
-    /// M10：voice 发出 `is_last=true` 后最多等多久 provider finalize（毫秒）。
+    /// voice 发出 `is_last=true` 后最多等多久 provider finalize（毫秒）。
     #[serde(default = "default_finalize_timeout_ms")]
     pub finalize_timeout_ms: u64,
 }

@@ -88,7 +88,7 @@ pub enum AsrEvent {
     Done,
 }
 
-/// M3+ overlay 直接 `match err` 分发 toast 样式，零字符串解析。
+/// 结构化 ASR 错误，供 voice / overlay / doctor 按错误类型处理。
 /// `Canceled` 是 first-class：voice 模块静默处理、不报 stderr、不发 toast。
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum AsrError {

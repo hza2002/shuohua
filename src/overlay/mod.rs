@@ -168,7 +168,7 @@ impl OverlayModel {
         match cmd {
             OverlayCmd::SetState { state } => {
                 // `Connecting` 是 session 起点；只有它把 overlay 拉起来。
-                // M10 多 session 路径上 `Idle` 表示"当前没 ASR session，麦克风
+                // 多 session 路径上 `Idle` 表示"当前没 ASR session，麦克风
                 // 仍在听" — 这种状态下 overlay 必须保持可见，所以 SetState
                 // 不再隐式地把 visible 跟 Idle 绑死。可见性只由 Connecting
                 // 拉起，由 Hide / Dismiss 关闭。
@@ -406,7 +406,7 @@ mod tests {
 
     #[test]
     fn set_state_idle_keeps_overlay_visible() {
-        // M10 多 session 路径：VAD 切到 Idle 子状态时，overlay 仍要可见，
+        // 多 session 路径：VAD 切到 Idle 子状态时，overlay 仍要可见，
         // 不能跟着 visible=false。可见性只由 Connecting 拉起 / Hide 关闭。
         i18n::init("en-US");
         let mut model = OverlayModel::default();

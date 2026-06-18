@@ -42,9 +42,8 @@ pub fn run(writer: PipeWriter, suppressor: Arc<Mutex<Suppressor>>) -> Result<()>
         // Default = active filter; ListenOnly would ignore the return
         // value. We need the active path to suppress.
         CGEventTapOptions::Default,
-        // FlagsChanged is added (vs M6 part 1's KeyDown/KeyUp-only mask)
-        // so the tokio-side Tracker can detect modifier-only triggers and
-        // maintain a current `ModMask` snapshot for combo matching.
+        // FlagsChanged lets the tokio-side Tracker detect modifier-only
+        // triggers and maintain a current `ModMask` snapshot for combo matching.
         vec![
             CGEventType::KeyDown,
             CGEventType::KeyUp,

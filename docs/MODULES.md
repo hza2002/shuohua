@@ -1,6 +1,6 @@
 # 模块规划
 
-`src/` 只包含已实现的模块。路径细节看 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)，阶段历史看 [CHANGELOG.md](../CHANGELOG.md)。
+`src/` 只包含已实现的模块。路径细节看 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)。
 
 ## 已实现
 
@@ -59,8 +59,8 @@ src/
 │   ├── meter.rs                         # 从已有 PCM/VAD 流聚合 50ms audio meter，供 UDS/TUI 画 waveform
 │   ├── observer.rs                      # dev observer：VAD shadow trace sidecar（feature=dev；默认 ZST no-op）
 │   ├── vad.rs                           # VAD frame/state 边界 + speech/silence hysteresis controller
-│   ├── silero.rs                        # Silero VAD 帧检测器（M10，默认 build）
-│   ├── timeline.rs                      # Sample-indexed PCM ring buffer + slice_from（M10 resume 用）
+│   ├── silero.rs                        # Silero VAD 帧检测器（默认 build）
+│   ├── timeline.rs                      # Sample-indexed PCM ring buffer + slice_from（resume 用）
 │   └── dispatch.rs                      # 剪贴板 + 可选 Cmd+V
 ├── state/
 │   ├── mod.rs                           # StateStore + 原子 subscribe_with_snapshot + StateEvent broadcast
@@ -89,6 +89,6 @@ src/
 
 ## 当前实现状态
 
-M10 多 session ASR 已接入主录音流程。`finish::run_recording` 入口按 `params.idle_pause && params.vad.backend == Silero` 二选一分派到 `run_single_session_recording`（保持 M9 行为）或 `run_multi_session_recording`（Active / Pausing / Idle / Opening 状态机）。`voice/silero.rs`、`voice/timeline.rs`、`voice/vad.rs` 都是默认 build 编译。`voice/observer.rs` 是 `feature=dev` 下的 trace observer，默认 build 是 ZST no-op。`cli/vad_probe.rs` 已删除；离线 threshold 评估改用保留 WAV + trace 后处理脚本。
+多 session ASR 已接入主录音流程。`finish::run_recording` 入口按 `params.idle_pause && params.vad.backend == Silero` 二选一分派到 `run_single_session_recording` 或 `run_multi_session_recording`。`voice/silero.rs`、`voice/timeline.rs`、`voice/vad.rs` 都是默认 build 编译。`voice/observer.rs` 是 `feature=dev` 下的 trace observer，默认 build 是 ZST no-op。`cli/vad_probe.rs` 已删除；离线 threshold 评估改用保留 WAV + trace 后处理脚本。
 
 每条路径的详细职责见 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)；关键设计决策见 [DESIGN.md §2](DESIGN.md#2-关键设计决策)。

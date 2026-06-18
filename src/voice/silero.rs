@@ -1,8 +1,7 @@
 //! Silero VAD backend wrapper.
 //!
 //! 把 ONNX 加载和样本缓冲都封死在本模块里，给 voice 层和 dev trace 共用同一
-//! 套帧边界（每 512 样本 = 32ms @ 16kHz）。`voice_activity_detector` 是
-//! M10 默认依赖，[`SileroVad`] 在所有 build 里都可用。
+//! 套帧边界（每 512 样本 = 32ms @ 16kHz）。[`SileroVad`] 在所有 build 里都可用。
 
 use crate::voice::vad::VadFrame;
 

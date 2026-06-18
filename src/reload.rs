@@ -1,4 +1,4 @@
-//! 配置热重载。M5 设计稿 §2.13 + DESIGN.md:177 / 不变量 #4。
+//! 配置热重载。
 //!
 //! 流程：
 //!   notify 监听 config 目录（不监听文件本身，避免编辑器 inode 替换）
@@ -11,8 +11,7 @@
 //!
 //! 显式不在范围内：
 //!   - profile 的 ASR/post 组合切换（下次录音开始时读取）
-//!   - UDS `{"op":"reload_config"}` 手动触发（依赖 M4 的 UDS server）
-//!   - `shuo doctor` / launchd 自启（M5 同包的另两个 feature，跟 reload 无关）
+//!   - `shuo doctor` / launchd 自启（跟 reload 无关）
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc as std_mpsc;

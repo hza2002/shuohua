@@ -1,7 +1,7 @@
 //! Sample-indexed PCM timeline + ring buffer.
 //!
-//! M10 voice 层需要按"recording 时间轴上的样本索引"对齐 VAD 决策、resume
-//! pre-roll 和 ASR session 的发送窗口。本模块提供：
+//! voice 层按"recording 时间轴上的样本索引"对齐 VAD 决策、resume pre-roll
+//! 和 ASR session 的发送窗口。本模块提供：
 //!
 //! - 单调递增的 `next_sample`：等于已被 `push()` 的样本总数。
 //! - 有界 ring buffer：超过 `max_retained_ms` 的旧样本被丢弃，`oldest_sample`

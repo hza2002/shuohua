@@ -8,8 +8,8 @@
 //! 信号后 drop stream 并 finalize wav。drop stream 时 cpal 自动 drain
 //! callback in-flight 的 buffer。
 //!
-//! 故意保留 M1 的 linear resample：质量对识别足够好，DESIGN §2.9 的 rubato
-//! 升级留给"识别质量真出问题"那天。
+//! 这里保留简单的 linear resample：质量对识别足够好，后续只有在真实识别质量
+//! 出问题时才需要升级重采样算法。
 
 use anyhow::{anyhow, bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};

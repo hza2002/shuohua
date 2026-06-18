@@ -165,15 +165,8 @@ fn merge_mod_matcher(
         // `cmd+left_cmd` → degenerate to the stricter side-specific form.
         (ModMatcher::EitherSide, ModMatcher::Specific(side))
         | (ModMatcher::Specific(side), ModMatcher::EitherSide) => ModMatcher::Specific(side),
-        // `left_cmd+right_cmd` → both sides must be down. We model this as
-        // an upgraded matcher: "both sides required" isn't representable in
-        // our enum (no BothSides variant), but in practice the matcher
-        // already says "left required" and we add a second constraint via
-        // forcing both bits. To keep the type small we just escalate to
-        // requiring left AND right by storing a special marker... no, we'd
-        // rather extend the matcher. For M6 part 2 simplicity, reject the
-        // combination and ask the user to phrase differently if they truly
-        // want both sides held — that's an unusual configuration.
+        // `left_cmd+right_cmd` would need a BothSides matcher. Reject it until
+        // there is a real use case for requiring both sides of one modifier.
         (ModMatcher::Specific(a), ModMatcher::Specific(b)) if a != b => {
             return Err(anyhow!(
                 "specifying both left_ and right_ for the same modifier is not supported"
@@ -479,9 +472,8 @@ mod tests {
 
     #[test]
     fn rejects_both_sides_explicit() {
-        // We chose to reject this in M6 part 2 — extending Combo to model
-        // "both sides held" isn't worth the type complexity. Re-evaluate if
-        // a real user wants it.
+        // Extending Combo to model "both sides held" isn't worth the type
+        // complexity until a real user wants it.
         assert!(parse("left_cmd+right_cmd").is_err());
     }
 

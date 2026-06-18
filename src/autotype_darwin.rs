@@ -7,7 +7,7 @@
 //!
 //! 需要 Accessibility 权限（跟 hotkey CGEventTap 是同一份）。撤回权限时
 //! 事件会被悄悄丢弃；这层无法区分"丢弃"和"成功"，只在 voice 层加 toast
-//! 提示（M3+）。
+//! 提示。
 
 use anyhow::{anyhow, Result};
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};

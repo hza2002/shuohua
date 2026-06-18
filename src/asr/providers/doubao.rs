@@ -658,7 +658,7 @@ struct DoubaoUtterance {
     start_time_ms: Option<u64>,
     #[serde(default, rename = "end_time")]
     end_time_ms: Option<u64>,
-    // words 字段暂不进入通用 AsrEvent；M10 trace 先用 utterance 区间评估 VAD。
+    // words 字段暂不进入通用 AsrEvent；trace 先用 utterance 区间评估 VAD。
 }
 
 /// 从 utterances 里抽出"还在变化的尾巴"：跳过所有 definite=true 的（它们已经

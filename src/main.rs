@@ -1,11 +1,8 @@
 //! shuohua daemon entry.
 //!
-//! M3.f status: F16 toggle → record → DoubaoProvider 流式 → 剪贴板 → Cmd+V，
-//! 加 AppKit overlay + 完整 M5 配置热重载（reload 机制）。
-//!
 //!   * tokio multi-thread runtime
 //!   * hotkey CGEventTap CFRunLoop 专用 OS 线程 → os_pipe → 桥到 tokio mpsc
-//!   * Tracker (M1 纯函数状态机) 消化 RawKey → HotkeyEvent；trigger 可热替换
+//!   * Tracker 纯函数状态机消化 RawEvent → HotkeyEvent；trigger/cancel 可热替换
 //!   * F16 第一次按 = 起录音；第二次按 = 发 stop oneshot 让 task 收尾
 //!   * Session 起来时从 `cfg_rx.borrow()` 取**最新** voice/asr 配置，做到
 //!     "下次录音用新值"。

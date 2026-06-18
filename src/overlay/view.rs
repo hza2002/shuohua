@@ -265,7 +265,7 @@ impl OverlayView {
         match &cmd {
             OverlayCmd::SetState { state } => match state {
                 OverlayState::Recording => {
-                    // M10 多 session 路径上每次 resume 都会回到 Recording。
+                    // 多 session 路径上每次 resume 都会回到 Recording。
                     // 时钟只在录音首次起跳时归零，后续 resume 不能让它跳回 0。
                     if self.recording_started.is_none() {
                         self.recording_started = Some(Instant::now());

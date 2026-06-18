@@ -191,7 +191,7 @@ async fn handle_client(
                     Event::Error {
                         recording_id: None,
                         kind: "unsupported".to_string(),
-                        msg: "command is not wired in M4".to_string(),
+                        msg: "recording control over IPC is not supported".to_string(),
                     },
                 ) {
                     cancel.cancel();

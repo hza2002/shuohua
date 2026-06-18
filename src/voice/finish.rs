@@ -1,10 +1,10 @@
 //! 一次录音的完整生命周期：录音 → ASR → pipeline → dispatch。
 //!
-//! M2.5 流程（单 ASR session）：
+//! 单 session 路径：
 //!
 //!   1. 生成 recording_id (ULID)
 //!   2. 开 cpal streaming recorder（可选 wav 留存）
-//!   3. 开 ASR session（DoubaoProvider）
+//!   3. 开 ASR session
 //!   4. 主循环 select!：
 //!        - stop_rx 收到 → 进 Finishing
 //!        - recorder 帧 → 转发到 ASR
@@ -12,9 +12,8 @@
 //!   5. Finishing：drain stop_delay_ms → stop recorder → is_last → 等 Done
 //!   6. 拼文本 → filler pipeline → dispatch
 //!
-//! 设计上"一次用户会话可能包含多次 ASR session"（见 DESIGN §2.9）。当前实现
-//! 用 Silero VAD 驱动多 session：`voice.vad.backend = "silero"` 且
-//! `asr/<provider>.toml` 里 `idle_pause = true` 时启用，否则保持单 session。
+//! 多 session 路径由 Silero VAD 驱动：`voice.vad.backend = "silero"` 且
+//! `asr/<provider>.toml` 里 `idle_pause = true` 时启用，否则走单 session。
 
 use std::time::{Duration, Instant};
 
@@ -145,13 +144,13 @@ pub struct SessionParams {
     pub auto_paste: bool,
     pub record_audio: bool,
     pub vad_trace: bool,
-    /// M10：provider 私有，源于 `asr/<provider>.toml.idle_pause`。
-    /// false 时 voice 不做多 session 切分，保持 M9 单 session 行为。
+    /// provider 私有配置，源于 `asr/<provider>.toml.idle_pause`。
+    /// false 时 voice 不做多 session 切分。
     pub idle_pause: bool,
-    /// M10：provider 私有，源于 `asr/<provider>.toml.finalize_timeout_ms`。
+    /// provider 私有配置，源于 `asr/<provider>.toml.finalize_timeout_ms`。
     /// voice 发出 `is_last=true` 后等 final segment / Done 的最大毫秒。
     pub finalize_timeout_ms: u64,
-    /// M10：全局 voice VAD 配置；`backend = Off` 时 voice 不启用本地 VAD。
+    /// 全局 voice VAD 配置；`backend = Off` 时 voice 不启用本地 VAD。
     pub vad: crate::config::VoiceVadCfg,
     pub stop_delay_ms: u32,
     pub hotwords: Vec<String>,
@@ -531,8 +530,8 @@ async fn run_single_session_recording(
         return;
     }
     // terminal_error 路径：录音 / ASR 中途崩溃 → 不跑 post chain、不写剪贴板。
-    // 理由（M7 决策）：半成品上屏会误导（用户以为成功），auto_paste 还可能粘到
-    // 已经切走的应用；history 保留所有 segments，需要的用户从 TUI 回捞。
+    // 半成品上屏会误导（用户以为成功），auto_paste 还可能粘到已经切走的
+    // 应用；history 保留所有 segments，需要的用户从 TUI 回捞。
     let (final_text, pipeline, status, error) = if terminal_error.is_some() {
         (raw_text.clone(), Vec::new(), HistoryStatus::Error, None)
     } else {
@@ -1553,8 +1552,8 @@ async fn finish(
 /// - `Err(asr_send_last)`：`send_pcm(&[], true)` 失败。
 /// - `Err(asr_timeout)`：`finalize_timeout_ms` 内未收到 `Done`。
 ///
-/// 期间出现的 `AsrEvent::Error` 不中断等待（保持 M9 行为），但会写入
-/// `terminal_error`，调用方据此决定 history status。
+/// 期间出现的 `AsrEvent::Error` 不中断等待，但会写入 `terminal_error`，
+/// 调用方据此决定 history status。
 #[allow(clippy::too_many_arguments)]
 async fn finalize_provider_session(
     session: &mut Box<dyn AsrSession>,
@@ -1770,8 +1769,7 @@ struct SegmentCapture {
 
 /// 一次 ASR provider session 在 recording timeline 上的捕获。
 ///
-/// M10 之前每条 recording 只产生 1 个 `SessionCapture`；启用 idle_pause +
-/// Silero 后，一条 recording 可携带 1..N 个，保持 `sessions[]` 的多 session 语义。
+/// 一条 recording 可携带 1..N 个 session，保持 `sessions[]` 的多 session 语义。
 #[derive(Debug, Clone)]
 struct SessionCapture {
     /// 该 session 第一帧 PCM 发送时刻（recording timeline 上的 instant）。
@@ -1787,7 +1785,7 @@ struct SessionCapture {
 }
 
 /// 当前单 session 路径把整段 PCM 视作一个 `SessionCapture`。
-/// 空录音（无 segment 且未发送样本）返回空 Vec，保留 M9 "no sessions" 语义。
+/// 空录音（无 segment 且未发送样本）返回空 Vec。
 ///
 /// session 边界严格 = "首/末发送样本的 timeline ms"，即
 /// `ended_at − started_at == samples_to_ms(audio_samples)`。不变量见 SCHEMA §2.2。
@@ -2144,7 +2142,7 @@ mod tests {
             .whole_milliseconds() as u64;
         assert_eq!(asr_duration_ms, 2_900);
         assert_eq!(record.asr.duration_ms, 2_900);
-        // M10 跳过的纯静音时长 = duration_ms - audio_ms
+        // 跳过的纯静音时长 = duration_ms - audio_ms
         assert_eq!(
             record.asr.duration_ms - record.asr.audio_ms,
             2_900 - (800 + 900)

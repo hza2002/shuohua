@@ -1,15 +1,10 @@
 //! 文本后处理流水线（DESIGN §2.10）。
 //!
-//! M2.5 只装一个内置 processor [`ZhFilter`]（去口语词）。M7 再加 LLM 清洗
-//! 和 per-app 链路配置。
-//!
 //! 数据契约：
 //! - [`PipelineText`] 流过整条链。`raw` 永远是原始 ASR 文本；`text` 是当前
-//!   in-flight 版本；`segments` 是多 ASR session 的原始段（M2.5.d2 引入），M3
-//!   history 直接消费。
+//!   in-flight 版本；`segments` 是本次 recording 的 ASR session 文本列表。
 //! - run_chain "链不阻塞"：单步 processor 失败/超时**跳过**，下一个继续用上一步
 //!   的 text。最差产出 == raw（不会丢内容）。
-//! - M2.5 不接 toast / step_tx；M3 加 overlay 时再扩参数。失败/超时走诊断日志。
 
 pub mod app_context;
 pub mod llm;
@@ -26,8 +21,7 @@ pub struct PipelineText {
     /// 原始 ASR 全文，整条链不变。
     #[allow(dead_code)]
     pub raw: String,
-    /// 多段 ASR session 的原始文本列表（M2.5.d2 之后才会出现 >1 项）。
-    /// M3 history.asr.sessions 直接消费这个 Vec。
+    /// 本次 recording 的 ASR session 文本列表。
     #[allow(dead_code)]
     pub segments: Vec<String>,
     /// 当前 in-flight 版本。run_chain 跑完即最终上屏文本。

@@ -161,7 +161,7 @@ impl Page for StatusPage {
     }
 
     fn on_key(&mut self, _key: KeyEvent) -> KeyOutcome {
-        KeyOutcome::None
+        KeyOutcome::none()
     }
 
     fn on_enter(&mut self) {

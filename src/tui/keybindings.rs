@@ -1,32 +1,15 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
 use crate::tui::Page;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Quit,
     NextPage,
     PrevPage,
     SetPage(Page),
-    MoveDown,
-    MoveUp,
-    MoveTop,
-    MoveBottom,
-    NextFocus,
-    PrevFocus,
     StartSearch,
-    CancelSearch,
-    ClearSearch,
-    SearchChar(char),
-    Backspace,
-    CopySelected,
-    CopySelectedRaw,
-    OpenAudio,
-    RevealAudio,
-    DeleteAudio,
-    ValidateConfig,
-    ReloadConfig,
-    NewConfig,
+    Forward(KeyEvent),
     None,
 }
 
@@ -35,16 +18,7 @@ pub fn action_for(key: KeyEvent, searching: bool) -> Action {
         return Action::None;
     }
     if searching {
-        return match key.code {
-            KeyCode::Esc => Action::CancelSearch,
-            KeyCode::Enter => Action::CancelSearch,
-            KeyCode::Backspace => Action::Backspace,
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Action::ClearSearch
-            }
-            KeyCode::Char(ch) => Action::SearchChar(ch),
-            _ => Action::None,
-        };
+        return Action::Forward(key);
     }
     match key.code {
         KeyCode::Char('q') => Action::Quit,
@@ -53,68 +27,50 @@ pub fn action_for(key: KeyEvent, searching: bool) -> Action {
         KeyCode::Char('1') => Action::SetPage(Page::Status),
         KeyCode::Char('2') => Action::SetPage(Page::History),
         KeyCode::Char('3') => Action::SetPage(Page::Settings),
-        KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
-        KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
-        KeyCode::Char('g') => Action::MoveTop,
-        KeyCode::Char('G') => Action::MoveBottom,
-        KeyCode::Char('l') | KeyCode::Right => Action::NextFocus,
-        KeyCode::Char('h') | KeyCode::Left => Action::PrevFocus,
         KeyCode::Char('/') => Action::StartSearch,
-        KeyCode::Esc => Action::ClearSearch,
-        KeyCode::Enter | KeyCode::Char('y') => Action::CopySelected,
-        KeyCode::Char('Y') => Action::CopySelectedRaw,
-        KeyCode::Char('o') => Action::OpenAudio,
-        KeyCode::Char('r') => Action::RevealAudio,
-        KeyCode::Char('d') => Action::DeleteAudio,
-        KeyCode::Char('v') => Action::ValidateConfig,
-        KeyCode::Char('R') => Action::ReloadConfig,
-        KeyCode::Char('n') => Action::NewConfig,
-        _ => Action::None,
+        _ => Action::Forward(key),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyModifiers;
 
     fn press(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
     #[test]
-    fn audio_shortcuts_are_open_reveal_and_delete_only() {
+    fn global_keys_match_when_not_searching() {
+        assert_eq!(action_for(press(KeyCode::Char('q')), false), Action::Quit);
+        assert_eq!(action_for(press(KeyCode::Tab), false), Action::NextPage);
+        assert_eq!(action_for(press(KeyCode::BackTab), false), Action::PrevPage);
         assert_eq!(
-            action_for(press(KeyCode::Char('o')), false),
-            Action::OpenAudio
+            action_for(press(KeyCode::Char('1')), false),
+            Action::SetPage(Page::Status)
         );
         assert_eq!(
-            action_for(press(KeyCode::Char('r')), false),
-            Action::RevealAudio
-        );
-        assert_eq!(
-            action_for(press(KeyCode::Char('d')), false),
-            Action::DeleteAudio
-        );
-        assert_eq!(action_for(press(KeyCode::Char('p')), false), Action::None);
-    }
-
-    #[test]
-    fn configure_shortcuts_include_validate_and_reload() {
-        assert_eq!(
-            action_for(press(KeyCode::Char('v')), false),
-            Action::ValidateConfig
-        );
-        assert_eq!(
-            action_for(press(KeyCode::Char('R')), false),
-            Action::ReloadConfig
+            action_for(press(KeyCode::Char('/')), false),
+            Action::StartSearch
         );
     }
 
     #[test]
-    fn configure_shortcuts_include_new_config() {
-        assert_eq!(
-            action_for(press(KeyCode::Char('n')), false),
-            Action::NewConfig
-        );
+    fn page_keys_forward_when_not_searching() {
+        let key = press(KeyCode::Char('o'));
+        assert_eq!(action_for(key, false), Action::Forward(key));
+        let key = press(KeyCode::Char('j'));
+        assert_eq!(action_for(key, false), Action::Forward(key));
+    }
+
+    #[test]
+    fn all_keys_forward_when_searching() {
+        let key = press(KeyCode::Char('q'));
+        assert_eq!(action_for(key, true), Action::Forward(key));
+        let key = press(KeyCode::Tab);
+        assert_eq!(action_for(key, true), Action::Forward(key));
+        let key = press(KeyCode::Char('/'));
+        assert_eq!(action_for(key, true), Action::Forward(key));
     }
 }

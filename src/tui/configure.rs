@@ -441,8 +441,30 @@ impl Page for ConfigurePage {
         }
     }
 
-    fn on_key(&mut self, _key: KeyEvent) -> KeyOutcome {
-        KeyOutcome::None
+    fn on_key(&mut self, key: KeyEvent) -> KeyOutcome {
+        if key.kind != KeyEventKind::Press {
+            return KeyOutcome::none();
+        }
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
+            KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
+            KeyCode::Char('g') => self.move_top(),
+            KeyCode::Char('G') => self.move_bottom(),
+            KeyCode::Char('l') | KeyCode::Right => self.move_focus(1),
+            KeyCode::Char('h') | KeyCode::Left => self.move_focus(-1),
+            KeyCode::Char('v') => return KeyOutcome::status(self.validate()),
+            KeyCode::Char('R') => {
+                let (cmd, status) = self.request_reload();
+                return KeyOutcome::command_and_status(cmd, status);
+            }
+            KeyCode::Char('n') if self.module == ConfigureModule::PostProcessor => {
+                return KeyOutcome::status(self.start_wizard());
+            }
+            KeyCode::Char('o') => return KeyOutcome::status(self.open_editor()),
+            KeyCode::Char('r') => return KeyOutcome::status(self.reveal_in_finder()),
+            _ => {}
+        }
+        KeyOutcome::none()
     }
 
     fn on_enter(&mut self) {

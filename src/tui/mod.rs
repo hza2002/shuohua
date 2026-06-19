@@ -204,116 +204,21 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
                 on_page_changed(app);
             }
         }
-        Action::MoveDown => {
-            if app.page == Page::Settings {
-                app.configure.move_selection(1);
-            } else {
-                app.history.move_down();
-            }
-        }
-        Action::MoveUp => {
-            if app.page == Page::Settings {
-                app.configure.move_selection(-1);
-            } else {
-                app.history.move_up();
-            }
-        }
-        Action::MoveTop => {
-            if app.page == Page::Settings {
-                app.configure.move_top();
-            } else {
-                app.history.move_top();
-            }
-        }
-        Action::MoveBottom => {
-            if app.page == Page::Settings {
-                app.configure.move_bottom();
-            } else {
-                app.history.move_bottom();
-            }
-        }
-        Action::NextFocus => {
-            if app.page == Page::Settings {
-                app.configure.move_focus(1);
-            } else {
-                app.history.next_detail();
-            }
-        }
-        Action::PrevFocus => {
-            if app.page == Page::Settings {
-                app.configure.move_focus(-1);
-            } else {
-                app.history.prev_detail();
-            }
-        }
         Action::StartSearch => {
             app.page = Page::History;
             app.history.start_search();
         }
-        Action::CancelSearch => {
-            app.history.cancel_search();
-        }
-        Action::ClearSearch => {
-            app.history.clear_search();
-        }
-        Action::SearchChar(ch) => {
-            app.history.search_char(ch);
-        }
-        Action::Backspace => {
-            app.history.search_backspace();
-        }
-        Action::CopySelected => {
-            if app.page == Page::History {
-                if let Some(text) = app.history.copy_selected_text() {
-                    crate::clipboard_darwin::write_string(&text)?;
-                    app.status = "copied selected history text".to_string();
-                }
-            }
-        }
-        Action::CopySelectedRaw => {
-            if app.page == Page::History {
-                if let Some(text) = app.history.copy_selected_asr() {
-                    crate::clipboard_darwin::write_string(&text)?;
-                    app.status = "copied selected ASR text".to_string();
-                }
-            }
-        }
-        Action::OpenAudio => {
-            if app.page == Page::Settings {
-                app.status = app.configure.open_editor();
-            } else if app.page == Page::History {
-                app.status = app.history.open_selected_audio();
-            }
-        }
-        Action::RevealAudio => {
-            if app.page == Page::Settings {
-                app.status = app.configure.reveal_in_finder();
-            } else if app.page == Page::History {
-                app.status = app.history.reveal_selected_audio();
-            }
-        }
-        Action::DeleteAudio => {
-            if app.page == Page::History {
-                app.status = app.history.request_delete_audio();
-            }
-        }
-        Action::ValidateConfig => {
-            if app.page == Page::Settings {
-                app.status = app.configure.validate();
-            }
-        }
-        Action::ReloadConfig => {
-            if app.page == Page::Settings {
-                let (cmd, status) = app.configure.request_reload();
+        Action::Forward(key) => {
+            let outcome = match app.page {
+                Page::Status => app.status_page.on_key(key),
+                Page::History => app.history.on_key(key),
+                Page::Settings => app.configure.on_key(key),
+            };
+            if let Some(cmd) = outcome.command {
                 client.send(&cmd).await?;
-                app.status = status;
             }
-        }
-        Action::NewConfig => {
-            if app.page == Page::Settings
-                && app.configure.module == crate::tui::configure::ConfigureModule::PostProcessor
-            {
-                app.status = app.configure.start_wizard();
+            if let Some(status) = outcome.status {
+                app.status = status;
             }
         }
         Action::None => {}

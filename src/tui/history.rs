@@ -5,7 +5,7 @@ use std::process::Command as ProcessCommand;
 use std::time::SystemTime;
 
 use anyhow::{bail, Context, Result};
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -184,12 +184,24 @@ impl HistoryPage {
         self.selected = 0;
     }
 
-    pub fn copy_selected_text(&self) -> Option<String> {
-        self.selected_record().map(|record| record.text.clone())
+    fn copy_text_outcome(&self) -> KeyOutcome {
+        let Some(text) = self.selected_record().map(|record| record.text.clone()) else {
+            return KeyOutcome::none();
+        };
+        match crate::clipboard_darwin::write_string(&text) {
+            Ok(()) => KeyOutcome::status("copied selected history text"),
+            Err(e) => KeyOutcome::status(format!("clipboard error: {e}")),
+        }
     }
 
-    pub fn copy_selected_asr(&self) -> Option<String> {
-        self.selected_record().map(|record| record.asr.text.clone())
+    fn copy_asr_outcome(&self) -> KeyOutcome {
+        let Some(text) = self.selected_record().map(|record| record.asr.text.clone()) else {
+            return KeyOutcome::none();
+        };
+        match crate::clipboard_darwin::write_string(&text) {
+            Ok(()) => KeyOutcome::status("copied selected ASR text"),
+            Err(e) => KeyOutcome::status(format!("clipboard error: {e}")),
+        }
     }
 
     pub fn open_selected_audio(&self) -> String {
@@ -306,8 +318,38 @@ impl Page for HistoryPage {
         }
     }
 
-    fn on_key(&mut self, _key: KeyEvent) -> KeyOutcome {
-        KeyOutcome::None
+    fn on_key(&mut self, key: KeyEvent) -> KeyOutcome {
+        if key.kind != KeyEventKind::Press {
+            return KeyOutcome::none();
+        }
+        if self.searching {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => self.cancel_search(),
+                KeyCode::Backspace => self.search_backspace(),
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.clear_search();
+                }
+                KeyCode::Char(ch) => self.search_char(ch),
+                _ => {}
+            }
+            return KeyOutcome::none();
+        }
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => self.move_down(),
+            KeyCode::Char('k') | KeyCode::Up => self.move_up(),
+            KeyCode::Char('g') => self.move_top(),
+            KeyCode::Char('G') => self.move_bottom(),
+            KeyCode::Char('l') | KeyCode::Right => self.next_detail(),
+            KeyCode::Char('h') | KeyCode::Left => self.prev_detail(),
+            KeyCode::Esc => self.clear_search(),
+            KeyCode::Enter | KeyCode::Char('y') => return self.copy_text_outcome(),
+            KeyCode::Char('Y') => return self.copy_asr_outcome(),
+            KeyCode::Char('o') => return KeyOutcome::status(self.open_selected_audio()),
+            KeyCode::Char('r') => return KeyOutcome::status(self.reveal_selected_audio()),
+            KeyCode::Char('d') => return KeyOutcome::status(self.request_delete_audio()),
+            _ => {}
+        }
+        KeyOutcome::none()
     }
 
     fn render(&self, frame: &mut Frame, area: Rect, theme: &TuiTheme, _footer_status: &str) {

@@ -7,13 +7,37 @@ use ratatui::Frame;
 use crate::config::theme::TuiTheme;
 use crate::ipc::protocol::{Command, Event};
 
-#[derive(Debug)]
-pub enum KeyOutcome {
-    None,
-    SetStatus(String),
-    StartSearch,
-    SendCommand(Command),
-    Quit,
+#[derive(Debug, Default)]
+pub struct KeyOutcome {
+    pub status: Option<String>,
+    pub command: Option<Command>,
+}
+
+impl KeyOutcome {
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    pub fn status(msg: impl Into<String>) -> Self {
+        Self {
+            status: Some(msg.into()),
+            command: None,
+        }
+    }
+
+    pub fn command(cmd: Command) -> Self {
+        Self {
+            status: None,
+            command: Some(cmd),
+        }
+    }
+
+    pub fn command_and_status(cmd: Command, msg: impl Into<String>) -> Self {
+        Self {
+            status: Some(msg.into()),
+            command: Some(cmd),
+        }
+    }
 }
 
 pub trait Page {

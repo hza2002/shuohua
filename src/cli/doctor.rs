@@ -197,6 +197,10 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) {
         )) {
             Ok(provider) => {
                 let caps = provider.caps();
+                println!("{}", asr_runtime_probe_line("apple", &target.profiles));
+                if let Some(notice) = provider.runtime_check_notice() {
+                    println!("{}", notice.line);
+                }
                 match provider.check_runtime(ctx).await {
                     Ok(()) => println!(
                         "asr.apple.runtime: OK profiles=[{}] hotwords={} multilingual={}",
@@ -232,6 +236,7 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) {
         )) {
             Ok(provider) => {
                 let caps = provider.caps();
+                println!("{}", asr_runtime_probe_line("doubao", &target.profiles));
                 match provider.check_runtime(ctx).await {
                     Ok(()) => println!(
                         "asr.doubao.runtime: OK profiles=[{}] hotwords={} multilingual={}",
@@ -269,6 +274,13 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) {
             );
         }
     }
+}
+
+fn asr_runtime_probe_line(provider: &str, profiles: &[String]) -> String {
+    format!(
+        "asr.{provider}.runtime: probing minimal session for profiles=[{}]",
+        profiles.join(", ")
+    )
 }
 
 async fn check_llm_runtime(target: LlmRuntimeTarget) {
@@ -438,5 +450,20 @@ fn format_duration(ms: u64) -> String {
         format!("{m}m{s}s")
     } else {
         format!("{s}s")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn asr_runtime_probe_line_mentions_minimal_session() {
+        let profiles = vec!["default".to_string(), "coding".to_string()];
+
+        let line = super::asr_runtime_probe_line("doubao", &profiles);
+
+        assert_eq!(
+            line,
+            "asr.doubao.runtime: probing minimal session for profiles=[default, coding]"
+        );
     }
 }

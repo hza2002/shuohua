@@ -38,6 +38,7 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
+use std::time::Duration;
 use std::time::Instant;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -70,17 +71,41 @@ impl DoubaoProvider {
         })
     }
 
-    pub fn idle_pause(&self) -> bool {
-        self.config.idle_pause
-    }
-
     pub fn finalize_timeout_ms(&self) -> u64 {
         self.config.finalize_timeout_ms
     }
 
+    pub fn options(&self) -> crate::asr::providers::ProviderOptions {
+        crate::asr::providers::ProviderOptions {
+            idle_pause: self.config.idle_pause,
+            finalize_timeout_ms: self.config.finalize_timeout_ms,
+        }
+    }
+
     pub async fn check_runtime(&self, ctx: SessionCtx) -> Result<(), AsrError> {
-        let (session, _events) = self.open(ctx).await?;
-        session.close().await
+        let (mut session, mut events) = self.open(ctx).await?;
+        // Keep the probe short: it validates init payload + final audio frame
+        // acceptance without trying to assess recognition quality.
+        session.send_pcm(&[0i16; 1600], true).await?;
+        let done = tokio::time::timeout(Duration::from_millis(self.finalize_timeout_ms()), async {
+            while let Some(event) = events.recv().await {
+                match event {
+                    AsrEvent::Done => return Ok(()),
+                    AsrEvent::Error { err } => return Err(err),
+                    AsrEvent::Partial { .. }
+                    | AsrEvent::Segment { .. }
+                    | AsrEvent::Final { .. } => {}
+                }
+            }
+            Err(AsrError::Protocol(
+                "doubao stream closed before done".into(),
+            ))
+        })
+        .await
+        .map_err(|_| AsrError::Timeout);
+        let close_result = session.close().await;
+        done??;
+        close_result
     }
 }
 
@@ -722,6 +747,33 @@ access_key = "sk"
         .unwrap();
         assert!(!cfg.idle_pause);
         assert_eq!(cfg.finalize_timeout_ms, 12_000);
+    }
+
+    #[test]
+    fn provider_options_reflect_config() {
+        let provider = DoubaoProvider {
+            config: DoubaoConfig {
+                app_key: "ak".into(),
+                access_key: "sk".into(),
+                resource_id: default_resource_id(),
+                language: None,
+                enable_itn: true,
+                enable_punc: true,
+                enable_ddc: true,
+                stream_mode: None,
+                ai_vad: None,
+                idle_pause: true,
+                finalize_timeout_ms: 7000,
+            },
+        };
+
+        assert_eq!(
+            provider.options(),
+            crate::asr::providers::ProviderOptions {
+                idle_pause: true,
+                finalize_timeout_ms: 7000,
+            }
+        );
     }
 
     #[test]

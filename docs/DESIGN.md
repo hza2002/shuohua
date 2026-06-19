@@ -266,7 +266,7 @@ key         := f1..f20 | a..z | 0..9
 - 流式 partial 是必需的，不是可选 cap。不支持原生流式或不能包装成流式的 provider 直接不入选
 - **单事件流**：partial / segment / final / error / done 走同一根 channel（`AsrEvent` enum），voice 模块只 select 一臂
 - provider 私有配置类型化分离在自己的 TOML 文件，voice 模块永远不见
-- provider 必须保证：`send_pcm(is_last=true)` 之后**至少**会出一个 `AsrEvent::Segment`，然后 `AsrEvent::Done`
+- provider 必须保证：`send_pcm(is_last=true)` 之后用 `AsrEvent::Done` 表示正常结束，或用 `AsrEvent::Error` / 关闭事件流让 voice 记录错误；有最终文本时应通过 `AsrEvent::Segment` 或 `AsrEvent::Final` 表达，无识别文本可直接 `Done`
 - provider 未发 `Done` 就关闭事件流，或 voice 向 provider 发送 PCM 失败，均视为 ASR terminal error：保留已经确认的 segment 到 error history，跳过 post/dispatch，避免把截断文本当成功结果粘贴
 - `AsrEvent::Final` 是可选的 session-scoped 最终全文；provider 不支持时 voice 用已收到的 Segment 拼接结果作为 fallback
 - **音频 codec 在 provider 实现里写死**，不暴露给用户。codec 是工程权衡（CPU/带宽/server 兼容性），由 provider 作者拍板而非配置项
@@ -297,7 +297,8 @@ pub enum LanguageMode {
 
 #[async_trait]
 pub trait AsrSession: Send {
-    /// 喂 PCM (16kHz s16le mono)。is_last=true 表示后面没了，provider 必须在收到后吐 Segment + Done。
+    /// 喂 PCM (16kHz s16le mono)。is_last=true 表示后面没了，provider 必须用 Done
+    /// 正常结束；有最终文本时用 Segment 或 Final 表达，无识别文本可直接 Done。
     async fn send_pcm(&mut self, pcm: &[i16], is_last: bool) -> Result<()>;
 
     async fn close(self: Box<Self>) -> Result<()>;
@@ -325,7 +326,7 @@ pub enum AsrError {
 }
 ```
 
-**为什么删 `server_side_vad` cap**：原本用来告诉 voice "session 中间会不会冒 Segment"。改用单事件流后，voice 行为统一（来什么处理什么），不需要分支。Provider 实现保证 `is_last=true` 后至少出一个 Segment 即可。
+**为什么删 `server_side_vad` cap**：原本用来告诉 voice "session 中间会不会冒 Segment"。改用单事件流后，voice 行为统一（来什么处理什么），不需要分支。Provider 实现保证 `is_last=true` 后正常发 `Done`，并在有最终文本时用 `Segment` 或 `Final` 表达即可。
 
 **为什么 hotwords 是 `Vec<String>` 而不是结构化 `{ word, boost }`**：现有 provider 没有一家支持 per-word boost（Doubao 接词列表、Apple SpeechAnalyzer 用 contextualStrings）。统一结构是为假想未来设计、YAGNI。真接入支持 boost 的 provider 时，它在自己的 `asr/<provider>.toml` 里定义私有字段，跟主 hotwords 列表互不影响。
 

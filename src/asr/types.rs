@@ -22,8 +22,9 @@ pub trait AsrProvider: Send + Sync {
 pub trait AsrSession: Send {
     /// 喂一帧 PCM。Canonical 格式 = 16kHz s16le mono（recorder 已做归一化）。
     ///
-    /// is_last=true 表示后面没了。provider 必须在收到后**至少**吐一个
-    /// `AsrEvent::Segment`，然后 `AsrEvent::Done`。
+    /// `is_last=true` 表示后面没了。provider 必须最终发 `AsrEvent::Done`
+    /// 表示正常结束，或发 `AsrEvent::Error` / 关闭事件流让 voice 记录错误。
+    /// 有最终文本时应通过 `Segment` 或 `Final` 表达；无识别文本可直接 `Done`。
     async fn send_pcm(&mut self, pcm: &[i16], is_last: bool) -> Result<(), AsrError>;
 
     /// 主动关 session。多次调用应幂等。

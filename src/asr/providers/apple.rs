@@ -30,12 +30,23 @@ impl AppleProvider {
         })
     }
 
-    pub fn idle_pause(&self) -> bool {
-        self.config.idle_pause
-    }
-
     pub fn finalize_timeout_ms(&self) -> u64 {
         self.config.finalize_timeout_ms
+    }
+
+    pub fn options(&self) -> crate::asr::providers::ProviderOptions {
+        crate::asr::providers::ProviderOptions {
+            idle_pause: self.config.idle_pause,
+            finalize_timeout_ms: self.config.finalize_timeout_ms,
+        }
+    }
+
+    pub fn runtime_check_notice(&self) -> Option<crate::asr::providers::RuntimeCheckNotice> {
+        self.config
+            .install_assets
+            .then_some(crate::asr::providers::RuntimeCheckNotice {
+                line: "asr.apple.runtime: checking Apple SpeechAnalyzer runtime; macOS may install speech assets if missing",
+            })
     }
 
     pub async fn check_runtime(&self, ctx: SessionCtx) -> Result<(), AsrError> {
@@ -395,5 +406,30 @@ finalize_timeout_ms = 3000
             "en-US"
         );
         assert_eq!(choose_language(&AppleConfig::default(), &ctx), "zh-CN");
+    }
+
+    #[test]
+    fn runtime_notice_mentions_possible_asset_install() {
+        let provider = AppleProvider {
+            config: AppleConfig {
+                install_assets: true,
+                ..AppleConfig::default()
+            },
+        };
+
+        let notice = provider.runtime_check_notice().unwrap();
+        assert!(notice.line.contains("install speech assets"));
+    }
+
+    #[test]
+    fn runtime_notice_is_empty_when_asset_install_is_disabled() {
+        let provider = AppleProvider {
+            config: AppleConfig {
+                install_assets: false,
+                ..AppleConfig::default()
+            },
+        };
+
+        assert!(provider.runtime_check_notice().is_none());
     }
 }

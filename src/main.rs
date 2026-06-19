@@ -354,8 +354,10 @@ async fn run_daemon(
                                 continue;
                             }
                         };
-                        let runtime =
-                            match build_provider(&profile.asr.provider, &profile.asr.overrides) {
+                        let runtime = match asr::providers::build(
+                            &profile.asr.provider,
+                            &profile.asr.overrides,
+                        ) {
                             Ok(runtime) => runtime,
                             Err(e) => {
                                 tracing::error!(error = ?e, "ASR provider init failed");
@@ -368,8 +370,8 @@ async fn run_daemon(
                             auto_paste: cfg.voice.auto_paste,
                             record_audio: cfg.voice.record_audio,
                             vad_trace: cfg.dev.vad_trace,
-                            idle_pause: runtime.idle_pause,
-                            finalize_timeout_ms: runtime.finalize_timeout_ms,
+                            idle_pause: runtime.options.idle_pause,
+                            finalize_timeout_ms: runtime.options.finalize_timeout_ms,
                             vad: cfg.voice.vad.clone(),
                             stop_delay_ms: cfg.voice.stop_delay_ms,
                             hotwords: profile.asr.hotwords.clone(),
@@ -398,40 +400,6 @@ async fn run_daemon(
                 }
             }
         }
-    }
-}
-
-struct ProviderRuntime {
-    provider: Arc<dyn asr::AsrProvider>,
-    idle_pause: bool,
-    finalize_timeout_ms: u64,
-}
-
-fn build_provider(name: &str, overrides: &toml::value::Table) -> Result<ProviderRuntime> {
-    match name {
-        "doubao" => {
-            let p = asr::providers::doubao::DoubaoProvider::new_with_overrides(Some(overrides))
-                .context("init doubao provider")?;
-            let idle_pause = p.idle_pause();
-            let finalize_timeout_ms = p.finalize_timeout_ms();
-            Ok(ProviderRuntime {
-                provider: Arc::new(p),
-                idle_pause,
-                finalize_timeout_ms,
-            })
-        }
-        "apple" => {
-            let p = asr::providers::apple::AppleProvider::new_with_overrides(Some(overrides))
-                .context("init apple provider")?;
-            let idle_pause = p.idle_pause();
-            let finalize_timeout_ms = p.finalize_timeout_ms();
-            Ok(ProviderRuntime {
-                provider: Arc::new(p),
-                idle_pause,
-                finalize_timeout_ms,
-            })
-        }
-        other => anyhow::bail!("未知 ASR provider {other:?}。支持 \"doubao\" / \"apple\""),
     }
 }
 

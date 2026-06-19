@@ -189,8 +189,11 @@ impl HistoryPage {
             return KeyOutcome::none();
         };
         match crate::clipboard_darwin::write_string(&text) {
-            Ok(()) => KeyOutcome::status("copied selected history text"),
-            Err(e) => KeyOutcome::status(format!("clipboard error: {e}")),
+            Ok(()) => KeyOutcome::status(crate::t!("tui.history.copy.final_ok")),
+            Err(e) => KeyOutcome::status(crate::i18n::tr(
+                "tui.error.clipboard",
+                &[("error", e.to_string())],
+            )),
         }
     }
 
@@ -199,8 +202,11 @@ impl HistoryPage {
             return KeyOutcome::none();
         };
         match crate::clipboard_darwin::write_string(&text) {
-            Ok(()) => KeyOutcome::status("copied selected ASR text"),
-            Err(e) => KeyOutcome::status(format!("clipboard error: {e}")),
+            Ok(()) => KeyOutcome::status(crate::t!("tui.history.copy.asr_ok")),
+            Err(e) => KeyOutcome::status(crate::i18n::tr(
+                "tui.error.clipboard",
+                &[("error", e.to_string())],
+            )),
         }
     }
 
@@ -562,7 +568,7 @@ fn history_detail_text(
         )),
         HistoryDetail::Pipeline => {
             if record.pipeline.is_empty() {
-                return vec![Line::from("no pipeline steps")];
+                return vec![Line::from(crate::t!("tui.history.pipeline.empty"))];
             }
             text_lines(
                 record
@@ -581,7 +587,7 @@ fn history_detail_text(
         }
         HistoryDetail::Sessions => {
             if record.asr.sessions.is_empty() {
-                return vec![Line::from("no ASR sessions")];
+                return vec![Line::from(crate::t!("tui.history.sessions.empty"))];
             }
             text_lines(
                 record
@@ -607,13 +613,22 @@ fn history_detail_text(
             record
                 .error
                 .as_ref()
-                .map(|error| format!("{}: {}", error.kind, error.msg))
-                .unwrap_or_else(|| "no error".to_string()),
+                .map(|error| {
+                    crate::i18n::tr(
+                        "tui.history.detail.error_message",
+                        &[("kind", error.kind.clone()), ("error", error.msg.clone())],
+                    )
+                })
+                .unwrap_or_else(|| crate::t!("tui.history.error.empty")),
         ),
-        HistoryDetail::Json => text_lines(
-            serde_json::to_string_pretty(record)
-                .unwrap_or_else(|e| format!("failed to render json: {e}")),
-        ),
+        HistoryDetail::Json => {
+            text_lines(serde_json::to_string_pretty(record).unwrap_or_else(|e| {
+                crate::i18n::tr(
+                    "tui.history.json.render_failed",
+                    &[("error", e.to_string())],
+                )
+            }))
+        }
     }
 }
 

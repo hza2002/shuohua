@@ -73,7 +73,7 @@ impl App {
             page: Page::Status,
             status_page: StatusPage::new(),
             history: HistoryPage::new(),
-            status: "connected".to_string(),
+            status: crate::t!("tui.status.connected"),
             theme,
             configure: ConfigurePage::new(),
         }
@@ -86,7 +86,8 @@ impl App {
             }
             Event::DaemonStatus { .. } => {}
             Event::ConfigReloaded { ref path } => {
-                self.status = format!("config reloaded: {path}");
+                self.status =
+                    crate::i18n::tr("tui.status.config_reloaded", &[("path", path.to_string())]);
                 self.configure.apply_event(&event, true);
                 self.theme = crate::config::load_from(&crate::config::default_path())
                     .map(|cfg| {
@@ -96,7 +97,8 @@ impl App {
                     .unwrap_or_default();
             }
             Event::Error { kind, msg, .. } => {
-                self.status = format!("{kind}: {msg}");
+                self.status =
+                    crate::i18n::tr("tui.error.daemon_event", &[("kind", kind), ("error", msg)]);
             }
             _ => {
                 self.status_page

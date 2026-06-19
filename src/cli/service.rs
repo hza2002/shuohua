@@ -32,7 +32,13 @@ pub fn install() -> Result<()> {
         plist.to_str().unwrap_or_default(),
     ])?;
     run_launchctl(&["kickstart", "-k", &format!("{}/{}", gui_domain(), LABEL)])?;
-    println!("installed {}", plist.display());
+    println!(
+        "{}",
+        crate::i18n::tr(
+            "cli.service.installed",
+            &[("path", plist.display().to_string())]
+        )
+    );
     Ok(())
 }
 
@@ -42,19 +48,31 @@ pub fn uninstall() -> Result<()> {
     if plist.exists() {
         std::fs::remove_file(&plist).with_context(|| format!("remove {}", plist.display()))?;
     }
-    println!("uninstalled {}", plist.display());
+    println!(
+        "{}",
+        crate::i18n::tr(
+            "cli.service.uninstalled",
+            &[("path", plist.display().to_string())]
+        )
+    );
     Ok(())
 }
 
 pub fn start() -> Result<()> {
     run_launchctl(&["kickstart", "-k", &format!("{}/{}", gui_domain(), LABEL)])?;
-    println!("started {LABEL}");
+    println!(
+        "{}",
+        crate::i18n::tr("cli.service.started", &[("label", LABEL.to_string())])
+    );
     Ok(())
 }
 
 pub fn stop() -> Result<()> {
     run_launchctl(&["kill", "TERM", &format!("{}/{}", gui_domain(), LABEL)])?;
-    println!("stopped {LABEL}");
+    println!(
+        "{}",
+        crate::i18n::tr("cli.service.stopped", &[("label", LABEL.to_string())])
+    );
     Ok(())
 }
 
@@ -76,16 +94,34 @@ pub fn status() -> Result<()> {
         Ok(Ok(None)) => {}
         Ok(Err(e)) => return Err(e),
         Err(_) => anyhow::bail!(
-            "daemon status query timed out after {}s",
-            DAEMON_STATUS_TIMEOUT.as_secs()
+            "{}",
+            crate::i18n::tr(
+                "cli.service.status_timeout",
+                &[("seconds", DAEMON_STATUS_TIMEOUT.as_secs().to_string())]
+            )
         ),
     }
-    println!("daemon: not running");
+    println!(
+        "daemon: {}",
+        crate::i18n::tr("cli.service.not_running", &[])
+    );
     let plist = plist_path();
     if plist.exists() {
-        println!("launchd.plist: installed {}", plist.display());
+        println!(
+            "launchd.plist: {}",
+            crate::i18n::tr(
+                "cli.service.plist_installed",
+                &[("path", plist.display().to_string())]
+            )
+        );
     } else {
-        println!("launchd.plist: not installed {}", plist.display());
+        println!(
+            "launchd.plist: {}",
+            crate::i18n::tr(
+                "cli.service.plist_not_installed",
+                &[("path", plist.display().to_string())]
+            )
+        );
     }
     Ok(())
 }

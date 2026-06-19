@@ -17,7 +17,13 @@ pub fn run(args: ConfigTemplateArgs) -> Result<()> {
     let out = args.out.unwrap_or_else(default_template_dir);
     let lang = template_lang(&args.lang);
     write_templates(&out, lang)?;
-    println!("config templates written to {}", out.display());
+    println!(
+        "{}",
+        crate::i18n::tr(
+            "cli.config_template.written",
+            &[("path", out.display().to_string())]
+        )
+    );
     Ok(())
 }
 
@@ -49,7 +55,8 @@ fn write_templates(out: &Path, lang: crate::i18n::Lang) -> Result<()> {
         .collect();
     if !conflicts.is_empty() {
         anyhow::bail!(
-            "refusing to overwrite existing template files:\n{}",
+            "{}\n{}",
+            crate::i18n::tr("cli.config_template.refuse_overwrite", &[]),
             conflicts.join("\n")
         );
     }

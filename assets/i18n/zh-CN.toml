@@ -134,6 +134,9 @@ live_speech = "实时识别"
 pipeline = "流水线"
 no_pipeline_steps = "暂无流水线步骤"
 search_prompt = "/ 搜索"
+status.connected = "已连接"
+status.config_reloaded = "配置已重载：{path}"
+status.input_title = "输入  ASR：{provider} -> {chain}"
 history_stats = "历史统计"
 history_stats_line = "记录：{shown} 条显示 / 共 {total} 条    总时长：{duration}    字：{words}    平均：{avg}"
 history_newest_first = "历史（新到旧）"
@@ -162,6 +165,12 @@ revealing = "正在 Finder 定位配置路径：{path}"
 validated = "已刷新配置清单并运行 doctor"
 reload_requested = "已发送 reload_config；配置清单已刷新"
 no_config_selected = "未选中配置文件"
+doctor_failed = "运行 doctor 失败：{error}"
+
+[tui.configure.inventory]
+warning = "警告：{summary}"
+error = "错误：{summary}"
+missing = "缺失：{summary}"
 
 [tui.configure.wizard]
 title = "新建 LLM 后处理组件"
@@ -191,6 +200,23 @@ pipeline = "流水线"
 sessions = "Sessions"
 error = "错误"
 json = "JSON"
+error_message = "{kind}：{error}"
+
+[tui.history.copy]
+final_ok = "已复制选中历史文本"
+asr_ok = "已复制选中 ASR 文本"
+
+[tui.history.pipeline]
+empty = "没有流水线步骤"
+
+[tui.history.sessions]
+empty = "没有 ASR session"
+
+[tui.history.error]
+empty = "没有错误"
+
+[tui.history.json]
+render_failed = "渲染 JSON 失败：{error}"
 
 [tui.history.audio]
 present_short = "A"
@@ -214,3 +240,52 @@ cancelled = "已取消"
 [tui.error]
 audio_action = "音频操作失败：{error}"
 config_action = "配置操作失败：{error}"
+clipboard = "剪贴板错误：{error}"
+daemon_event = "{kind}：{error}"
+
+[cli.service]
+installed = "已安装 {path}"
+uninstalled = "已卸载 {path}"
+started = "已启动 {label}"
+stopped = "已停止 {label}"
+status_timeout = "daemon 状态查询超过 {seconds}s"
+not_running = "未运行"
+plist_installed = "已安装 {path}"
+plist_not_installed = "未安装 {path}"
+
+[cli.config_template]
+written = "配置模板已写入 {path}"
+refuse_overwrite = "拒绝覆盖已存在的模板文件："
+
+[cli.doctor]
+version = "版本：{version}"
+runtime_skipped = "已跳过（运行 `shuo doctor --runtime` 可测试已配置的 ASR/LLM 运行路径）"
+blocking_issues = "doctor 发现 {count} 个阻断问题"
+i18n_diagnostics = "{count} 条诊断"
+config_checked = "已检查 {path} 下 {count} 个文件"
+effective_config = "实际生效配置："
+effective_config_unavailable = "不可用（{error}）"
+hint_edit_path = "编辑 {path}"
+hint_microphone_input = "在系统设置 > 声音 中连接或选择默认麦克风"
+hotkey_ok = "trigger {trigger_raw} -> {trigger}，cancel {cancel_raw} -> {cancel}"
+hint_hotkey_grammar = "查看 docs/DESIGN.md §2.4 了解支持的热键语法"
+runtime_skipped_config_errors = "已跳过，因为本地配置诊断存在错误"
+runtime_no_profiles = "{path} 下没有找到 profile"
+llm_runtime_no_components = "没有被引用的 LLM 组件"
+hint_apple_runtime = "编辑 {path}，或确认 macOS SpeechAnalyzer 可用"
+hint_doubao_runtime = "编辑 {path}，并确认 app_key/access_key 可用"
+asr_unsupported_provider = "profiles=[{profiles}] 不支持该 provider"
+asr_runtime_probing = "正在为 profiles=[{profiles}] 探测最小 session"
+llm_runtime_timeout = "profiles=[{profiles}] component={component} provider={provider} 超过 {seconds}s"
+hint_llm_runtime = "编辑 post/llm 组件或 profile [post.llm] 覆盖项"
+daemon_not_running = "未运行（无法连接 {socket}）"
+daemon_status_timeout = "状态查询超过 {seconds}s"
+daemon_ok = "pid={pid} uptime={uptime} state={state} recording={recording}"
+permission_accessibility_missing = "缺失或未授权"
+hint_permission_accessibility = "在系统设置 > 隐私与安全性 > 辅助功能 中授权启动 shuo 的终端应用"
+permission_microphone_not_determined = "尚未确定"
+permission_microphone_denied = "已拒绝"
+permission_microphone_restricted = "受系统策略限制"
+permission_microphone_unknown = "未知"
+hint_permission_microphone_prompt = "从运行 shuo 的终端应用启动一次录音以触发系统授权弹窗"
+hint_permission_microphone_grant = "在系统设置 > 隐私与安全性 > 麦克风 中授权启动 shuo 的终端应用"

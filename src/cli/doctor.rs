@@ -24,7 +24,13 @@ pub struct DoctorArgs {
 pub fn run(args: DoctorArgs) -> Result<()> {
     let mut report = DoctorReport::default();
     println!("shuo doctor");
-    println!("version: {}", env!("CARGO_PKG_VERSION"));
+    println!(
+        "{}",
+        tr(
+            "cli.doctor.version",
+            &[("version", env!("CARGO_PKG_VERSION").to_string())]
+        )
+    );
     report.record(check_config());
     report.record(check_i18n());
     report.record(check_hotkey());
@@ -35,9 +41,13 @@ pub fn run(args: DoctorArgs) -> Result<()> {
     if args.runtime {
         report.record(check_runtime());
     } else {
-        println!("runtime: skipped (run `shuo doctor --runtime` to test configured ASR/LLM runtime paths)");
+        println!("runtime: {}", tr("cli.doctor.runtime_skipped", &[]));
     }
     report.into_result()
+}
+
+fn tr(key: &str, vars: &[(&str, String)]) -> String {
+    crate::i18n::tr(key, vars)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +71,13 @@ impl DoctorReport {
 
     fn into_result(self) -> Result<()> {
         if self.errors > 0 {
-            anyhow::bail!("doctor found {} blocking issue(s)", self.errors);
+            anyhow::bail!(
+                "{}",
+                tr(
+                    "cli.doctor.blocking_issues",
+                    &[("count", self.errors.to_string())]
+                )
+            );
         }
         Ok(())
     }
@@ -73,7 +89,13 @@ fn check_i18n() -> CheckStatus {
         println!("i18n.embedded: OK");
         return CheckStatus::Ok;
     }
-    println!("i18n.embedded: ERROR {} diagnostics", diagnostics.len());
+    println!(
+        "i18n.embedded: ERROR {}",
+        tr(
+            "cli.doctor.i18n_diagnostics",
+            &[("count", diagnostics.len().to_string())]
+        )
+    );
     for diagnostic in diagnostics {
         println!("i18n.embedded: {diagnostic:?}");
     }
@@ -83,9 +105,14 @@ fn check_i18n() -> CheckStatus {
 fn check_config() -> CheckStatus {
     let report = crate::config::diagnostics::run_local();
     println!(
-        "config.local: checked {} files under {}",
-        report.files_checked,
-        report.root.display()
+        "config.local: {}",
+        tr(
+            "cli.doctor.config_checked",
+            &[
+                ("count", report.files_checked.to_string()),
+                ("path", report.root.display().to_string())
+            ]
+        )
     );
     for diagnostic in &report.diagnostics {
         println!(
@@ -108,7 +135,7 @@ fn check_config() -> CheckStatus {
     let path = crate::config::default_path();
     match crate::config::load_from(&path) {
         Ok(cfg) => {
-            println!("effective config:");
+            println!("{}", tr("cli.doctor.effective_config", &[]));
             println!("  hotkey.trigger = {:?}", cfg.hotkey.trigger);
             println!("  hotkey.cancel = {:?}", cfg.hotkey.cancel);
             println!("  post.timeout_ms = {}", cfg.post.timeout_ms);
@@ -123,8 +150,20 @@ fn check_config() -> CheckStatus {
             println!("  overlay.position = {:?}", cfg.overlay.position);
         }
         Err(e) => {
-            println!("effective config: unavailable ({e:#})");
-            println!("hint: edit {}", path.display());
+            println!(
+                "effective config: {}",
+                tr(
+                    "cli.doctor.effective_config_unavailable",
+                    &[("error", format!("{e:#}"))]
+                )
+            );
+            println!(
+                "hint: {}",
+                tr(
+                    "cli.doctor.hint_edit_path",
+                    &[("path", path.display().to_string())]
+                )
+            );
             status = CheckStatus::Error;
         }
     }
@@ -143,7 +182,7 @@ fn check_microphone_input() -> CheckStatus {
         }
         Err(e) => {
             println!("microphone.input: ERROR {e:#}");
-            println!("hint: connect or select a default microphone in System Settings → Sound");
+            println!("hint: {}", tr("cli.doctor.hint_microphone_input", &[]));
             CheckStatus::Error
         }
     }
@@ -164,14 +203,22 @@ fn check_hotkey() -> CheckStatus {
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "<missing>".to_string());
             println!(
-                "hotkey: OK trigger {:?} -> {}, cancel {:?} -> {}",
-                cfg.hotkey.trigger, trigger, cfg.hotkey.cancel, cancel
+                "hotkey: {}",
+                tr(
+                    "cli.doctor.hotkey_ok",
+                    &[
+                        ("trigger_raw", format!("{:?}", cfg.hotkey.trigger)),
+                        ("trigger", trigger),
+                        ("cancel_raw", format!("{:?}", cfg.hotkey.cancel)),
+                        ("cancel", cancel)
+                    ]
+                )
             );
             CheckStatus::Ok
         }
         Err(e) => {
             println!("hotkey: ERROR {e:#}");
-            println!("hint: see docs/DESIGN.md §2.4 for the supported hotkey grammar");
+            println!("hint: {}", tr("cli.doctor.hint_hotkey_grammar", &[]));
             CheckStatus::Error
         }
     }
@@ -181,7 +228,10 @@ fn check_runtime() -> CheckStatus {
     let plan = match crate::config::diagnostics::runtime_check_plan() {
         Ok(plan) => plan,
         Err(report) => {
-            println!("runtime: skipped because local config diagnostics have errors");
+            println!(
+                "runtime: {}",
+                tr("cli.doctor.runtime_skipped_config_errors", &[])
+            );
             for diagnostic in &report.diagnostics {
                 println!(
                     "runtime.blocker.{:?}: {:?} {} {}: {}",
@@ -196,7 +246,13 @@ fn check_runtime() -> CheckStatus {
         }
     };
     if plan.is_empty() {
-        println!("runtime: no profiles found under {}", plan.root.display());
+        println!(
+            "runtime: {}",
+            tr(
+                "cli.doctor.runtime_no_profiles",
+                &[("path", plan.root.display().to_string())]
+            )
+        );
         return CheckStatus::Warning;
     }
     let rt = match tokio::runtime::Builder::new_current_thread()
@@ -219,7 +275,10 @@ fn check_runtime() -> CheckStatus {
         }
         let llm_targets = plan.llm_targets();
         if llm_targets.is_empty() {
-            println!("llm.runtime: no referenced LLM components");
+            println!(
+                "llm.runtime: {}",
+                tr("cli.doctor.llm_runtime_no_components", &[])
+            );
         } else {
             for target in llm_targets {
                 if check_llm_runtime(target).await == CheckStatus::Error {
@@ -261,8 +320,16 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) -> CheckStatus {
                             target.profiles.join(", ")
                         );
                         println!(
-                            "hint: edit {} or verify macOS SpeechAnalyzer availability",
-                            crate::asr::providers::apple::config_path().display()
+                            "hint: {}",
+                            tr(
+                                "cli.doctor.hint_apple_runtime",
+                                &[(
+                                    "path",
+                                    crate::asr::providers::apple::config_path()
+                                        .display()
+                                        .to_string()
+                                )]
+                            )
                         );
                         return CheckStatus::Error;
                     }
@@ -275,8 +342,16 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) -> CheckStatus {
                     target.profiles.join(", ")
                 );
                 println!(
-                    "hint: edit {}",
-                    crate::asr::providers::apple::config_path().display()
+                    "hint: {}",
+                    tr(
+                        "cli.doctor.hint_edit_path",
+                        &[(
+                            "path",
+                            crate::asr::providers::apple::config_path()
+                                .display()
+                                .to_string()
+                        )]
+                    )
                 );
                 CheckStatus::Error
             }
@@ -300,8 +375,16 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) -> CheckStatus {
                             target.profiles.join(", ")
                         );
                         println!(
-                            "hint: edit {} and verify app_key/access_key",
-                            crate::asr::providers::doubao::config_path().display()
+                            "hint: {}",
+                            tr(
+                                "cli.doctor.hint_doubao_runtime",
+                                &[(
+                                    "path",
+                                    crate::asr::providers::doubao::config_path()
+                                        .display()
+                                        .to_string()
+                                )]
+                            )
                         );
                         return CheckStatus::Error;
                     }
@@ -314,16 +397,27 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) -> CheckStatus {
                     target.profiles.join(", ")
                 );
                 println!(
-                    "hint: edit {}",
-                    crate::asr::providers::doubao::config_path().display()
+                    "hint: {}",
+                    tr(
+                        "cli.doctor.hint_edit_path",
+                        &[(
+                            "path",
+                            crate::asr::providers::doubao::config_path()
+                                .display()
+                                .to_string()
+                        )]
+                    )
                 );
                 CheckStatus::Error
             }
         },
         other => {
             println!(
-                "asr.{other}.runtime: ERROR profiles=[{}] unsupported provider",
-                target.profiles.join(", ")
+                "asr.{other}.runtime: ERROR {}",
+                tr(
+                    "cli.doctor.asr_unsupported_provider",
+                    &[("profiles", target.profiles.join(", "))]
+                )
             );
             CheckStatus::Error
         }
@@ -332,8 +426,11 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) -> CheckStatus {
 
 fn asr_runtime_probe_line(provider: &str, profiles: &[String]) -> String {
     format!(
-        "asr.{provider}.runtime: probing minimal session for profiles=[{}]",
-        profiles.join(", ")
+        "asr.{provider}.runtime: {}",
+        tr(
+            "cli.doctor.asr_runtime_probing",
+            &[("profiles", profiles.join(", "))]
+        )
     )
 }
 
@@ -358,13 +455,18 @@ async fn check_llm_runtime(target: LlmRuntimeTarget) -> CheckStatus {
     match tokio::time::timeout(RUNTIME_CHECK_TIMEOUT, checker.check_runtime()).await {
         Err(_) => {
             println!(
-                "llm.runtime: ERROR profiles=[{}] component={} provider={} timed out after {}s",
-                target.profiles.join(", "),
-                target.id,
-                provider,
-                RUNTIME_CHECK_TIMEOUT.as_secs()
+                "llm.runtime: ERROR {}",
+                tr(
+                    "cli.doctor.llm_runtime_timeout",
+                    &[
+                        ("profiles", target.profiles.join(", ")),
+                        ("component", target.id.clone()),
+                        ("provider", provider.clone()),
+                        ("seconds", RUNTIME_CHECK_TIMEOUT.as_secs().to_string())
+                    ]
+                )
             );
-            println!("hint: edit post/llm component or profile [post.llm] override");
+            println!("hint: {}", tr("cli.doctor.hint_llm_runtime", &[]));
             CheckStatus::Error
         }
         Ok(Ok(())) => {
@@ -383,7 +485,7 @@ async fn check_llm_runtime(target: LlmRuntimeTarget) -> CheckStatus {
                 target.id,
                 provider
             );
-            println!("hint: edit post/llm component or profile [post.llm] override");
+            println!("hint: {}", tr("cli.doctor.hint_llm_runtime", &[]));
             CheckStatus::Error
         }
     }
@@ -411,8 +513,16 @@ fn check_uds() -> CheckStatus {
         }
         Ok(Ok(None)) => {
             println!(
-                "daemon: not running ({} not reachable)",
-                crate::ipc::server::default_socket_path().display()
+                "daemon: {}",
+                tr(
+                    "cli.doctor.daemon_not_running",
+                    &[(
+                        "socket",
+                        crate::ipc::server::default_socket_path()
+                            .display()
+                            .to_string()
+                    )]
+                )
             );
             CheckStatus::Warning
         }
@@ -422,8 +532,11 @@ fn check_uds() -> CheckStatus {
         }
         Err(_) => {
             println!(
-                "daemon: ERROR status query timed out after {}s",
-                DAEMON_STATUS_TIMEOUT.as_secs()
+                "daemon: ERROR {}",
+                tr(
+                    "cli.doctor.daemon_status_timeout",
+                    &[("seconds", DAEMON_STATUS_TIMEOUT.as_secs().to_string())]
+                )
             );
             CheckStatus::Error
         }
@@ -446,9 +559,19 @@ async fn query_daemon_status() -> Result<Option<String>> {
                 recording_id,
             } => {
                 return Ok(Some(format!(
-                    "daemon: OK pid={pid} uptime={} state={state:?} recording={}",
-                    format_duration(uptime_ms),
-                    recording_id.as_deref().unwrap_or("-")
+                    "daemon: OK {}",
+                    tr(
+                        "cli.doctor.daemon_ok",
+                        &[
+                            ("pid", pid.to_string()),
+                            ("uptime", format_duration(uptime_ms)),
+                            ("state", format!("{state:?}")),
+                            (
+                                "recording",
+                                recording_id.as_deref().unwrap_or("-").to_string()
+                            )
+                        ]
+                    )
                 )));
             }
             Event::Error { kind, msg, .. } => anyhow::bail!("{kind}: {msg}"),
@@ -461,10 +584,22 @@ async fn query_daemon_status() -> Result<Option<String>> {
 fn check_launchd() -> CheckStatus {
     let path = crate::cli::service::plist_path();
     if path.exists() {
-        println!("launchd.plist: installed {}", path.display());
+        println!(
+            "launchd.plist: {}",
+            tr(
+                "cli.service.plist_installed",
+                &[("path", path.display().to_string())]
+            )
+        );
         CheckStatus::Ok
     } else {
-        println!("launchd.plist: not installed {}", path.display());
+        println!(
+            "launchd.plist: {}",
+            tr(
+                "cli.service.plist_not_installed",
+                &[("path", path.display().to_string())]
+            )
+        );
         CheckStatus::Warning
     }
 }
@@ -474,29 +609,56 @@ fn check_permissions() -> CheckStatus {
     if accessibility_trusted() {
         println!("permissions.accessibility: OK");
     } else {
-        println!("permissions.accessibility: missing or not granted");
-        println!("hint: grant the terminal app that starts shuo in System Settings > Privacy & Security > Accessibility");
+        println!(
+            "permissions.accessibility: {}",
+            tr("cli.doctor.permission_accessibility_missing", &[])
+        );
+        println!(
+            "hint: {}",
+            tr("cli.doctor.hint_permission_accessibility", &[])
+        );
         status = CheckStatus::Error;
     }
     match microphone_authorization() {
         Some(MicrophoneAuthorization::Authorized) => println!("permissions.microphone: OK"),
         Some(MicrophoneAuthorization::NotDetermined) => {
-            println!("permissions.microphone: not determined");
-            println!("hint: start recording once from the terminal app that runs shuo to trigger the system prompt");
+            println!(
+                "permissions.microphone: {}",
+                tr("cli.doctor.permission_microphone_not_determined", &[])
+            );
+            println!(
+                "hint: {}",
+                tr("cli.doctor.hint_permission_microphone_prompt", &[])
+            );
             status = CheckStatus::Error;
         }
         Some(MicrophoneAuthorization::Denied) => {
-            println!("permissions.microphone: denied");
-            println!("hint: grant the terminal app that starts shuo in System Settings > Privacy & Security > Microphone");
+            println!(
+                "permissions.microphone: {}",
+                tr("cli.doctor.permission_microphone_denied", &[])
+            );
+            println!(
+                "hint: {}",
+                tr("cli.doctor.hint_permission_microphone_grant", &[])
+            );
             status = CheckStatus::Error;
         }
         Some(MicrophoneAuthorization::Restricted) => {
-            println!("permissions.microphone: restricted by system policy");
+            println!(
+                "permissions.microphone: {}",
+                tr("cli.doctor.permission_microphone_restricted", &[])
+            );
             status = CheckStatus::Error;
         }
         None => {
-            println!("permissions.microphone: unknown");
-            println!("hint: grant the terminal app that starts shuo in System Settings > Privacy & Security > Microphone");
+            println!(
+                "permissions.microphone: {}",
+                tr("cli.doctor.permission_microphone_unknown", &[])
+            );
+            println!(
+                "hint: {}",
+                tr("cli.doctor.hint_permission_microphone_grant", &[])
+            );
             status = CheckStatus::Error;
         }
     }

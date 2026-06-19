@@ -134,6 +134,9 @@ live_speech = "Live speech"
 pipeline = "Pipeline"
 no_pipeline_steps = "no pipeline steps yet"
 search_prompt = "/ to search"
+status.connected = "connected"
+status.config_reloaded = "config reloaded: {path}"
+status.input_title = "Input  ASR: {provider} -> {chain}"
 history_stats = "History stats"
 history_stats_line = "records: {shown} shown / {total} total    total: {duration}    words: {words}    avg: {avg}"
 history_newest_first = "History newest first"
@@ -162,6 +165,12 @@ revealing = "revealing config path in Finder: {path}"
 validated = "configuration inventory refreshed and doctor run"
 reload_requested = "reload_config sent; inventory refreshed"
 no_config_selected = "no config file selected"
+doctor_failed = "failed to run doctor: {error}"
+
+[tui.configure.inventory]
+warning = "warning: {summary}"
+error = "error: {summary}"
+missing = "missing: {summary}"
 
 [tui.configure.wizard]
 title = "New LLM post component"
@@ -191,6 +200,23 @@ pipeline = "Pipeline"
 sessions = "Sessions"
 error = "Error"
 json = "JSON"
+error_message = "{kind}: {error}"
+
+[tui.history.copy]
+final_ok = "copied selected history text"
+asr_ok = "copied selected ASR text"
+
+[tui.history.pipeline]
+empty = "no pipeline steps"
+
+[tui.history.sessions]
+empty = "no ASR sessions"
+
+[tui.history.error]
+empty = "no error"
+
+[tui.history.json]
+render_failed = "failed to render json: {error}"
 
 [tui.history.audio]
 present_short = "A"
@@ -214,3 +240,52 @@ cancelled = "cancelled"
 [tui.error]
 audio_action = "audio action failed: {error}"
 config_action = "config action failed: {error}"
+clipboard = "clipboard error: {error}"
+daemon_event = "{kind}: {error}"
+
+[cli.service]
+installed = "installed {path}"
+uninstalled = "uninstalled {path}"
+started = "started {label}"
+stopped = "stopped {label}"
+status_timeout = "daemon status query timed out after {seconds}s"
+not_running = "not running"
+plist_installed = "installed {path}"
+plist_not_installed = "not installed {path}"
+
+[cli.config_template]
+written = "config templates written to {path}"
+refuse_overwrite = "refusing to overwrite existing template files:"
+
+[cli.doctor]
+version = "version: {version}"
+runtime_skipped = "skipped (run `shuo doctor --runtime` to test configured ASR/LLM runtime paths)"
+blocking_issues = "doctor found {count} blocking issue(s)"
+i18n_diagnostics = "{count} diagnostics"
+config_checked = "checked {count} files under {path}"
+effective_config = "effective config:"
+effective_config_unavailable = "unavailable ({error})"
+hint_edit_path = "edit {path}"
+hint_microphone_input = "connect or select a default microphone in System Settings > Sound"
+hotkey_ok = "trigger {trigger_raw} -> {trigger}, cancel {cancel_raw} -> {cancel}"
+hint_hotkey_grammar = "see docs/DESIGN.md §2.4 for the supported hotkey grammar"
+runtime_skipped_config_errors = "skipped because local config diagnostics have errors"
+runtime_no_profiles = "no profiles found under {path}"
+llm_runtime_no_components = "no referenced LLM components"
+hint_apple_runtime = "edit {path} or verify macOS SpeechAnalyzer availability"
+hint_doubao_runtime = "edit {path} and verify app_key/access_key"
+asr_unsupported_provider = "profiles=[{profiles}] unsupported provider"
+asr_runtime_probing = "probing minimal session for profiles=[{profiles}]"
+llm_runtime_timeout = "profiles=[{profiles}] component={component} provider={provider} timed out after {seconds}s"
+hint_llm_runtime = "edit post/llm component or profile [post.llm] override"
+daemon_not_running = "not running ({socket} not reachable)"
+daemon_status_timeout = "status query timed out after {seconds}s"
+daemon_ok = "pid={pid} uptime={uptime} state={state} recording={recording}"
+permission_accessibility_missing = "missing or not granted"
+hint_permission_accessibility = "grant the terminal app that starts shuo in System Settings > Privacy & Security > Accessibility"
+permission_microphone_not_determined = "not determined"
+permission_microphone_denied = "denied"
+permission_microphone_restricted = "restricted by system policy"
+permission_microphone_unknown = "unknown"
+hint_permission_microphone_prompt = "start recording once from the terminal app that runs shuo to trigger the system prompt"
+hint_permission_microphone_grant = "grant the terminal app that starts shuo in System Settings > Privacy & Security > Microphone"

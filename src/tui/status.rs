@@ -265,7 +265,13 @@ fn render_status(frame: &mut Frame, page: &StatusPage, area: Rect, theme: &TuiTh
         ))
         .block(
             Block::default()
-                .title(format!("Input  ASR: {provider} -> {chain}"))
+                .title(crate::i18n::tr(
+                    "tui.status.input_title",
+                    &[
+                        ("provider", provider.to_string()),
+                        ("chain", chain.to_string()),
+                    ],
+                ))
                 .borders(Borders::ALL),
         ),
         chunks[1],

@@ -1157,7 +1157,7 @@ fn run_doctor() -> DoctorState {
         Err(e) => DoctorState {
             ran_once: true,
             status: Some("error".to_string()),
-            output: format!("failed to run doctor: {e}"),
+            output: crate::i18n::tr("tui.configure.doctor_failed", &[("error", e.to_string())]),
         },
     }
 }

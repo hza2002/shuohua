@@ -35,6 +35,7 @@ pub fn parse() -> Cli {
 }
 
 pub fn run_command(command: Command) -> Result<()> {
+    init_i18n_for_cli();
     match command {
         Command::Doctor(args) => doctor::run(args),
         Command::ConfigTemplate(args) => config_template::run(args),
@@ -49,6 +50,13 @@ pub fn run_command(command: Command) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn init_i18n_for_cli() {
+    let language = crate::config::load_from(&crate::config::default_path())
+        .map(|cfg| cfg.ui.language)
+        .unwrap_or_else(|_| "auto".to_string());
+    crate::i18n::init(&language);
 }
 
 #[cfg(test)]
@@ -75,5 +83,15 @@ mod tests {
     #[test]
     fn doctor_rejects_removed_full_flag() {
         assert!(Cli::try_parse_from(["shuo", "doctor", "--full"]).is_err());
+    }
+
+    #[test]
+    fn cli_i18n_keys_are_available() {
+        crate::i18n::init("en-US");
+
+        assert_eq!(
+            crate::i18n::tr("cli.service.started", &[("label", "x".to_string())]),
+            "started x"
+        );
     }
 }

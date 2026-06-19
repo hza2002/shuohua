@@ -22,9 +22,18 @@ fn row_from_entry(entry: &InventoryEntry) -> SettingsRow {
         display_key: display_key_for_entry(entry),
         value: match entry.status {
             inventory::InventoryStatus::Ok => entry.summary.clone(),
-            inventory::InventoryStatus::Warning => format!("warning: {}", entry.summary),
-            inventory::InventoryStatus::Error => format!("error: {}", entry.summary),
-            inventory::InventoryStatus::Missing => format!("missing: {}", entry.summary),
+            inventory::InventoryStatus::Warning => crate::i18n::tr(
+                "tui.configure.inventory.warning",
+                &[("summary", entry.summary.clone())],
+            ),
+            inventory::InventoryStatus::Error => crate::i18n::tr(
+                "tui.configure.inventory.error",
+                &[("summary", entry.summary.clone())],
+            ),
+            inventory::InventoryStatus::Missing => crate::i18n::tr(
+                "tui.configure.inventory.missing",
+                &[("summary", entry.summary.clone())],
+            ),
         },
         source: entry.source.display().to_string(),
         status: entry.status,

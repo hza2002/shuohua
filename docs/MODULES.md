@@ -99,7 +99,11 @@ src/
 │       ├── chrome.rs                    # NSGlassEffectView + SkyLight SPI + HUD fallback + 背景层
 │       └── debug.rs   (#[cfg(debug_assertions)])  # NSGlassEffectView SPI 探针
 └── i18n/
-    └── mod.rs                            # assets/i18n/*.toml 加载 + 静态 LANG 切换
+    ├── mod.rs                            # 内部入口：init/resolve_lang/tr/tr_lang/Lang + t! 宏
+    ├── lang.rs                           # ui.language/$LANG 解析：auto/en-US/zh-CN/zh-Hant/zh-TW/zh-HK/pseudo
+    ├── catalog.rs                        # 嵌入 TOML 加载、flatten、繁中 build 产物和 pseudo 字典装配
+    ├── format.rs                         # {placeholder} 替换、抽取和 pseudo 文案扩展
+    └── diagnostics.rs                    # 内置 i18n key/placeholder/空值诊断，doctor 复用
 ```
 
 `assets/themes/*.toml` 是内置主题的唯一事实来源。`build.rs` 在编译期扫描并校验

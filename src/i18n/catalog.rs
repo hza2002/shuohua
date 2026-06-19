@@ -66,14 +66,19 @@ fn flatten_toml(body: &str) -> HashMap<String, String> {
         .parse::<toml::Value>()
         .expect("embedded i18n TOML must parse");
     let mut out = HashMap::new();
-    flatten_value(None, &value, &mut out);
+    flatten_value(None, &value, &mut out)
+        .expect("embedded i18n TOML must contain only tables and string leaves");
     out
 }
 
-fn flatten_value(prefix: Option<&str>, value: &toml::Value, out: &mut HashMap<String, String>) {
-    let Some(table) = value.as_table() else {
-        return;
-    };
+fn flatten_value(
+    prefix: Option<&str>,
+    value: &toml::Value,
+    out: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| "i18n root must be a TOML table".to_string())?;
     for (key, value) in table {
         let full_key = match prefix {
             Some(prefix) => format!("{prefix}.{key}"),
@@ -81,8 +86,11 @@ fn flatten_value(prefix: Option<&str>, value: &toml::Value, out: &mut HashMap<St
         };
         if let Some(text) = value.as_str() {
             out.insert(full_key, text.to_string());
+        } else if value.is_table() {
+            flatten_value(Some(&full_key), value, out)?;
         } else {
-            flatten_value(Some(&full_key), value, out);
+            return Err(format!("i18n key {full_key} must be a string"));
         }
     }
+    Ok(())
 }

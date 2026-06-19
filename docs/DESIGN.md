@@ -690,17 +690,24 @@ thinking = { type = "disabled" }     # DeepSeek 专属；不是 OpenAI 通用默
 - 不做 per-URL / per-input 字段的更细粒度匹配 —— 粒度到 bundle_id 为止
 - 不允许 processor 整段拒绝输出 —— 失败只能跳过该步，链路始终产出（最差是 raw）
 
-### 2.11 i18n（界面双语）
+### 2.11 i18n（界面文案）
 
-v1 支持 **zh-CN** 和 **en-US**。设计目标：**不引第三方 crate**（`rust-i18n` / `fluent-rs` 都过重），手写 ~100 行搞定。
+v1 内置 **zh-CN** 和 **en-US** 两份人工维护文案，并在 build 阶段从 zh-CN
+派生 **zh-Hant / zh-TW / zh-HK**。另有 **pseudo** 伪语言用于检查 UI 宽度和
+漏翻译。设计目标：不引入 `rust-i18n` / `fluent-rs` / ICU 这类重型 i18n 框架；
+本项目只需要小而明确的内部接口。
 
-#### 字典文件结构
+#### 字典资产
 
 ```
 assets/i18n/
 ├── zh-CN.toml
 └── en-US.toml
 ```
+
+资产是嵌入 binary 的 TOML，结构可以嵌套，加载后 flatten 成
+`overlay.state_idle` 这类 dotted key。叶子节点必须是 string；其它类型直接让
+构建 / 测试失败，避免误写资产后静默丢 key。
 
 ```toml
 # assets/i18n/zh-CN.toml
@@ -748,55 +755,54 @@ asr_runtime      = "ASR interrupted — nothing pasted"
 dispatch         = "Paste failed — text saved in history"
 ```
 
-#### 实现（约 80 行）
+#### 模块边界
+
+`src/i18n/` 是内部模块，不作为外部 library API 承诺稳定性：
+
+- `mod.rs`：对内入口，暴露 `init` / `resolve_lang` / `tr` / `tr_lang` / `Lang`
+  和 `t!` 宏；当前字典保存在全局 `OnceLock<RwLock<Arc<Dict>>>`。
+- `lang.rs`：解析 `auto`、BCP-47-ish tag 和 `$LANG`，不做完整 locale negotiation。
+- `catalog.rs`：加载嵌入资产、flatten TOML、装配 build 生成的繁中字典和 pseudo 字典。
+- `format.rs`：处理 `{name}` 占位符替换、placeholder 抽取、pseudo 文案扩展。
+- `diagnostics.rs`：检查内置资产 key 对齐、placeholder 对齐和空值；`doctor` 复用。
+
+翻译调用只用：
 
 ```rust
-// src/i18n/mod.rs
-use std::collections::HashMap;
-use std::sync::{Arc, OnceLock, RwLock};
-
-static DICT: OnceLock<RwLock<Arc<Dict>>> = OnceLock::new();
-
-pub struct Dict {
-    pub entries: HashMap<String, String>,   // 扁平 key 如 "overlay.state_idle"
-}
-
-pub enum Lang { ZhCN, EnUS }
-
-pub fn init(cfg_lang: &str) {
-    let lang = resolve_lang(cfg_lang);     // "auto" → 读 $LANG → fallback en-US
-    let entries = load_toml(lang);
-    set_dict(Dict { entries });
-}
-
-/// t!("overlay.state_recording") → "录音中" / "Recording"
-/// t!("notice.step_failed", name = "filler") → "filler failed, skipped"
-#[macro_export]
-macro_rules! t {
-    ($key:expr) => { $crate::i18n::tr($key, &[]) };
-    ($key:expr, $($k:ident = $v:expr),*) => {
-        $crate::i18n::tr($key, &[$((stringify!($k), $v.to_string())),*])
-    };
-}
-
-pub fn tr(key: &str, vars: &[(&str, String)]) -> String {
-    let d = DICT.get().unwrap().load();
-    let template = d.entries.get(key).cloned().unwrap_or_else(|| key.to_string());
-    vars.iter().fold(template, |acc, (k, v)| acc.replace(&format!("{{{}}}", k), v))
-}
+t!("overlay.state_recording")
+t!("notice.step_failed", name = "filler")
+crate::i18n::tr_lang(lang, "config.field.ui.language.description", &[])
 ```
 
 #### 配置
 
 ```toml
 [ui]
-language = "auto"        # auto | zh-CN | en-US
+language = "auto"        # auto | en-US | zh-CN | zh-Hant | zh-TW | zh-HK | pseudo
 ```
 
 `auto` 解析逻辑：
 1. 读 `$LANG`
-2. 以 `zh` 开头 → `zh-CN`
-3. 其他 → `en-US`
+2. `zh-TW` → `zh-TW`，`zh-HK` / `zh-MO` → `zh-HK`，`zh-Hant` → `zh-Hant`
+3. 其它 `zh*` → `zh-CN`
+4. 其它语言 → `en-US`
+
+#### 构建期派生和校验
+
+`build.rs` 从 `assets/i18n/zh-CN.toml` 生成三份繁中文字典：
+
+- `i18n_zh_hant.rs`：OpenCC `s2t`
+- `i18n_zh_tw.rs`：OpenCC `s2twp`
+- `i18n_zh_hk.rs`：OpenCC `s2hk`
+
+生成时保留 `{placeholder}` 不转换。pseudo locale 从 en-US 动态生成，保留
+placeholder 并扩展英文字符，用来暴露 UI 截断和漏翻译。
+
+i18n 质量门禁：
+
+- `cargo test` 覆盖 zh-CN / en-US key 集合一致。
+- `diagnostics::diagnose_embedded()` 检查 base/derived/pseudo 的 key、placeholder 和空值。
+- `shuo doctor` 执行内置 i18n 诊断；有问题返回 blocking error。
 
 #### 应用范围
 

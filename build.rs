@@ -5,6 +5,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/asr/providers/apple_helper.swift");
     println!("cargo:rerun-if-changed=assets/themes");
     println!("cargo:rerun-if-changed=assets/i18n/zh-CN.toml");
+    println!("cargo:rerun-if-changed=assets/i18n/en-US.toml");
     println!("cargo:rustc-link-lib=framework=AppKit");
     println!("cargo:rustc-link-lib=framework=ApplicationServices");
     println!("cargo:rustc-link-lib=framework=QuartzCore");
@@ -70,9 +71,9 @@ fn flatten_i18n_toml(value: &toml::Value) -> Vec<(String, String)> {
 }
 
 fn flatten_i18n_value(prefix: Option<&str>, value: &toml::Value, out: &mut Vec<(String, String)>) {
-    let Some(table) = value.as_table() else {
-        return;
-    };
+    let table = value
+        .as_table()
+        .unwrap_or_else(|| panic!("i18n root must be a TOML table"));
     for (key, value) in table {
         let full_key = match prefix {
             Some(prefix) => format!("{prefix}.{key}"),
@@ -80,8 +81,10 @@ fn flatten_i18n_value(prefix: Option<&str>, value: &toml::Value, out: &mut Vec<(
         };
         if let Some(text) = value.as_str() {
             out.push((full_key, text.to_string()));
-        } else {
+        } else if value.is_table() {
             flatten_i18n_value(Some(&full_key), value, out);
+        } else {
+            panic!("i18n key {full_key} must be a string");
         }
     }
 }

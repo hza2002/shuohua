@@ -1,5 +1,5 @@
 //! 平台无关的 overlay 布局。
-//! 所有几何输出使用 `LayoutFrame`，平台 view 自行转成 NSRect / 其他原生类型。
+//! 所有几何输出使用 `LayoutFrame`，平台 view 自行转成平台原生矩形类型。
 
 use crate::config::OverlayPosition;
 

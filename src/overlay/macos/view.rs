@@ -381,8 +381,10 @@ impl OverlayView {
             self.stats.setStringValue(&NSString::from_str(&stats_text));
             self.last_stats_text = stats_text;
         }
-        self.stats
-            .setTextColor(Some(&color_from_rgb_alpha(self.cfg.core.text.secondary, 1.0)));
+        self.stats.setTextColor(Some(&color_from_rgb_alpha(
+            self.cfg.core.text.secondary,
+            1.0,
+        )));
 
         // meta 行：notice 活跃时盖住 chain_summary，黄字。
         let (meta_text, meta_color) = if let Some(notice) = &self.model.notice {

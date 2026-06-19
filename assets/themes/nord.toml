@@ -1,0 +1,60 @@
+# Palette: Nord (https://www.nordtheme.com/docs/colors-and-palettes)
+name = "Nord"
+
+[palette]
+polar0 = 0x2E3440
+polar1 = 0x3B4252
+polar2 = 0x434C5E
+polar3 = 0x4C566A
+snow0 = 0xD8DEE9
+snow1 = 0xE5E9F0
+snow2 = 0xECEFF4
+frost0 = 0x8FBCBB
+frost1 = 0x88C0D0
+frost2 = 0x81A1C1
+frost3 = 0x5E81AC
+red = 0xBF616A
+orange = 0xD08770
+yellow = 0xEBCB8B
+green = 0xA3BE8C
+purple = 0xB48EAD
+
+[tui]
+foreground = "snow0"
+muted = "polar3"
+accent = "frost1"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "frost2"
+highlight = "frost1"
+border = "polar3"
+border_focus = "frost1"
+segment = "snow1"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "polar0"
+background_alpha = 0.70
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "snow2"
+secondary = "snow0"
+tertiary = "snow1"
+segment = "snow0"
+notice = "yellow"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "orange"
+recording = "red"
+thinking = "frost2"
+stopping = "yellow"
+error = "red"

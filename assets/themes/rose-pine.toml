@@ -1,0 +1,56 @@
+# Palette: Rosé Pine Main (https://rosepinetheme.com/palette/)
+name = "Rose Pine"
+
+[palette]
+base = 0x191724
+surface = 0x1F1D2E
+overlay = 0x26233A
+muted = 0x6E6A86
+subtle = 0x908CAA
+text = 0xE0DEF4
+love = 0xEB6F92
+gold = 0xF6C177
+rose = 0xEBBCBA
+pine = 0x31748F
+foam = 0x9CCFD8
+iris = 0xC4A7E7
+
+[tui]
+foreground = "text"
+muted = "muted"
+accent = "iris"
+success = "foam"
+warning = "gold"
+error = "love"
+info = "pine"
+highlight = "rose"
+border = "muted"
+border_focus = "iris"
+segment = "subtle"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "base"
+background_alpha = 0.7
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "text"
+secondary = "subtle"
+tertiary = "muted"
+segment = "subtle"
+notice = "gold"
+error = "love"
+
+[overlay.state]
+idle = "foam"
+connecting = "gold"
+recording = "love"
+thinking = "iris"
+stopping = "rose"
+error = "love"

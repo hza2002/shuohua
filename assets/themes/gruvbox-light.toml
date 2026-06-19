@@ -1,0 +1,58 @@
+# Palette: Gruvbox light (https://github.com/morhetz/gruvbox)
+name = "Gruvbox Light"
+
+[palette]
+bg = 0xFBF1C7
+fg0 = 0x282828
+fg1 = 0x3C3836
+fg2 = 0x504945
+fg3 = 0x665C54
+muted = 0x928374
+red = 0x9D0006
+dark_red = 0xCC241D
+orange = 0xAF3A03
+yellow = 0xB57614
+green = 0x79740E
+aqua = 0x427B58
+blue = 0x076678
+purple = 0x8F3F71
+
+[tui]
+foreground = "fg1"
+muted = "muted"
+accent = "blue"
+success = "aqua"
+warning = "yellow"
+error = "red"
+info = "blue"
+highlight = "blue"
+border = "muted"
+border_focus = "blue"
+segment = "fg3"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "bg"
+background_alpha = 0.70
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "fg0"
+secondary = "fg2"
+tertiary = "fg3"
+segment = "fg2"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "aqua"
+connecting = "orange"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "dark_red"

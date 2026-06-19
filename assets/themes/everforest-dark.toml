@@ -1,0 +1,55 @@
+# Palette: Everforest dark medium (https://github.com/sainnhe/everforest/blob/master/palette.md)
+name = "Everforest Dark"
+
+[palette]
+bg = 0x2D353B
+fg = 0xD3C6AA
+gray0 = 0x7A8478
+gray1 = 0x859289
+red = 0xE67E80
+orange = 0xE69875
+yellow = 0xDBBC7F
+green = 0xA7C080
+aqua = 0x83C092
+blue = 0x7FBBB3
+purple = 0xD699B6
+
+[tui]
+foreground = "fg"
+muted = "gray0"
+accent = "blue"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "aqua"
+highlight = "blue"
+border = "gray0"
+border_focus = "blue"
+segment = "gray1"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "bg"
+background_alpha = 0.70
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "fg"
+secondary = "gray1"
+tertiary = "gray0"
+segment = "gray1"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "aqua"
+connecting = "orange"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "red"

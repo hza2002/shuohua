@@ -1,0 +1,62 @@
+# Palette: Catppuccin Mocha (https://catppuccin.com/palette/)
+name = "Catppuccin Mocha"
+
+[palette]
+rosewater = 0xF5E0DC
+flamingo = 0xF2CDCD
+pink = 0xF5C2E7
+mauve = 0xCBA6F7
+red = 0xF38BA8
+maroon = 0xEBA0AC
+peach = 0xFAB387
+yellow = 0xF9E2AF
+green = 0xA6E3A1
+teal = 0x94E2D5
+sky = 0x89DCED
+blue = 0x89B4FA
+lavender = 0xB4BEFE
+text = 0xCDD6F4
+subtext1 = 0xBAC2DE
+subtext0 = 0xA6ADC8
+overlay1 = 0x7F849C
+base = 0x1E1E2E
+
+[tui]
+foreground = "text"
+muted = "overlay1"
+accent = "mauve"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "blue"
+highlight = "mauve"
+border = "overlay1"
+border_focus = "mauve"
+segment = "subtext0"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "base"
+background_alpha = 0.60
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "text"
+secondary = "subtext1"
+tertiary = "subtext0"
+segment = "subtext1"
+notice = "peach"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "peach"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "maroon"

@@ -1,0 +1,56 @@
+# Palette: Rosé Pine Dawn (https://rosepinetheme.com/palette/)
+name = "Rose Pine Dawn"
+
+[palette]
+base = 0xFAF4ED
+surface = 0xFFFAF3
+overlay = 0xF2E9E1
+muted = 0x9893A5
+subtle = 0x797593
+text = 0x575279
+love = 0xB4637A
+gold = 0xEA9D34
+rose = 0xD7827E
+pine = 0x286983
+foam = 0x56949F
+iris = 0x907AA9
+
+[tui]
+foreground = "text"
+muted = "muted"
+accent = "iris"
+success = "foam"
+warning = "gold"
+error = "love"
+info = "pine"
+highlight = "iris"
+border = "muted"
+border_focus = "iris"
+segment = "subtle"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "base"
+background_alpha = 0.60
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "text"
+secondary = "subtle"
+tertiary = "muted"
+segment = "subtle"
+notice = "gold"
+error = "love"
+
+[overlay.state]
+idle = "foam"
+connecting = "gold"
+recording = "love"
+thinking = "iris"
+stopping = "rose"
+error = "love"

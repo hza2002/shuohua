@@ -1,0 +1,62 @@
+# Palette: Catppuccin Latte (https://catppuccin.com/palette/)
+name = "Catppuccin Latte"
+
+[palette]
+rosewater = 0xDC8A78
+flamingo = 0xDD7878
+pink = 0xEA76CB
+mauve = 0x8839EF
+red = 0xD20F39
+maroon = 0xE64553
+peach = 0xFE640B
+yellow = 0xDF8E1D
+green = 0x40A02B
+teal = 0x179299
+sky = 0x04A5E5
+blue = 0x1E66F5
+lavender = 0x7287FD
+text = 0x4C4F69
+subtext1 = 0x5C5F77
+subtext0 = 0x6C6F85
+overlay1 = 0x8C8FA1
+base = 0xEFF1F5
+
+[tui]
+foreground = "text"
+muted = "overlay1"
+accent = "mauve"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "blue"
+highlight = "mauve"
+border = "overlay1"
+border_focus = "mauve"
+segment = "subtext0"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "base"
+background_alpha = 0.80
+background_blur_radius = 3
+corner_radius = 18.0
+
+[overlay.text]
+primary = "text"
+secondary = "subtext1"
+tertiary = "subtext0"
+segment = "subtext1"
+notice = "peach"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "peach"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "maroon"

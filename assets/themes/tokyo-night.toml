@@ -1,0 +1,56 @@
+# Palette: Tokyo Night Night (https://github.com/folke/tokyonight.nvim)
+name = "Tokyo Night"
+
+[palette]
+bg = 0x1A1B26
+fg = 0xC0CAF5
+fg_dark = 0xA9B1D6
+comment = 0x565F89
+blue = 0x7AA2F7
+cyan = 0x7DCFFF
+green = 0x9ECE6A
+yellow = 0xE0AF68
+orange = 0xFF9E64
+red = 0xF7768E
+magenta = 0xBB9AF7
+purple = 0x9D7CD8
+
+[tui]
+foreground = "fg"
+muted = "comment"
+accent = "blue"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "cyan"
+highlight = "magenta"
+border = "comment"
+border_focus = "blue"
+segment = "fg_dark"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "bg"
+background_alpha = 0.80
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "fg"
+secondary = "fg_dark"
+tertiary = "comment"
+segment = "fg_dark"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "orange"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "red"

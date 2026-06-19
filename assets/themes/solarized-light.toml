@@ -1,0 +1,60 @@
+# Palette: Solarized (https://ethanschoonover.com/solarized/)
+name = "Solarized Light"
+
+[palette]
+base03 = 0x002B36
+base02 = 0x073642
+base01 = 0x586E75
+base00 = 0x657B83
+base0 = 0x839496
+base1 = 0x93A1A1
+base2 = 0xEEE8D5
+base3 = 0xFDF6E3
+yellow = 0xB58900
+orange = 0xCB4B16
+red = 0xDC322F
+magenta = 0xD33682
+violet = 0x6C71C4
+blue = 0x268BD2
+cyan = 0x2AA198
+green = 0x859900
+
+[tui]
+foreground = "base00"
+muted = "base1"
+accent = "blue"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "cyan"
+highlight = "blue"
+border = "base1"
+border_focus = "blue"
+segment = "base01"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "base3"
+background_alpha = 0.70
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "base03"
+secondary = "base00"
+tertiary = "base01"
+segment = "base00"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "orange"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "red"

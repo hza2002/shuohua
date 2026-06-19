@@ -1,0 +1,60 @@
+# Palette: Everforest light medium (https://github.com/sainnhe/everforest/blob/master/palette.md)
+name = "Everforest Light"
+
+[palette]
+bg = 0xFDF6E3
+fg = 0x5C6A72
+gray0 = 0xA6B0A0
+gray1 = 0x939F91
+surface = 0xFFFBEF
+gray2 = 0x829181
+status_green = 0x93B259
+status_fg = 0x708089
+status_red = 0xE66868
+red = 0xF85552
+orange = 0xF57D26
+yellow = 0xDFA000
+green = 0x8DA101
+aqua = 0x35A77C
+blue = 0x3A94C5
+purple = 0xDF69BA
+
+[tui]
+foreground = "fg"
+muted = "gray1"
+accent = "blue"
+success = "aqua"
+warning = "yellow"
+error = "red"
+info = "blue"
+highlight = "blue"
+border = "gray0"
+border_focus = "blue"
+segment = "gray1"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "surface"
+background_alpha = 0.78
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "fg"
+secondary = "fg"
+tertiary = "status_fg"
+segment = "fg"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "status_green"
+connecting = "orange"
+recording = "red"
+thinking = "blue"
+stopping = "yellow"
+error = "status_red"

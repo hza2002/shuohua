@@ -1,0 +1,55 @@
+# Palette: Dracula (https://draculatheme.com/spec)
+name = "Dracula"
+
+[palette]
+background = 0x282A36
+current_line = 0x44475A
+foreground = 0xF8F8F2
+comment = 0x6272A4
+cyan = 0x8BE9FD
+green = 0x50FA7B
+orange = 0xFFB86C
+pink = 0xFF79C6
+purple = 0xBD93F9
+red = 0xFF5555
+yellow = 0xF1FA8C
+
+[tui]
+foreground = "foreground"
+muted = "comment"
+accent = "purple"
+success = "green"
+warning = "yellow"
+error = "red"
+info = "cyan"
+highlight = "pink"
+border = "comment"
+border_focus = "purple"
+segment = "comment"
+
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background = "background"
+background_alpha = 0.80
+background_blur_radius = 0
+corner_radius = 18.0
+
+[overlay.text]
+primary = "foreground"
+secondary = "cyan"
+tertiary = "comment"
+segment = "cyan"
+notice = "orange"
+error = "red"
+
+[overlay.state]
+idle = "green"
+connecting = "orange"
+recording = "red"
+thinking = "purple"
+stopping = "yellow"
+error = "red"

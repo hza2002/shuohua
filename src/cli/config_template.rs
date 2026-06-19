@@ -41,25 +41,47 @@ fn template_lang(value: &str) -> crate::i18n::Lang {
 
 fn write_templates(out: &Path, lang: crate::i18n::Lang) -> Result<()> {
     std::fs::create_dir_all(out).with_context(|| format!("create {}", out.display()))?;
-    for template in crate::config::template::registry() {
-        write_new_file(
-            &out.join(template.path),
-            crate::config::template::render_with_lang(template, lang),
-        )?;
+    let templates = template_outputs(out, lang);
+    let conflicts: Vec<_> = templates
+        .iter()
+        .filter(|(path, _)| path.exists())
+        .map(|(path, _)| path.display().to_string())
+        .collect();
+    if !conflicts.is_empty() {
+        anyhow::bail!(
+            "refusing to overwrite existing template files:\n{}",
+            conflicts.join("\n")
+        );
     }
-    for preset in crate::config::template::theme_presets() {
-        write_new_file(
-            &out.join(preset.path),
-            crate::config::template::render_theme_preset(preset),
-        )?;
+    for (path, body) in templates {
+        write_new_file(&path, body)?;
     }
     Ok(())
 }
 
+fn template_outputs(out: &Path, lang: crate::i18n::Lang) -> Vec<(PathBuf, String)> {
+    crate::config::template::registry()
+        .iter()
+        .map(|template| {
+            (
+                out.join(template.path),
+                crate::config::template::render_with_lang(template, lang),
+            )
+        })
+        .chain(
+            crate::config::template::theme_presets()
+                .iter()
+                .map(|preset| {
+                    (
+                        out.join(preset.path),
+                        crate::config::template::render_theme_preset(preset),
+                    )
+                }),
+        )
+        .collect()
+}
+
 fn write_new_file(path: &Path, body: String) -> Result<()> {
-    if path.exists() {
-        anyhow::bail!("refusing to overwrite {}", path.display());
-    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
@@ -108,6 +130,23 @@ mod tests {
             .to_string();
 
         assert!(error.contains("refusing to overwrite"), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn refuses_all_conflicts_before_writing_any_template() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("config.toml"), "existing").unwrap();
+        std::fs::create_dir_all(dir.join("asr")).unwrap();
+        std::fs::write(dir.join("asr/apple.toml"), "existing").unwrap();
+
+        let error = write_templates(&dir, crate::i18n::Lang::EnUS)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("config.toml"), "{error}");
+        assert!(error.contains("asr/apple.toml"), "{error}");
+        assert!(!dir.join("profile/default.toml").exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 

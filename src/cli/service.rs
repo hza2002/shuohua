@@ -1,11 +1,13 @@
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 
 use crate::ipc::protocol::{Command, Event};
 
 const LABEL: &str = "com.hza2002.shuohua";
+const DAEMON_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub fn plist_path() -> PathBuf {
     home_dir().join("Library/LaunchAgents/com.hza2002.shuohua.plist")
@@ -66,9 +68,17 @@ pub fn status() -> Result<()> {
         .enable_all()
         .build()
         .context("create status runtime")?;
-    if let Some(line) = rt.block_on(uds_status())? {
-        println!("{line}");
-        return Ok(());
+    match rt.block_on(tokio::time::timeout(DAEMON_STATUS_TIMEOUT, uds_status())) {
+        Ok(Ok(Some(line))) => {
+            println!("{line}");
+            return Ok(());
+        }
+        Ok(Ok(None)) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(_) => anyhow::bail!(
+            "daemon status query timed out after {}s",
+            DAEMON_STATUS_TIMEOUT.as_secs()
+        ),
     }
     println!("daemon: not running");
     let plist = plist_path();
@@ -194,5 +204,15 @@ fn format_duration(ms: u64) -> String {
         format!("{m}m{s}s")
     } else {
         format!("{s}s")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    #[test]
+    fn status_timeout_matches_cli_contract() {
+        assert_eq!(super::DAEMON_STATUS_TIMEOUT, Duration::from_secs(1));
     }
 }

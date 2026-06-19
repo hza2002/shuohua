@@ -3,12 +3,16 @@ use clap::Args;
 use objc2::msg_send;
 use objc2::runtime::AnyClass;
 use objc2_foundation::ns_string;
+use std::time::Duration;
 
 use crate::asr::types::{LanguageMode, SessionCtx};
 use crate::asr::AsrProvider;
 use crate::config::diagnostics::{AsrRuntimeTarget, LlmRuntimeTarget};
 use crate::ipc::protocol::{Command, Event};
 use crate::post::llm::LlmCleanup;
+
+const DAEMON_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
+const RUNTIME_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
@@ -18,36 +22,65 @@ pub struct DoctorArgs {
 }
 
 pub fn run(args: DoctorArgs) -> Result<()> {
+    let mut report = DoctorReport::default();
     println!("shuo doctor");
     println!("version: {}", env!("CARGO_PKG_VERSION"));
-    check_config();
-    check_i18n();
-    check_hotkey();
-    check_microphone_input();
-    check_uds();
-    check_launchd();
-    check_permissions();
+    report.record(check_config());
+    report.record(check_i18n());
+    report.record(check_hotkey());
+    report.record(check_microphone_input());
+    report.record(check_uds());
+    report.record(check_launchd());
+    report.record(check_permissions());
     if args.runtime {
-        check_runtime();
+        report.record(check_runtime());
     } else {
         println!("runtime: skipped (run `shuo doctor --runtime` to test configured ASR/LLM runtime paths)");
     }
-    Ok(())
+    report.into_result()
 }
 
-fn check_i18n() {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckStatus {
+    Ok,
+    Warning,
+    Error,
+}
+
+#[derive(Default)]
+struct DoctorReport {
+    errors: usize,
+}
+
+impl DoctorReport {
+    fn record(&mut self, status: CheckStatus) {
+        if status == CheckStatus::Error {
+            self.errors += 1;
+        }
+    }
+
+    fn into_result(self) -> Result<()> {
+        if self.errors > 0 {
+            anyhow::bail!("doctor found {} blocking issue(s)", self.errors);
+        }
+        Ok(())
+    }
+}
+
+fn check_i18n() -> CheckStatus {
     let diagnostics = crate::i18n::diagnostics::diagnose_embedded();
     if diagnostics.is_empty() {
         println!("i18n.embedded: OK");
-        return;
+        return CheckStatus::Ok;
     }
     println!("i18n.embedded: ERROR {} diagnostics", diagnostics.len());
     for diagnostic in diagnostics {
         println!("i18n.embedded: {diagnostic:?}");
     }
+    CheckStatus::Error
 }
 
-fn check_config() {
+fn check_config() -> CheckStatus {
     let report = crate::config::diagnostics::run_local();
     println!(
         "config.local: checked {} files under {}",
@@ -64,11 +97,13 @@ fn check_config() {
             diagnostic.message
         );
     }
-    if report.has_errors() {
+    let mut status = if report.has_errors() {
         println!("config.local: ERROR");
+        CheckStatus::Error
     } else {
         println!("config.local: OK");
-    }
+        CheckStatus::Ok
+    };
 
     let path = crate::config::default_path();
     match crate::config::load_from(&path) {
@@ -90,11 +125,13 @@ fn check_config() {
         Err(e) => {
             println!("effective config: unavailable ({e:#})");
             println!("hint: edit {}", path.display());
+            status = CheckStatus::Error;
         }
     }
+    status
 }
 
-fn check_microphone_input() {
+fn check_microphone_input() -> CheckStatus {
     match crate::voice::recorder::probe_default_input() {
         Ok(info) => {
             let name = info.name.unwrap_or_else(|| "<unknown>".to_string());
@@ -102,15 +139,17 @@ fn check_microphone_input() {
                 "microphone.input: OK {name} ({}Hz, {}ch, {:?})",
                 info.sample_rate, info.channels, info.sample_format
             );
+            CheckStatus::Ok
         }
         Err(e) => {
             println!("microphone.input: ERROR {e:#}");
             println!("hint: connect or select a default microphone in System Settings → Sound");
+            CheckStatus::Error
         }
     }
 }
 
-fn check_hotkey() {
+fn check_hotkey() -> CheckStatus {
     match crate::config::load_from(&crate::config::default_path()).and_then(|cfg| {
         crate::hotkey::Bindings::parse(&cfg.hotkey.trigger, &cfg.hotkey.cancel)
             .map(|bindings| (cfg, bindings))
@@ -128,15 +167,17 @@ fn check_hotkey() {
                 "hotkey: OK trigger {:?} -> {}, cancel {:?} -> {}",
                 cfg.hotkey.trigger, trigger, cfg.hotkey.cancel, cancel
             );
+            CheckStatus::Ok
         }
         Err(e) => {
             println!("hotkey: ERROR {e:#}");
             println!("hint: see docs/DESIGN.md §2.4 for the supported hotkey grammar");
+            CheckStatus::Error
         }
     }
 }
 
-fn check_runtime() {
+fn check_runtime() -> CheckStatus {
     let plan = match crate::config::diagnostics::runtime_check_plan() {
         Ok(plan) => plan,
         Err(report) => {
@@ -151,12 +192,12 @@ fn check_runtime() {
                     diagnostic.message
                 );
             }
-            return;
+            return CheckStatus::Error;
         }
     };
     if plan.is_empty() {
         println!("runtime: no profiles found under {}", plan.root.display());
-        return;
+        return CheckStatus::Warning;
     }
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -166,25 +207,31 @@ fn check_runtime() {
         Ok(rt) => rt,
         Err(e) => {
             println!("runtime: ERROR {e:#}");
-            return;
+            return CheckStatus::Error;
         }
     };
     rt.block_on(async {
+        let mut status = CheckStatus::Ok;
         for target in plan.asr_targets() {
-            check_asr_runtime(target).await;
+            if check_asr_runtime(target).await == CheckStatus::Error {
+                status = CheckStatus::Error;
+            }
         }
         let llm_targets = plan.llm_targets();
         if llm_targets.is_empty() {
             println!("llm.runtime: no referenced LLM components");
         } else {
             for target in llm_targets {
-                check_llm_runtime(target).await;
+                if check_llm_runtime(target).await == CheckStatus::Error {
+                    status = CheckStatus::Error;
+                }
             }
         }
-    });
+        status
+    })
 }
 
-async fn check_asr_runtime(target: AsrRuntimeTarget) {
+async fn check_asr_runtime(target: AsrRuntimeTarget) -> CheckStatus {
     let ctx = SessionCtx {
         language: LanguageMode::Multilingual {
             hint: vec!["zh-CN".to_string(), "en-US".to_string()],
@@ -217,8 +264,10 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) {
                             "hint: edit {} or verify macOS SpeechAnalyzer availability",
                             crate::asr::providers::apple::config_path().display()
                         );
+                        return CheckStatus::Error;
                     }
                 }
+                CheckStatus::Ok
             }
             Err(e) => {
                 println!(
@@ -229,6 +278,7 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) {
                     "hint: edit {}",
                     crate::asr::providers::apple::config_path().display()
                 );
+                CheckStatus::Error
             }
         },
         "doubao" => match crate::asr::providers::doubao::DoubaoProvider::new_with_overrides(Some(
@@ -253,8 +303,10 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) {
                             "hint: edit {} and verify app_key/access_key",
                             crate::asr::providers::doubao::config_path().display()
                         );
+                        return CheckStatus::Error;
                     }
                 }
+                CheckStatus::Ok
             }
             Err(e) => {
                 println!(
@@ -265,6 +317,7 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) {
                     "hint: edit {}",
                     crate::asr::providers::doubao::config_path().display()
                 );
+                CheckStatus::Error
             }
         },
         other => {
@@ -272,6 +325,7 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) {
                 "asr.{other}.runtime: ERROR profiles=[{}] unsupported provider",
                 target.profiles.join(", ")
             );
+            CheckStatus::Error
         }
     }
 }
@@ -283,44 +337,59 @@ fn asr_runtime_probe_line(provider: &str, profiles: &[String]) -> String {
     )
 }
 
-async fn check_llm_runtime(target: LlmRuntimeTarget) {
+async fn check_llm_runtime(target: LlmRuntimeTarget) -> CheckStatus {
     let dirs = crate::config::post::PostDirs {
         rule: crate::config::post::default_dir().join("rule"),
         llm: crate::config::post::default_dir().join("llm"),
     };
-    match crate::config::post::load_llm_config(&target.id, &dirs, &target.overrides) {
-        Ok(cfg) => {
-            let provider = cfg.provider_name.clone();
-            let checker = LlmCleanup::new(cfg);
-            match checker.check_runtime().await {
-                Ok(()) => println!(
-                    "llm.runtime: OK profiles=[{}] component={} provider={}",
-                    target.profiles.join(", "),
-                    target.id,
-                    provider
-                ),
-                Err(e) => {
-                    println!(
-                        "llm.runtime: ERROR profiles=[{}] component={} provider={} {e}",
-                        target.profiles.join(", "),
-                        target.id,
-                        provider
-                    );
-                    println!("hint: edit post/llm component or profile [post.llm] override");
-                }
-            }
-        }
+    let cfg = match crate::config::post::load_llm_config(&target.id, &dirs, &target.overrides) {
+        Ok(cfg) => cfg,
         Err(e) => {
             println!(
                 "llm.runtime: ERROR profiles=[{}] component={} {e:#}",
                 target.profiles.join(", "),
                 target.id
             );
+            return CheckStatus::Error;
+        }
+    };
+    let provider = cfg.provider_name.clone();
+    let checker = LlmCleanup::new(cfg);
+    match tokio::time::timeout(RUNTIME_CHECK_TIMEOUT, checker.check_runtime()).await {
+        Err(_) => {
+            println!(
+                "llm.runtime: ERROR profiles=[{}] component={} provider={} timed out after {}s",
+                target.profiles.join(", "),
+                target.id,
+                provider,
+                RUNTIME_CHECK_TIMEOUT.as_secs()
+            );
+            println!("hint: edit post/llm component or profile [post.llm] override");
+            CheckStatus::Error
+        }
+        Ok(Ok(())) => {
+            println!(
+                "llm.runtime: OK profiles=[{}] component={} provider={}",
+                target.profiles.join(", "),
+                target.id,
+                provider
+            );
+            CheckStatus::Ok
+        }
+        Ok(Err(e)) => {
+            println!(
+                "llm.runtime: ERROR profiles=[{}] component={} provider={} {e}",
+                target.profiles.join(", "),
+                target.id,
+                provider
+            );
+            println!("hint: edit post/llm component or profile [post.llm] override");
+            CheckStatus::Error
         }
     }
 }
 
-fn check_uds() {
+fn check_uds() -> CheckStatus {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -329,16 +398,35 @@ fn check_uds() {
         Ok(rt) => rt,
         Err(e) => {
             println!("daemon: ERROR {e:#}");
-            return;
+            return CheckStatus::Error;
         }
     };
-    match rt.block_on(query_daemon_status()) {
-        Ok(Some(status)) => println!("{status}"),
-        Ok(None) => println!(
-            "daemon: not running ({} not reachable)",
-            crate::ipc::server::default_socket_path().display()
-        ),
-        Err(e) => println!("daemon: ERROR {e:#}"),
+    match rt.block_on(tokio::time::timeout(
+        DAEMON_STATUS_TIMEOUT,
+        query_daemon_status(),
+    )) {
+        Ok(Ok(Some(status))) => {
+            println!("{status}");
+            CheckStatus::Ok
+        }
+        Ok(Ok(None)) => {
+            println!(
+                "daemon: not running ({} not reachable)",
+                crate::ipc::server::default_socket_path().display()
+            );
+            CheckStatus::Warning
+        }
+        Ok(Err(e)) => {
+            println!("daemon: ERROR {e:#}");
+            CheckStatus::Error
+        }
+        Err(_) => {
+            println!(
+                "daemon: ERROR status query timed out after {}s",
+                DAEMON_STATUS_TIMEOUT.as_secs()
+            );
+            CheckStatus::Error
+        }
     }
 }
 
@@ -370,40 +458,49 @@ async fn query_daemon_status() -> Result<Option<String>> {
     Ok(None)
 }
 
-fn check_launchd() {
+fn check_launchd() -> CheckStatus {
     let path = crate::cli::service::plist_path();
     if path.exists() {
         println!("launchd.plist: installed {}", path.display());
+        CheckStatus::Ok
     } else {
         println!("launchd.plist: not installed {}", path.display());
+        CheckStatus::Warning
     }
 }
 
-fn check_permissions() {
+fn check_permissions() -> CheckStatus {
+    let mut status = CheckStatus::Ok;
     if accessibility_trusted() {
         println!("permissions.accessibility: OK");
     } else {
         println!("permissions.accessibility: missing or not granted");
         println!("hint: grant the terminal app that starts shuo in System Settings > Privacy & Security > Accessibility");
+        status = CheckStatus::Error;
     }
     match microphone_authorization() {
         Some(MicrophoneAuthorization::Authorized) => println!("permissions.microphone: OK"),
         Some(MicrophoneAuthorization::NotDetermined) => {
             println!("permissions.microphone: not determined");
             println!("hint: start recording once from the terminal app that runs shuo to trigger the system prompt");
+            status = CheckStatus::Error;
         }
         Some(MicrophoneAuthorization::Denied) => {
             println!("permissions.microphone: denied");
             println!("hint: grant the terminal app that starts shuo in System Settings > Privacy & Security > Microphone");
+            status = CheckStatus::Error;
         }
         Some(MicrophoneAuthorization::Restricted) => {
             println!("permissions.microphone: restricted by system policy");
+            status = CheckStatus::Error;
         }
         None => {
             println!("permissions.microphone: unknown");
             println!("hint: grant the terminal app that starts shuo in System Settings > Privacy & Security > Microphone");
+            status = CheckStatus::Error;
         }
     }
+    status
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -455,6 +552,8 @@ fn format_duration(ms: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     #[test]
     fn asr_runtime_probe_line_mentions_minimal_session() {
         let profiles = vec!["default".to_string(), "coding".to_string()];
@@ -465,5 +564,21 @@ mod tests {
             line,
             "asr.doubao.runtime: probing minimal session for profiles=[default, coding]"
         );
+    }
+
+    #[test]
+    fn doctor_report_fails_when_required_check_has_error() {
+        let mut report = super::DoctorReport::default();
+
+        report.record(super::CheckStatus::Ok);
+        report.record(super::CheckStatus::Error);
+
+        assert!(report.into_result().is_err());
+    }
+
+    #[test]
+    fn doctor_timeouts_match_cli_contract() {
+        assert_eq!(super::DAEMON_STATUS_TIMEOUT, Duration::from_secs(1));
+        assert_eq!(super::RUNTIME_CHECK_TIMEOUT, Duration::from_secs(15));
     }
 }

@@ -351,16 +351,38 @@ Agent 报告本次发版摘要：
 
 ## 5. 首次发版的特殊准备
 
-只在第一次正式 release 之前做一次：
+只在第一次正式 release 之前做一次。
 
-- 仓库根目录创建 `LICENSE`（MIT 文本，Cargo.toml 已声明）
-- 仓库根目录创建 `README.md`（项目简介 + 安装方法 + 权限说明 + 链到 `docs/`）
-- 决定首个 tag 是 `v0.1.0`（保持与 Cargo.toml 当前一致）还是 `v0.1.1`（如果首版前还有 fix 进入）
-- 本地 `cargo install cargo-release`
-- 仓库根有 `release.toml` 配置（限制只能从 main 发、强制走 hook、禁止 publish 到 crates.io）
-- 仓库有 `.github/workflows/release.yml`
+### 5.1 已完成的基础设施（基线）
 
-这些都是一次性工作，写在这里防止首次发版时漏。
+下列由 `2026-06-20-github-release-packaging` 计划完成，已 commit 在 main：
+
+- `LICENSE`（MIT 文本，匹配 Cargo.toml 声明）
+- `README.md`（项目简介 + 安装 + 权限 + 链到 docs/）
+- `release.toml`（cargo-release 配置：限制 main 分支、强制 pre-release-hook、禁止 publish）
+- `.github/workflows/release.yml`（tag-driven macOS release workflow）
+- `.github/release-body.md`（Release notes 模板含权限提醒）
+- `docs/RELEASE.md`（本文档）
+- 本地 `cargo install cargo-release` 已装
+
+### 5.2 还需要做的加固（首次公开发版前）
+
+[docs/RELEASE_HARDENING.md](RELEASE_HARDENING.md) 列出 7 个必须按顺序走完的步骤：
+
+1. 配置 git remote 并首次 push 到 GitHub
+2. 撤销本仓库 `commit.gpgsign` override
+3. 装 `includeIf onbranch:main` 让 main 自动 GPG 签名
+4. 改 `release.toml` 让 release commit + v\* tag 强制签名
+5. 更新 `CLAUDE.md` 加 agent 工作流硬规则
+6. GitHub branch protection（main 要求签名）
+7. GitHub tag protection（v\* 限制 pusher）
+
+走完 7 步后再回到本文档执行真实发版。
+
+### 5.3 决定首个 tag 版本号
+
+- 保持与 Cargo.toml 一致：`v0.1.0`
+- 或首版前还有 fix 进入：先 patch 几次再发，或直接首个 tag 用 `v0.1.1` 等
 
 ---
 

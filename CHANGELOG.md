@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-06-19 - Overlay platform boundary refactor
+
+- Split `src/overlay/` into platform-agnostic `command.rs` / `model.rs` /
+  `layout.rs` plus a macOS subtree at `overlay/macos/{view,chrome,debug}.rs`.
+- Moved Notice / Error TTL, `pending_hide` deferral, and `recording_started`
+  duration tracking into `OverlayModel` with `tick(now) -> TickOutcome`. View
+  now drives a single fade-out animation via prev/current `visible` comparison.
+- Lifted pure layout/text helpers (`display_text_plan`, `live_text_plan`,
+  `header_parts`, `format_duration`, `panel_frame`, `first_row_frames`, ...)
+  out of view into `overlay/layout.rs`. Geometric functions return
+  `LayoutFrame` instead of `NSRect`.
+- Split `EffectiveOverlayCfg` into `{ core, macos }` substructs. TOML schema
+  breaking change: `[overlay.glass]` removed; `glass_variant`, `glass_style`,
+  `subdued`, and `background_blur_radius` now live under `[overlay.macos]`.
+  Local `~/.config/shuohua/theme/*.toml` files must be updated manually.
+- `main.rs` now can call `overlay::run` without naming the platform; future
+  Linux / Windows ports add a sibling `overlay/<platform>/` and a
+  `PlatformOverlayCfg` substruct, leaving every other file untouched.
+
 ## 2026-06-19 - Voice engine lifecycle hardening
 
 - Treated provider-initiated `AsrEvent::Done` as session completion in both

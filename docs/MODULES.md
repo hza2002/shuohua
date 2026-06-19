@@ -84,9 +84,15 @@ src/
 │   ├── keybindings.rs                   # Tab/Shift-Tab + 1/2/3 翻页；vim/方向键滚动
 │   └── settings.rs                      # Configure inventory rows；脱敏展示 secret 字段
 ├── overlay/
-│   ├── mod.rs                           # OverlayCmd + OverlayState + OverlayHandle (mpsc 发命令)
-│   ├── view.rs                          # AppKit NSGlassEffectView 同进程渲染主循环
-│   └── debug.rs   (#[cfg(debug_assertions)])  # NSGlassEffectView SPI 探针
+│   ├── mod.rs                           # cfg(target_os) 路由 + pub use
+│   ├── command.rs                       # OverlayCmd + OverlayState + TextKind + OverlayHandle
+│   ├── model.rs                         # OverlayModel + Notice + apply + tick(now) + TickOutcome
+│   ├── layout.rs                        # 平台无关布局：LayoutFrame + 纯文本/几何函数
+│   └── macos/
+│       ├── mod.rs                       # pub fn run(rx, cfg)
+│       ├── view.rs                      # NSPanel 主循环 + control 更新 + 动画 + NSTimer 驱动 tick
+│       ├── chrome.rs                    # NSGlassEffectView + SkyLight SPI + HUD fallback + 背景层
+│       └── debug.rs   (#[cfg(debug_assertions)])  # NSGlassEffectView SPI 探针
 └── i18n/
     └── mod.rs                            # assets/i18n/*.toml 加载 + 静态 LANG 切换
 ```

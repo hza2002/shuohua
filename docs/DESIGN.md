@@ -96,6 +96,16 @@ enum OverlayCmd {
 
 这个设计避免了"warn 一闪就被 dispatch 后的 Hide 吞掉"的问题，也让 Error 不被自动粘贴流程截胡。
 
+#### Overlay 平台边界
+
+`src/overlay/` 按 drop-in 跨平台原则分层：
+
+- **command.rs / model.rs / layout.rs**：平台无关。`OverlayCmd` 是上层 (voice/reload/post) 的唯一接口；`OverlayModel` 拥有所有时序状态（Notice / Error TTL、`pending_hide`、`recording_started → dur_ms`）和 `tick(now) -> TickOutcome`；`layout.rs` 用 `LayoutFrame { x, y, w, h: f64 }` 返回纯几何，文本截断 / 行数 / 时长格式化也住这里。
+- **macos/**：唯一已实现的平台 renderer。`view.rs` 是 NSPanel + mpsc 消费 + 动画；`chrome.rs` 集中 `NSGlassEffectView` / SkyLight 私有 SPI / HUD fallback；`debug.rs` 是 SPI 探针。
+- **mod.rs**：`#[cfg(target_os = "macos")] pub use macos::run;`，`main.rs` 调 `overlay::run`。
+
+加新平台 = 在 `overlay/` 下加 `<platform>/` 兄弟目录写自己的 `view / chrome`，加 `MacosOverlayCfg` 兄弟 struct 到 `EffectiveOverlayCfg`。不动 command / model / layout / 上层业务模块。
+
 ### 1.3 进程模型
 
 #### 单进程，AppKit 主线程 + tokio 后台线程

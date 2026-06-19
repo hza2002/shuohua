@@ -352,6 +352,16 @@ mod tests {
     }
 
     #[test]
+    fn header_stats_use_supplied_word_count_text() {
+        let header = header_parts("Recording", "4s", "9 words", "Xcode", "chain");
+
+        assert_eq!(
+            stats_text(&header.duration, &header.words, &header.app),
+            "4s · 9 words · Xcode"
+        );
+    }
+
+    #[test]
     fn live_text_plan_keeps_segments_and_partial_distinct() {
         let plan = live_text_plan(&["已经定型。".to_string()], "正在识别", 5, 34);
         assert_eq!(plan.segments, "已经定型。");

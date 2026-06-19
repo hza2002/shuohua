@@ -113,6 +113,7 @@ impl OverlayModel {
             OverlayCmd::SetText { text, kind } => match kind {
                 TextKind::Partial => self.partial = text,
                 TextKind::Final => {
+                    self.words = crate::text_stats::compute(&text).words as u32;
                     self.final_text = text;
                     self.partial.clear();
                 }
@@ -521,6 +522,28 @@ mod tests {
         assert_eq!(out, TickOutcome::Hide);
         assert!(!model.visible);
         assert!(model.error_text.is_empty());
+    }
+
+    #[test]
+    fn final_text_updates_model_word_count() {
+        i18n::init("en-US");
+        let mut model = OverlayModel::default();
+        apply(
+            &mut model,
+            OverlayCmd::SetStats {
+                dur_ms: 1200,
+                words: 1,
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::SetText {
+                text: "hello world".into(),
+                kind: TextKind::Final,
+            },
+        );
+
+        assert_eq!(model.words, 2);
     }
 
     #[test]

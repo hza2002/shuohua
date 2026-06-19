@@ -1,4 +1,9 @@
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
 use tokio::sync::mpsc;
+
+const QUEUE_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone)]
 pub enum OverlayCmd {
@@ -92,16 +97,191 @@ pub enum TextKind {
 
 #[derive(Debug, Clone)]
 pub struct OverlayHandle {
-    tx: mpsc::UnboundedSender<OverlayCmd>,
+    inner: Arc<Mutex<OverlayMailbox>>,
+    wake: mpsc::UnboundedSender<()>,
+}
+
+#[derive(Debug)]
+pub struct OverlayReceiver {
+    inner: Arc<Mutex<OverlayMailbox>>,
+    wake: mpsc::UnboundedReceiver<()>,
+}
+
+#[derive(Debug, Default)]
+struct OverlayMailbox {
+    queue: VecDeque<OverlayCmd>,
+    latest_stats: Option<OverlayCmd>,
+    latest_partial: Option<OverlayCmd>,
+    wake_pending: bool,
 }
 
 impl OverlayHandle {
-    pub fn channel() -> (Self, mpsc::UnboundedReceiver<OverlayCmd>) {
-        let (tx, rx) = mpsc::unbounded_channel();
-        (Self { tx }, rx)
+    pub fn channel() -> (Self, OverlayReceiver) {
+        let (wake, wake_rx) = mpsc::unbounded_channel();
+        let inner = Arc::new(Mutex::new(OverlayMailbox::default()));
+        (
+            Self {
+                inner: inner.clone(),
+                wake,
+            },
+            OverlayReceiver {
+                inner,
+                wake: wake_rx,
+            },
+        )
     }
 
     pub fn send(&self, cmd: OverlayCmd) {
-        let _ = self.tx.send(cmd);
+        let should_wake = {
+            let Ok(mut mailbox) = self.inner.lock() else {
+                return;
+            };
+            mailbox.push(cmd);
+            if mailbox.wake_pending {
+                false
+            } else {
+                mailbox.wake_pending = true;
+                true
+            }
+        };
+        if should_wake && self.wake.send(()).is_err() {
+            if let Ok(mut mailbox) = self.inner.lock() {
+                mailbox.wake_pending = false;
+            }
+        }
+    }
+}
+
+impl OverlayReceiver {
+    pub fn try_recv(&mut self) -> Result<OverlayCmd, mpsc::error::TryRecvError> {
+        if let Some(cmd) = self.pop_ready() {
+            return Ok(cmd);
+        }
+        match self.wake.try_recv() {
+            Ok(()) => {
+                if let Ok(mut mailbox) = self.inner.lock() {
+                    mailbox.wake_pending = false;
+                }
+                self.pop_ready().ok_or(mpsc::error::TryRecvError::Empty)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn pop_ready(&mut self) -> Option<OverlayCmd> {
+        self.inner.lock().ok()?.pop()
+    }
+}
+
+impl OverlayMailbox {
+    fn push(&mut self, cmd: OverlayCmd) {
+        match cmd {
+            OverlayCmd::SetStats { .. } => self.latest_stats = Some(cmd),
+            OverlayCmd::SetText {
+                kind: TextKind::Partial,
+                ..
+            } => self.latest_partial = Some(cmd),
+            _ => {
+                if self.queue.len() >= QUEUE_CAPACITY {
+                    let _ = self.queue.pop_front();
+                    tracing::warn!(
+                        area = "overlay",
+                        capacity = QUEUE_CAPACITY,
+                        "overlay command queue full; dropping oldest command"
+                    );
+                }
+                self.queue.push_back(cmd);
+            }
+        }
+    }
+
+    fn pop(&mut self) -> Option<OverlayCmd> {
+        self.latest_stats
+            .take()
+            .or_else(|| self.latest_partial.take())
+            .or_else(|| self.queue.pop_front())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transient_stats_and_partial_are_coalesced() {
+        let (handle, mut rx) = OverlayHandle::channel();
+        handle.send(OverlayCmd::SetStats {
+            dur_ms: 1,
+            words: 1,
+        });
+        handle.send(OverlayCmd::SetStats {
+            dur_ms: 2,
+            words: 2,
+        });
+        handle.send(OverlayCmd::SetText {
+            text: "old".into(),
+            kind: TextKind::Partial,
+        });
+        handle.send(OverlayCmd::SetText {
+            text: "new".into(),
+            kind: TextKind::Partial,
+        });
+
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            OverlayCmd::SetStats {
+                dur_ms: 2,
+                words: 2
+            }
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            OverlayCmd::SetText {
+                text,
+                kind: TextKind::Partial
+            } if text == "new"
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn critical_commands_are_kept_in_order() {
+        let (handle, mut rx) = OverlayHandle::channel();
+        handle.send(OverlayCmd::SetState {
+            state: OverlayState::Connecting,
+        });
+        handle.send(OverlayCmd::Hide);
+
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            OverlayCmd::SetState {
+                state: OverlayState::Connecting
+            }
+        ));
+        assert!(matches!(rx.try_recv().unwrap(), OverlayCmd::Hide));
+    }
+
+    #[test]
+    fn full_queue_keeps_new_critical_command() {
+        let (handle, mut rx) = OverlayHandle::channel();
+        for i in 0..QUEUE_CAPACITY {
+            handle.send(OverlayCmd::Notice {
+                text: format!("notice {i}"),
+                ttl_ms: 1,
+            });
+        }
+        handle.send(OverlayCmd::Dismiss);
+
+        let mut saw_dismiss = false;
+        while let Ok(cmd) = rx.try_recv() {
+            if matches!(cmd, OverlayCmd::Dismiss) {
+                saw_dismiss = true;
+            }
+        }
+
+        assert!(saw_dismiss);
     }
 }

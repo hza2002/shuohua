@@ -24,7 +24,17 @@ extern "C" {
     fn AXValueGetValue(value: AXValueRef, the_type: i32, out: *mut c_void) -> bool;
 }
 
-pub fn focused_window_frame(screen_height: f64) -> Option<NSRect> {
+pub fn focused_window_frame_for_screens(screens: &[NSRect]) -> Option<(NSRect, NSRect)> {
+    let (point, size) = focused_window_cg_frame()?;
+    let cg_frame = NSRect::new(
+        NSPoint::new(point.x, point.y),
+        NSSize::new(size.width, size.height),
+    );
+    let screen = screen_containing_window(cg_frame, screens)?;
+    Some((ax_frame_to_appkit(point, size, screen), screen))
+}
+
+fn focused_window_cg_frame() -> Option<(CGPoint, CGSize)> {
     let system = unsafe { AXUIElementCreateSystemWide() };
     if system.is_null() {
         return None;
@@ -76,11 +86,33 @@ pub fn focused_window_frame(screen_height: f64) -> Option<NSRect> {
         return None;
     }
 
-    let appkit_y = screen_height - point.y - cg_size.height;
-    Some(NSRect::new(
+    Some((point, cg_size))
+}
+
+pub fn screen_containing_window(window: NSRect, screens: &[NSRect]) -> Option<NSRect> {
+    screens.iter().copied().max_by(|a, b| {
+        overlap_area(window, *a)
+            .partial_cmp(&overlap_area(window, *b))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
+}
+
+pub fn ax_frame_to_appkit(point: CGPoint, size: CGSize, screen: NSRect) -> NSRect {
+    let appkit_y = screen.origin.y + screen.size.height - point.y - size.height;
+    NSRect::new(
         NSPoint::new(point.x, appkit_y),
-        NSSize::new(cg_size.width, cg_size.height),
-    ))
+        NSSize::new(size.width, size.height),
+    )
+}
+
+fn overlap_area(a: NSRect, b: NSRect) -> f64 {
+    let left = a.origin.x.max(b.origin.x);
+    let right = (a.origin.x + a.size.width).min(b.origin.x + b.size.width);
+    let bottom = a.origin.y.max(b.origin.y);
+    let top = (a.origin.y + a.size.height).min(b.origin.y + b.size.height);
+    let w = (right - left).max(0.0);
+    let h = (top - bottom).max(0.0);
+    w * h
 }
 
 fn copy_attr(element: AXUIElementRef, attr: &str) -> Option<CFTypeRef> {
@@ -92,5 +124,40 @@ fn copy_attr(element: AXUIElementRef, attr: &str) -> Option<CFTypeRef> {
         Some(value)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(x: f64, y: f64, w: f64, h: f64) -> NSRect {
+        NSRect::new(NSPoint::new(x, y), NSSize::new(w, h))
+    }
+
+    #[test]
+    fn chooses_screen_with_largest_overlap_for_focused_window() {
+        let screens = [
+            rect(0.0, 0.0, 1440.0, 900.0),
+            rect(1440.0, 0.0, 1440.0, 900.0),
+        ];
+        let window = rect(1500.0, 100.0, 800.0, 600.0);
+
+        let chosen = screen_containing_window(window, &screens).unwrap();
+
+        assert_eq!(chosen.origin.x, 1440.0);
+    }
+
+    #[test]
+    fn converts_ax_y_using_target_screen_frame() {
+        let screen = rect(0.0, 900.0, 1440.0, 900.0);
+        let frame = ax_frame_to_appkit(
+            CGPoint::new(120.0, 100.0),
+            CGSize::new(800.0, 600.0),
+            screen,
+        );
+
+        assert_eq!(frame.origin.x, 120.0);
+        assert_eq!(frame.origin.y, 1100.0);
     }
 }

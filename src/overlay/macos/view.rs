@@ -5,8 +5,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{NSObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSFont, NSFontWeightBold,
-    NSForegroundColorAttributeName, NSGlassEffectView, NSImage, NSImageAlignment,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSEvent, NSFont,
+    NSFontWeightBold, NSForegroundColorAttributeName, NSGlassEffectView, NSImage, NSImageAlignment,
     NSImageFrameStyle, NSImageScaling, NSImageSymbolConfiguration, NSImageSymbolScale, NSImageView,
     NSLineBreakMode, NSPanel, NSScreen, NSTextAlignment, NSTextField, NSView,
 };
@@ -15,11 +15,10 @@ use objc2_foundation::{
     NSPoint, NSRange, NSRect, NSSize, NSString, NSTimer,
 };
 use objc2_quartz_core::{kCATransitionFade, CAMediaTiming, CATransition};
-use tokio::sync::mpsc;
 
 use crate::config::theme::EffectiveOverlayCfg;
 use crate::overlay::layout as L;
-use crate::overlay::{OverlayCmd, OverlayModel, OverlayState, TextKind};
+use crate::overlay::{OverlayCmd, OverlayModel, OverlayReceiver, OverlayState, TextKind};
 
 use super::chrome::{
     apply_background_settings, apply_glass_settings, apply_panel_background_blur, build_chrome,
@@ -44,7 +43,7 @@ mod typography {
 #[derive(Default)]
 struct DelegateIvars {
     overlay: OnceCell<RefCell<OverlayView>>,
-    rx: OnceCell<RefCell<mpsc::UnboundedReceiver<OverlayCmd>>>,
+    rx: OnceCell<RefCell<OverlayReceiver>>,
     cfg: OnceCell<EffectiveOverlayCfg>,
     timer: OnceCell<Retained<NSTimer>>,
 }
@@ -97,11 +96,7 @@ define_class!(
 );
 
 impl OverlayDelegate {
-    fn new(
-        mtm: MainThreadMarker,
-        rx: mpsc::UnboundedReceiver<OverlayCmd>,
-        cfg: EffectiveOverlayCfg,
-    ) -> Retained<Self> {
+    fn new(mtm: MainThreadMarker, rx: OverlayReceiver, cfg: EffectiveOverlayCfg) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(DelegateIvars {
             overlay: OnceCell::new(),
             rx: OnceCell::from(RefCell::new(rx)),
@@ -112,7 +107,7 @@ impl OverlayDelegate {
     }
 }
 
-pub fn run(rx: mpsc::UnboundedReceiver<OverlayCmd>, cfg: EffectiveOverlayCfg) {
+pub fn run(rx: OverlayReceiver, cfg: EffectiveOverlayCfg) {
     let mtm = MainThreadMarker::new().expect("AppKit must run on main thread");
     let app = NSApplication::sharedApplication(mtm);
     let delegate = OverlayDelegate::new(mtm, rx, cfg);
@@ -143,8 +138,6 @@ struct OverlayView {
     last_stats_text: String,
     last_meta_text: String,
     peak_text_lines: usize,
-    /// chrome 初始化 / 热重载时检测到不可用的 SPI / fallback 走人 → 等首次可见时塞 chrome error。
-    pending_chrome_error: Option<String>,
 }
 
 impl OverlayView {
@@ -157,6 +150,9 @@ impl OverlayView {
         apply_panel_background_blur(&panel, cfg.macos.background_blur_radius);
 
         let (container, glass, background, pending_chrome_error) = build_chrome(mtm, &cfg);
+        if let Some(error) = &pending_chrome_error {
+            tracing::warn!(area = "overlay_chrome", message = %error);
+        }
 
         let row = L::first_row_frames(0.0);
         let state_icon = make_state_icon(mtm, cfg.core.text.primary);
@@ -232,7 +228,6 @@ impl OverlayView {
             last_stats_text: String::new(),
             last_meta_text: String::new(),
             peak_text_lines: 1,
-            pending_chrome_error,
         }
     }
 
@@ -292,19 +287,6 @@ impl OverlayView {
 
     fn render(&mut self) {
         if self.model.visible {
-            // 首次可见时，把 chrome 初始化 / 热重载攒下的错误塞进 error 文本区。
-            if self.model.error_text.is_empty() && self.model.error_until.is_none() {
-                if let Some(err) = self.pending_chrome_error.take() {
-                    self.model.apply(
-                        OverlayCmd::SetText {
-                            text: err,
-                            kind: TextKind::Error,
-                        },
-                        &self.cfg.core.state,
-                    );
-                }
-            }
-
             let full_text = self.model.display_text();
             let (_, current_lines) = L::display_text_plan(
                 &full_text,
@@ -361,10 +343,7 @@ impl OverlayView {
             .as_deref()
             .or(self.model.bundle_id.as_deref())
             .unwrap_or("");
-        // 用 text_stats 算 words：CJK 按字、英文按词，跨语言一致。
-        // 文案模板 {n} 字 / {n} words 由 i18n 选；底层数 = words。
-        let words = crate::text_stats::compute(&full_text).words as u32;
-        let words_text = crate::t!("overlay.word_count", n = words);
+        let words_text = crate::t!("overlay.word_count", n = self.model.words);
         let header = L::header_parts(&label, &dur, &words_text, app, &self.model.chain_summary);
         self.render_state_icon(state, color_rgb);
         if self.last_status_text != header.state {
@@ -539,11 +518,11 @@ impl OverlayView {
     }
 
     fn place(&mut self, height: f64) {
-        let screen = NSScreen::mainScreen(self.mtm)
-            .map(|screen| screen.frame())
-            .unwrap_or_else(|| NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0)));
-        let anchor = crate::focused_window_darwin::focused_window_frame(screen.size.height)
-            .unwrap_or(screen);
+        let screens = screen_frames(self.mtm);
+        let fallback = fallback_screen(self.mtm, &screens);
+        let (anchor, screen) =
+            crate::focused_window_darwin::focused_window_frame_for_screens(&screens)
+                .unwrap_or((fallback, fallback));
         let frame = to_nsrect(L::panel_frame(
             from_nsrect(anchor),
             self.cfg.core.position,
@@ -569,8 +548,11 @@ impl OverlayView {
         if let Some(glass) = &self.glass {
             let missing = apply_glass_settings(glass, &cfg);
             if !missing.is_empty() {
-                self.pending_chrome_error =
-                    Some(format!("glass SPI unavailable: {}", missing.join(", ")));
+                tracing::warn!(
+                    area = "overlay_chrome",
+                    missing = %missing.join(", "),
+                    "glass SPI unavailable"
+                );
             }
         }
         apply_panel_background_blur(&self.panel, cfg.macos.background_blur_radius);
@@ -587,6 +569,30 @@ impl OverlayView {
         }
         self.render();
     }
+}
+
+fn screen_frames(mtm: MainThreadMarker) -> Vec<NSRect> {
+    NSScreen::screens(mtm)
+        .iter()
+        .map(|screen| screen.frame())
+        .collect()
+}
+
+fn fallback_screen(mtm: MainThreadMarker, screens: &[NSRect]) -> NSRect {
+    let mouse = NSEvent::mouseLocation();
+    screens
+        .iter()
+        .copied()
+        .find(|screen| point_in_rect(mouse, *screen))
+        .or_else(|| NSScreen::mainScreen(mtm).map(|screen| screen.frame()))
+        .unwrap_or_else(|| NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0)))
+}
+
+fn point_in_rect(point: NSPoint, rect: NSRect) -> bool {
+    point.x >= rect.origin.x
+        && point.x <= rect.origin.x + rect.size.width
+        && point.y >= rect.origin.y
+        && point.y <= rect.origin.y + rect.size.height
 }
 
 fn label(

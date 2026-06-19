@@ -168,14 +168,15 @@ fn validate_theme(value: &toml::Value, path: &Path) -> Result<String, String> {
     }
 
     let overlay = required_table(root, "overlay", path)?;
-    let glass = required_table(overlay, "glass", path)?;
-    required_integer(glass, "variant", "overlay.glass", path)?;
-    required_integer(glass, "subdued", "overlay.glass", path)?;
-    match required_value(glass, "style", "overlay.glass", path)?.as_str() {
+    let macos = required_table(overlay, "macos", path)?;
+    required_integer(macos, "glass_variant", "overlay.macos", path)?;
+    required_integer(macos, "subdued", "overlay.macos", path)?;
+    required_integer(macos, "background_blur_radius", "overlay.macos", path)?;
+    match required_value(macos, "glass_style", "overlay.macos", path)?.as_str() {
         Some("clear" | "blur") => {}
         _ => {
             return Err(format!(
-                "overlay.glass.style must be `clear` or `blur`: {}",
+                "overlay.macos.glass_style must be `clear` or `blur`: {}",
                 path.display()
             ))
         }
@@ -189,7 +190,6 @@ fn validate_theme(value: &toml::Value, path: &Path) -> Result<String, String> {
         path,
     )?;
     required_number(surface, "background_alpha", "overlay.surface", path)?;
-    required_integer(surface, "background_blur_radius", "overlay.surface", path)?;
     required_number(surface, "corner_radius", "overlay.surface", path)?;
 
     let text = required_table(overlay, "text", path)?;

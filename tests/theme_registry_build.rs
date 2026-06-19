@@ -31,15 +31,15 @@ border = "bg"
 border_focus = "bg"
 segment = "bg"
 
-[overlay.glass]
-variant = 11
-style = "clear"
+[overlay.macos]
+glass_variant = 11
+glass_style = "clear"
 subdued = 0
+background_blur_radius = 0
 
 [overlay.surface]
 background = "bg"
 background_alpha = 0.7
-background_blur_radius = 0
 corner_radius = 18.0
 
 [overlay.text]

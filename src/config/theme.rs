@@ -44,18 +44,28 @@ pub struct TuiTheme {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EffectiveOverlayCfg {
+    pub core: CoreOverlayCfg,
+    pub macos: MacosOverlayCfg,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoreOverlayCfg {
     pub position: OverlayPosition,
-    pub glass_variant: i64,
-    pub glass_style: GlassStyle,
     pub background_rgb: u32,
     pub background_alpha: f64,
-    pub background_blur_radius: i64,
     pub corner_radius: f64,
-    pub subdued: i64,
     pub max_text_lines: usize,
     pub thinking_delay_ms: u64,
     pub text: OverlayTextTheme,
     pub state: OverlayStateTheme,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacosOverlayCfg {
+    pub glass_variant: i64,
+    pub glass_style: GlassStyle,
+    pub subdued: i64,
+    pub background_blur_radius: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,7 +119,7 @@ pub struct PartialTuiTheme {
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct PartialOverlayTheme {
     #[serde(default)]
-    pub glass: PartialOverlayGlass,
+    pub macos: PartialOverlayMacos,
     #[serde(default)]
     pub surface: PartialOverlaySurface,
     #[serde(default)]
@@ -119,17 +129,17 @@ pub struct PartialOverlayTheme {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct PartialOverlayGlass {
-    pub variant: Option<i64>,
-    pub style: Option<GlassStyle>,
+pub struct PartialOverlayMacos {
+    pub glass_variant: Option<i64>,
+    pub glass_style: Option<GlassStyle>,
     pub subdued: Option<i64>,
+    pub background_blur_radius: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct PartialOverlaySurface {
     pub background: Option<ColorValue>,
     pub background_alpha: Option<f64>,
-    pub background_blur_radius: Option<i64>,
     pub corner_radius: Option<f64>,
 }
 
@@ -253,27 +263,51 @@ impl Default for OverlayStateTheme {
     }
 }
 
+impl Default for CoreOverlayCfg {
+    fn default() -> Self {
+        Self {
+            position: OverlayPosition::default(),
+            background_rgb: 0x282828,
+            background_alpha: 0.70,
+            corner_radius: 18.0,
+            max_text_lines: 5,
+            thinking_delay_ms: 200,
+            text: OverlayTextTheme::default(),
+            state: OverlayStateTheme::default(),
+        }
+    }
+}
+
+impl Default for MacosOverlayCfg {
+    fn default() -> Self {
+        Self {
+            glass_variant: 11,
+            glass_style: GlassStyle::Clear,
+            subdued: 0,
+            background_blur_radius: 0,
+        }
+    }
+}
+
 impl Default for EffectiveOverlayCfg {
     fn default() -> Self {
-        Self::from_behavior_and_default_theme(&OverlayCfg::default())
+        Self {
+            core: CoreOverlayCfg::default(),
+            macos: MacosOverlayCfg::default(),
+        }
     }
 }
 
 impl EffectiveOverlayCfg {
     pub fn from_behavior_and_default_theme(behavior: &OverlayCfg) -> Self {
         Self {
-            position: behavior.position,
-            glass_variant: 11,
-            glass_style: GlassStyle::Clear,
-            background_rgb: 0x282828,
-            background_alpha: 0.70,
-            background_blur_radius: 0,
-            corner_radius: 18.0,
-            subdued: 0,
-            max_text_lines: behavior.max_text_lines,
-            thinking_delay_ms: behavior.thinking_delay_ms,
-            text: OverlayTextTheme::default(),
-            state: OverlayStateTheme::default(),
+            core: CoreOverlayCfg {
+                position: behavior.position,
+                max_text_lines: behavior.max_text_lines,
+                thinking_delay_ms: behavior.thinking_delay_ms,
+                ..CoreOverlayCfg::default()
+            },
+            macos: MacosOverlayCfg::default(),
         }
     }
 }
@@ -348,9 +382,9 @@ pub fn default_for_config(config: &crate::config::Config) -> EffectiveTheme {
         normalized_theme_name(non_empty_or(&config.ui.theme_tui, &theme.theme)).to_string();
     theme.theme_overlay =
         normalized_theme_name(non_empty_or(&config.ui.theme_overlay, &theme.theme)).to_string();
-    theme.overlay.position = config.overlay.position;
-    theme.overlay.max_text_lines = config.overlay.max_text_lines;
-    theme.overlay.thinking_delay_ms = config.overlay.thinking_delay_ms;
+    theme.overlay.core.position = config.overlay.position;
+    theme.overlay.core.max_text_lines = config.overlay.max_text_lines;
+    theme.overlay.core.thinking_delay_ms = config.overlay.thinking_delay_ms;
     theme
 }
 
@@ -455,98 +489,98 @@ fn apply_tui_theme(target: &mut TuiTheme, file: &ThemeFile) -> Result<()> {
 
 fn apply_overlay_theme(target: &mut EffectiveOverlayCfg, file: &ThemeFile) -> Result<()> {
     let palette = palette_for(file)?;
-    if let Some(value) = file.overlay.glass.variant {
-        target.glass_variant = value;
+    if let Some(value) = file.overlay.macos.glass_variant {
+        target.macos.glass_variant = value;
     }
-    if let Some(value) = file.overlay.glass.style {
-        target.glass_style = value;
+    if let Some(value) = file.overlay.macos.glass_style {
+        target.macos.glass_style = value;
     }
-    if let Some(value) = file.overlay.glass.subdued {
-        target.subdued = value;
+    if let Some(value) = file.overlay.macos.subdued {
+        target.macos.subdued = value;
+    }
+    if let Some(value) = file.overlay.macos.background_blur_radius {
+        target.macos.background_blur_radius = value;
     }
     set_color(
-        &mut target.background_rgb,
+        &mut target.core.background_rgb,
         &file.overlay.surface.background,
         &palette,
         "overlay.surface.background",
     )?;
     if let Some(value) = file.overlay.surface.background_alpha {
-        target.background_alpha = value;
-    }
-    if let Some(value) = file.overlay.surface.background_blur_radius {
-        target.background_blur_radius = value;
+        target.core.background_alpha = value;
     }
     if let Some(value) = file.overlay.surface.corner_radius {
-        target.corner_radius = value;
+        target.core.corner_radius = value;
     }
     set_color(
-        &mut target.text.primary,
+        &mut target.core.text.primary,
         &file.overlay.text.primary,
         &palette,
         "overlay.text.primary",
     )?;
     set_color(
-        &mut target.text.secondary,
+        &mut target.core.text.secondary,
         &file.overlay.text.secondary,
         &palette,
         "overlay.text.secondary",
     )?;
     set_color(
-        &mut target.text.tertiary,
+        &mut target.core.text.tertiary,
         &file.overlay.text.tertiary,
         &palette,
         "overlay.text.tertiary",
     )?;
     set_color(
-        &mut target.text.segment,
+        &mut target.core.text.segment,
         &file.overlay.text.segment,
         &palette,
         "overlay.text.segment",
     )?;
     set_color(
-        &mut target.text.notice,
+        &mut target.core.text.notice,
         &file.overlay.text.notice,
         &palette,
         "overlay.text.notice",
     )?;
     set_color(
-        &mut target.text.error,
+        &mut target.core.text.error,
         &file.overlay.text.error,
         &palette,
         "overlay.text.error",
     )?;
     set_color(
-        &mut target.state.idle,
+        &mut target.core.state.idle,
         &file.overlay.state.idle,
         &palette,
         "overlay.state.idle",
     )?;
     set_color(
-        &mut target.state.connecting,
+        &mut target.core.state.connecting,
         &file.overlay.state.connecting,
         &palette,
         "overlay.state.connecting",
     )?;
     set_color(
-        &mut target.state.recording,
+        &mut target.core.state.recording,
         &file.overlay.state.recording,
         &palette,
         "overlay.state.recording",
     )?;
     set_color(
-        &mut target.state.thinking,
+        &mut target.core.state.thinking,
         &file.overlay.state.thinking,
         &palette,
         "overlay.state.thinking",
     )?;
     set_color(
-        &mut target.state.stopping,
+        &mut target.core.state.stopping,
         &file.overlay.state.stopping,
         &palette,
         "overlay.state.stopping",
     )?;
     set_color(
-        &mut target.state.error,
+        &mut target.core.state.error,
         &file.overlay.state.error,
         &palette,
         "overlay.state.error",
@@ -634,9 +668,9 @@ trigger = "f16"
         apply_overlay_theme(&mut overlay, &file).unwrap();
 
         assert_eq!(tui.highlight, palette::BRIGHT_AQUA);
-        assert_eq!(overlay.glass_variant, 11);
-        assert!((overlay.background_alpha - 0.70).abs() < 1e-9);
-        assert_eq!(overlay.text.primary, palette::FG0);
+        assert_eq!(overlay.macos.glass_variant, 11);
+        assert!((overlay.core.background_alpha - 0.70).abs() < 1e-9);
+        assert_eq!(overlay.core.text.primary, palette::FG0);
     }
 
     #[test]
@@ -662,8 +696,8 @@ error = 0x445566
 
         assert_eq!(tui.highlight, 0x112233);
         assert_eq!(tui.foreground, palette::FG0);
-        assert_eq!(overlay.text.error, 0x445566);
-        assert_eq!(overlay.text.primary, palette::FG0);
+        assert_eq!(overlay.core.text.error, 0x445566);
+        assert_eq!(overlay.core.text.primary, palette::FG0);
     }
 
     #[test]
@@ -674,7 +708,7 @@ error = 0x445566
         let effective = load_effective_from_root(&minimal_config(), &dir).unwrap();
 
         assert_eq!(effective.theme, DEFAULT_THEME_NAME);
-        assert_eq!(effective.overlay.text.primary, palette::FG0);
+        assert_eq!(effective.overlay.core.text.primary, palette::FG0);
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -34,15 +34,14 @@ border = "overlay1"
 border_focus = "mauve"
 segment = "subtext0"
 
-[overlay.glass]
-variant = 11
-style = "clear"
+[overlay.macos]
+glass_variant = 11
+glass_style = "clear"
 subdued = 0
-
+background_blur_radius = 0
 [overlay.surface]
 background = "base"
 background_alpha = 0.60
-background_blur_radius = 0
 corner_radius = 18.0
 
 [overlay.text]

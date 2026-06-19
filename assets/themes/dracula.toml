@@ -27,15 +27,14 @@ border = "comment"
 border_focus = "purple"
 segment = "comment"
 
-[overlay.glass]
-variant = 11
-style = "clear"
+[overlay.macos]
+glass_variant = 11
+glass_style = "clear"
 subdued = 0
-
+background_blur_radius = 0
 [overlay.surface]
 background = "background"
 background_alpha = 0.80
-background_blur_radius = 0
 corner_radius = 18.0
 
 [overlay.text]

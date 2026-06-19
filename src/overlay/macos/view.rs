@@ -154,33 +154,33 @@ impl OverlayView {
             NSSize::new(L::constants::WIDTH, L::constants::BASE_HEIGHT),
         );
         let panel = make_panel(mtm, initial_frame);
-        apply_panel_background_blur(&panel, cfg.background_blur_radius);
+        apply_panel_background_blur(&panel, cfg.macos.background_blur_radius);
 
         let (container, glass, background, pending_chrome_error) = build_chrome(mtm, &cfg);
 
         let row = L::first_row_frames(0.0);
-        let state_icon = make_state_icon(mtm, cfg.text.primary);
+        let state_icon = make_state_icon(mtm, cfg.core.text.primary);
         state_icon.setFrame(to_nsrect(row.icon));
         let status = label(
             mtm,
             to_nsrect(row.status),
             typography::STATE,
             true,
-            cfg.text.primary,
+            cfg.core.text.primary,
         );
         let stats = label(
             mtm,
             to_nsrect(row.stats),
             typography::META,
             false,
-            cfg.text.secondary,
+            cfg.core.text.secondary,
         );
         let meta = label(
             mtm,
             to_nsrect(row.meta),
             typography::META,
             false,
-            cfg.text.tertiary,
+            cfg.core.text.tertiary,
         );
         meta.setAlignment(NSTextAlignment::Right);
         let text = label(
@@ -191,7 +191,7 @@ impl OverlayView {
             ),
             typography::BODY,
             false,
-            cfg.text.primary,
+            cfg.core.text.primary,
         );
         text.setUsesSingleLineMode(false);
         text.setLineBreakMode(NSLineBreakMode::ByWordWrapping);
@@ -209,7 +209,7 @@ impl OverlayView {
         panel.setContentView(Some(&container));
         panel.orderOut(None);
 
-        let model = OverlayModel::new(&cfg.state);
+        let model = OverlayModel::new(&cfg.core.state);
 
         Self {
             mtm,
@@ -244,7 +244,7 @@ impl OverlayView {
         if matches!(cmd, OverlayCmd::Relabel) {
             // Force render() to push new translated status text.
             self.last_status_text.clear();
-            self.model.apply(cmd, &self.cfg.state);
+            self.model.apply(cmd, &self.cfg.core.state);
             self.render();
             return;
         }
@@ -270,7 +270,7 @@ impl OverlayView {
             _ => {}
         }
         let prev_visible = self.model.visible;
-        self.model.apply(cmd, &self.cfg.state);
+        self.model.apply(cmd, &self.cfg.core.state);
         if prev_visible && !self.model.visible {
             self.last_text_update = None;
             self.peak_text_lines = 1;
@@ -281,7 +281,7 @@ impl OverlayView {
 
     fn tick(&mut self) {
         let prev_visible = self.model.visible;
-        let _ = self.model.tick(Instant::now(), &self.cfg.state);
+        let _ = self.model.tick(Instant::now(), &self.cfg.core.state);
         if prev_visible && !self.model.visible {
             self.last_text_update = None;
             self.peak_text_lines = 1;
@@ -300,7 +300,7 @@ impl OverlayView {
                             text: err,
                             kind: TextKind::Error,
                         },
-                        &self.cfg.state,
+                        &self.cfg.core.state,
                     );
                 }
             }
@@ -308,7 +308,7 @@ impl OverlayView {
             let full_text = self.model.display_text();
             let (_, current_lines) = L::display_text_plan(
                 &full_text,
-                self.cfg.max_text_lines,
+                self.cfg.core.max_text_lines,
                 L::constants::CHARS_PER_LINE,
             );
             let lines = if self.model.state == OverlayState::Recording {
@@ -337,13 +337,13 @@ impl OverlayView {
             L::live_text_plan(
                 &self.model.segments,
                 &self.model.partial,
-                self.cfg.max_text_lines,
+                self.cfg.core.max_text_lines,
                 L::constants::CHARS_PER_LINE,
             )
         } else {
             let (display_text, lines) = L::display_text_plan(
                 &full_text,
-                self.cfg.max_text_lines,
+                self.cfg.core.max_text_lines,
                 L::constants::CHARS_PER_LINE,
             );
             L::LiveTextPlan {
@@ -382,13 +382,13 @@ impl OverlayView {
             self.last_stats_text = stats_text;
         }
         self.stats
-            .setTextColor(Some(&color_from_rgb_alpha(self.cfg.text.secondary, 1.0)));
+            .setTextColor(Some(&color_from_rgb_alpha(self.cfg.core.text.secondary, 1.0)));
 
         // meta 行：notice 活跃时盖住 chain_summary，黄字。
         let (meta_text, meta_color) = if let Some(notice) = &self.model.notice {
-            (notice.text.clone(), self.cfg.text.notice)
+            (notice.text.clone(), self.cfg.core.text.notice)
         } else {
-            (header.meta, self.cfg.text.tertiary)
+            (header.meta, self.cfg.core.text.tertiary)
         };
         if self.last_meta_text != meta_text {
             fade_view(&self.meta, 0.16);
@@ -400,9 +400,9 @@ impl OverlayView {
 
         // text 区：error_text 非空时强制红字，覆盖 partial/final（display_text 已优先返回 error）。
         let text_color = if !self.model.error_text.is_empty() {
-            self.cfg.text.error
+            self.cfg.core.text.error
         } else {
-            self.cfg.text.primary
+            self.cfg.core.text.primary
         };
         if self.last_visible_text != display_text {
             if !self.model.error_text.is_empty() {
@@ -483,8 +483,8 @@ impl OverlayView {
         let attributed = NSMutableAttributedString::from_nsstring(&NSString::from_str(&full));
         let segment_len = L::utf16_len(&plan.segments);
         let full_len = L::utf16_len(&full);
-        let segment_color = color_from_rgb_alpha(self.cfg.text.segment, 0.88);
-        let partial_color = color_from_rgb_alpha(self.cfg.text.primary, 1.0);
+        let segment_color = color_from_rgb_alpha(self.cfg.core.text.segment, 0.88);
+        let partial_color = color_from_rgb_alpha(self.cfg.core.text.primary, 1.0);
         unsafe {
             let _: () = msg_send![
                 &attributed,
@@ -544,7 +544,7 @@ impl OverlayView {
             .unwrap_or(screen);
         let frame = to_nsrect(L::panel_frame(
             from_nsrect(anchor),
-            self.cfg.position,
+            self.cfg.core.position,
             L::constants::WIDTH,
             height,
             from_nsrect(screen),
@@ -571,15 +571,15 @@ impl OverlayView {
                     Some(format!("glass SPI unavailable: {}", missing.join(", ")));
             }
         }
-        apply_panel_background_blur(&self.panel, cfg.background_blur_radius);
+        apply_panel_background_blur(&self.panel, cfg.macos.background_blur_radius);
         apply_background_settings(&self.background, &cfg);
         self.cfg = cfg;
-        self.model.state_color = self.model.state.color_rgb(&self.cfg.state);
+        self.model.state_color = self.model.state.color_rgb(&self.cfg.core.state);
         self.last_status_text.clear();
         self.last_visible_text.clear();
         self.last_meta_text.clear();
         // peak_text_lines 用旧上限可能比新 max_text_lines 大，clamp 回去
-        let cap = self.cfg.max_text_lines.clamp(1, 8);
+        let cap = self.cfg.core.max_text_lines.clamp(1, 8);
         if self.peak_text_lines > cap {
             self.peak_text_lines = cap;
         }

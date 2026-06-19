@@ -162,23 +162,23 @@ pub(super) fn apply_glass_settings(
     glass: &NSGlassEffectView,
     cfg: &EffectiveOverlayCfg,
 ) -> Vec<&'static str> {
-    glass.setCornerRadius(cfg.corner_radius);
-    let style = match cfg.glass_style {
+    glass.setCornerRadius(cfg.core.corner_radius);
+    let style = match cfg.macos.glass_style {
         GlassStyle::Clear => NSGlassEffectViewStyle::Regular,
         GlassStyle::Blur => NSGlassEffectViewStyle::Clear,
     };
     glass.setStyle(style);
 
     let mut missing = Vec::new();
-    if !try_set_long(glass, c"set_variant:", c"setVariant:", cfg.glass_variant) {
+    if !try_set_long(glass, c"set_variant:", c"setVariant:", cfg.macos.glass_variant) {
         missing.push("variant");
     }
     if !try_set_long(
         glass,
         c"set_subduedState:",
         c"setSubduedState:",
-        cfg.subdued,
-    ) && cfg.subdued != 0
+        cfg.macos.subdued,
+    ) && cfg.macos.subdued != 0
     {
         missing.push("subdued");
     }
@@ -202,9 +202,9 @@ pub(super) fn make_background_layer(
 pub(super) fn apply_background_settings(background: &NSView, cfg: &EffectiveOverlayCfg) {
     unsafe {
         let layer: *mut AnyObject = msg_send![background, layer];
-        let color = color_from_rgb_alpha(cfg.background_rgb, cfg.background_alpha).CGColor();
+        let color = color_from_rgb_alpha(cfg.core.background_rgb, cfg.core.background_alpha).CGColor();
         let _: () = msg_send![layer, setBackgroundColor: &*color];
-        let _: () = msg_send![layer, setCornerRadius: cfg.corner_radius];
+        let _: () = msg_send![layer, setCornerRadius: cfg.core.corner_radius];
         let _: () = msg_send![layer, setMasksToBounds: true];
     }
 }

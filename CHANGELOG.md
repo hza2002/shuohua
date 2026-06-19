@@ -8,6 +8,14 @@
 - New valid theme files are embedded into `shuo` and exported by
   `shuo config-template` without editing a Rust registry.
 
+## 2026-06-19 - Voice engine boundary
+
+- Split the recording-time Active/Idle engine from lifecycle completion.
+- `voice::engine` now owns PCM routing, session switching, finalize, cancel,
+  runtime errors, and retained audio, returning a compact `EngineOutcome`.
+- `voice::finish` now contains only the public entry point plus
+  post-processing, dispatch, history, and final StateStore/Overlay updates.
+
 ## 2026-06-19 - Unified voice recording lifecycle
 
 - Removed the duplicate single-session recording implementation. Continuous

@@ -7,6 +7,7 @@
 pub(crate) mod audio;
 pub(crate) mod capture;
 pub mod dispatch;
+pub(crate) mod engine;
 pub(crate) mod finalize;
 pub mod finish;
 pub(crate) mod history_build;

@@ -56,7 +56,8 @@ src/
 │   ├── mod.rs
 │   ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 临时 WAV writer
 │   ├── audio.rs                         # retained audio：临时 WAV → FLAC/AAC，路径与失败清理
-│   ├── finish.rs                        # 唯一录音生命周期：Continuous / VadPause + 统一收尾
+│   ├── finish.rs                        # 公开录音入口 + post/dispatch/history/UI completion
+│   ├── engine.rs                        # Continuous / VadPause Active/Idle 引擎 + session 切换
 │   ├── capture.rs                       # SegmentCapture / SessionCapture 数据模型 + samples_to_ms / instant_to_datetime
 │   ├── finalize.rs                      # provider session 收口：is_last → Final/Segment/Done/timeout
 │   ├── history_build.rs                 # HistoryRecord 构造 / append + PipelineStep → PipelineStepHistory
@@ -98,17 +99,19 @@ src/
 
 ## 当前实现状态
 
-`finish::run_recording` 是唯一录音生命周期，通过
-`RecordingMode::{Continuous, VadPause}` 区分固定模式。Continuous 始终向一个
+`finish::run_recording` 是唯一公开录音入口。`engine::run` 通过
+`RecordingMode::{Continuous, VadPause}` 区分固定模式：Continuous 始终向一个
 provider session 发送 PCM，不构造 Silero、timeline 或 pre-roll 状态，也不进入
-Idle；VadPause 保留 Active / Idle、pause / resume、pre-roll 和 overlap。两种模式
-共享 recording 初始化、ASR event、stop drain、provider finalize、错误/取消、
-retained audio、post/dispatch、history、StateStore 和 Overlay 收尾。
+Idle；VadPause 保留 Active / Idle、pause / resume、pre-roll 和 overlap。
+engine 返回 `EngineOutcome` 后，finish 统一执行 post/dispatch、history 和最终
+StateStore / Overlay completion。
 `voice/silero.rs`、`voice/timeline.rs`、`voice/vad.rs` 都是默认 build 编译。
 `voice/observer.rs` 是 `feature=dev` 下的 trace observer，默认 build 是 ZST no-op。
 
-`finish.rs` 是 voice 子系统编排顶层，依赖
-`capture / finalize / history_build / post_dispatch`，无模块反向依赖。
+`finish.rs` 是 voice 子系统 completion 顶层，依赖
+`engine / capture / history_build / post_dispatch`；`engine.rs` 只依赖录音运行期的
+`capture / finalize / meter / observer / vad / silero / timeline / recorder / audio`，
+不依赖 post、dispatch 或 history。
 `SegmentCapture / SessionCapture` 仅 `pub(crate)` 暴露在 voice 模块内部。
 
 每条路径的详细职责见 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)；关键设计决策见 [DESIGN.md §2](DESIGN.md#2-关键设计决策)。

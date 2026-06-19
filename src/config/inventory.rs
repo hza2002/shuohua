@@ -380,10 +380,7 @@ fn file_stem(path: &Path, fallback: &str) -> String {
 }
 
 fn config_home() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(xdg);
-    }
-    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config")
+    crate::config::paths::config_home()
 }
 
 #[cfg(test)]

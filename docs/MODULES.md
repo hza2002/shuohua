@@ -15,11 +15,20 @@ src/
 ├── config/
 │   ├── mod.rs                           # config module root；top-level config API re-export + submodules
 │   ├── main.rs                          # ~/.config/shuohua/config.toml schema/parse/path helpers
+│   ├── paths.rs                         # XDG config path helpers shared by config loaders
 │   ├── spec.rs                          # shared field/spec metadata + validation diagnostics
 │   ├── schema.rs                        # shared config schema registry + description i18n keys
 │   ├── inventory.rs                     # structured Configure/doctor inventory scan
-│   ├── diagnostics.rs                   # full-tree local config diagnostics shared by doctor/Configure
-│   ├── template.rs                      # official config template registry + build-generated theme registry + LLM component creation
+│   ├── diagnostics/                     # full-tree local config diagnostics shared by doctor/Configure
+│   │   ├── mod.rs                       # diagnostics facade and tests
+│   │   ├── report.rs                    # diagnostic report types and helpers
+│   │   ├── runtime_plan.rs              # ASR/LLM runtime check target planning
+│   │   └── scan.rs                      # filesystem scan, TOML validation, reference checks
+│   ├── template/                        # official config template registry + build-generated theme registry + LLM component creation
+│   │   ├── mod.rs                       # template facade and tests
+│   │   ├── registry.rs                  # static templates and embedded theme presets
+│   │   ├── render.rs                    # schema/comment-driven TOML rendering
+│   │   └── llm_wizard.rs                # LLM component draft/render/create helpers
 │   ├── profile.rs                       # profile/*.toml schema + route loading
 │   ├── post/                            # post component config namespace
 │   ├── asr/                             # ASR provider config loaders

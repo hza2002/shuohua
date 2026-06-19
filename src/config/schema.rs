@@ -162,7 +162,11 @@ pub fn main_spec() -> ConfigSpec {
         .field(field(FieldSpec::string, "hotkey.trigger").required())
         .field(field(FieldSpec::string, "hotkey.cancel").optional())
         .field(field(FieldSpec::table, "voice").optional())
-        .field(field(FieldSpec::integer, "voice.stop_delay_ms").optional())
+        .field(
+            field(FieldSpec::integer, "voice.stop_delay_ms")
+                .optional()
+                .range(0.0, 5000.0),
+        )
         .field(
             field(FieldSpec::string, "voice.record_audio")
                 .optional()
@@ -175,15 +179,39 @@ pub fn main_spec() -> ConfigSpec {
                 .optional()
                 .allowed_values(["off", "silero"]),
         )
-        .field(field(FieldSpec::float, "voice.vad.threshold").optional())
-        .field(field(FieldSpec::integer, "voice.vad.pause_silence_ms").optional())
-        .field(field(FieldSpec::integer, "voice.vad.pre_roll_ms").optional())
-        .field(field(FieldSpec::integer, "voice.vad.max_overlap_ms").optional())
-        .field(field(FieldSpec::integer, "voice.vad.min_start_voiced_frames").optional())
+        .field(
+            field(FieldSpec::float, "voice.vad.threshold")
+                .optional()
+                .range(0.0, 1.0),
+        )
+        .field(
+            field(FieldSpec::integer, "voice.vad.pause_silence_ms")
+                .optional()
+                .range(200.0, 10_000.0),
+        )
+        .field(
+            field(FieldSpec::integer, "voice.vad.pre_roll_ms")
+                .optional()
+                .range(0.0, 2000.0),
+        )
+        .field(
+            field(FieldSpec::integer, "voice.vad.max_overlap_ms")
+                .optional()
+                .range(0.0, 2000.0),
+        )
+        .field(
+            field(FieldSpec::integer, "voice.vad.min_start_voiced_frames")
+                .optional()
+                .range(1.0, 20.0),
+        )
         .field(field(FieldSpec::table, "dev").optional())
         .field(field(FieldSpec::bool, "dev.vad_trace").optional())
         .field(field(FieldSpec::table, "post").optional())
-        .field(field(FieldSpec::integer, "post.timeout_ms").optional())
+        .field(
+            field(FieldSpec::integer, "post.timeout_ms")
+                .optional()
+                .range(100.0, 60_000.0),
+        )
         .field(field(FieldSpec::table, "profile").optional().free_table())
         .field(field(FieldSpec::table, "ui").optional())
         .field(field(FieldSpec::string, "ui.language").optional())
@@ -196,8 +224,16 @@ pub fn main_spec() -> ConfigSpec {
                 .optional()
                 .allowed_values(["top", "middle", "bottom"]),
         )
-        .field(field(FieldSpec::integer, "overlay.max_text_lines").optional())
-        .field(field(FieldSpec::integer, "overlay.thinking_delay_ms").optional())
+        .field(
+            field(FieldSpec::integer, "overlay.max_text_lines")
+                .optional()
+                .range(1.0, 10.0),
+        )
+        .field(
+            field(FieldSpec::integer, "overlay.thinking_delay_ms")
+                .optional()
+                .range(0.0, 10_000.0),
+        )
 }
 
 pub fn asr_apple_spec() -> ConfigSpec {
@@ -205,7 +241,11 @@ pub fn asr_apple_spec() -> ConfigSpec {
         .field(field(FieldSpec::string, "language").optional())
         .field(field(FieldSpec::bool, "install_assets").optional())
         .field(field(FieldSpec::bool, "idle_pause").optional())
-        .field(field(FieldSpec::integer, "finalize_timeout_ms").optional())
+        .field(
+            field(FieldSpec::integer, "finalize_timeout_ms")
+                .optional()
+                .range(1000.0, 60_000.0),
+        )
 }
 
 pub fn asr_doubao_spec() -> ConfigSpec {
@@ -217,16 +257,24 @@ pub fn asr_doubao_spec() -> ConfigSpec {
         .field(field(FieldSpec::bool, "enable_itn").optional())
         .field(field(FieldSpec::bool, "enable_punc").optional())
         .field(field(FieldSpec::bool, "enable_ddc").optional())
-        .field(field(FieldSpec::integer, "stream_mode").optional())
+        .field(
+            field(FieldSpec::integer, "stream_mode")
+                .optional()
+                .range(0.0, 2.0),
+        )
         .field(field(FieldSpec::bool, "ai_vad").optional())
         .field(field(FieldSpec::bool, "idle_pause").optional())
-        .field(field(FieldSpec::integer, "finalize_timeout_ms").optional())
+        .field(
+            field(FieldSpec::integer, "finalize_timeout_ms")
+                .optional()
+                .range(1000.0, 60_000.0),
+        )
 }
 
 pub fn profile_spec() -> ConfigSpec {
     ConfigSpec::new("profile")
         .field(field(FieldSpec::string, "name").required())
-        .field(field(FieldSpec::table, "asr").required())
+        .field(field(FieldSpec::table, "asr").required().free_table())
         .field(field(FieldSpec::string, "asr.provider").required())
         .field(field(FieldSpec::array, "asr.hotwords").optional())
         .field(field(FieldSpec::table, "post").optional())
@@ -297,8 +345,16 @@ pub fn theme_spec() -> ConfigSpec {
         .field(field(FieldSpec::integer, "overlay.macos.background_blur_radius").optional())
         .field(field(FieldSpec::table, "overlay.surface").optional())
         .field(field(FieldSpec::color, "overlay.surface.background").optional())
-        .field(field(FieldSpec::float, "overlay.surface.background_alpha").optional())
-        .field(field(FieldSpec::float, "overlay.surface.corner_radius").optional())
+        .field(
+            field(FieldSpec::float, "overlay.surface.background_alpha")
+                .optional()
+                .range(0.0, 1.0),
+        )
+        .field(
+            field(FieldSpec::float, "overlay.surface.corner_radius")
+                .optional()
+                .range(0.0, 40.0),
+        )
         .field(field(FieldSpec::table, "overlay.text").optional())
         .field(field(FieldSpec::color, "overlay.text.primary").optional())
         .field(field(FieldSpec::color, "overlay.text.secondary").optional())
@@ -318,6 +374,17 @@ pub fn theme_spec() -> ConfigSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::spec::validate_value;
+
+    const ALL_SCHEMA_IDS: &[SchemaId] = &[
+        SchemaId::Main,
+        SchemaId::AsrApple,
+        SchemaId::AsrDoubao,
+        SchemaId::Profile,
+        SchemaId::PostRule,
+        SchemaId::PostLlm,
+        SchemaId::Theme,
+    ];
 
     #[test]
     fn registry_resolves_known_paths() {
@@ -338,15 +405,7 @@ mod tests {
 
     #[test]
     fn generated_template_fields_have_description_keys() {
-        for id in [
-            SchemaId::Main,
-            SchemaId::AsrApple,
-            SchemaId::AsrDoubao,
-            SchemaId::Profile,
-            SchemaId::PostRule,
-            SchemaId::PostLlm,
-            SchemaId::Theme,
-        ] {
+        for &id in ALL_SCHEMA_IDS {
             for field in spec_for(id).fields() {
                 assert!(
                     field.description_key_value().is_some(),
@@ -355,5 +414,88 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn schema_description_keys_exist_in_base_locales() {
+        for &id in ALL_SCHEMA_IDS {
+            for field in spec_for(id).fields() {
+                let key = field
+                    .description_key_value()
+                    .unwrap_or_else(|| panic!("{id:?} {} missing description key", field.name()));
+                assert_ne!(
+                    crate::i18n::tr_lang(crate::i18n::Lang::EnUS, key, &[]),
+                    key,
+                    "{id:?} {} missing en-US key {key}",
+                    field.name()
+                );
+                assert_ne!(
+                    crate::i18n::tr_lang(crate::i18n::Lang::ZhCN, key, &[]),
+                    key,
+                    "{id:?} {} missing zh-CN key {key}",
+                    field.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn official_template_values_are_declared_in_schema() {
+        for template in crate::config::template::registry() {
+            let spec = template.spec();
+            let value: toml::Value = toml::from_str(&crate::config::template::render(template))
+                .unwrap_or_else(|error| panic!("{} rendered invalid TOML: {error}", template.id));
+            let diagnostics = validate_value(&spec, &value)
+                .into_iter()
+                .filter(|diagnostic| {
+                    !spec.field_for_path(&diagnostic.path).is_some_and(|field| {
+                        field.is_secret()
+                            && diagnostic.message.contains("secret field cannot be empty")
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                diagnostics.is_empty(),
+                "{} template does not match schema: {diagnostics:?}",
+                template.id
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_parsers_reject_unknown_fields_across_config_kinds() {
+        assert!(crate::config::main::parse(
+            "[hotkey]\ntrigger = \"f16\"\n[voice]\nstop_delay_mss = 1\n"
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("voice.stop_delay_mss"));
+
+        let apple = toml::toml! {
+            idle_paus = true
+        }
+        .into();
+        assert!(validate_value(&spec_for(SchemaId::AsrApple), &apple)
+            .iter()
+            .any(|diagnostic| diagnostic.path == "idle_paus"));
+
+        let post = toml::toml! {
+            type = "rule"
+            patterns = []
+            typo = true
+        }
+        .into();
+        assert!(validate_value(&spec_for(SchemaId::PostRule), &post)
+            .iter()
+            .any(|diagnostic| diagnostic.path == "typo"));
+
+        let theme = toml::toml! {
+            [overlay.surface]
+            background_alfa = 0.5
+        }
+        .into();
+        assert!(validate_value(&spec_for(SchemaId::Theme), &theme)
+            .iter()
+            .any(|diagnostic| diagnostic.path == "overlay.surface.background_alfa"));
     }
 }

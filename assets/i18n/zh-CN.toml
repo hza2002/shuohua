@@ -12,6 +12,8 @@ step_timeout = "{name} 超时，已跳过"
 step_failed = "{name} 失败，已跳过"
 history_save_failed = "文本已输出，但历史记录保存失败"
 audio_save_failed = "录音音频保存失败"
+config_reload_failed = "配置重载失败，继续使用上一份配置"
+theme_fallback = "主题加载失败，已使用兜底颜色"
 
 [error]
 no_audio = "没有收到麦克风音频，请检查输入设备"

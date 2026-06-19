@@ -136,8 +136,10 @@ fn run_daemon_process() -> Result<()> {
     let _lock = DaemonLock::acquire()?;
     let _log_guard = log::init_daemon().context("initialize daemon logger")?;
     let cfg_path = config::default_path();
+    let (overlay, _overlay_rx) = OverlayHandle::channel();
     let (cfg_rx, reload_handle) =
-        reload::watch_with_handle(cfg_path.clone()).context("start config watcher")?;
+        reload::watch_with_handle(cfg_path.clone(), Some(overlay.clone()))
+            .context("start config watcher")?;
     let runtime_cfg = cfg_rx.borrow().clone();
     let cfg = &runtime_cfg.config;
     i18n::init(&cfg.ui.language);
@@ -163,7 +165,6 @@ fn run_daemon_process() -> Result<()> {
         language = %cfg.ui.language,
         "daemon config loaded"
     );
-    let (overlay, _overlay_rx) = OverlayHandle::channel();
     let state_store = StateStore::new();
 
     let cfg_rx_for_daemon = cfg_rx.clone();
@@ -339,7 +340,7 @@ async fn run_daemon(
                             }
                         };
                         let post_dir = config::post::default_dir();
-                        let post_chain = match config::post::load_components(
+                        let post_chain_config = match config::post::load_components(
                             &profile.post.chain,
                             &config::post::PostDirs {
                                 rule: post_dir.join("rule"),
@@ -350,6 +351,14 @@ async fn run_daemon(
                             Ok(chain) => chain,
                             Err(e) => {
                                 tracing::warn!(error = ?e, "post chain load failed");
+                                state_store.set_error(None);
+                                continue;
+                            }
+                        };
+                        let post_chain = match post::build_chain(post_chain_config) {
+                            Ok(chain) => chain,
+                            Err(e) => {
+                                tracing::warn!(error = ?e, "post chain build failed");
                                 state_store.set_error(None);
                                 continue;
                             }

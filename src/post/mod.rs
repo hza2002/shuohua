@@ -10,11 +10,72 @@ pub mod app_context;
 pub mod llm;
 pub mod zh_filter;
 
+use anyhow::Result;
 use async_trait::async_trait;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
+use crate::config::post::{PostChainConfig, ProcessorConfig, ProviderFormatCfg};
+use crate::post::llm::{LlmCleanup, LlmCleanupConfig, ProviderFormat};
 pub use zh_filter::ZhFilter;
+
+pub struct PostChain {
+    pub name: String,
+    pub processors: Vec<Box<dyn PostProcessor>>,
+}
+
+pub fn build_chain(config: PostChainConfig) -> Result<PostChain> {
+    let mut processors = Vec::with_capacity(config.processors.len());
+    for processor in config.processors {
+        processors.push(build_processor(processor)?);
+    }
+    Ok(PostChain {
+        name: config.name,
+        processors,
+    })
+}
+
+pub fn build_llm_cleanup_config(config: ProcessorConfig) -> Result<LlmCleanupConfig> {
+    match config {
+        ProcessorConfig::Llm {
+            id,
+            format,
+            provider_name,
+            base_url,
+            api_key,
+            model,
+            extra_body,
+            system_prompt,
+            prompt,
+        } => Ok(LlmCleanupConfig {
+            name: id,
+            format: match format {
+                ProviderFormatCfg::Openai => ProviderFormat::OpenAi,
+                ProviderFormatCfg::Anthropic => ProviderFormat::Anthropic,
+            },
+            provider_name,
+            base_url,
+            api_key,
+            model,
+            extra_body,
+            system_prompt,
+            prompt,
+        }),
+        ProcessorConfig::Rule { .. } => anyhow::bail!("expected llm config"),
+    }
+}
+
+fn build_processor(config: ProcessorConfig) -> Result<Box<dyn PostProcessor>> {
+    match config {
+        ProcessorConfig::Rule { id, patterns } => {
+            let borrowed = patterns.iter().map(String::as_str).collect::<Vec<_>>();
+            Ok(Box::new(ZhFilter::with_name(&id, &borrowed)))
+        }
+        llm @ ProcessorConfig::Llm { .. } => {
+            Ok(Box::new(LlmCleanup::new(build_llm_cleanup_config(llm)?)))
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PipelineText {
@@ -290,5 +351,35 @@ mod tests {
         assert_eq!(out.text, "raw text");
         assert_eq!(out.raw, "raw text");
         assert_eq!(steps.len(), 2);
+    }
+
+    #[test]
+    fn builds_runtime_chain_from_config_processors() {
+        let chain = build_chain(crate::config::post::PostChainConfig {
+            name: "rule:zh_filter → llm:deepseek".to_string(),
+            processors: vec![
+                crate::config::post::ProcessorConfig::Rule {
+                    id: "rule:zh_filter".to_string(),
+                    patterns: vec!["嗯".to_string(), "啊".to_string()],
+                },
+                crate::config::post::ProcessorConfig::Llm {
+                    id: "llm:deepseek".to_string(),
+                    format: crate::config::post::ProviderFormatCfg::Openai,
+                    provider_name: "deepseek".to_string(),
+                    base_url: "https://api.deepseek.com".to_string(),
+                    api_key: "sk-test".to_string(),
+                    model: "deepseek-chat".to_string(),
+                    extra_body: serde_json::Map::new(),
+                    system_prompt: None,
+                    prompt: "{{text}}".to_string(),
+                },
+            ],
+        })
+        .unwrap();
+
+        assert_eq!(chain.name, "rule:zh_filter → llm:deepseek");
+        assert_eq!(chain.processors.len(), 2);
+        assert_eq!(chain.processors[0].name(), "rule:zh_filter");
+        assert_eq!(chain.processors[1].name(), "llm:deepseek");
     }
 }

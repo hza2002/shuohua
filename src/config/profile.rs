@@ -4,12 +4,15 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use toml::value::Table;
 
+use crate::config::schema::{self, SchemaId};
+use crate::config::spec::validate_value;
 use crate::config::ProfileRouteCfg;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Profile {
     pub name: String,
     pub asr: ProfileAsr,
+    #[serde(default)]
     pub post: ProfilePost,
 }
 
@@ -30,11 +33,17 @@ pub struct ProfilePost {
     pub llm: Table,
 }
 
-pub fn default_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(xdg).join("shuohua/profile");
+impl Default for ProfilePost {
+    fn default() -> Self {
+        Self {
+            chain: Vec::new(),
+            llm: Table::new(),
+        }
     }
-    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/shuohua/profile")
+}
+
+pub fn default_dir() -> PathBuf {
+    crate::config::paths::profile_dir()
 }
 
 pub fn load_for_app(
@@ -45,7 +54,16 @@ pub fn load_for_app(
     let path = profile_path_for_routes(profile_dir, routes, bundle_id)?;
     let body = std::fs::read_to_string(&path)
         .with_context(|| format!("read profile {}", path.display()))?;
-    toml::from_str(&body).with_context(|| format!("parse profile {}", path.display()))
+    parse(&body).with_context(|| format!("parse profile {}", path.display()))
+}
+
+pub fn parse(body: &str) -> Result<Profile> {
+    let value = toml::from_str::<toml::Value>(body)?;
+    crate::config::main::reject_schema_diagnostics(validate_value(
+        &schema::spec_for(SchemaId::Profile),
+        &value,
+    ))?;
+    value.try_into::<Profile>().map_err(Into::into)
 }
 
 fn profile_path_for_routes(
@@ -238,5 +256,49 @@ chain = []
 
         assert!(err.contains("matches multiple profiles"));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parse_rejects_unknown_profile_fields() {
+        let err = parse(
+            r#"
+name = "default"
+unknown = true
+
+[asr]
+provider = "apple"
+"#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("unknown"), "{err}");
+        assert!(err.contains("unknown field"), "{err}");
+    }
+
+    #[test]
+    fn parse_allows_asr_provider_overrides() {
+        let profile = parse(
+            r#"
+name = "default"
+
+[asr]
+provider = "apple"
+language = "zh-CN"
+idle_pause = true
+finalize_timeout_ms = 5000
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(profile.asr.provider, "apple");
+        assert_eq!(
+            profile
+                .asr
+                .overrides
+                .get("language")
+                .and_then(toml::Value::as_str),
+            Some("zh-CN")
+        );
     }
 }

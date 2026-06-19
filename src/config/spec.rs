@@ -39,6 +39,8 @@ pub struct FieldSpec {
     default: Option<String>,
     secret: bool,
     allowed_values: Vec<String>,
+    numeric_min: Option<f64>,
+    numeric_max: Option<f64>,
     free_table: bool,
     description_key: Option<&'static str>,
 }
@@ -86,6 +88,8 @@ impl FieldSpec {
             default: None,
             secret: false,
             allowed_values: Vec::new(),
+            numeric_min: None,
+            numeric_max: None,
             free_table: false,
             description_key: None,
         }
@@ -114,6 +118,12 @@ impl FieldSpec {
     pub fn allowed_values(mut self, values: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.allowed_values = values.into_iter().map(Into::into).collect();
         self.kind = ValueKind::Enum;
+        self
+    }
+
+    pub fn range(mut self, min: f64, max: f64) -> Self {
+        self.numeric_min = Some(min);
+        self.numeric_max = Some(max);
         self
     }
 
@@ -299,16 +309,22 @@ fn validate_field(field: &FieldSpec, value: &toml::Value, diagnostics: &mut Vec<
             }
         }
         ValueKind::Integer => {
-            if !value.is_integer() {
+            let Some(actual) = value.as_integer() else {
                 push_type_error(field, "integer", diagnostics);
                 return;
-            }
+            };
+            validate_numeric_range(field, actual as f64, diagnostics);
         }
         ValueKind::Float => {
-            if !value.is_float() && !value.is_integer() {
-                push_type_error(field, "float", diagnostics);
-                return;
-            }
+            let actual = match (value.as_float(), value.as_integer()) {
+                (Some(value), _) => value,
+                (None, Some(value)) => value as f64,
+                (None, None) => {
+                    push_type_error(field, "float", diagnostics);
+                    return;
+                }
+            };
+            validate_numeric_range(field, actual, diagnostics);
         }
         ValueKind::Bool => {
             if !value.is_bool() {
@@ -378,6 +394,28 @@ fn push_type_error(field: &FieldSpec, expected: &str, diagnostics: &mut Vec<Diag
         path: field.name.clone(),
         message: format!("expected {expected}"),
     });
+}
+
+fn validate_numeric_range(field: &FieldSpec, actual: f64, diagnostics: &mut Vec<Diagnostic>) {
+    if let Some(min) = field.numeric_min {
+        if actual < min {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                path: field.name.clone(),
+                message: format!("value {actual} is below minimum {min}"),
+            });
+            return;
+        }
+    }
+    if let Some(max) = field.numeric_max {
+        if actual > max {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                path: field.name.clone(),
+                message: format!("value {actual} is above maximum {max}"),
+            });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -616,5 +654,33 @@ mod tests {
         let diagnostics = validate_value(&spec, &value);
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn validate_reports_numeric_values_outside_range() {
+        let spec = ConfigSpec::new("main")
+            .field(FieldSpec::integer("overlay.max_text_lines").range(1.0, 10.0))
+            .field(FieldSpec::float("voice.vad.threshold").range(0.0, 1.0));
+        let value: toml::Value = toml::toml! {
+            [overlay]
+            max_text_lines = 0
+
+            [voice.vad]
+            threshold = 1.5
+        }
+        .into();
+
+        let diagnostics = validate_value(&spec, &value);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic.path == "overlay.max_text_lines"
+                && diagnostic.message.contains("minimum")
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == Severity::Error
+                && diagnostic.path == "voice.vad.threshold"
+                && diagnostic.message.contains("maximum")
+        }));
     }
 }

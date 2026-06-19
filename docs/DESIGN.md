@@ -981,11 +981,18 @@ shuohua/
 │   ├── config/
 │   │   ├── mod.rs              # module root；top-level config API re-export + submodules
 │   │   ├── main.rs             # top-level config.toml schema/parse/path helpers
+│   │   ├── paths.rs            # XDG config path helpers shared by config loaders
 │   │   ├── spec.rs             # shared config spec metadata + diagnostics
 │   │   ├── schema.rs           # shared config schema registry + description i18n keys
 │   │   ├── inventory.rs        # structured Configure inventory
-│   │   ├── diagnostics.rs      # full-tree local config diagnostics
-│   │   ├── template.rs         # official templates + theme presets + LLM component creation
+│   │   ├── diagnostics/        # full-tree local config diagnostics
+│   │   │   ├── report.rs       # report types and helpers
+│   │   │   ├── runtime_plan.rs # ASR/LLM runtime check target planning
+│   │   │   └── scan.rs         # filesystem scan, TOML validation, reference checks
+│   │   ├── template/           # official templates + theme presets + LLM component creation
+│   │   │   ├── registry.rs     # static templates and embedded theme presets
+│   │   │   ├── render.rs       # schema/comment-driven TOML rendering
+│   │   │   └── llm_wizard.rs   # LLM component draft/render/create helpers
 │   │   ├── profile.rs          # profile/*.toml schema/routes
 │   │   ├── post/               # post component config namespace
 │   │   ├── asr/                # ASR provider config loaders

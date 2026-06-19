@@ -439,7 +439,19 @@ async fn check_llm_runtime(target: LlmRuntimeTarget) -> CheckStatus {
         rule: crate::config::post::default_dir().join("rule"),
         llm: crate::config::post::default_dir().join("llm"),
     };
-    let cfg = match crate::config::post::load_llm_config(&target.id, &dirs, &target.overrides) {
+    let processor_cfg =
+        match crate::config::post::load_llm_config(&target.id, &dirs, &target.overrides) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                println!(
+                    "llm.runtime: ERROR profiles=[{}] component={} {e:#}",
+                    target.profiles.join(", "),
+                    target.id
+                );
+                return CheckStatus::Error;
+            }
+        };
+    let cfg = match crate::post::build_llm_cleanup_config(processor_cfg) {
         Ok(cfg) => cfg,
         Err(e) => {
             println!(

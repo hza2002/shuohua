@@ -22,7 +22,7 @@ use anyhow::{Context, Result};
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
-use crate::config::theme::EffectiveTheme;
+use crate::config::theme::{EffectiveTheme, ThemeLoadWarning};
 use crate::config::{self, Config};
 use crate::overlay::{OverlayCmd, OverlayHandle};
 
@@ -30,6 +30,7 @@ use crate::overlay::{OverlayCmd, OverlayHandle};
 pub struct RuntimeConfig {
     pub config: Config,
     pub theme: EffectiveTheme,
+    pub theme_warning: Option<ThemeLoadWarning>,
 }
 
 pub type Cfg = Arc<RuntimeConfig>;
@@ -39,17 +40,24 @@ pub type Rx = watch::Receiver<Cfg>;
 pub struct Handle {
     path: PathBuf,
     tx: watch::Sender<Cfg>,
+    overlay: Option<OverlayHandle>,
 }
 
 impl Handle {
     pub fn reload_now(&self) -> Result<()> {
-        load_and_broadcast(&self.path, &self.tx)
+        match load_and_broadcast(&self.path, &self.tx, self.overlay.as_ref()) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                send_reload_failed_notice(self.overlay.as_ref());
+                Err(error)
+            }
+        }
     }
 }
 
 /// 起 watcher 线程，返回带初值的 `watch::Receiver` 和手动 reload handle。
 /// 初值 = `config::load_from(path)` + active theme.
-pub fn watch_with_handle(path: PathBuf) -> Result<(Rx, Handle)> {
+pub fn watch_with_handle(path: PathBuf, overlay: Option<OverlayHandle>) -> Result<(Rx, Handle)> {
     let initial = Arc::new(load_runtime_config(&path).context("initial config load")?);
     let (tx, rx) = watch::channel(initial);
 
@@ -60,12 +68,13 @@ pub fn watch_with_handle(path: PathBuf) -> Result<(Rx, Handle)> {
     let handle = Handle {
         path: path.clone(),
         tx: tx.clone(),
+        overlay: overlay.clone(),
     };
 
     std::thread::Builder::new()
         .name("config-watcher".into())
         .spawn(move || {
-            if let Err(e) = run_watcher(dir, path, tx) {
+            if let Err(e) = run_watcher(dir, path, tx, overlay) {
                 tracing::error!(error = ?e, "config watcher exited");
             }
         })
@@ -74,7 +83,12 @@ pub fn watch_with_handle(path: PathBuf) -> Result<(Rx, Handle)> {
     Ok((rx, handle))
 }
 
-fn run_watcher(dir: PathBuf, path: PathBuf, tx: watch::Sender<Cfg>) -> Result<()> {
+fn run_watcher(
+    dir: PathBuf,
+    path: PathBuf,
+    tx: watch::Sender<Cfg>,
+    overlay: Option<OverlayHandle>,
+) -> Result<()> {
     use notify::{RecursiveMode, Watcher};
 
     let (event_tx, event_rx) = std_mpsc::channel::<notify::Result<notify::Event>>();
@@ -101,17 +115,43 @@ fn run_watcher(dir: PathBuf, path: PathBuf, tx: watch::Sender<Cfg>) -> Result<()
         }
         while event_rx.recv_timeout(debounce).is_ok() {}
 
-        match load_and_broadcast(&path, &tx) {
+        match load_and_broadcast(&path, &tx, overlay.as_ref()) {
             Ok(()) => {}
             Err(e) => {
                 tracing::warn!(error = ?e, "config reload failed; keeping previous config");
+                send_reload_failed_notice(overlay.as_ref());
             }
         }
     }
 }
 
-fn load_and_broadcast(path: &Path, tx: &watch::Sender<Cfg>) -> Result<()> {
+fn send_reload_failed_notice(overlay: Option<&OverlayHandle>) {
+    if let Some(overlay) = overlay {
+        overlay.send(OverlayCmd::Notice {
+            text: crate::i18n::tr("notice.config_reload_failed", &[]),
+            ttl_ms: 3000,
+        });
+    }
+}
+
+fn send_theme_fallback_notice(overlay: Option<&OverlayHandle>) {
+    if let Some(overlay) = overlay {
+        overlay.send(OverlayCmd::Notice {
+            text: crate::i18n::tr("notice.theme_fallback", &[]),
+            ttl_ms: 3000,
+        });
+    }
+}
+
+fn load_and_broadcast(
+    path: &Path,
+    tx: &watch::Sender<Cfg>,
+    overlay: Option<&OverlayHandle>,
+) -> Result<()> {
     let cfg = load_runtime_config(path)?;
+    if cfg.theme_warning.is_some() {
+        send_theme_fallback_notice(overlay);
+    }
     tx.send(Arc::new(cfg)).context("broadcast config reload")?;
     tracing::info!(path = %path.display(), "config reloaded");
     Ok(())
@@ -119,8 +159,12 @@ fn load_and_broadcast(path: &Path, tx: &watch::Sender<Cfg>) -> Result<()> {
 
 fn load_runtime_config(path: &Path) -> Result<RuntimeConfig> {
     let config = config::load_from(path)?;
-    let theme = config::theme::load_effective(&config, path);
-    Ok(RuntimeConfig { config, theme })
+    let theme_load = config::theme::load_effective_report(&config, path);
+    Ok(RuntimeConfig {
+        config,
+        theme: theme_load.theme,
+        theme_warning: theme_load.warning,
+    })
 }
 
 fn is_reload_relevant(root: &Path, path: &Path) -> bool {

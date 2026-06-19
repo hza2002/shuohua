@@ -155,7 +155,7 @@ pub struct SessionParams {
     pub stop_delay_ms: u32,
     pub hotwords: Vec<String>,
     pub start_app_context: post::AppContext,
-    pub post_chain: crate::config::post::PostChain,
+    pub post_chain: crate::post::PostChain,
     pub post_timeout_ms: u64,
     pub overlay: Option<OverlayHandle>,
     pub state: StateStore,

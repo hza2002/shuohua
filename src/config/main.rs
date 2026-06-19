@@ -11,6 +11,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::config::schema::{self, SchemaId};
+use crate::config::spec::{validate_value, Diagnostic, Severity};
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub hotkey: HotkeyCfg,
@@ -258,11 +261,7 @@ fn default_thinking_delay_ms() -> u64 {
 
 /// `$XDG_CONFIG_HOME/shuohua/config.toml` or `~/.config/shuohua/config.toml`.
 pub fn default_path() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(xdg).join("shuohua/config.toml");
-    }
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".config/shuohua/config.toml")
+    crate::config::paths::main_config()
 }
 
 pub fn load_from(path: &Path) -> Result<Config> {
@@ -277,7 +276,24 @@ pub fn load_from(path: &Path) -> Result<Config> {
 }
 
 pub fn parse(body: &str) -> Result<Config> {
-    toml::from_str::<Config>(body).map_err(Into::into)
+    let value = toml::from_str::<toml::Value>(body)?;
+    reject_schema_diagnostics(validate_value(&schema::spec_for(SchemaId::Main), &value))?;
+    value.try_into::<Config>().map_err(Into::into)
+}
+
+pub(crate) fn reject_schema_diagnostics(diagnostics: Vec<Diagnostic>) -> Result<()> {
+    if diagnostics.is_empty() {
+        return Ok(());
+    }
+    let messages = diagnostics
+        .into_iter()
+        .filter(|diagnostic| matches!(diagnostic.severity, Severity::Error | Severity::Warning))
+        .map(|diagnostic| format!("{}: {}", diagnostic.path, diagnostic.message))
+        .collect::<Vec<_>>();
+    if messages.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!("invalid config:\n{}", messages.join("\n"));
 }
 
 #[cfg(test)]
@@ -490,6 +506,45 @@ timeout_ms = 3500
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.post.timeout_ms, 3500);
+    }
+
+    #[test]
+    fn parse_rejects_unknown_fields() {
+        let error = parse(
+            r#"
+[hotkey]
+trigger = "f16"
+
+[voice]
+stop_delay_mss = 1200
+"#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("voice.stop_delay_mss"), "{error}");
+        assert!(error.contains("unknown field"), "{error}");
+    }
+
+    #[test]
+    fn parse_rejects_values_outside_safe_ranges() {
+        let error = parse(
+            r#"
+[hotkey]
+trigger = "f16"
+
+[voice.vad]
+threshold = 1.5
+
+[overlay]
+max_text_lines = 0
+"#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("voice.vad.threshold"), "{error}");
+        assert!(error.contains("overlay.max_text_lines"), "{error}");
     }
 
     #[test]

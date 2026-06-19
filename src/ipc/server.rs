@@ -451,7 +451,7 @@ mod tests {
         let cfg_path =
             std::env::temp_dir().join(format!("shuohua-ipc-test-{}.toml", ulid::Ulid::new()));
         std::fs::write(&cfg_path, "[hotkey]\ntrigger=\"f16\"\n").unwrap();
-        let (_rx, reload) = crate::reload::watch_with_handle(cfg_path).unwrap();
+        let (_rx, reload) = crate::reload::watch_with_handle(cfg_path, None).unwrap();
         let server = tokio::spawn(run(
             listener,
             state.clone(),

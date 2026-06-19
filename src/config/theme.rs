@@ -27,6 +27,17 @@ pub struct EffectiveTheme {
     pub overlay: EffectiveOverlayCfg,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectiveThemeLoad {
+    pub theme: EffectiveTheme,
+    pub warning: Option<ThemeLoadWarning>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThemeLoadWarning {
+    pub message: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TuiTheme {
     pub foreground: u32,
@@ -318,14 +329,31 @@ pub mod palette {
 }
 
 pub fn load_effective(config: &crate::config::Config, config_path: &Path) -> EffectiveTheme {
+    load_effective_report(config, config_path).theme
+}
+
+pub fn load_effective_report(
+    config: &crate::config::Config,
+    config_path: &Path,
+) -> EffectiveThemeLoad {
     let root = config_path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    load_effective_from_root(config, &root).unwrap_or_else(|error| {
-        tracing::warn!(error = ?error, "theme load failed; using builtin default theme");
-        default_for_config(config)
-    })
+    match load_effective_from_root(config, &root) {
+        Ok(theme) => EffectiveThemeLoad {
+            theme,
+            warning: None,
+        },
+        Err(error) => {
+            let message = error.to_string();
+            tracing::warn!(error = ?error, "theme load failed; using builtin default theme");
+            EffectiveThemeLoad {
+                theme: default_for_config(config),
+                warning: Some(ThemeLoadWarning { message }),
+            }
+        }
+    }
 }
 
 pub fn load_effective_from_root(
@@ -626,7 +654,7 @@ mod tests {
     use super::*;
 
     fn minimal_config() -> crate::config::Config {
-        crate::config::parse(
+        crate::config::main::parse(
             r#"
 [hotkey]
 trigger = "f16"
@@ -686,6 +714,30 @@ error = 0x445566
 
         assert_eq!(effective.theme, DEFAULT_THEME_NAME);
         assert_eq!(effective.overlay.core.text.primary, palette::FG0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn load_effective_report_returns_warning_when_theme_falls_back() {
+        let dir = std::env::temp_dir().join(format!("shuohua-theme-test-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = crate::config::main::parse(
+            r#"
+[hotkey]
+trigger = "f16"
+
+[ui]
+theme = "missing-theme"
+"#,
+        )
+        .unwrap();
+        let config_path = dir.join("config.toml");
+
+        let report = load_effective_report(&cfg, &config_path);
+
+        assert!(report.warning.is_some(), "{report:?}");
+        assert_eq!(report.theme.theme, "missing-theme");
+        assert_eq!(report.theme.overlay.core.text.primary, palette::FG0);
         let _ = std::fs::remove_dir_all(dir);
     }
 

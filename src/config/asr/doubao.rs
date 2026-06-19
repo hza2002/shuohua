@@ -3,6 +3,9 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use toml::value::Table;
 
+use crate::config::schema::{self, SchemaId};
+use crate::config::spec::validate_value;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DoubaoConfig {
     pub app_key: String,
@@ -53,15 +56,17 @@ pub(crate) fn default_finalize_timeout_ms() -> u64 {
 }
 
 pub fn config_path() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(xdg).join("shuohua/asr/doubao.toml");
-    }
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".config/shuohua/asr/doubao.toml")
+    crate::config::paths::asr_provider("doubao")
 }
 
 pub fn load_config_with_overrides(overrides: Option<&Table>) -> anyhow::Result<DoubaoConfig> {
-    let path = config_path();
+    load_config_with_overrides_from_path(&config_path(), overrides)
+}
+
+fn load_config_with_overrides_from_path(
+    path: &std::path::Path,
+    overrides: Option<&Table>,
+) -> anyhow::Result<DoubaoConfig> {
     let body = std::fs::read_to_string(&path).map_err(|e| {
         anyhow::anyhow!(
             "doubao config not found at {}: {e}\n\
@@ -80,6 +85,11 @@ pub fn load_config_with_overrides(overrides: Option<&Table>) -> anyhow::Result<D
             table.insert(key.clone(), value.clone());
         }
     }
+    crate::config::main::reject_schema_diagnostics(validate_value(
+        &schema::spec_for(SchemaId::AsrDoubao),
+        &value,
+    ))
+    .map_err(|e| anyhow::anyhow!("validate {}: {e}", path.display()))?;
     let mut cfg: DoubaoConfig = value
         .try_into()
         .map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))?;
@@ -93,4 +103,33 @@ pub fn load_config_with_overrides(overrides: Option<&Table>) -> anyhow::Result<D
         );
     }
     Ok(cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn rejects_provider_values_outside_safe_ranges() {
+        let path = std::env::temp_dir().join(format!("shuohua-doubao-{}.toml", ulid::Ulid::new()));
+        fs::write(
+            &path,
+            r#"
+app_key = "app"
+access_key = "access"
+stream_mode = 9
+"#,
+        )
+        .unwrap();
+
+        let error = load_config_with_overrides_from_path(&path, None)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("stream_mode"), "{error}");
+        assert!(error.contains("maximum"), "{error}");
+        let _ = fs::remove_file(path);
+    }
 }

@@ -12,6 +12,8 @@ step_timeout = "{name} timed out, skipped"
 step_failed = "{name} failed, skipped"
 history_save_failed = "Text was delivered, but history could not be saved"
 audio_save_failed = "Recording audio could not be saved"
+config_reload_failed = "Config reload failed; keeping previous settings"
+theme_fallback = "Theme load failed; using fallback colors"
 
 [error]
 no_audio = "No microphone audio — check input device"

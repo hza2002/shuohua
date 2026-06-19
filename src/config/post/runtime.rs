@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -5,12 +6,66 @@ use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use toml::value::Table;
 
-use crate::post::llm::{LlmCleanup, LlmCleanupConfig, ProviderFormat};
-use crate::post::{PostProcessor, ZhFilter};
+use crate::config::schema::{self, SchemaId};
+use crate::config::spec::validate_value;
 
-pub struct PostChain {
+#[derive(Debug, Clone)]
+pub struct PostChainConfig {
     pub name: String,
-    pub processors: Vec<Box<dyn PostProcessor>>,
+    pub processors: Vec<ProcessorConfig>,
+}
+
+#[derive(Clone, PartialEq)]
+pub enum ProcessorConfig {
+    Rule {
+        id: String,
+        patterns: Vec<String>,
+    },
+    Llm {
+        id: String,
+        format: ProviderFormatCfg,
+        provider_name: String,
+        base_url: String,
+        api_key: String,
+        model: String,
+        extra_body: JsonMap<String, JsonValue>,
+        system_prompt: Option<String>,
+        prompt: String,
+    },
+}
+
+impl fmt::Debug for ProcessorConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Rule { id, patterns } => f
+                .debug_struct("Rule")
+                .field("id", id)
+                .field("patterns", patterns)
+                .finish(),
+            Self::Llm {
+                id,
+                format,
+                provider_name,
+                base_url,
+                api_key: _,
+                model,
+                extra_body,
+                system_prompt,
+                prompt,
+            } => f
+                .debug_struct("Llm")
+                .field("id", id)
+                .field("format", format)
+                .field("provider_name", provider_name)
+                .field("base_url", base_url)
+                .field("api_key", &"<redacted>")
+                .field("model", model)
+                .field("extra_body", extra_body)
+                .field("system_prompt", system_prompt)
+                .field("prompt", prompt)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -20,32 +75,33 @@ pub struct PostDirs {
 }
 
 pub fn default_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(xdg).join("shuohua/post");
-    }
-    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/shuohua/post")
+    crate::config::paths::post_dir()
 }
 
 pub fn load_components(
     chain: &[String],
     dirs: &PostDirs,
     llm_overrides: &Table,
-) -> Result<PostChain> {
+) -> Result<PostChainConfig> {
+    load_chain_config(chain, dirs, llm_overrides)
+}
+
+pub fn load_chain_config(
+    chain: &[String],
+    dirs: &PostDirs,
+    llm_overrides: &Table,
+) -> Result<PostChainConfig> {
     let mut processors = Vec::with_capacity(chain.len());
     for id in chain {
         processors.push(load_component(id, dirs, llm_overrides)?);
     }
-    Ok(PostChain {
+    Ok(PostChainConfig {
         name: chain.join(" → "),
         processors,
     })
 }
 
-fn load_component(
-    id: &str,
-    dirs: &PostDirs,
-    llm_overrides: &Table,
-) -> Result<Box<dyn PostProcessor>> {
+fn load_component(id: &str, dirs: &PostDirs, llm_overrides: &Table) -> Result<ProcessorConfig> {
     let (kind, name) = id
         .split_once(':')
         .with_context(|| format!("post chain item {id:?} must be kind:name"))?;
@@ -67,17 +123,19 @@ fn load_component(
                 .with_context(|| format!("merge post.llm.{name} override into {id:?}"))?;
         }
     }
+    validate_component_value(kind, &value)
+        .with_context(|| format!("validate post component {}", path.display()))?;
     let cfg: ProcessorCfg = value
         .try_into()
         .with_context(|| format!("parse post component {}", path.display()))?;
-    cfg.build(id)
+    cfg.into_config(id)
 }
 
 pub fn load_llm_config(
     id: &str,
     dirs: &PostDirs,
     llm_overrides: &Table,
-) -> Result<LlmCleanupConfig> {
+) -> Result<ProcessorConfig> {
     let (kind, name) = id
         .split_once(':')
         .with_context(|| format!("post chain item {id:?} must be kind:name"))?;
@@ -97,6 +155,8 @@ pub fn load_llm_config(
         merge_table(&mut value, override_table)
             .with_context(|| format!("merge post.llm.{name} override into {id:?}"))?;
     }
+    validate_component_value(kind, &value)
+        .with_context(|| format!("validate post component {}", path.display()))?;
     let cfg: ProcessorCfg = value
         .try_into()
         .with_context(|| format!("parse post component {}", path.display()))?;
@@ -110,12 +170,9 @@ pub fn load_llm_config(
             extra_body,
             system_prompt,
             prompt,
-        } => Ok(LlmCleanupConfig {
-            name: id.to_string(),
-            format: match format {
-                ProviderFormatCfg::Openai => ProviderFormat::OpenAi,
-                ProviderFormatCfg::Anthropic => ProviderFormat::Anthropic,
-            },
+        } => Ok(ProcessorConfig::Llm {
+            id: id.to_string(),
+            format,
             provider_name: name.clone(),
             base_url: base_url.unwrap_or_else(|| default_base_url(format, &name)),
             api_key,
@@ -136,6 +193,15 @@ fn merge_table(value: &mut toml::Value, overrides: &Table) -> Result<()> {
         table.insert(key.clone(), value.clone());
     }
     Ok(())
+}
+
+fn validate_component_value(kind: &str, value: &toml::Value) -> Result<()> {
+    let spec = match kind {
+        "rule" => schema::spec_for(SchemaId::PostRule),
+        "llm" => schema::spec_for(SchemaId::PostLlm),
+        other => anyhow::bail!("unknown post component kind {other:?}"),
+    };
+    crate::config::main::reject_schema_diagnostics(validate_value(&spec, value))
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,9 +226,9 @@ enum ProcessorCfg {
     },
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum ProviderFormatCfg {
+pub enum ProviderFormatCfg {
     Openai,
     Anthropic,
 }
@@ -172,12 +238,12 @@ fn default_format() -> ProviderFormatCfg {
 }
 
 impl ProcessorCfg {
-    fn build(&self, id: &str) -> Result<Box<dyn PostProcessor>> {
+    fn into_config(self, id: &str) -> Result<ProcessorConfig> {
         match self {
-            ProcessorCfg::Rule { patterns } => {
-                let borrowed = patterns.iter().map(String::as_str).collect::<Vec<_>>();
-                Ok(Box::new(ZhFilter::with_name(id, &borrowed)))
-            }
+            ProcessorCfg::Rule { patterns } => Ok(ProcessorConfig::Rule {
+                id: id.to_string(),
+                patterns,
+            }),
             ProcessorCfg::Llm {
                 format,
                 name,
@@ -187,22 +253,17 @@ impl ProcessorCfg {
                 extra_body,
                 system_prompt,
                 prompt,
-            } => Ok(Box::new(LlmCleanup::new(LlmCleanupConfig {
-                name: id.to_string(),
-                format: match format {
-                    ProviderFormatCfg::Openai => ProviderFormat::OpenAi,
-                    ProviderFormatCfg::Anthropic => ProviderFormat::Anthropic,
-                },
+            } => Ok(ProcessorConfig::Llm {
+                id: id.to_string(),
+                format,
                 provider_name: name.clone(),
-                base_url: base_url
-                    .clone()
-                    .unwrap_or_else(|| default_base_url(*format, name)),
-                api_key: api_key.clone(),
-                model: model.clone(),
-                extra_body: extra_body.clone(),
-                system_prompt: system_prompt.clone(),
-                prompt: prompt.clone(),
-            }))),
+                base_url: base_url.unwrap_or_else(|| default_base_url(format, &name)),
+                api_key,
+                model,
+                extra_body,
+                system_prompt,
+                prompt,
+            }),
         }
     }
 }
@@ -212,7 +273,7 @@ fn load_llm_config_for_test(
     id: &str,
     dirs: &PostDirs,
     llm_overrides: &Table,
-) -> Result<LlmCleanupConfig> {
+) -> Result<ProcessorConfig> {
     load_llm_config(id, dirs, llm_overrides)
 }
 
@@ -241,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_openai_and_anthropic_llm_processors() {
+    fn parses_openai_and_anthropic_llm_processor_configs() {
         let dir = temp_dir();
         let llm = dir.join("llm");
         fs::create_dir_all(&llm).unwrap();
@@ -290,8 +351,30 @@ prompt = "{{text}}"
 
         assert_eq!(chain.name, "llm:openai_cleanup → llm:anthropic_cleanup");
         assert_eq!(chain.processors.len(), 2);
-        assert_eq!(chain.processors[0].name(), "llm:openai_cleanup");
-        assert_eq!(chain.processors[1].name(), "llm:anthropic_cleanup");
+        assert!(matches!(
+            &chain.processors[0],
+            ProcessorConfig::Llm {
+                id,
+                format: ProviderFormatCfg::Openai,
+                provider_name,
+                base_url,
+                ..
+            } if id == "llm:openai_cleanup"
+                && provider_name == "deepseek"
+                && base_url == "https://api.deepseek.com"
+        ));
+        assert!(matches!(
+            &chain.processors[1],
+            ProcessorConfig::Llm {
+                id,
+                format: ProviderFormatCfg::Anthropic,
+                provider_name,
+                base_url,
+                ..
+            } if id == "llm:anthropic_cleanup"
+                && provider_name == "anthropic"
+                && base_url == "https://api.anthropic.com"
+        ));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -333,8 +416,22 @@ prompt = "{{text}}"
 
         assert_eq!(chain.name, "rule:zh_filter → llm:deepseek");
         assert_eq!(chain.processors.len(), 2);
-        assert_eq!(chain.processors[0].name(), "rule:zh_filter");
-        assert_eq!(chain.processors[1].name(), "llm:deepseek");
+        assert!(matches!(
+            &chain.processors[0],
+            ProcessorConfig::Rule { id, patterns }
+                if id == "rule:zh_filter" && patterns == &vec!["嗯".to_string(), "啊".to_string()]
+        ));
+        assert!(matches!(
+            &chain.processors[1],
+            ProcessorConfig::Llm {
+                id,
+                provider_name,
+                base_url,
+                ..
+            } if id == "llm:deepseek"
+                && provider_name == "deepseek"
+                && base_url == "https://api.deepseek.com"
+        ));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -360,7 +457,12 @@ patterns = ["嗯", "呃", "啊"]
 
         assert_eq!(chain.name, "rule:zh_filter");
         assert_eq!(chain.processors.len(), 1);
-        assert_eq!(chain.processors[0].name(), "rule:zh_filter");
+        assert!(matches!(
+            &chain.processors[0],
+            ProcessorConfig::Rule { id, patterns }
+                if id == "rule:zh_filter"
+                    && patterns == &vec!["嗯".to_string(), "呃".to_string(), "啊".to_string()]
+        ));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -398,14 +500,89 @@ prompt = "{{text}}"
         let cfg = load_llm_config_for_test("llm:deepseek", &dirs, &overrides).unwrap();
         let chain = load_components(&["llm:deepseek".to_string()], &dirs, &overrides).unwrap();
 
-        assert_eq!(cfg.model, "deepseek-v4-flash");
-        assert_eq!(cfg.system_prompt.as_deref(), Some("terminal"));
-        assert_eq!(
-            cfg.extra_body.get("thinking"),
-            Some(&serde_json::json!({ "type": "disabled" }))
-        );
+        assert!(matches!(
+            &cfg,
+            ProcessorConfig::Llm {
+                model,
+                system_prompt,
+                extra_body,
+                ..
+            } if model == "deepseek-v4-flash"
+                && system_prompt.as_deref() == Some("terminal")
+                && extra_body.get("thinking") == Some(&serde_json::json!({ "type": "disabled" }))
+        ));
         assert_eq!(chain.name, "llm:deepseek");
-        assert_eq!(chain.processors[0].name(), "llm:deepseek");
+        assert!(matches!(
+            &chain.processors[0],
+            ProcessorConfig::Llm {
+                id,
+                model,
+                system_prompt,
+                extra_body,
+                ..
+            } if id == "llm:deepseek"
+                && model == "deepseek-v4-flash"
+                && system_prompt.as_deref() == Some("terminal")
+                && extra_body.get("thinking") == Some(&serde_json::json!({ "type": "disabled" }))
+        ));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rejects_unknown_llm_override_fields() {
+        let dir = temp_dir();
+        let llm = dir.join("llm");
+        fs::create_dir_all(&llm).unwrap();
+        fs::write(
+            llm.join("deepseek.toml"),
+            r#"
+type = "llm"
+name = "deepseek"
+api_key = "sk-test"
+model = "deepseek-chat"
+prompt = "{{text}}"
+"#,
+        )
+        .unwrap();
+        let mut overrides = Table::new();
+        overrides.insert(
+            "deepseek".to_string(),
+            toml::Value::Table(
+                [("modle".to_string(), toml::Value::String("typo".to_string()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+        let dirs = PostDirs {
+            rule: dir.join("rule"),
+            llm,
+        };
+
+        let error = load_llm_config_for_test("llm:deepseek", &dirs, &overrides).unwrap_err();
+        let error = format!("{error:#}");
+
+        assert!(error.contains("modle"), "{error}");
+        assert!(error.contains("unknown field"), "{error}");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn processor_config_debug_redacts_api_key() {
+        let config = ProcessorConfig::Llm {
+            id: "llm:deepseek".to_string(),
+            format: ProviderFormatCfg::Openai,
+            provider_name: "deepseek".to_string(),
+            base_url: "https://api.deepseek.com".to_string(),
+            api_key: "sk-secret".to_string(),
+            model: "deepseek-chat".to_string(),
+            extra_body: JsonMap::new(),
+            system_prompt: None,
+            prompt: "{{text}}".to_string(),
+        };
+
+        let debug = format!("{config:?}");
+
+        assert!(!debug.contains("sk-secret"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
     }
 }

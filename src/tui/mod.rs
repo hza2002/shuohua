@@ -1,3 +1,13 @@
+// Adding a new page:
+//   1. Create tui/<name>.rs with a `pub struct <Name>Page` plus `impl Page`
+//      (see tui/page.rs for the trait).
+//   2. Add `pub mod <name>;` below and a field to `App`.
+//   3. Add a variant to `Page`, update `Page::index`, and pick a digit
+//      shortcut in tui/keybindings.rs (`SetPage` arm).
+//   4. Dispatch the new variant in panes::render and in handle_key's
+//      `Action::Forward` match.
+//   5. Add a footer hint key under `tui.footer_<name>` in i18n strings.
+
 pub mod config_actions;
 pub mod configure;
 pub mod history;

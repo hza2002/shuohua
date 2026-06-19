@@ -2,6 +2,8 @@ use std::fmt;
 
 use super::combo::{ModType, Side};
 
+const UNKNOWN_WIRE_PREFIX: u16 = 0x8000;
+
 /// Platform-neutral key identity used by the hotkey core.
 ///
 /// Platform providers map OS-specific keycodes to this enum at the boundary.
@@ -57,12 +59,15 @@ impl Key {
             Self::Modifier(ModType::Opt, Side::Right) => 0x0306,
             Self::Modifier(ModType::Shift, Side::Left) => 0x0307,
             Self::Modifier(ModType::Shift, Side::Right) => 0x0308,
-            Self::Unknown(code) => code,
+            Self::Unknown(code) => UNKNOWN_WIRE_PREFIX | code,
             _ => 0xffff,
         }
     }
 
     pub fn from_wire_code(code: u16) -> Self {
+        if code & UNKNOWN_WIRE_PREFIX != 0 {
+            return Self::Unknown(code & !UNKNOWN_WIRE_PREFIX);
+        }
         match code {
             0x0101..=0x0114 => Self::F((code - 0x0100) as u8),
             0x0061..=0x007a => Self::Char(char::from_u32(code as u32).unwrap()),

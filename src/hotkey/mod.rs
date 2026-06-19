@@ -18,12 +18,12 @@
 //! OS-specific keycodes at the boundary.
 
 mod bindings;
-pub mod combo;
-pub mod key;
-pub mod parse;
-pub mod provider_darwin;
-pub mod suppressor;
-pub mod tracker;
+pub(crate) mod combo;
+pub(crate) mod key;
+pub(crate) mod parse;
+pub(crate) mod provider_darwin;
+mod suppressor;
+mod tracker;
 
 #[cfg(test)]
 mod proptests;
@@ -123,5 +123,17 @@ mod wire_tests {
     fn unknown_kind_byte_rejected() {
         assert!(RawEvent::decode([3, 0, 0, 0]).is_none());
         assert!(RawEvent::decode([255, 0, 0, 0]).is_none());
+    }
+
+    #[test]
+    fn unknown_key_round_trips_without_colliding_with_known_keys() {
+        for code in [0x00u16, 0x31, 0x6a, 0x0101, 0x0201, 0x0301, 0x0fff] {
+            let ev = RawEvent {
+                kind: EventKind::KeyDown,
+                key: Key::Unknown(code),
+                mods: ModMask::empty(),
+            };
+            assert_eq!(RawEvent::decode(ev.encode()), Some(ev));
+        }
     }
 }

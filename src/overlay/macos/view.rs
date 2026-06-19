@@ -1,5 +1,5 @@
 use std::cell::{OnceCell, RefCell};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, ProtocolObject};

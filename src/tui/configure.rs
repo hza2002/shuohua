@@ -202,9 +202,7 @@ impl ConfigurePage {
     }
 
     pub fn feed_wizard_key(&mut self, key: KeyEvent) -> Option<String> {
-        if self.llm_wizard.is_none() {
-            return None;
-        }
+        self.llm_wizard.as_ref()?;
         if key.kind != KeyEventKind::Press {
             return None;
         }

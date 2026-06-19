@@ -2,9 +2,6 @@ use std::time::{Duration, Instant};
 
 use crate::overlay::command::{OverlayCmd, OverlayState, TextKind};
 
-/// Notice 默认 TTL。配置以 `OverlayCmd::Notice.ttl_ms` 字段覆盖。
-pub const NOTICE_DEFAULT_TTL_MS: u32 = 3000;
-
 /// `SetText{Error}` 后自动 hide overlay 的等待时长。比 notice 长，让用户读完
 /// 错误并决定是否重试。
 pub const ERROR_TTL_MS: u64 = 5000;

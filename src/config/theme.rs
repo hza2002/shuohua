@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use serde::de::{self, Visitor};
 use serde::Deserialize;
 
-use crate::config::{OverlayCfg, OverlayPosition};
+use crate::config::OverlayPosition;
 
 pub const DEFAULT_THEME_NAME: &str = "gruvbox-dark";
 pub const LEGACY_DEFAULT_THEME_NAME: &str = "default";
@@ -42,7 +42,7 @@ pub struct TuiTheme {
     pub segment: u32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct EffectiveOverlayCfg {
     pub core: CoreOverlayCfg,
     pub macos: MacosOverlayCfg,
@@ -285,29 +285,6 @@ impl Default for MacosOverlayCfg {
             glass_style: GlassStyle::Clear,
             subdued: 0,
             background_blur_radius: 0,
-        }
-    }
-}
-
-impl Default for EffectiveOverlayCfg {
-    fn default() -> Self {
-        Self {
-            core: CoreOverlayCfg::default(),
-            macos: MacosOverlayCfg::default(),
-        }
-    }
-}
-
-impl EffectiveOverlayCfg {
-    pub fn from_behavior_and_default_theme(behavior: &OverlayCfg) -> Self {
-        Self {
-            core: CoreOverlayCfg {
-                position: behavior.position,
-                max_text_lines: behavior.max_text_lines,
-                thinking_delay_ms: behavior.thinking_delay_ms,
-                ..CoreOverlayCfg::default()
-            },
-            macos: MacosOverlayCfg::default(),
         }
     }
 }

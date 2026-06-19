@@ -1,7 +1,16 @@
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::Arc;
+#[cfg(not(test))]
+use std::sync::{OnceLock, RwLock};
 
+#[cfg(not(test))]
 static DICT: OnceLock<RwLock<Arc<Dict>>> = OnceLock::new();
+#[cfg(test)]
+thread_local! {
+    static TEST_DICT: RefCell<Arc<Dict>> = RefCell::new(Arc::new(load_dict(Lang::EnUS)));
+}
 
 #[derive(Debug)]
 pub struct Dict {
@@ -43,6 +52,9 @@ fn resolve_lang_with_env(cfg_lang: &str, env_lang: Option<&str>) -> Lang {
 }
 
 pub fn tr(key: &str, vars: &[(&str, String)]) -> String {
+    #[cfg(test)]
+    let dict = TEST_DICT.with(|dict| dict.borrow().clone());
+    #[cfg(not(test))]
     let dict = DICT
         .get()
         .map(|lock| lock.read().expect("i18n dict lock poisoned").clone())
@@ -78,8 +90,13 @@ macro_rules! t {
 
 fn set_dict(lang: Lang) {
     let dict = Arc::new(load_dict(lang));
-    let lock = DICT.get_or_init(|| RwLock::new(dict.clone()));
-    *lock.write().expect("i18n dict lock poisoned") = dict;
+    #[cfg(test)]
+    TEST_DICT.with(|current| *current.borrow_mut() = dict);
+    #[cfg(not(test))]
+    {
+        let lock = DICT.get_or_init(|| RwLock::new(dict.clone()));
+        *lock.write().expect("i18n dict lock poisoned") = dict;
+    }
 }
 
 fn load_dict(lang: Lang) -> Dict {

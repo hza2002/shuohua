@@ -6,7 +6,7 @@
 
 ```
 src/
-├── main.rs                              # clap 入口；smart fallback；--daemon 跑 AppKit + tokio daemon；F16 toggle 状态机
+├── main.rs                              # clap 入口；smart fallback；--daemon 跑 AppKit + tokio daemon；组装 hotkey/voice/reload
 ├── cli/
 │   ├── mod.rs                           # clap 子命令分发
 │   ├── doctor.rs                        # shuo doctor：本地配置诊断；--runtime 显式跑 ASR/LLM 可运行性检查入口
@@ -32,7 +32,9 @@ src/
 ├── app_context_darwin.rs                 # frontmost app bundle id / 名字，给 overlay header 显示
 ├── hotkey/
 │   ├── mod.rs                           # 4 字节 RawEvent 线协议 + 公共类型 re-export
+│   ├── bindings.rs                      # trigger/cancel binding 集合 + cancel-first TrackerSet
 │   ├── combo.rs                         # Combo / ModMatcher / ModMask / Side / ModType + 精确匹配函数
+│   ├── key.rs                           # macOS keycode → Key 解码
 │   ├── parse.rs                         # 完整 grammar：modifier+key / modifier-only / :double（DESIGN §2.4）
 │   ├── tracker.rs                       # 纯函数状态机：纯键 / combo / modifier-only + 双击窗口（500ms hold, 400ms double）
 │   ├── suppressor.rs                    # 纯函数 suppress：按 trigger 类型分发，§5 不变量 8 down/up 配对吞
@@ -78,9 +80,12 @@ src/
 │   └── client.rs                        # TUI/smart fallback 共用 UnixStream framing helper
 ├── tui/
 │   ├── mod.rs                           # ratatui 主循环；Status/History/Configure 三页
-│   ├── audio.rs                         # History retained audio path/status/open/reveal/delete helpers
+│   ├── page.rs                          # 三页共享的 Page trait + key outcome
+│   ├── status.rs                        # Status 状态、事件归并与渲染
+│   ├── history.rs                       # History 查询、音频 open/reveal/delete 与渲染
+│   ├── configure.rs                     # Configure 状态、wizard、doctor 与渲染
 │   ├── config_actions.rs                # Configure editor/Finder launcher helpers
-│   ├── panes.rs                         # 状态、实时文本、pipeline、历史、Configure 渲染
+│   ├── panes.rs                         # 顶层 tabs/page/footer 布局与页面分发
 │   ├── keybindings.rs                   # Tab/Shift-Tab + 1/2/3 翻页；vim/方向键滚动
 │   └── settings.rs                      # Configure inventory rows；脱敏展示 secret 字段
 ├── overlay/

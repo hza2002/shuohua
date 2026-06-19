@@ -6,6 +6,7 @@
 # Local scratch/output
 /tmp/
 docs/superpowers/
+docs/archive/
 
 # macOS
 **/.DS_Store

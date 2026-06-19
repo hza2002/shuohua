@@ -146,7 +146,7 @@ impl Page for StatusPage {
             }
             Event::AudioMeter { meter, .. } => {
                 if active {
-                    self.meters.push(meter.clone());
+                    self.meters.push(*meter);
                     self.trim_meters_to_capacity();
                 }
             }

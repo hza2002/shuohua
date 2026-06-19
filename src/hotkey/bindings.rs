@@ -45,7 +45,8 @@ impl Bindings {
         })
     }
 
-    pub(crate) fn entries(&self) -> &[Binding] {
+    #[cfg(test)]
+    fn entries(&self) -> &[Binding] {
         &self.entries
     }
 
@@ -59,17 +60,25 @@ impl Bindings {
 
 #[derive(Debug)]
 pub(crate) struct TrackerSet {
-    trackers: Vec<(HotkeyAction, Tracker)>,
+    trigger_tracker: Tracker,
+    cancel_tracker: Tracker,
 }
 
 impl TrackerSet {
     pub(crate) fn new(bindings: &Bindings) -> Self {
         Self {
-            trackers: bindings
-                .entries()
-                .iter()
-                .map(|binding| (binding.action, Tracker::new(binding.combo.clone())))
-                .collect(),
+            trigger_tracker: Tracker::new(
+                bindings
+                    .combo_for(HotkeyAction::ToggleRecord)
+                    .expect("missing toggle-record hotkey binding")
+                    .clone(),
+            ),
+            cancel_tracker: Tracker::new(
+                bindings
+                    .combo_for(HotkeyAction::CancelRecord)
+                    .expect("missing cancel-record hotkey binding")
+                    .clone(),
+            ),
         }
     }
 
@@ -78,9 +87,17 @@ impl TrackerSet {
     }
 
     pub(crate) fn on_event(&mut self, ev: RawEvent, now: Instant) -> Option<HotkeyAction> {
-        self.trackers.iter_mut().find_map(|(action, tracker)| {
-            matches!(tracker.on_event(ev, now), Some(HotkeyEvent::TriggerRecord)).then_some(*action)
-        })
+        if matches!(
+            self.cancel_tracker.on_event(ev, now),
+            Some(HotkeyEvent::TriggerRecord)
+        ) {
+            return Some(HotkeyAction::CancelRecord);
+        }
+        matches!(
+            self.trigger_tracker.on_event(ev, now),
+            Some(HotkeyEvent::TriggerRecord)
+        )
+        .then_some(HotkeyAction::ToggleRecord)
     }
 }
 
@@ -89,7 +106,14 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+    use crate::hotkey::combo::{ModType, Side};
     use crate::hotkey::{EventKind, Key, ModMask, RawEvent};
+
+    fn left_cmd_mods() -> ModMask {
+        let mut mods = ModMask::empty();
+        mods.set(ModType::Cmd, Side::Left, true);
+        mods
+    }
 
     #[test]
     fn bindings_parse_record_actions_and_reject_duplicate_combos() {
@@ -120,5 +144,76 @@ mod tests {
         );
 
         assert_eq!(action, Some(HotkeyAction::ToggleRecord));
+    }
+
+    #[test]
+    fn trigger_event_disqualifies_modifier_only_cancel() {
+        let bindings = Bindings::parse("cmd+r", "cmd").unwrap();
+        let mut trackers = TrackerSet::new(&bindings);
+        let now = Instant::now();
+
+        assert_eq!(
+            trackers.on_event(
+                RawEvent {
+                    kind: EventKind::FlagsChanged,
+                    key: Key::Modifier(ModType::Cmd, Side::Left),
+                    mods: left_cmd_mods(),
+                },
+                now,
+            ),
+            None
+        );
+        assert_eq!(
+            trackers.on_event(
+                RawEvent {
+                    kind: EventKind::KeyDown,
+                    key: Key::Char('r'),
+                    mods: left_cmd_mods(),
+                },
+                now,
+            ),
+            Some(HotkeyAction::ToggleRecord)
+        );
+        assert_eq!(
+            trackers.on_event(
+                RawEvent {
+                    kind: EventKind::FlagsChanged,
+                    key: Key::Modifier(ModType::Cmd, Side::Left),
+                    mods: ModMask::empty(),
+                },
+                now,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn cancel_wins_when_both_trackers_match_the_same_event() {
+        let bindings = Bindings::parse("left_cmd", "cmd").unwrap();
+        let mut trackers = TrackerSet::new(&bindings);
+        let now = Instant::now();
+
+        assert_eq!(
+            trackers.on_event(
+                RawEvent {
+                    kind: EventKind::FlagsChanged,
+                    key: Key::Modifier(ModType::Cmd, Side::Left),
+                    mods: left_cmd_mods(),
+                },
+                now,
+            ),
+            None
+        );
+        assert_eq!(
+            trackers.on_event(
+                RawEvent {
+                    kind: EventKind::FlagsChanged,
+                    key: Key::Modifier(ModType::Cmd, Side::Left),
+                    mods: ModMask::empty(),
+                },
+                now,
+            ),
+            Some(HotkeyAction::CancelRecord)
+        );
     }
 }

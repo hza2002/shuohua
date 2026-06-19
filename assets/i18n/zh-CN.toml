@@ -21,6 +21,10 @@ recorder_start = "录音启动失败"
 asr_open = "ASR 连接失败"
 asr_runtime = "ASR 中断，本次录音未保存到剪贴板"
 dispatch = "粘贴失败，可在历史里找回"
+profile_load = "Profile 加载失败"
+post_chain_load = "后处理配置加载失败"
+post_chain_build = "后处理流水线构建失败"
+asr_provider_init = "ASR provider 初始化失败"
 
 [config.field]
 "hotkey.description" = "daemon 使用的键盘快捷键。"

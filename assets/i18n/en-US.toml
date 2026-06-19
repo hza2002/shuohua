@@ -21,6 +21,10 @@ recorder_start = "Failed to start recording"
 asr_open = "ASR connection failed"
 asr_runtime = "ASR interrupted — nothing pasted"
 dispatch = "Paste failed — text saved in history"
+profile_load = "Profile could not be loaded"
+post_chain_load = "Post-processing config could not be loaded"
+post_chain_build = "Post-processing pipeline could not be built"
+asr_provider_init = "ASR provider could not be initialized"
 
 [config.field]
 "hotkey.description" = "Keyboard shortcuts used by the daemon."

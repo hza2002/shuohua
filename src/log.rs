@@ -4,9 +4,10 @@
 //! writes diagnostic logs here, and mirrors the same logs to stderr only when
 //! `shuo --daemon` is run from an interactive terminal.
 
-use std::fs::OpenOptions;
-use std::io::IsTerminal;
+use std::fs::{File, OpenOptions};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use time::macros::format_description;
@@ -27,12 +28,7 @@ pub fn init_daemon() -> Result<LogGuard> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create log dir {}", parent.display()))?;
     }
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("open log file {}", path.display()))?;
-    let (file_writer, file_guard) = tracing_appender::non_blocking(file);
+    let (file_writer, file_guard) = tracing_appender::non_blocking(DailyLogWriter::new());
 
     let timer = timer();
     let file_layer = tracing_subscriber::fmt::layer()
@@ -107,6 +103,66 @@ fn local_offset() -> UtcOffset {
     UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC)
 }
 
+#[derive(Debug, Default)]
+struct DailyLogWriter {
+    inner: Mutex<DailyLogState>,
+}
+
+#[derive(Debug, Default)]
+struct DailyLogState {
+    current_path: Option<PathBuf>,
+    file: Option<File>,
+}
+
+impl DailyLogWriter {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn write_rotated(&self, buf: &[u8]) -> io::Result<()> {
+        let path = log_file_path(OffsetDateTime::now_utc()).map_err(io::Error::other)?;
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("daily log writer mutex poisoned"))?;
+        if state.current_path.as_ref() != Some(&path) {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let file = OpenOptions::new().create(true).append(true).open(&path)?;
+            state.current_path = Some(path);
+            state.file = Some(file);
+        }
+        let file = state
+            .file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("daily log file not open"))?;
+        file.write_all(buf)
+    }
+
+    fn flush_current(&self) -> io::Result<()> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("daily log writer mutex poisoned"))?;
+        if let Some(file) = state.file.as_mut() {
+            file.flush()?;
+        }
+        Ok(())
+    }
+}
+
+impl Write for DailyLogWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.write_rotated(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_current()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,8 +172,7 @@ mod tests {
     fn log_file_path_uses_local_date_prefix() {
         let path = log_file_path(datetime!(2026-06-16 12:34:56 UTC)).unwrap();
         let file_name = path.file_name().unwrap().to_string_lossy();
-        assert!(file_name.starts_with("shuo-"));
-        assert!(file_name.ends_with(".log"));
+        assert_eq!(file_name, "shuo-2026-06-16.log");
     }
 
     #[test]

@@ -388,7 +388,7 @@ max_overlap_ms = 200
 min_start_voiced_frames = 2
 
 [post]
-timeout_ms = 2000
+timeout_ms = 10000
 
 [ui]
 language = "auto"
@@ -613,7 +613,7 @@ pub struct PipelineStep {
 
 ```toml
 [post]
-timeout_ms = 2000     # 单步 processor 超时
+timeout_ms = 10000    # 单步 processor 超时
 
 [profile]
 default = "default"

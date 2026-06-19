@@ -47,6 +47,8 @@ impl PostProcessor for ZhFilter {
 fn filter_zh_speech(input: &PipelineText, fillers: &[String]) -> String {
     let segment_source = if input.segments.is_empty() {
         vec![input.text.clone()]
+    } else if input.text != input.raw {
+        vec![input.text.clone()]
     } else {
         input.segments.clone()
     };
@@ -481,6 +483,18 @@ mod tests {
         let out = f.process(pt, &AppContext::default()).await.unwrap();
         assert_eq!(out.text, "你好");
         assert_eq!(out.raw, "嗯你好");
+    }
+
+    #[tokio::test]
+    async fn preserves_upstream_text_when_previous_processor_changed_it() {
+        let f = ZhFilter::default_patterns();
+        let mut pt = PipelineText::new("嗯原始文本".into(), vec!["嗯原始".into(), "文本".into()]);
+        pt.text = "LLM 改写后的文本".into();
+
+        let out = f.process(pt, &AppContext::default()).await.unwrap();
+
+        assert_eq!(out.text, "LLM 改写后的文本");
+        assert_eq!(out.raw, "嗯原始文本");
     }
 
     #[tokio::test]

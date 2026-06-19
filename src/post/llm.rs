@@ -1,6 +1,7 @@
 use super::{AppContext, PipelineText, PostError, PostProcessor};
 use async_trait::async_trait;
 use serde_json::{json, Map, Value};
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderFormat {
@@ -83,14 +84,17 @@ impl LlmCleanup {
                     "{} ({}) request failed: {e}",
                     self.cfg.name, self.cfg.provider_name
                 ))
-            })?
-            .error_for_status()
-            .map_err(|e| {
-                PostError::Failed(format!(
-                    "{} ({}) http error: {e}",
-                    self.cfg.name, self.cfg.provider_name
-                ))
             })?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(PostError::Failed(http_error_message(
+                &self.cfg.name,
+                &self.cfg.provider_name,
+                status,
+                &body,
+            )));
+        }
         let body: Value = response
             .json()
             .await
@@ -114,14 +118,17 @@ impl LlmCleanup {
                     "{} ({}) request failed: {e}",
                     self.cfg.name, self.cfg.provider_name
                 ))
-            })?
-            .error_for_status()
-            .map_err(|e| {
-                PostError::Failed(format!(
-                    "{} ({}) http error: {e}",
-                    self.cfg.name, self.cfg.provider_name
-                ))
             })?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(PostError::Failed(http_error_message(
+                &self.cfg.name,
+                &self.cfg.provider_name,
+                status,
+                &body,
+            )));
+        }
         let body: Value = response
             .json()
             .await
@@ -170,6 +177,9 @@ fn build_anthropic_request(cfg: &LlmCleanupConfig, prompt: &str) -> Value {
     {
         body["system"] = json!(system);
     }
+    for (key, value) in &cfg.extra_body {
+        body[key] = value.clone();
+    }
     body
 }
 
@@ -212,6 +222,30 @@ fn join_url(base: &str, path: &str) -> String {
         base.trim_end_matches('/'),
         path.trim_start_matches('/')
     )
+}
+
+fn http_error_message(
+    component: &str,
+    provider: &str,
+    status: impl fmt::Display,
+    body: &str,
+) -> String {
+    let body = truncate_response_body(body, 2048);
+    if body.is_empty() {
+        format!("{component} ({provider}) http error {status}")
+    } else {
+        format!("{component} ({provider}) http error {status}; body: {body}")
+    }
+}
+
+fn truncate_response_body(body: &str, max_chars: usize) -> String {
+    let trimmed = body.trim();
+    let mut chars = trimmed.chars();
+    let mut out = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        out.push_str("... [truncated]");
+    }
+    out
 }
 
 #[cfg(test)]
@@ -301,5 +335,47 @@ mod tests {
 
         assert_eq!(body["thinking"], json!({ "type": "disabled" }));
         assert!(body.get("api_key").is_none());
+    }
+
+    #[test]
+    fn anthropic_request_includes_provider_extra_body() {
+        let mut extra_body = Map::new();
+        extra_body.insert(
+            "thinking".to_string(),
+            json!({ "type": "enabled", "budget_tokens": 1024 }),
+        );
+        extra_body.insert("metadata".to_string(), json!({ "user_id": "shuohua" }));
+        let cfg = LlmCleanupConfig {
+            name: "clean".to_string(),
+            format: ProviderFormat::Anthropic,
+            provider_name: "anthropic".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            api_key: "secret".to_string(),
+            model: "claude-sonnet-4-5".to_string(),
+            extra_body,
+            system_prompt: None,
+            prompt: "{{text}}".to_string(),
+        };
+
+        let body = build_anthropic_request(&cfg, "hello");
+
+        assert_eq!(
+            body["thinking"],
+            json!({ "type": "enabled", "budget_tokens": 1024 })
+        );
+        assert_eq!(body["metadata"], json!({ "user_id": "shuohua" }));
+        assert!(body.get("api_key").is_none());
+    }
+
+    #[test]
+    fn http_error_message_includes_status_and_truncated_body() {
+        let body = format!("{}tail", "x".repeat(3000));
+
+        let message = http_error_message("clean", "anthropic", 400, &body);
+
+        assert!(message.contains("clean (anthropic) http error 400"));
+        assert!(message.contains("body: "));
+        assert!(message.contains("truncated"));
+        assert!(!message.contains("tail"));
     }
 }

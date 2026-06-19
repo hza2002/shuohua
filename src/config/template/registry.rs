@@ -90,7 +90,7 @@ const CONFIG_VALUES: &[(&str, TemplateValue)] = &[
     ),
     (
         "post",
-        TemplateValue::Table(&[("timeout_ms", TemplateValue::Integer(2000))]),
+        TemplateValue::Table(&[("timeout_ms", TemplateValue::Integer(10_000))]),
     ),
     (
         "profile",

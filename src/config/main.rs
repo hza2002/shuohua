@@ -189,7 +189,7 @@ impl Default for PostCfg {
 }
 
 fn default_post_timeout_ms() -> u64 {
-    2000
+    10_000
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -316,7 +316,7 @@ trigger = "f16"
         assert_eq!(cfg.ui.theme, "gruvbox-dark");
         assert_eq!(cfg.ui.theme_tui, "");
         assert_eq!(cfg.ui.theme_overlay, "");
-        assert_eq!(cfg.post.timeout_ms, 2000);
+        assert_eq!(cfg.post.timeout_ms, 10_000);
         assert_eq!(cfg.profile.default, "default");
         assert!(cfg.profile.routes.is_empty());
         assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
@@ -506,6 +506,19 @@ timeout_ms = 3500
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.post.timeout_ms, 3500);
+    }
+
+    #[test]
+    fn default_post_timeout_is_long_enough_for_llm_cleanup() {
+        let cfg = parse(
+            r#"
+[hotkey]
+trigger = "f16"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.post.timeout_ms, 10_000);
     }
 
     #[test]

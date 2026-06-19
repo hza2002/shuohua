@@ -1,4 +1,5 @@
 mod command;
+pub mod layout;
 mod model;
 
 pub use command::{OverlayCmd, OverlayHandle, OverlayState, TextKind};

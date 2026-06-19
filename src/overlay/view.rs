@@ -22,7 +22,7 @@ use objc2_quartz_core::{kCATransitionFade, CAMediaTiming, CATransition};
 use tokio::sync::mpsc;
 
 use crate::config::theme::{EffectiveOverlayCfg, GlassStyle};
-use crate::config::OverlayPosition;
+use crate::overlay::layout as L;
 use crate::overlay::{OverlayCmd, OverlayModel, OverlayState, TextKind};
 
 /// SetText{Error} 后多久自动 hide overlay。比 NOTICE_TTL_MS 长，因为 error 文案
@@ -30,29 +30,12 @@ use crate::overlay::{OverlayCmd, OverlayModel, OverlayState, TextKind};
 /// shuo 是键盘工具，5s 后还没看就靠 ESC 自己关。
 const ERROR_TTL_MS: u64 = 5000;
 
-mod layout {
-    pub const WIDTH: f64 = 572.0;
-    pub const BASE_HEIGHT: f64 = 64.0;
-    pub const WINDOW_MARGIN: f64 = 16.0;
-    pub const H_PAD: f64 = 16.0;
-    pub const BOTTOM_PAD: f64 = 7.0;
-    pub const HEADER_BODY_GAP: f64 = 2.0;
-    pub const BODY_LINE_H: f64 = 21.0;
-    pub const BODY_W: f64 = WIDTH - H_PAD * 2.0;
-    pub const CHARS_PER_LINE: usize = 38;
-    pub const HEADER_CENTER_Y: f64 = BOTTOM_PAD + BODY_LINE_H + HEADER_BODY_GAP + 12.0;
-    pub const ICON_BOX: f64 = 24.0;
-    pub const STATE_BOX_H: f64 = 20.0;
-    pub const META_BOX_H: f64 = 18.0;
-    pub const ICON_OPTICAL_Y: f64 = -0.5;
-    pub const STATE_OPTICAL_Y: f64 = 0.0;
-    pub const META_OPTICAL_Y: f64 = 0.0;
-    pub const ICON_STATE_GAP: f64 = 5.0;
-    pub const STATE_W: f64 = 56.0;
-    pub const STATE_STATS_GAP: f64 = 5.0;
-    pub const STATS_W: f64 = 220.0;
-    pub const META_GAP: f64 = 8.0;
-    pub const META_MIN_W: f64 = 180.0;
+fn to_nsrect(f: L::LayoutFrame) -> NSRect {
+    NSRect::new(NSPoint::new(f.x, f.y), NSSize::new(f.w, f.h))
+}
+
+fn from_nsrect(r: NSRect) -> L::LayoutFrame {
+    L::LayoutFrame::new(r.origin.x, r.origin.y, r.size.width, r.size.height)
 }
 
 mod typography {
@@ -179,25 +162,43 @@ impl OverlayView {
     fn new(mtm: MainThreadMarker, cfg: EffectiveOverlayCfg) -> Self {
         let initial_frame = NSRect::new(
             NSPoint::new(80.0, 860.0),
-            NSSize::new(layout::WIDTH, layout::BASE_HEIGHT),
+            NSSize::new(L::constants::WIDTH, L::constants::BASE_HEIGHT),
         );
         let panel = make_panel(mtm, initial_frame);
         apply_panel_background_blur(&panel, cfg.background_blur_radius);
 
         let (container, glass, background, pending_chrome_error) = build_chrome(mtm, &cfg);
 
-        let row = first_row_frames(0.0);
+        let row = L::first_row_frames(0.0);
         let state_icon = make_state_icon(mtm, cfg.text.primary);
-        state_icon.setFrame(row.icon);
-        let status = label(mtm, row.status, typography::STATE, true, cfg.text.primary);
-        let stats = label(mtm, row.stats, typography::META, false, cfg.text.secondary);
-        let meta = label(mtm, row.meta, typography::META, false, cfg.text.tertiary);
+        state_icon.setFrame(to_nsrect(row.icon));
+        let status = label(
+            mtm,
+            to_nsrect(row.status),
+            typography::STATE,
+            true,
+            cfg.text.primary,
+        );
+        let stats = label(
+            mtm,
+            to_nsrect(row.stats),
+            typography::META,
+            false,
+            cfg.text.secondary,
+        );
+        let meta = label(
+            mtm,
+            to_nsrect(row.meta),
+            typography::META,
+            false,
+            cfg.text.tertiary,
+        );
         meta.setAlignment(NSTextAlignment::Right);
         let text = label(
             mtm,
             NSRect::new(
-                NSPoint::new(layout::H_PAD, layout::BOTTOM_PAD),
-                NSSize::new(layout::BODY_W, layout::BODY_LINE_H),
+                NSPoint::new(L::constants::H_PAD, L::constants::BOTTOM_PAD),
+                NSSize::new(L::constants::BODY_W, L::constants::BODY_LINE_H),
             ),
             typography::BODY,
             false,
@@ -376,16 +377,19 @@ impl OverlayView {
             }
 
             let full_text = self.model.display_text();
-            let (_, current_lines) =
-                display_text_plan(&full_text, self.cfg.max_text_lines, layout::CHARS_PER_LINE);
+            let (_, current_lines) = L::display_text_plan(
+                &full_text,
+                self.cfg.max_text_lines,
+                L::constants::CHARS_PER_LINE,
+            );
             let lines = if self.model.state == OverlayState::Recording {
                 self.peak_text_lines = self.peak_text_lines.max(current_lines);
                 self.peak_text_lines
             } else {
                 current_lines
             };
-            let height =
-                layout::BASE_HEIGHT + (lines.saturating_sub(1) as f64 * layout::BODY_LINE_H);
+            let height = L::constants::BASE_HEIGHT
+                + (lines.saturating_sub(1) as f64 * L::constants::BODY_LINE_H);
             self.layout(height, lines);
             self.place(height);
             if self.panel.alphaValue() < 1.0 {
@@ -401,16 +405,19 @@ impl OverlayView {
 
         let full_text = self.model.display_text();
         let live_plan = if self.model.error_text.is_empty() && self.model.final_text.is_empty() {
-            live_text_plan(
+            L::live_text_plan(
                 &self.model.segments,
                 &self.model.partial,
                 self.cfg.max_text_lines,
-                layout::CHARS_PER_LINE,
+                L::constants::CHARS_PER_LINE,
             )
         } else {
-            let (display_text, lines) =
-                display_text_plan(&full_text, self.cfg.max_text_lines, layout::CHARS_PER_LINE);
-            LiveTextPlan {
+            let (display_text, lines) = L::display_text_plan(
+                &full_text,
+                self.cfg.max_text_lines,
+                L::constants::CHARS_PER_LINE,
+            );
+            L::LiveTextPlan {
                 segments: String::new(),
                 partial: display_text,
                 lines,
@@ -418,7 +425,7 @@ impl OverlayView {
         };
         let display_text = live_plan.full_text();
         let (state, label, color_rgb) = self.effective_state();
-        let dur = format_duration(self.model.dur_ms);
+        let dur = L::format_duration(self.model.dur_ms);
         let app = self
             .model
             .app_name
@@ -429,7 +436,7 @@ impl OverlayView {
         // 文案模板 {n} 字 / {n} words 由 i18n 选；底层数 = words。
         let words = crate::text_stats::compute(&full_text).words as u32;
         let words_text = crate::t!("overlay.word_count", n = words);
-        let header = header_parts(&label, &dur, &words_text, app, &self.model.chain_summary);
+        let header = L::header_parts(&label, &dur, &words_text, app, &self.model.chain_summary);
         self.render_state_icon(state, color_rgb);
         if self.last_status_text != header.state {
             fade_view(&self.status, 0.16);
@@ -440,7 +447,7 @@ impl OverlayView {
             self.last_status_text = header.state;
         }
 
-        let stats_text = stats_text(&header.duration, &header.words, &header.app);
+        let stats_text = L::stats_text(&header.duration, &header.words, &header.app);
         if self.last_stats_text != stats_text {
             self.stats.setStringValue(&NSString::from_str(&stats_text));
             self.last_stats_text = stats_text;
@@ -534,7 +541,7 @@ impl OverlayView {
             .setContentTintColor(Some(&color_from_rgb_alpha(color_rgb, 1.0)));
     }
 
-    fn render_body_text(&self, plan: &LiveTextPlan, fallback_color: u32) {
+    fn render_body_text(&self, plan: &L::LiveTextPlan, fallback_color: u32) {
         if plan.segments.is_empty() {
             self.text.setStringValue(&NSString::from_str(&plan.partial));
             self.text
@@ -544,8 +551,8 @@ impl OverlayView {
 
         let full = plan.full_text();
         let attributed = NSMutableAttributedString::from_nsstring(&NSString::from_str(&full));
-        let segment_len = utf16_len(&plan.segments);
-        let full_len = utf16_len(&full);
+        let segment_len = L::utf16_len(&plan.segments);
+        let full_len = L::utf16_len(&full);
         let segment_color = color_from_rgb_alpha(self.cfg.text.segment, 0.88);
         let partial_color = color_from_rgb_alpha(self.cfg.text.primary, 1.0);
         unsafe {
@@ -577,20 +584,24 @@ impl OverlayView {
     }
 
     fn layout(&mut self, height: f64, lines: usize) {
-        let top_offset = height - layout::BASE_HEIGHT;
-        let full = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(layout::WIDTH, height));
+        let top_offset = height - L::constants::BASE_HEIGHT;
+        let full = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(L::constants::WIDTH, height),
+        );
         // panel.contentView (glass 或 fallback) 跟随 panel 自动 resize；container 显式 set 确保 labels 坐标系对齐
         self.container.setFrame(full);
-        let row = first_row_frames(top_offset);
-        self.state_icon.setFrame(row.icon);
-        self.status.setFrame(row.status);
-        self.stats.setFrame(row.stats);
-        self.meta.setFrame(row.meta);
+        let row = L::first_row_frames(top_offset);
+        self.state_icon.setFrame(to_nsrect(row.icon));
+        self.status.setFrame(to_nsrect(row.status));
+        self.stats.setFrame(to_nsrect(row.stats));
+        self.meta.setFrame(to_nsrect(row.meta));
         self.text.setFrame(NSRect::new(
-            NSPoint::new(layout::H_PAD, layout::BOTTOM_PAD),
+            NSPoint::new(L::constants::H_PAD, L::constants::BOTTOM_PAD),
             NSSize::new(
-                layout::BODY_W,
-                layout::BODY_LINE_H + (lines.saturating_sub(1) as f64 * layout::BODY_LINE_H),
+                L::constants::BODY_W,
+                L::constants::BODY_LINE_H
+                    + (lines.saturating_sub(1) as f64 * L::constants::BODY_LINE_H),
             ),
         ));
     }
@@ -601,11 +612,17 @@ impl OverlayView {
             .unwrap_or_else(|| NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 900.0)));
         let anchor = crate::focused_window_darwin::focused_window_frame(screen.size.height)
             .unwrap_or(screen);
-        let frame = panel_frame(anchor, self.cfg.position, layout::WIDTH, height, screen);
+        let frame = to_nsrect(L::panel_frame(
+            from_nsrect(anchor),
+            self.cfg.position,
+            L::constants::WIDTH,
+            height,
+            from_nsrect(screen),
+        ));
         let animate = self.last_panel_frame.is_some();
         if self
             .last_panel_frame
-            .is_none_or(|last| !rect_nearly_eq(last, frame))
+            .is_none_or(|last| !L::frame_nearly_eq(from_nsrect(last), from_nsrect(frame)))
         {
             self.panel.setFrame_display_animate(frame, true, animate);
             self.last_panel_frame = Some(frame);
@@ -643,7 +660,7 @@ impl OverlayView {
 fn root_frame() -> NSRect {
     NSRect::new(
         NSPoint::new(0.0, 0.0),
-        NSSize::new(layout::WIDTH, layout::BASE_HEIGHT),
+        NSSize::new(L::constants::WIDTH, L::constants::BASE_HEIGHT),
     )
 }
 
@@ -716,60 +733,6 @@ impl SkyLightBlurApi {
 unsafe extern "C" {
     fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-}
-
-struct FirstRow {
-    icon: NSRect,
-    status: NSRect,
-    stats: NSRect,
-    meta: NSRect,
-}
-
-fn first_row_frames(top_offset: f64) -> FirstRow {
-    let center_y = layout::HEADER_CENTER_Y + top_offset;
-    let mut x = layout::H_PAD;
-    let icon = NSRect::new(
-        NSPoint::new(
-            x,
-            frame_y_for_visual_center(center_y, layout::ICON_BOX, layout::ICON_OPTICAL_Y),
-        ),
-        NSSize::new(layout::ICON_BOX, layout::ICON_BOX),
-    );
-    x += layout::ICON_BOX + layout::ICON_STATE_GAP;
-    let status = NSRect::new(
-        NSPoint::new(
-            x,
-            frame_y_for_visual_center(center_y, layout::STATE_BOX_H, layout::STATE_OPTICAL_Y),
-        ),
-        NSSize::new(layout::STATE_W, layout::STATE_BOX_H),
-    );
-    x += layout::STATE_W + layout::STATE_STATS_GAP;
-    let stats = NSRect::new(
-        NSPoint::new(
-            x,
-            frame_y_for_visual_center(center_y, layout::META_BOX_H, layout::META_OPTICAL_Y),
-        ),
-        NSSize::new(layout::STATS_W, layout::META_BOX_H),
-    );
-    x += layout::STATS_W + layout::META_GAP;
-    let right = layout::WIDTH - layout::H_PAD;
-    let meta_w = (right - x).max(layout::META_MIN_W);
-    FirstRow {
-        icon,
-        status,
-        stats,
-        meta: NSRect::new(
-            NSPoint::new(
-                x,
-                frame_y_for_visual_center(center_y, layout::META_BOX_H, layout::META_OPTICAL_Y),
-            ),
-            NSSize::new(meta_w, layout::META_BOX_H),
-        ),
-    }
-}
-
-fn frame_y_for_visual_center(center_y: f64, height: f64, optical_y: f64) -> f64 {
-    center_y - height / 2.0 - optical_y
 }
 
 fn label(
@@ -1001,168 +964,6 @@ fn color_from_rgb_alpha(rgb: u32, alpha: f64) -> Retained<NSColor> {
     NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, alpha.clamp(0.0, 1.0))
 }
 
-fn display_text_plan(text: &str, max_lines: usize, chars_per_line: usize) -> (String, usize) {
-    let max_lines = max_lines.clamp(1, 8);
-    let chars_per_line = chars_per_line.max(8);
-    let chars = text.chars().count().max(1);
-    let lines = chars.div_ceil(chars_per_line).clamp(1, max_lines);
-    let capacity = chars_per_line * max_lines;
-    if chars <= capacity {
-        return (text.to_string(), lines);
-    }
-
-    let keep = capacity.saturating_sub(1);
-    let tail: String = text
-        .chars()
-        .rev()
-        .take(keep)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    (format!("…{tail}"), max_lines)
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct LiveTextPlan {
-    segments: String,
-    partial: String,
-    lines: usize,
-}
-
-impl LiveTextPlan {
-    fn full_text(&self) -> String {
-        let mut text = self.segments.clone();
-        text.push_str(&self.partial);
-        text
-    }
-}
-
-fn live_text_plan(
-    segments: &[String],
-    partial: &str,
-    max_lines: usize,
-    chars_per_line: usize,
-) -> LiveTextPlan {
-    let full_segments = segments.join("");
-    let mut full = full_segments.clone();
-    full.push_str(partial);
-    let (display, lines) = display_text_plan(&full, max_lines, chars_per_line);
-    if display == full {
-        return LiveTextPlan {
-            segments: full_segments,
-            partial: partial.to_string(),
-            lines,
-        };
-    }
-
-    let visible_chars = display
-        .strip_prefix('…')
-        .unwrap_or(&display)
-        .chars()
-        .count();
-    let partial_chars = partial.chars().count();
-    let visible_partial_chars = partial_chars.min(visible_chars);
-    let visible_segment_chars = visible_chars.saturating_sub(visible_partial_chars);
-    let segment_tail = tail_chars(&full_segments, visible_segment_chars);
-    let partial_tail = tail_chars(partial, visible_partial_chars);
-    LiveTextPlan {
-        segments: if segment_tail.is_empty() {
-            "…".to_string()
-        } else {
-            format!("…{segment_tail}")
-        },
-        partial: partial_tail,
-        lines,
-    }
-}
-
-fn tail_chars(text: &str, count: usize) -> String {
-    if count == 0 {
-        return String::new();
-    }
-    text.chars()
-        .rev()
-        .take(count)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect()
-}
-
-fn utf16_len(text: &str) -> usize {
-    text.encode_utf16().count()
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct HeaderParts {
-    state: String,
-    duration: String,
-    words: String,
-    app: String,
-    meta: String,
-}
-
-fn header_parts(state: &str, duration: &str, words: &str, app: &str, chain: &str) -> HeaderParts {
-    HeaderParts {
-        state: state.to_string(),
-        duration: duration.to_string(),
-        words: words.to_string(),
-        app: app.to_string(),
-        meta: chain.to_string(),
-    }
-}
-
-fn stats_text(duration: &str, words: &str, app: &str) -> String {
-    if app.is_empty() {
-        format!("{duration} · {words}")
-    } else {
-        format!("{duration} · {words} · {app}")
-    }
-}
-
-fn panel_frame(
-    anchor: NSRect,
-    position: OverlayPosition,
-    width: f64,
-    height: f64,
-    screen: NSRect,
-) -> NSRect {
-    let x = anchor.origin.x + (anchor.size.width - width) / 2.0;
-    let y = match position {
-        OverlayPosition::Top => {
-            anchor.origin.y + anchor.size.height - height - layout::WINDOW_MARGIN
-        }
-        OverlayPosition::Middle => anchor.origin.y + (anchor.size.height - height) / 2.0,
-        OverlayPosition::Bottom => anchor.origin.y + layout::WINDOW_MARGIN,
-    };
-    let x = clamp(
-        x,
-        screen.origin.x + layout::WINDOW_MARGIN,
-        screen.origin.x + screen.size.width - width - layout::WINDOW_MARGIN,
-    );
-    let y = clamp(
-        y,
-        screen.origin.y + layout::WINDOW_MARGIN,
-        screen.origin.y + screen.size.height - height - layout::WINDOW_MARGIN,
-    );
-    NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))
-}
-
-fn clamp(value: f64, min: f64, max: f64) -> f64 {
-    if min > max {
-        return min;
-    }
-    value.max(min).min(max)
-}
-
-fn rect_nearly_eq(a: NSRect, b: NSRect) -> bool {
-    (a.origin.x - b.origin.x).abs() < 0.5
-        && (a.origin.y - b.origin.y).abs() < 0.5
-        && (a.size.width - b.size.width).abs() < 0.5
-        && (a.size.height - b.size.height).abs() < 0.5
-}
-
 fn fade_view(view: &NSView, duration_s: f64) {
     if let Some(layer) = view.layer() {
         let transition = CATransition::animation();
@@ -1172,95 +973,9 @@ fn fade_view(view: &NSView, duration_s: f64) {
     }
 }
 
-fn format_duration(ms: u64) -> String {
-    let total_secs = ms / 1000;
-    let h = total_secs / 3600;
-    let m = (total_secs % 3600) / 60;
-    let s = total_secs % 60;
-    if h > 0 {
-        format!("{h}h{m}m{s}s")
-    } else if m > 0 {
-        format!("{m}m{s}s")
-    } else {
-        format!("{s}s")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn visual_center(frame: NSRect, optical_y: f64) -> f64 {
-        frame.origin.y + frame.size.height / 2.0 + optical_y
-    }
-
-    #[test]
-    fn text_line_count_is_bounded() {
-        assert_eq!(display_text_plan("", 5, 34).1, 1);
-        assert_eq!(display_text_plan("短句", 5, 34).1, 1);
-        assert_eq!(display_text_plan(&"字".repeat(70), 5, 34).1, 3);
-        assert_eq!(display_text_plan(&"字".repeat(300), 5, 34).1, 5);
-    }
-
-    #[test]
-    fn long_text_keeps_tail() {
-        let text = format!("{}{}", "前".repeat(200), "后".repeat(20));
-        let (visible, lines) = display_text_plan(&text, 5, 20);
-        assert_eq!(lines, 5);
-        assert!(visible.starts_with('…'));
-        assert!(visible.ends_with(&"后".repeat(20)));
-        assert!(!visible.contains(&"前".repeat(120)));
-    }
-
-    #[test]
-    fn header_parts_keep_state_duration_and_meta_separate() {
-        let parts = header_parts("Recording", "3s", "84 words", "Xcode", "filler");
-        assert_eq!(parts.state, "Recording");
-        assert_eq!(parts.duration, "3s");
-        assert_eq!(parts.words, "84 words");
-        assert_eq!(parts.app, "Xcode");
-        assert_eq!(parts.meta, "filler");
-    }
-
-    #[test]
-    fn first_row_clusters_stats_and_app_on_left_with_wide_meta() {
-        let row = first_row_frames(0.0);
-        assert!(row.stats.origin.x - (row.status.origin.x + row.status.size.width) <= 6.0);
-        assert!(row.stats.size.width >= 210.0);
-        assert!(row.stats.origin.x < row.meta.origin.x);
-        assert!(row.meta.size.width >= 180.0);
-    }
-
-    #[test]
-    fn base_overlay_spacing_is_compact() {
-        const {
-            assert!(layout::BASE_HEIGHT <= 68.0);
-            assert!(layout::H_PAD <= 16.0);
-            assert!(layout::BOTTOM_PAD <= 8.0);
-        }
-    }
-
-    #[test]
-    fn first_row_uses_shared_visual_center() {
-        let row = first_row_frames(0.0);
-        let center = layout::HEADER_CENTER_Y;
-        assert!((visual_center(row.icon, layout::ICON_OPTICAL_Y) - center).abs() < 0.1);
-        assert!((visual_center(row.status, layout::STATE_OPTICAL_Y) - center).abs() < 0.1);
-        assert!((visual_center(row.stats, layout::META_OPTICAL_Y) - center).abs() < 0.1);
-        assert!((visual_center(row.meta, layout::META_OPTICAL_Y) - center).abs() < 0.1);
-    }
-
-    #[test]
-    fn meta_typography_is_readable_but_secondary() {
-        const {
-            assert!(typography::META >= 13.0);
-            assert!(typography::META < typography::STATE);
-        }
-        assert_eq!(
-            crate::config::theme::OverlayTextTheme::default().tertiary,
-            crate::config::theme::palette::FG3
-        );
-    }
 
     #[test]
     fn state_symbols_match_overlay_semantics() {
@@ -1279,8 +994,15 @@ mod tests {
     }
 
     #[test]
-    fn header_body_gap_keeps_rows_breathing() {
-        assert_eq!(layout::HEADER_BODY_GAP, 2.0);
+    fn meta_typography_is_readable_but_secondary() {
+        const {
+            assert!(typography::META >= 13.0);
+            assert!(typography::META < typography::STATE);
+        }
+        assert_eq!(
+            crate::config::theme::OverlayTextTheme::default().tertiary,
+            crate::config::theme::palette::FG3
+        );
     }
 
     #[test]
@@ -1289,34 +1011,5 @@ mod tests {
             crate::config::theme::OverlayTextTheme::default().segment,
             crate::config::theme::palette::FG1
         );
-    }
-
-    #[test]
-    fn stats_text_is_inline_metadata() {
-        assert_eq!(stats_text("12s", "128字", "Xcode"), "12s · 128字 · Xcode");
-        assert_eq!(stats_text("12s", "128字", ""), "12s · 128字");
-    }
-
-    #[test]
-    fn live_text_plan_keeps_segments_and_partial_distinct() {
-        let plan = live_text_plan(&["已经定型。".to_string()], "正在识别", 5, 34);
-        assert_eq!(plan.segments, "已经定型。");
-        assert_eq!(plan.partial, "正在识别");
-        assert_eq!(plan.lines, 1);
-    }
-
-    #[test]
-    fn positions_overlay_inside_anchor_centered() {
-        let anchor = NSRect::new(NSPoint::new(100.0, 100.0), NSSize::new(800.0, 600.0));
-        let screen = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1200.0, 900.0));
-        let bottom = panel_frame(anchor, OverlayPosition::Bottom, 540.0, 86.0, screen);
-        assert_eq!(bottom.origin.x, 230.0);
-        assert_eq!(bottom.origin.y, 116.0);
-        let middle = panel_frame(anchor, OverlayPosition::Middle, 540.0, 86.0, screen);
-        assert_eq!(middle.origin.x, 230.0);
-        assert_eq!(middle.origin.y, 357.0);
-        let top = panel_frame(anchor, OverlayPosition::Top, 540.0, 86.0, screen);
-        assert_eq!(top.origin.x, 230.0);
-        assert_eq!(top.origin.y, 598.0);
     }
 }

@@ -3,7 +3,7 @@
 //!
 //! 纯数据 + 算术。不持 overlay / state / I/O。
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SegmentCapture {
@@ -38,28 +38,6 @@ pub(crate) fn instant_to_datetime(
     recording_started_at + time::Duration::milliseconds(delta.as_millis() as i64)
 }
 
-/// 单 session 路径下把整段 PCM 视作一个 `SessionCapture`。
-/// 空录音（无 segment、无 final、未发送样本）返回空 Vec。
-/// 不变量：`ended_at - started_at == samples_to_ms(audio_samples)`（SCHEMA §2.2）。
-pub(crate) fn wrap_single_session(
-    started_at: Instant,
-    audio_samples: u64,
-    segments: Vec<SegmentCapture>,
-    final_text: Option<String>,
-) -> Vec<SessionCapture> {
-    if segments.is_empty() && final_text.as_deref().unwrap_or("").is_empty() && audio_samples == 0 {
-        return Vec::new();
-    }
-    let ended_at = started_at + Duration::from_millis(samples_to_ms(audio_samples));
-    vec![SessionCapture {
-        started_at,
-        ended_at,
-        audio_samples,
-        segments,
-        final_text,
-    }]
-}
-
 pub(crate) fn session_text_from_parts(
     segments: &[SegmentCapture],
     final_text: Option<&str>,
@@ -85,7 +63,7 @@ pub(crate) fn session_texts(sessions: &[SessionCapture]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     fn segment(base: Instant, text: &str, start_ms: u64, end_ms: u64) -> SegmentCapture {
         SegmentCapture {
@@ -93,30 +71,6 @@ mod tests {
             started_at: base + Duration::from_millis(start_ms),
             ended_at: base + Duration::from_millis(end_ms),
         }
-    }
-
-    #[test]
-    fn wrap_single_session_audio_ms_matches_ended_minus_started() {
-        let base = Instant::now();
-        let segments = vec![segment(base, "hello", 0, 800)];
-        let audio_samples = 16_000 * 1_500 / 1_000; // 1500ms
-        let sessions = wrap_single_session(base, audio_samples, segments, None);
-        assert_eq!(sessions.len(), 1);
-        let s = &sessions[0];
-        let span_ms = s
-            .ended_at
-            .saturating_duration_since(s.started_at)
-            .as_millis() as u64;
-        let audio_ms = (s.audio_samples * 1000) / 16_000;
-        assert_eq!(span_ms, audio_ms);
-        assert_eq!(span_ms, 1_500);
-    }
-
-    #[test]
-    fn empty_single_session_wrap_returns_empty_vec() {
-        let base = Instant::now();
-        let sessions = wrap_single_session(base, 0, Vec::new(), None);
-        assert!(sessions.is_empty());
     }
 
     #[test]

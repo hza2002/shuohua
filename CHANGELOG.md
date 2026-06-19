@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-19 - Unified voice recording lifecycle
+
+- Removed the duplicate single-session recording implementation. Continuous
+  recording is now a fixed mode of the same lifecycle used by VAD pause/resume.
+- Kept Continuous free of Silero, timeline, pre-roll, and Idle state while
+  preserving at most one history session.
+- Reused one initialization, ASR event, stop/finalize, error/cancel, retained
+  audio, post/dispatch, history, StateStore, and Overlay completion path.
+
 ## 2026-06-19 - Release history and retained audio formats
 
 - Reset the current history record structure to schema version 1 as the first

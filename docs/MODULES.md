@@ -56,7 +56,7 @@ src/
 │   ├── mod.rs
 │   ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 临时 WAV writer
 │   ├── audio.rs                         # retained audio：临时 WAV → FLAC/AAC，路径与失败清理
-│   ├── finish.rs                        # 一次录音生命周期：单/多 session 编排顶层
+│   ├── finish.rs                        # 唯一录音生命周期：Continuous / VadPause + 统一收尾
 │   ├── capture.rs                       # SegmentCapture / SessionCapture 数据模型 + samples_to_ms / instant_to_datetime
 │   ├── finalize.rs                      # provider session 收口：is_last → Final/Segment/Done/timeout
 │   ├── history_build.rs                 # HistoryRecord 构造 / append + PipelineStep → PipelineStepHistory
@@ -94,8 +94,17 @@ src/
 
 ## 当前实现状态
 
-多 session ASR 已接入主录音流程。`finish::run_recording` 入口按 `params.idle_pause && params.vad.backend == Silero` 二选一分派到 `run_single_session_recording` 或 `run_multi_session_recording`。`voice/silero.rs`、`voice/timeline.rs`、`voice/vad.rs` 都是默认 build 编译。`voice/observer.rs` 是 `feature=dev` 下的 trace observer，默认 build 是 ZST no-op。`cli/vad_probe.rs` 已删除；离线 threshold 评估改用保留 WAV + trace 后处理脚本。
+`finish::run_recording` 是唯一录音生命周期，通过
+`RecordingMode::{Continuous, VadPause}` 区分固定模式。Continuous 始终向一个
+provider session 发送 PCM，不构造 Silero、timeline 或 pre-roll 状态，也不进入
+Idle；VadPause 保留 Active / Idle、pause / resume、pre-roll 和 overlap。两种模式
+共享 recording 初始化、ASR event、stop drain、provider finalize、错误/取消、
+retained audio、post/dispatch、history、StateStore 和 Overlay 收尾。
+`voice/silero.rs`、`voice/timeline.rs`、`voice/vad.rs` 都是默认 build 编译。
+`voice/observer.rs` 是 `feature=dev` 下的 trace observer，默认 build 是 ZST no-op。
 
-`finish.rs` 是 voice 子系统编排顶层，依赖 `capture / finalize / history_build / post_dispatch`，无模块反向依赖。`SegmentCapture / SessionCapture` 仅 `pub(crate)` 暴露在 voice 模块内部。
+`finish.rs` 是 voice 子系统编排顶层，依赖
+`capture / finalize / history_build / post_dispatch`，无模块反向依赖。
+`SegmentCapture / SessionCapture` 仅 `pub(crate)` 暴露在 voice 模块内部。
 
 每条路径的详细职责见 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)；关键设计决策见 [DESIGN.md §2](DESIGN.md#2-关键设计决策)。

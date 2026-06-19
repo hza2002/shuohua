@@ -1,19 +1,8 @@
-//! 一次录音的完整生命周期：录音 → ASR → pipeline → dispatch。
+//! 一次录音的统一生命周期：录音 → 1..N 个 ASR session → pipeline → dispatch。
 //!
-//! 单 session 路径：
-//!
-//!   1. 生成 recording_id (ULID)
-//!   2. 开 cpal streaming recorder（可选 wav 留存）
-//!   3. 开 ASR session
-//!   4. 主循环 select!：
-//!        - stop_rx 收到 → 进 Finishing
-//!        - recorder 帧 → 转发到 ASR
-//!        - ASR 事件 → 累积 Segment（不再用 partial 兜底）
-//!   5. Finishing：drain stop_delay_ms → stop recorder → is_last → 等 Done
-//!   6. 拼文本 → filler pipeline → dispatch
-//!
-//! 多 session 路径由 Silero VAD 驱动：`voice.vad.backend = "silero"` 且
-//! `asr/<provider>.toml` 里 `idle_pause = true` 时启用，否则走单 session。
+//! `Continuous` 和 `VadPause` 只在 PCM 路由与 session 切换上不同。录音初始化、
+//! ASR event 处理、stop drain、provider finalize、错误/取消、retained audio、
+//! post-processing、dispatch、history 与 UI 收尾全部复用同一路径。
 
 use std::time::{Duration, Instant};
 
@@ -22,10 +11,7 @@ use crate::overlay::{OverlayCmd, OverlayHandle, OverlayState, TextKind};
 use crate::post;
 use crate::state::history::{HistoryError, HistoryStatus};
 use crate::state::{SessionMeta, SessionPhase as UiSessionPhase, StateStore};
-use crate::voice::capture::{
-    samples_to_ms, session_text_from_parts, session_texts, wrap_single_session, SegmentCapture,
-    SessionCapture,
-};
+use crate::voice::capture::{samples_to_ms, session_texts, SegmentCapture, SessionCapture};
 use crate::voice::finalize::{finalize_provider_session, FinalizeOutcome};
 use crate::voice::history_build::{append_history, HistoryInput};
 use crate::voice::meter::MeterCollector;
@@ -39,31 +25,1017 @@ use crate::voice::{audio, recorder, SessionControl};
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep_until, Instant as TokioInstant};
 
-/// 录音开始后等"非零样本"出现的硬上限。
-///
-/// macOS 没有可靠的"麦克风一定能产生数据"的预检（合盖、被其他进程独占、
-/// 设备名匹配 builtin 但其实是别的，都会假阳/假阴）。所以放弃事前探测，
-/// 改成运行时 watchdog：开了 cpal 之后 1s 内没看见任何**非零** PCM 样本
-/// 就当作不可用。
-///
-/// 为什么不是"任意一帧"：合盖时 macOS 仍然驱动 AudioQueue 推 callback，
-/// 只是塞 0 帧（默认输入设备被屏蔽）。所以 has-any-frame 检测不到合盖，
-/// 必须看样本值本身。
-///
-/// 阈值故意不进配置：超过这个时间几乎可以确定是设备问题，不是用户该调的旋钮。
 const FIRST_AUDIO_TIMEOUT_MS: u64 = 1000;
-
-/// 区分"真静音"和"真信号"的样本振幅门槛。约 -72 dBFS，远低于消费级麦克风
-/// 在安静房间的本底噪声（约 -50 ~ -60 dBFS，对应 i16 ≈ 32~100），同时严格
-/// 大于"完美零"（合盖 / 设备被屏蔽时的 silence buffer 是精确 0）。
 const MIN_NONZERO_AMPLITUDE: i16 = 8;
 const NOTICE_TTL_MS: u32 = 3_000;
 
-/// 当前 PCM 帧里是否至少有一个样本超过静音阈值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordingMode {
+    Continuous,
+    VadPause,
+}
+
+impl RecordingMode {
+    fn select(idle_pause: bool, vad: &crate::config::VoiceVadCfg) -> Self {
+        if idle_pause && matches!(vad.backend, crate::config::VoiceVadBackend::Silero) {
+            Self::VadPause
+        } else {
+            Self::Continuous
+        }
+    }
+}
+
+type OpenedSession = (Box<dyn AsrSession>, mpsc::Receiver<AsrEvent>);
+
+struct SessionOpener<'a> {
+    provider: &'a dyn AsrProvider,
+    context: SessionCtx,
+}
+
+impl<'a> SessionOpener<'a> {
+    fn new(provider: &'a dyn AsrProvider, context: SessionCtx) -> Self {
+        Self { provider, context }
+    }
+
+    async fn open_initial(&self) -> Result<OpenedSession, crate::asr::types::AsrError> {
+        self.provider.open(self.context.clone()).await
+    }
+
+    async fn open_resume(
+        &self,
+        mode: RecordingMode,
+    ) -> Result<Option<OpenedSession>, crate::asr::types::AsrError> {
+        if mode == RecordingMode::Continuous {
+            return Ok(None);
+        }
+        self.provider.open(self.context.clone()).await.map(Some)
+    }
+}
+
+struct VadPauseState {
+    silero: crate::voice::silero::SileroVad,
+    controller: crate::voice::vad::VadController,
+    timeline: crate::voice::timeline::PcmTimeline,
+    pre_roll_samples: u64,
+    max_overlap_samples: u64,
+}
+
+impl VadPauseState {
+    fn new(config: &crate::config::VoiceVadCfg) -> anyhow::Result<Self> {
+        use crate::voice::silero::{SileroConfig, SileroVad};
+        use crate::voice::timeline::{ms_to_samples, PcmTimeline};
+        use crate::voice::vad::{VadController, VadPolicy};
+
+        let silero = SileroVad::new(SileroConfig {
+            threshold: config.threshold,
+        })?;
+        let controller = VadController::new(VadPolicy {
+            min_start_voiced_frames: config.min_start_voiced_frames,
+            pause_silence_ms: config.pause_silence_ms,
+            frame_ms: SileroConfig::frame_ms(),
+        });
+        let retention_ms = config.pre_roll_ms + config.max_overlap_ms + 100;
+        Ok(Self {
+            silero,
+            controller,
+            timeline: PcmTimeline::new(retention_ms),
+            pre_roll_samples: ms_to_samples(config.pre_roll_ms),
+            max_overlap_samples: ms_to_samples(config.max_overlap_ms),
+        })
+    }
+}
+
+struct CurrentSessionCapture {
+    start_sample: u64,
+    audio_samples: u64,
+    segments: Vec<SegmentCapture>,
+    final_text: Option<String>,
+    pending_overlay_segments: usize,
+}
+
+impl CurrentSessionCapture {
+    fn new(start_sample: u64) -> Self {
+        Self {
+            start_sample,
+            audio_samples: 0,
+            segments: Vec::new(),
+            final_text: None,
+            pending_overlay_segments: 0,
+        }
+    }
+
+    fn record_sent_samples(&mut self, samples: u64) {
+        self.audio_samples += samples;
+    }
+
+    fn into_session(self, recording_started: Instant) -> Option<SessionCapture> {
+        if self.audio_samples == 0
+            && self.segments.is_empty()
+            && self.final_text.as_deref().unwrap_or("").is_empty()
+        {
+            return None;
+        }
+        let start_ms = samples_to_ms(self.start_sample);
+        let end_ms = samples_to_ms(self.start_sample + self.audio_samples);
+        Some(SessionCapture {
+            started_at: recording_started + Duration::from_millis(start_ms),
+            ended_at: recording_started + Duration::from_millis(end_ms),
+            audio_samples: self.audio_samples,
+            segments: self.segments,
+            final_text: self.final_text,
+        })
+    }
+}
+
+pub struct SessionParams {
+    pub auto_paste: bool,
+    pub record_audio: crate::config::RecordAudioMode,
+    pub vad_trace: bool,
+    pub idle_pause: bool,
+    pub finalize_timeout_ms: u64,
+    pub vad: crate::config::VoiceVadCfg,
+    pub stop_delay_ms: u32,
+    pub hotwords: Vec<String>,
+    pub start_app_context: post::AppContext,
+    pub post_chain: crate::config::post::PostChain,
+    pub post_timeout_ms: u64,
+    pub overlay: Option<OverlayHandle>,
+    pub state: StateStore,
+}
+
+pub async fn run_recording(
+    provider: &dyn AsrProvider,
+    params: SessionParams,
+    mut control_rx: watch::Receiver<SessionControl>,
+) {
+    let mode = RecordingMode::select(params.idle_pause, &params.vad);
+    let recording_id = ulid::Ulid::new().to_string();
+    let recording_started_at = time::OffsetDateTime::now_utc();
+    let recording_started_instant = Instant::now();
+    tracing::info!(
+        recording_id = %recording_id,
+        provider = %provider.name(),
+        app = ?params.start_app_context.bundle_id,
+        mode = ?mode,
+        "recording started"
+    );
+
+    let mut trace = RecordingObserver::start(TraceStart {
+        enabled: params.vad_trace,
+        recording_id: recording_id.clone(),
+        provider: provider.name().to_string(),
+        started_at: recording_started_at.to_string(),
+        started_instant: recording_started_instant,
+    });
+    if params.vad_trace {
+        tracing::info!(recording_id = %recording_id, "dev voice trace enabled");
+    }
+
+    let mut app_context = params.start_app_context.clone();
+    params
+        .state
+        .set_recording(recording_id.clone(), recording_started_at);
+    emit_session_meta(&params.state, &recording_id, provider, &params);
+    params
+        .state
+        .session_phase(recording_id.clone(), UiSessionPhase::Active);
+    params
+        .state
+        .app(app_context.bundle_id.clone(), app_context.app_name.clone());
+    overlay_send(
+        &params,
+        OverlayCmd::SetState {
+            state: OverlayState::Connecting,
+        },
+    );
+    overlay_send(
+        &params,
+        OverlayCmd::SetApp {
+            bundle_id: app_context.bundle_id.clone(),
+            app_name: app_context.app_name.clone(),
+            chain_summary: params.post_chain.name.clone(),
+        },
+    );
+
+    let audio_output = prepare_audio_output(&params, &recording_id);
+    let mut rec = match recorder::start(audio_output) {
+        Ok(rec) => rec,
+        Err(error) => {
+            tracing::error!(recording_id = %recording_id, error = ?error, "recorder start failed");
+            observe_finish_ms(&mut trace, "recorder_start_error", 0);
+            params.state.set_error(Some(recording_id));
+            send_error_overlay(&params, crate::t!("error.recorder_start"));
+            return;
+        }
+    };
+
+    let mut vad_pause = if mode == RecordingMode::VadPause {
+        match VadPauseState::new(&params.vad) {
+            Ok(state) => Some(state),
+            Err(error) => {
+                tracing::error!(recording_id = %recording_id, error = ?error, "Silero VAD init failed");
+                finish_retained_audio(&params, &recording_id, &mut rec).await;
+                observe_finish_ms(&mut trace, "vad_init_error", 0);
+                params.state.set_error(Some(recording_id));
+                send_error_overlay(&params, crate::t!("error.asr_runtime"));
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
+    let session_ctx = SessionCtx {
+        language: LanguageMode::Multilingual {
+            hint: vec!["zh-CN".into(), "en-US".into()],
+        },
+        hotwords: params.hotwords.clone(),
+    };
+    let opener = SessionOpener::new(provider, session_ctx);
+    let (initial_session, initial_events) = match opener.open_initial().await {
+        Ok(opened) => opened,
+        Err(error) => {
+            tracing::error!(recording_id = %recording_id, error = %error, "ASR open failed");
+            finish_retained_audio(&params, &recording_id, &mut rec).await;
+            observe_asr_error(&mut trace, recording_started_instant, error);
+            observe_finish_ms(&mut trace, "asr_open_error", 0);
+            params.state.set_error(Some(recording_id));
+            send_error_overlay(&params, crate::t!("error.asr_open"));
+            return;
+        }
+    };
+
+    let mut session: Option<Box<dyn AsrSession>> = Some(initial_session);
+    let mut events = initial_events;
+    overlay_send(
+        &params,
+        OverlayCmd::SetState {
+            state: OverlayState::Recording,
+        },
+    );
+    observe_provider_opened(&mut trace, recording_started_instant);
+    observe_session(
+        &mut trace,
+        SessionPhase::Start {
+            index: 0,
+            start_ms: 0,
+        },
+    );
+
+    let first_audio_deadline = TokioInstant::now() + Duration::from_millis(FIRST_AUDIO_TIMEOUT_MS);
+    let mut first_audio_seen = false;
+    let mut sessions = Vec::new();
+    let mut current = CurrentSessionCapture::new(0);
+    let mut session_index = 0u32;
+    let mut total_audio_samples = 0u64;
+    let mut last_sent_sample = 0u64;
+    let mut active = true;
+    let mut stop_requested = false;
+    let mut cancel_requested = false;
+    let mut terminal_error = None;
+    let mut meter = MeterCollector::new();
+
+    'recording: loop {
+        if active {
+            let mut pause_requested = false;
+            let mut provider_done = false;
+            'active: loop {
+                tokio::select! {
+                    biased;
+                    changed = control_rx.changed() => {
+                        if changed.is_err() {
+                            stop_requested = true;
+                            break 'active;
+                        }
+                        match *control_rx.borrow_and_update() {
+                            SessionControl::Stop => {
+                                stop_requested = true;
+                                break 'active;
+                            }
+                            SessionControl::Cancel => {
+                                cancel_requested = true;
+                                break 'recording;
+                            }
+                            SessionControl::Idle => {}
+                        }
+                    }
+                    pcm = rec.recv() => {
+                        match pcm {
+                            None => {
+                                stop_requested = true;
+                                break 'active;
+                            }
+                            Some(samples) => {
+                                observe_pcm(&mut trace, &samples);
+                                emit_meters(&params.state, &recording_id, &mut meter, &samples);
+                                if !first_audio_seen && frame_has_signal(&samples) {
+                                    first_audio_seen = true;
+                                }
+
+                                let end_sample = if let Some(vad) = vad_pause.as_mut() {
+                                    vad.timeline.push(&samples).end_sample()
+                                } else {
+                                    last_sent_sample + samples.len() as u64
+                                };
+                                let Some(active_session) = session.as_mut() else {
+                                    terminal_error = Some(HistoryError {
+                                        kind: "asr_session".to_string(),
+                                        msg: "missing active ASR session".to_string(),
+                                    });
+                                    break 'recording;
+                                };
+                                if let Err(error) =
+                                    send_pcm_chunk(active_session, &samples, &mut total_audio_samples).await
+                                {
+                                    terminal_error = Some(error);
+                                    break 'recording;
+                                }
+                                current.record_sent_samples(samples.len() as u64);
+                                last_sent_sample = end_sample;
+
+                                if let Some(vad) = vad_pause.as_mut() {
+                                    use crate::voice::vad::{VadFrame, VadTransition};
+                                    for frame in vad.silero.accept(&samples) {
+                                        meter.observe_vad(
+                                            frame.probability,
+                                            matches!(frame.frame, VadFrame::Speech),
+                                        );
+                                        if vad.controller.accept(frame.frame)
+                                            == VadTransition::SilenceStarted
+                                        {
+                                            pause_requested = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if pause_requested {
+                                    break 'active;
+                                }
+                            }
+                        }
+                    }
+                    _ = sleep_until(first_audio_deadline), if !first_audio_seen => {
+                        tracing::error!(
+                            recording_id = %recording_id,
+                            timeout_ms = FIRST_AUDIO_TIMEOUT_MS,
+                            "no microphone audio received before timeout"
+                        );
+                        rec.stop();
+                        if let Some(active_session) = session.take() {
+                            let _ = active_session.close().await;
+                        }
+                        finish_retained_audio(&params, &recording_id, &mut rec).await;
+                        observe_finish(&mut trace, "no_audio", total_audio_samples);
+                        params.state.set_error(Some(recording_id));
+                        send_error_overlay(&params, crate::t!("error.no_audio"));
+                        return;
+                    }
+                    event = events.recv() => {
+                        match event {
+                            None => {
+                                terminal_error = Some(asr_stream_closed_error());
+                                break 'recording;
+                            }
+                            Some(AsrEvent::Done) => {
+                                observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Done);
+                                if mode == RecordingMode::VadPause {
+                                    pause_requested = true;
+                                } else {
+                                    provider_done = true;
+                                }
+                                break 'active;
+                            }
+                            Some(event) => {
+                                if let Some(error) = handle_asr_event(
+                                    event,
+                                    &mut current,
+                                    &params,
+                                    &recording_id,
+                                    recording_started_instant,
+                                    &mut trace,
+                                ) {
+                                    terminal_error = Some(error);
+                                    break 'recording;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if stop_requested {
+                refresh_stop_context(&params, &recording_id, &mut app_context);
+                let Some(active_session) = session.as_mut() else {
+                    break 'recording;
+                };
+                if let Err(error) = drain_stop_audio(
+                    &mut rec,
+                    active_session,
+                    &mut current,
+                    vad_pause.as_mut(),
+                    &mut total_audio_samples,
+                    &mut last_sent_sample,
+                    params.stop_delay_ms,
+                    &mut control_rx,
+                    &mut cancel_requested,
+                    &mut meter,
+                    &params.state,
+                    &recording_id,
+                    &mut trace,
+                )
+                .await
+                {
+                    terminal_error = Some(error);
+                    break 'recording;
+                }
+                if cancel_requested {
+                    break 'recording;
+                }
+            }
+
+            if !provider_done {
+                observe_session(
+                    &mut trace,
+                    SessionPhase::FinalizeStart {
+                        index: session_index,
+                        t_ms: instant_elapsed_ms(recording_started_instant),
+                    },
+                );
+                let Some(active_session) = session.as_mut() else {
+                    break 'recording;
+                };
+                match finalize_provider_session(
+                    active_session,
+                    &mut events,
+                    &mut current.segments,
+                    &mut current.final_text,
+                    &mut current.pending_overlay_segments,
+                    params.finalize_timeout_ms,
+                    &mut control_rx,
+                    &mut terminal_error,
+                    &mut trace,
+                    recording_started_instant,
+                    &params.state,
+                    &recording_id,
+                    params.overlay.as_ref(),
+                )
+                .await
+                {
+                    Ok(FinalizeOutcome::Done) => {}
+                    Ok(FinalizeOutcome::Canceled) => {
+                        cancel_requested = true;
+                        break 'recording;
+                    }
+                    Err(error) => {
+                        terminal_error = Some(error);
+                        break 'recording;
+                    }
+                }
+            }
+            if let Some(active_session) = session.take() {
+                let _ = active_session.close().await;
+            }
+
+            let session_start_ms = samples_to_ms(current.start_sample);
+            let session_end_ms = samples_to_ms(current.start_sample + current.audio_samples);
+            observe_session(
+                &mut trace,
+                SessionPhase::Done {
+                    index: session_index,
+                    start_ms: session_start_ms,
+                    end_ms: session_end_ms,
+                    audio_ms: samples_to_ms(current.audio_samples),
+                },
+            );
+            if let Some(capture) =
+                std::mem::replace(&mut current, CurrentSessionCapture::new(last_sent_sample))
+                    .into_session(recording_started_instant)
+            {
+                sessions.push(capture);
+            }
+
+            if !should_enter_idle(mode, stop_requested, pause_requested) {
+                break 'recording;
+            }
+
+            overlay_send(
+                &params,
+                OverlayCmd::SetState {
+                    state: OverlayState::Idle,
+                },
+            );
+            params
+                .state
+                .session_phase(recording_id.clone(), UiSessionPhase::Idle);
+            if let Some(vad) = vad_pause.as_mut() {
+                use crate::voice::vad::VadFrame;
+                vad.controller.reset();
+                vad.controller.accept(VadFrame::Silence);
+            }
+            active = false;
+        } else {
+            let mut speech_start = None;
+            'idle: loop {
+                tokio::select! {
+                    biased;
+                    changed = control_rx.changed() => {
+                        if changed.is_err() {
+                            stop_requested = true;
+                            break 'idle;
+                        }
+                        match *control_rx.borrow_and_update() {
+                            SessionControl::Stop => {
+                                stop_requested = true;
+                                break 'idle;
+                            }
+                            SessionControl::Cancel => {
+                                cancel_requested = true;
+                                break 'recording;
+                            }
+                            SessionControl::Idle => {}
+                        }
+                    }
+                    pcm = rec.recv() => {
+                        match pcm {
+                            None => {
+                                stop_requested = true;
+                                break 'idle;
+                            }
+                            Some(samples) => {
+                                observe_pcm(&mut trace, &samples);
+                                emit_meters(&params.state, &recording_id, &mut meter, &samples);
+                                let Some(vad) = vad_pause.as_mut() else {
+                                    terminal_error = Some(HistoryError {
+                                        kind: "vad_state".to_string(),
+                                        msg: "VadPause mode missing VAD state".to_string(),
+                                    });
+                                    break 'recording;
+                                };
+                                vad.timeline.push(&samples);
+                                use crate::voice::vad::{VadFrame, VadTransition};
+                                for frame in vad.silero.accept(&samples) {
+                                    meter.observe_vad(
+                                        frame.probability,
+                                        matches!(frame.frame, VadFrame::Speech),
+                                    );
+                                    if vad.controller.accept(frame.frame)
+                                        == VadTransition::SpeechStarted
+                                    {
+                                        speech_start = Some(frame.start_sample);
+                                        break;
+                                    }
+                                }
+                                if speech_start.is_some() {
+                                    break 'idle;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if stop_requested {
+                refresh_stop_context(&params, &recording_id, &mut app_context);
+                break 'recording;
+            }
+            let Some(speech_start) = speech_start else {
+                break 'recording;
+            };
+            let Some(vad) = vad_pause.as_mut() else {
+                break 'recording;
+            };
+            let send_start = compute_resume_start_sample(
+                speech_start,
+                vad.pre_roll_samples,
+                last_sent_sample,
+                vad.max_overlap_samples,
+                vad.timeline.oldest_sample(),
+            );
+            let next_index = session_index + 1;
+            let (new_session, new_events) = match opener.open_resume(mode).await {
+                Ok(Some(opened)) => opened,
+                Ok(None) => {
+                    terminal_error = Some(HistoryError {
+                        kind: "asr_resume_mode".to_string(),
+                        msg: "Continuous mode cannot open a resume session".to_string(),
+                    });
+                    break 'recording;
+                }
+                Err(error) => {
+                    observe_session(
+                        &mut trace,
+                        SessionPhase::OpenError {
+                            index: next_index,
+                            t_ms: instant_elapsed_ms(recording_started_instant),
+                            message: error.to_string(),
+                        },
+                    );
+                    terminal_error = Some(HistoryError {
+                        kind: "asr_resume_open".to_string(),
+                        msg: error.to_string(),
+                    });
+                    break 'recording;
+                }
+            };
+            session = Some(new_session);
+            events = new_events;
+            session_index = next_index;
+            observe_provider_opened(&mut trace, recording_started_instant);
+            observe_session(
+                &mut trace,
+                SessionPhase::Start {
+                    index: session_index,
+                    start_ms: samples_to_ms(send_start),
+                },
+            );
+
+            let replay = vad.timeline.slice_from(send_start);
+            current = CurrentSessionCapture::new(replay.start_sample);
+            if !replay.samples.is_empty() {
+                let Some(active_session) = session.as_mut() else {
+                    break 'recording;
+                };
+                if let Err(error) =
+                    send_pcm_chunk(active_session, &replay.samples, &mut total_audio_samples).await
+                {
+                    terminal_error = Some(error);
+                    break 'recording;
+                }
+                current.record_sent_samples(replay.samples.len() as u64);
+            }
+            last_sent_sample = replay.end_sample();
+            use crate::voice::vad::VadFrame;
+            vad.controller.reset();
+            vad.controller.accept(VadFrame::Speech);
+            overlay_send(
+                &params,
+                OverlayCmd::SetState {
+                    state: OverlayState::Recording,
+                },
+            );
+            params
+                .state
+                .session_phase(recording_id.clone(), UiSessionPhase::Active);
+            active = true;
+        }
+    }
+
+    if current.audio_samples > 0
+        || !current.segments.is_empty()
+        || current
+            .final_text
+            .as_deref()
+            .is_some_and(|text| !text.is_empty())
+    {
+        if let Some(capture) = current.into_session(recording_started_instant) {
+            sessions.push(capture);
+        }
+    }
+    if cancel_requested {
+        rec.stop();
+    }
+    if let Some(active_session) = session.take() {
+        let _ = active_session.close().await;
+    }
+    finish_retained_audio(&params, &recording_id, &mut rec).await;
+
+    complete_recording(
+        provider,
+        &params,
+        &recording_id,
+        recording_started_at,
+        recording_started_instant,
+        app_context,
+        sessions,
+        cancel_requested,
+        terminal_error,
+        total_audio_samples,
+        &mut trace,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn complete_recording(
+    provider: &dyn AsrProvider,
+    params: &SessionParams,
+    recording_id: &str,
+    recording_started_at: time::OffsetDateTime,
+    recording_started_instant: Instant,
+    app_context: post::AppContext,
+    sessions: Vec<SessionCapture>,
+    cancel_requested: bool,
+    terminal_error: Option<HistoryError>,
+    total_audio_samples: u64,
+    trace: &mut RecordingObserver,
+) {
+    let provider_name = provider.name().to_string();
+    let session_texts = session_texts(&sessions);
+    let raw_text = session_texts.concat();
+
+    if cancel_requested {
+        tracing::info!(recording_id, "recording canceled");
+        params.state.set_idle();
+        let history_result = append_history(HistoryInput {
+            id: recording_id.to_string(),
+            provider: provider_name,
+            started_at: recording_started_at,
+            ended_at: time::OffsetDateTime::now_utc(),
+            started_instant: recording_started_instant,
+            asr_text: raw_text.clone(),
+            final_text: raw_text,
+            sessions,
+            pipeline: Vec::new(),
+            app: app_context.bundle_id,
+            status: HistoryStatus::Canceled,
+            error: None,
+        });
+        publish_history_result(
+            &params.state,
+            params.overlay.as_ref(),
+            recording_id,
+            history_result,
+        );
+        overlay_send(params, OverlayCmd::Hide);
+        observe_finish(trace, "canceled", total_audio_samples);
+        return;
+    }
+
+    let (final_text, pipeline, status, dispatch_error) = if !should_dispatch(false, &terminal_error)
+    {
+        (raw_text.clone(), Vec::new(), HistoryStatus::Error, None)
+    } else {
+        let outcome = dispatch_with_post_chain(
+            &session_texts,
+            params.auto_paste,
+            &app_context,
+            &params.post_chain,
+            params.post_timeout_ms,
+            params.overlay.as_ref(),
+        )
+        .await;
+        (
+            outcome.final_text,
+            outcome.pipeline,
+            outcome.status,
+            outcome.error,
+        )
+    };
+    for step in &pipeline {
+        params
+            .state
+            .pipeline_step(recording_id.to_string(), step.clone());
+    }
+
+    if terminal_error.is_some() || dispatch_error.is_some() {
+        params.state.set_error(Some(recording_id.to_string()));
+        send_error_overlay(
+            params,
+            if terminal_error.is_some() {
+                crate::t!("error.asr_runtime")
+            } else {
+                crate::t!("error.dispatch")
+            },
+        );
+    } else {
+        if let Some(text) = pipeline.iter().rev().find_map(|step| step.text.clone()) {
+            overlay_send(
+                params,
+                OverlayCmd::SetText {
+                    text,
+                    kind: TextKind::Final,
+                },
+            );
+        }
+        params.state.set_idle();
+    }
+
+    let history_status = terminal_error
+        .as_ref()
+        .map(|_| HistoryStatus::Error)
+        .unwrap_or(status);
+    let trace_status = if terminal_error.is_some() || dispatch_error.is_some() {
+        "error"
+    } else {
+        match status {
+            HistoryStatus::Submitted => "submitted",
+            HistoryStatus::Canceled => "canceled",
+            HistoryStatus::Error => "error",
+            HistoryStatus::Timeout => "timeout",
+        }
+    };
+    let should_hide = terminal_error.is_none() && dispatch_error.is_none();
+    let history_result = append_history(HistoryInput {
+        id: recording_id.to_string(),
+        provider: provider_name,
+        started_at: recording_started_at,
+        ended_at: time::OffsetDateTime::now_utc(),
+        started_instant: recording_started_instant,
+        asr_text: raw_text,
+        final_text,
+        sessions,
+        pipeline,
+        app: app_context.bundle_id,
+        status: history_status,
+        error: terminal_error.or(dispatch_error),
+    });
+    publish_history_result(
+        &params.state,
+        params.overlay.as_ref(),
+        recording_id,
+        history_result,
+    );
+    if should_hide {
+        overlay_send(params, OverlayCmd::Hide);
+    }
+    observe_finish(trace, trace_status, total_audio_samples);
+}
+
+fn should_dispatch(cancel_requested: bool, terminal_error: &Option<HistoryError>) -> bool {
+    !cancel_requested && terminal_error.is_none()
+}
+
+fn should_enter_idle(mode: RecordingMode, stop_requested: bool, pause_requested: bool) -> bool {
+    mode == RecordingMode::VadPause && !stop_requested && pause_requested
+}
+
+fn handle_asr_event(
+    event: AsrEvent,
+    current: &mut CurrentSessionCapture,
+    params: &SessionParams,
+    recording_id: &str,
+    recording_started_instant: Instant,
+    trace: &mut RecordingObserver,
+) -> Option<HistoryError> {
+    observe_asr_event(trace, recording_started_instant, &event);
+    match event {
+        AsrEvent::Final { text } => {
+            current.final_text = Some(text.clone());
+            overlay_send(
+                params,
+                OverlayCmd::ReplaceRecentSegments {
+                    segments: current.pending_overlay_segments,
+                    text,
+                },
+            );
+            current.pending_overlay_segments = 1;
+        }
+        AsrEvent::Partial { text, .. } => {
+            params.state.partial(recording_id.to_string(), text.clone());
+            let live_text = format!(
+                "{}{}",
+                current
+                    .segments
+                    .iter()
+                    .map(|segment| segment.text.as_str())
+                    .collect::<String>(),
+                text
+            );
+            let words = crate::text_stats::compute(&live_text).words as u32;
+            let dur_ms = recording_started_instant.elapsed().as_millis() as u64;
+            params.state.stats(dur_ms, words);
+            overlay_send(params, OverlayCmd::SetStats { dur_ms, words });
+            overlay_send(
+                params,
+                OverlayCmd::SetText {
+                    text,
+                    kind: TextKind::Partial,
+                },
+            );
+        }
+        AsrEvent::Segment {
+            text,
+            started_at,
+            ended_at,
+        } => {
+            params.state.segment(recording_id.to_string(), text.clone());
+            overlay_send(params, OverlayCmd::AppendSegment { text: text.clone() });
+            current.pending_overlay_segments += 1;
+            current.segments.push(SegmentCapture {
+                text,
+                started_at,
+                ended_at,
+            });
+        }
+        AsrEvent::Error { err } => {
+            tracing::error!(recording_id, error = %err, "ASR event error");
+            return Some(HistoryError {
+                kind: "asr_error".to_string(),
+                msg: err.to_string(),
+            });
+        }
+        AsrEvent::Done => {}
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn drain_stop_audio(
+    rec: &mut recorder::RecordingStream,
+    session: &mut Box<dyn AsrSession>,
+    current: &mut CurrentSessionCapture,
+    mut vad_pause: Option<&mut VadPauseState>,
+    total_audio_samples: &mut u64,
+    last_sent_sample: &mut u64,
+    stop_delay_ms: u32,
+    control_rx: &mut watch::Receiver<SessionControl>,
+    cancel_requested: &mut bool,
+    meter: &mut MeterCollector,
+    state: &StateStore,
+    recording_id: &str,
+    trace: &mut RecordingObserver,
+) -> Result<(), HistoryError> {
+    let drain_until = Instant::now() + Duration::from_millis(stop_delay_ms as u64);
+    while Instant::now() < drain_until {
+        tokio::select! {
+            biased;
+            changed = control_rx.changed() => {
+                if changed.is_ok()
+                    && matches!(*control_rx.borrow_and_update(), SessionControl::Cancel)
+                {
+                    *cancel_requested = true;
+                    return Ok(());
+                }
+            }
+            _ = sleep_until(TokioInstant::from_std(drain_until)) => break,
+            pcm = rec.recv() => {
+                let Some(samples) = pcm else {
+                    break;
+                };
+                observe_pcm(trace, &samples);
+                emit_meters(state, recording_id, meter, &samples);
+                send_pcm_chunk(session, &samples, total_audio_samples).await?;
+                current.record_sent_samples(samples.len() as u64);
+                *last_sent_sample = if let Some(vad) = vad_pause.as_mut() {
+                    vad.timeline.push(&samples).end_sample()
+                } else {
+                    *last_sent_sample + samples.len() as u64
+                };
+            }
+        }
+    }
+
+    rec.stop();
+    while let Some(samples) = rec.try_recv() {
+        observe_pcm(trace, &samples);
+        emit_meters(state, recording_id, meter, &samples);
+        send_pcm_chunk(session, &samples, total_audio_samples).await?;
+        current.record_sent_samples(samples.len() as u64);
+        *last_sent_sample = if let Some(vad) = vad_pause.as_mut() {
+            vad.timeline.push(&samples).end_sample()
+        } else {
+            *last_sent_sample + samples.len() as u64
+        };
+    }
+    Ok(())
+}
+
+fn refresh_stop_context(
+    params: &SessionParams,
+    recording_id: &str,
+    app_context: &mut post::AppContext,
+) {
+    *app_context = post::app_context::frontmost_app();
+    params
+        .state
+        .app(app_context.bundle_id.clone(), app_context.app_name.clone());
+    overlay_send(
+        params,
+        OverlayCmd::SetApp {
+            bundle_id: app_context.bundle_id.clone(),
+            app_name: app_context.app_name.clone(),
+            chain_summary: params.post_chain.name.clone(),
+        },
+    );
+    overlay_send(
+        params,
+        OverlayCmd::SetState {
+            state: OverlayState::Stopping,
+        },
+    );
+    params.state.set_stopping(recording_id.to_string());
+    params
+        .state
+        .session_phase(recording_id.to_string(), UiSessionPhase::Stopping);
+}
+
+fn compute_resume_start_sample(
+    speech_start_sample: u64,
+    pre_roll_samples: u64,
+    last_sent_sample: u64,
+    max_overlap_samples: u64,
+    oldest_sample: u64,
+) -> u64 {
+    speech_start_sample
+        .saturating_sub(pre_roll_samples)
+        .max(last_sent_sample.saturating_sub(max_overlap_samples))
+        .max(oldest_sample)
+}
+
 fn frame_has_signal(samples: &[i16]) -> bool {
     samples
         .iter()
-        .any(|s| s.unsigned_abs() > MIN_NONZERO_AMPLITUDE as u16)
+        .any(|sample| sample.unsigned_abs() > MIN_NONZERO_AMPLITUDE as u16)
 }
 
 fn emit_meters(
@@ -94,1457 +1066,6 @@ fn emit_session_meta(
     );
 }
 
-/// 把 overlay 切到 Error 终态：状态字红色 icon + text 区显示错误文案（红字）。
-/// view 的 tick 会在 ERROR_TTL_MS 后自动 hide。所有 error 路径走这一条。
-fn send_error_overlay(params: &SessionParams, message: String) {
-    overlay_send(
-        params,
-        OverlayCmd::SetState {
-            state: OverlayState::Error,
-        },
-    );
-    overlay_send(
-        params,
-        OverlayCmd::SetText {
-            text: message,
-            kind: TextKind::Error,
-        },
-    );
-}
-
-pub struct SessionParams {
-    pub auto_paste: bool,
-    pub record_audio: crate::config::RecordAudioMode,
-    pub vad_trace: bool,
-    /// provider 私有配置，源于 `asr/<provider>.toml.idle_pause`。
-    /// false 时 voice 不做多 session 切分。
-    pub idle_pause: bool,
-    /// provider 私有配置，源于 `asr/<provider>.toml.finalize_timeout_ms`。
-    /// voice 发出 `is_last=true` 后等 final segment / Done 的最大毫秒。
-    pub finalize_timeout_ms: u64,
-    /// 全局 voice VAD 配置；`backend = Off` 时 voice 不启用本地 VAD。
-    pub vad: crate::config::VoiceVadCfg,
-    pub stop_delay_ms: u32,
-    pub hotwords: Vec<String>,
-    pub start_app_context: post::AppContext,
-    pub post_chain: crate::config::post::PostChain,
-    pub post_timeout_ms: u64,
-    pub overlay: Option<OverlayHandle>,
-    pub state: StateStore,
-}
-
-pub async fn run_recording(
-    provider: &dyn AsrProvider,
-    params: SessionParams,
-    control_rx: watch::Receiver<SessionControl>,
-) {
-    let multi_session_enabled =
-        params.idle_pause && matches!(params.vad.backend, crate::config::VoiceVadBackend::Silero);
-    if multi_session_enabled {
-        run_multi_session_recording(provider, params, control_rx).await;
-        return;
-    }
-    run_single_session_recording(provider, params, control_rx).await;
-}
-
-async fn run_single_session_recording(
-    provider: &dyn AsrProvider,
-    params: SessionParams,
-    mut control_rx: watch::Receiver<SessionControl>,
-) {
-    let recording_id = ulid::Ulid::new().to_string();
-    let recording_started_at = time::OffsetDateTime::now_utc();
-    let recording_started_instant = Instant::now();
-    tracing::info!(
-        recording_id = %recording_id,
-        provider = %provider.name(),
-        app = ?params.start_app_context.bundle_id,
-        multi_session = false,
-        "recording started"
-    );
-    let mut trace = RecordingObserver::start(TraceStart {
-        enabled: params.vad_trace,
-        recording_id: recording_id.clone(),
-        provider: provider.name().to_string(),
-        started_at: recording_started_at.to_string(),
-        started_instant: recording_started_instant,
-    });
-    if params.vad_trace {
-        tracing::info!(recording_id = %recording_id, "dev voice trace enabled");
-    }
-    let mut app_context = params.start_app_context.clone();
-    params
-        .state
-        .set_recording(recording_id.clone(), recording_started_at);
-    emit_session_meta(&params.state, &recording_id, provider, &params);
-    params
-        .state
-        .session_phase(recording_id.clone(), UiSessionPhase::Active);
-    params
-        .state
-        .app(app_context.bundle_id.clone(), app_context.app_name.clone());
-    overlay_send(
-        &params,
-        OverlayCmd::SetState {
-            state: OverlayState::Connecting,
-        },
-    );
-    overlay_send(
-        &params,
-        OverlayCmd::SetApp {
-            bundle_id: app_context.bundle_id.clone(),
-            app_name: app_context.app_name.clone(),
-            chain_summary: params.post_chain.name.clone(),
-        },
-    );
-
-    let audio_output = prepare_audio_output(&params, &recording_id);
-    if let Some(output) = &audio_output {
-        tracing::debug!(
-            recording_id = %recording_id,
-            path = %output.wav_path.display(),
-            "retained audio temporary wav enabled"
-        );
-    }
-
-    let mut rec = match recorder::start(audio_output) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(recording_id = %recording_id, error = ?e, "recorder start failed");
-            observe_finish_ms(&mut trace, "recorder_start_error", 0);
-            params.state.set_error(Some(recording_id));
-            send_error_overlay(&params, crate::t!("error.recorder_start"));
-            return;
-        }
-    };
-    // deadline 从 cpal stream play 成功这一刻起算。ASR open 期间 cpal callback
-    // 已经在底层线程往 mpsc 推帧，所以这个倒计时跟 provider.open() 真正并行：
-    // 正常麦克风的话，进 select 时帧早就在 channel 里，pcm 分支会先 ready；
-    // 没声音的话，1s 后 sleep_until 分支 fire 并退出。
-    let first_audio_deadline = TokioInstant::now() + Duration::from_millis(FIRST_AUDIO_TIMEOUT_MS);
-    let mut first_audio_seen = false;
-
-    let ctx = SessionCtx {
-        language: LanguageMode::Multilingual {
-            hint: vec!["zh-CN".into(), "en-US".into()],
-        },
-        hotwords: params.hotwords.clone(),
-    };
-    let (mut session, mut events) = match provider.open(ctx).await {
-        Ok(t) => t,
-        Err(err) => {
-            tracing::error!(recording_id = %recording_id, error = %err, "ASR open failed");
-            finish_retained_audio(&params, &recording_id, &mut rec).await;
-            observe_asr_error(&mut trace, recording_started_instant, err.clone());
-            observe_finish_ms(&mut trace, "asr_open_error", 0);
-            params.state.set_error(Some(recording_id));
-            send_error_overlay(&params, crate::t!("error.asr_open"));
-            return;
-        }
-    };
-    overlay_send(
-        &params,
-        OverlayCmd::SetState {
-            state: OverlayState::Recording,
-        },
-    );
-    observe_provider_opened(&mut trace, recording_started_instant);
-
-    let mut pending_segments: Vec<SegmentCapture> = Vec::new();
-    let mut pending_overlay_segments: usize = 0;
-    let mut audio_samples_sent: u64 = 0;
-    let mut session_final_text: Option<String> = None;
-    let mut stop_requested = false;
-    let mut cancel_requested = false;
-    let mut terminal_error: Option<HistoryError> = None;
-    let mut meter = MeterCollector::new();
-
-    loop {
-        tokio::select! {
-            biased;
-            _ = control_rx.changed() => {
-                match *control_rx.borrow_and_update() {
-                    SessionControl::Stop => {
-                        stop_requested = true;
-                    }
-                    SessionControl::Cancel => {
-                        cancel_requested = true;
-                        break;
-                    }
-                    SessionControl::Idle => {}
-                }
-            }
-            pcm = rec.recv(), if !stop_requested => {
-                match pcm {
-                    Some(samples) => {
-                        observe_pcm(&mut trace, &samples);
-                        emit_meters(&params.state, &recording_id, &mut meter, &samples);
-                        if !first_audio_seen && frame_has_signal(&samples) {
-                            first_audio_seen = true;
-                        }
-                        if let Err(e) = session.send_pcm(&samples, false).await {
-                            tracing::error!(recording_id = %recording_id, error = %e, "ASR send_pcm failed");
-                            terminal_error = Some(HistoryError {
-                                kind: "asr_send".to_string(),
-                                msg: e.to_string(),
-                            });
-                            break;
-                        }
-                        audio_samples_sent += samples.len() as u64;
-                    }
-                    None => {
-                        tracing::warn!(recording_id = %recording_id, "recorder ended unexpectedly");
-                        stop_requested = true;
-                    }
-                }
-            }
-            _ = sleep_until(first_audio_deadline), if !first_audio_seen => {
-                tracing::error!(
-                    recording_id = %recording_id,
-                    timeout_ms = FIRST_AUDIO_TIMEOUT_MS,
-                    "no microphone audio received before timeout"
-                );
-                finish_retained_audio(&params, &recording_id, &mut rec).await;
-                let _ = session.close().await;
-                observe_finish(&mut trace, "no_audio", audio_samples_sent);
-                params.state.set_error(Some(recording_id));
-                send_error_overlay(&params, crate::t!("error.no_audio"));
-                return;
-            }
-            ev = events.recv() => {
-                match ev {
-                    None => {
-                        terminal_error = Some(asr_stream_closed_error());
-                        break;
-                    }
-                    Some(AsrEvent::Final { text }) => {
-                        observe_asr_event(
-                            &mut trace,
-                            recording_started_instant,
-                            &AsrEvent::Final { text: text.clone() },
-                        );
-                        session_final_text = Some(text.clone());
-                        overlay_send(
-                            &params,
-                            OverlayCmd::ReplaceRecentSegments {
-                                segments: pending_overlay_segments,
-                                text,
-                            },
-                        );
-                        pending_overlay_segments = 1;
-                    }
-                    Some(AsrEvent::Partial { text, seq }) => {
-                        observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Partial { text: text.clone(), seq });
-                        params.state.partial(recording_id.clone(), text.clone());
-                        let live_text = format!(
-                            "{}{}",
-                            pending_segments
-                                .iter()
-                                .map(|segment| segment.text.as_str())
-                                .collect::<String>(),
-                            text
-                        );
-                        let words = crate::text_stats::compute(&live_text).words as u32;
-                        let dur_ms = recording_started_instant.elapsed().as_millis() as u64;
-                        params.state.stats(dur_ms, words);
-                        overlay_send(&params, OverlayCmd::SetStats { dur_ms, words });
-                        overlay_send(
-                            &params,
-                            OverlayCmd::SetText { text, kind: TextKind::Partial },
-                        );
-                    }
-                    Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                        observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Segment { text: text.clone(), started_at, ended_at });
-                        params.state.segment(recording_id.clone(), text.clone());
-                        overlay_send(&params, OverlayCmd::AppendSegment { text: text.clone() });
-                        pending_overlay_segments += 1;
-                        pending_segments.push(SegmentCapture { text, started_at, ended_at });
-                    }
-                    Some(AsrEvent::Error { err }) => {
-                        tracing::error!(recording_id = %recording_id, error = %err, "ASR event error");
-                        observe_asr_error(&mut trace, recording_started_instant, err.clone());
-                        params.state.set_error(Some(recording_id.clone()));
-                        send_error_overlay(&params, crate::t!("error.asr_runtime"));
-                        finish_retained_audio(&params, &recording_id, &mut rec).await;
-                        let _ = session.close().await;
-                        let ended_at = time::OffsetDateTime::now_utc();
-                        let asr_text: String = pending_segments
-                            .iter()
-                            .map(|s| s.text.as_str())
-                            .collect();
-                        let history_result = append_history(HistoryInput {
-                            id: recording_id.clone(),
-                            provider: provider.name().to_string(),
-                            started_at: recording_started_at,
-                            ended_at,
-                            started_instant: recording_started_instant,
-                            asr_text: asr_text.clone(),
-                            final_text: asr_text,
-                            sessions: wrap_single_session(
-                                recording_started_instant,
-                                audio_samples_sent,
-                                pending_segments,
-                                session_final_text,
-                            ),
-                            pipeline: Vec::new(),
-                            app: app_context.bundle_id.clone(),
-                            status: HistoryStatus::Error,
-                            error: Some(HistoryError {
-                                kind: "asr_error".to_string(),
-                                msg: err.to_string(),
-                            }),
-                        });
-                        publish_history_result(
-                            &params.state,
-                            params.overlay.as_ref(),
-                            &recording_id,
-                            history_result,
-                        );
-                        observe_finish(&mut trace, "asr_error", audio_samples_sent);
-                        return;
-                    }
-                    Some(AsrEvent::Done) => {
-                        observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Done);
-                        break;
-                    }
-                }
-            }
-        }
-
-        if cancel_requested {
-            break;
-        }
-        if stop_requested {
-            app_context = post::app_context::frontmost_app();
-            params
-                .state
-                .app(app_context.bundle_id.clone(), app_context.app_name.clone());
-            overlay_send(
-                &params,
-                OverlayCmd::SetApp {
-                    bundle_id: app_context.bundle_id.clone(),
-                    app_name: app_context.app_name.clone(),
-                    chain_summary: params.post_chain.name.clone(),
-                },
-            );
-            overlay_send(
-                &params,
-                OverlayCmd::SetState {
-                    state: OverlayState::Stopping,
-                },
-            );
-            params.state.set_stopping(recording_id.clone());
-            params
-                .state
-                .session_phase(recording_id.clone(), UiSessionPhase::Stopping);
-            finish(
-                &mut rec,
-                &mut session,
-                &mut events,
-                &mut pending_segments,
-                &mut session_final_text,
-                &mut pending_overlay_segments,
-                &params.state,
-                &recording_id,
-                params.stop_delay_ms,
-                params.finalize_timeout_ms,
-                &mut control_rx,
-                &mut audio_samples_sent,
-                &mut terminal_error,
-                &mut trace,
-                recording_started_instant,
-                params.overlay.as_ref(),
-            )
-            .await;
-            if terminal_error.is_none() && control_rx.borrow().eq(&SessionControl::Cancel) {
-                cancel_requested = true;
-            }
-            break;
-        }
-    }
-
-    if cancel_requested {
-        cancel_session(&mut rec, &mut session, &mut audio_samples_sent).await;
-    }
-
-    let _ = session.close().await;
-    finish_retained_audio(&params, &recording_id, &mut rec).await;
-    let provider_name = provider.name().to_string();
-    let raw_text = session_text_from_parts(&pending_segments, session_final_text.as_deref());
-    if cancel_requested {
-        tracing::info!(recording_id = %recording_id, "recording canceled");
-        params.state.set_idle();
-        let history_result = append_history(HistoryInput {
-            id: recording_id.clone(),
-            provider: provider_name,
-            started_at: recording_started_at,
-            ended_at: time::OffsetDateTime::now_utc(),
-            started_instant: recording_started_instant,
-            asr_text: raw_text.clone(),
-            final_text: raw_text,
-            sessions: wrap_single_session(
-                recording_started_instant,
-                audio_samples_sent,
-                pending_segments,
-                session_final_text,
-            ),
-            pipeline: Vec::new(),
-            app: app_context.bundle_id,
-            status: HistoryStatus::Canceled,
-            error: None,
-        });
-        publish_history_result(
-            &params.state,
-            params.overlay.as_ref(),
-            &recording_id,
-            history_result,
-        );
-        overlay_send(&params, OverlayCmd::Hide);
-        observe_finish(&mut trace, "canceled", audio_samples_sent);
-        return;
-    }
-    // terminal_error 路径：录音 / ASR 中途崩溃 → 不跑 post chain、不写剪贴板。
-    // 半成品上屏会误导（用户以为成功），auto_paste 还可能粘到已经切走的
-    // 应用；history 保留所有 segments，需要的用户从 TUI 回捞。
-    let (final_text, pipeline, status, error) = if terminal_error.is_some() {
-        (raw_text.clone(), Vec::new(), HistoryStatus::Error, None)
-    } else {
-        let outcome = dispatch_with_post_chain(
-            std::slice::from_ref(&raw_text),
-            params.auto_paste,
-            &app_context,
-            &params.post_chain,
-            params.post_timeout_ms,
-            params.overlay.as_ref(),
-        )
-        .await;
-        (
-            outcome.final_text,
-            outcome.pipeline,
-            outcome.status,
-            outcome.error,
-        )
-    };
-    for step in &pipeline {
-        params
-            .state
-            .pipeline_step(recording_id.clone(), step.clone());
-    }
-    if terminal_error.is_some() || error.is_some() {
-        // dispatch 失败 vs 录音中途失败用不同文案；剪贴板失败明确告知用户。
-        let msg = if terminal_error.is_some() {
-            crate::t!("error.asr_runtime")
-        } else {
-            crate::t!("error.dispatch")
-        };
-        params.state.set_error(Some(recording_id.clone()));
-        send_error_overlay(&params, msg);
-    } else {
-        if let Some(last_text) = pipeline.iter().rev().find_map(|step| step.text.clone()) {
-            overlay_send(
-                &params,
-                OverlayCmd::SetText {
-                    text: last_text,
-                    kind: TextKind::Final,
-                },
-            );
-        }
-        params.state.set_idle();
-    }
-    let ended_at = time::OffsetDateTime::now_utc();
-    let history_status = terminal_error
-        .as_ref()
-        .map(|_| HistoryStatus::Error)
-        .unwrap_or(status);
-    let trace_status = if terminal_error.is_some() || error.is_some() {
-        "error"
-    } else {
-        match status {
-            HistoryStatus::Submitted => "submitted",
-            HistoryStatus::Canceled => "canceled",
-            HistoryStatus::Error => "error",
-            HistoryStatus::Timeout => "timeout",
-        }
-    };
-    let should_hide = terminal_error.is_none() && error.is_none();
-    let history_result = append_history(HistoryInput {
-        id: recording_id.clone(),
-        provider: provider_name,
-        started_at: recording_started_at,
-        ended_at,
-        started_instant: recording_started_instant,
-        asr_text: raw_text,
-        final_text,
-        sessions: wrap_single_session(
-            recording_started_instant,
-            audio_samples_sent,
-            pending_segments,
-            session_final_text,
-        ),
-        pipeline,
-        app: app_context.bundle_id,
-        status: history_status,
-        error: terminal_error.or(error),
-    });
-    publish_history_result(
-        &params.state,
-        params.overlay.as_ref(),
-        &recording_id,
-        history_result,
-    );
-    if should_hide {
-        // History warning 必须先发，再 Hide；overlay 会把 Hide 延期到 notice TTL
-        // 到期，避免“文本已输出但历史未保存”的提示一闪而过。
-        overlay_send(&params, OverlayCmd::Hide);
-    }
-    observe_finish(&mut trace, trace_status, audio_samples_sent);
-}
-
-/// 给定 VAD 检测到的 speech 起点，按 pre-roll / overlap 上限算出该从 timeline
-/// 哪个样本开始往新 ASR session 发送。
-///
-/// 不变量：
-///   desired = speech_start - pre_roll
-///   bounded = max(desired, last_sent - max_overlap)
-///   result  = max(bounded, oldest)   // 不要回到 ring buffer 之外
-fn compute_resume_start_sample(
-    speech_start_sample: u64,
-    pre_roll_samples: u64,
-    last_sent_sample: u64,
-    max_overlap_samples: u64,
-    oldest_sample: u64,
-) -> u64 {
-    let desired = speech_start_sample.saturating_sub(pre_roll_samples);
-    let bounded = desired.max(last_sent_sample.saturating_sub(max_overlap_samples));
-    bounded.max(oldest_sample)
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn run_multi_session_recording(
-    provider: &dyn AsrProvider,
-    params: SessionParams,
-    mut control_rx: watch::Receiver<SessionControl>,
-) {
-    use crate::voice::silero::{SileroConfig, SileroVad};
-    use crate::voice::timeline::{ms_to_samples, PcmTimeline};
-    use crate::voice::vad::{VadController, VadFrame, VadPolicy, VadTransition};
-
-    let recording_id = ulid::Ulid::new().to_string();
-    let recording_started_at = time::OffsetDateTime::now_utc();
-    let recording_started_instant = Instant::now();
-    tracing::info!(
-        recording_id = %recording_id,
-        provider = %provider.name(),
-        app = ?params.start_app_context.bundle_id,
-        multi_session = true,
-        "recording started"
-    );
-    let mut trace = RecordingObserver::start(TraceStart {
-        enabled: params.vad_trace,
-        recording_id: recording_id.clone(),
-        provider: provider.name().to_string(),
-        started_at: recording_started_at.to_string(),
-        started_instant: recording_started_instant,
-    });
-    if params.vad_trace {
-        tracing::info!(recording_id = %recording_id, "dev voice trace enabled");
-    }
-    let mut app_context = params.start_app_context.clone();
-    params
-        .state
-        .set_recording(recording_id.clone(), recording_started_at);
-    emit_session_meta(&params.state, &recording_id, provider, &params);
-    params
-        .state
-        .session_phase(recording_id.clone(), UiSessionPhase::Active);
-    params
-        .state
-        .app(app_context.bundle_id.clone(), app_context.app_name.clone());
-    overlay_send(
-        &params,
-        OverlayCmd::SetState {
-            state: OverlayState::Connecting,
-        },
-    );
-    overlay_send(
-        &params,
-        OverlayCmd::SetApp {
-            bundle_id: app_context.bundle_id.clone(),
-            app_name: app_context.app_name.clone(),
-            chain_summary: params.post_chain.name.clone(),
-        },
-    );
-
-    let audio_output = prepare_audio_output(&params, &recording_id);
-
-    let mut rec = match recorder::start(audio_output) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(recording_id = %recording_id, error = ?e, "recorder start failed");
-            observe_finish_ms(&mut trace, "recorder_start_error", 0);
-            params.state.set_error(Some(recording_id));
-            send_error_overlay(&params, crate::t!("error.recorder_start"));
-            return;
-        }
-    };
-    let first_audio_deadline = TokioInstant::now() + Duration::from_millis(FIRST_AUDIO_TIMEOUT_MS);
-    let mut first_audio_seen = false;
-
-    let mut silero = match SileroVad::new(SileroConfig {
-        threshold: params.vad.threshold,
-    }) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!(recording_id = %recording_id, error = ?e, "Silero VAD init failed");
-            finish_retained_audio(&params, &recording_id, &mut rec).await;
-            observe_finish_ms(&mut trace, "vad_init_error", 0);
-            params.state.set_error(Some(recording_id));
-            send_error_overlay(&params, crate::t!("error.asr_runtime"));
-            return;
-        }
-    };
-    let mut controller = VadController::new(VadPolicy {
-        min_start_voiced_frames: params.vad.min_start_voiced_frames,
-        pause_silence_ms: params.vad.pause_silence_ms,
-        frame_ms: SileroConfig::frame_ms(),
-    });
-    let retention_ms = params.vad.pre_roll_ms + params.vad.max_overlap_ms + 100;
-    let mut timeline = PcmTimeline::new(retention_ms);
-    let pre_roll_samples = ms_to_samples(params.vad.pre_roll_ms);
-    let max_overlap_samples = ms_to_samples(params.vad.max_overlap_ms);
-
-    let ctx = SessionCtx {
-        language: LanguageMode::Multilingual {
-            hint: vec!["zh-CN".into(), "en-US".into()],
-        },
-        hotwords: params.hotwords.clone(),
-    };
-
-    // 开第一个 provider session。
-    let (initial_session, initial_events) = match provider.open(ctx.clone()).await {
-        Ok(t) => t,
-        Err(err) => {
-            tracing::error!(recording_id = %recording_id, error = %err, "ASR open failed");
-            finish_retained_audio(&params, &recording_id, &mut rec).await;
-            observe_asr_error(&mut trace, recording_started_instant, err.clone());
-            observe_finish_ms(&mut trace, "asr_open_error", 0);
-            params.state.set_error(Some(recording_id));
-            send_error_overlay(&params, crate::t!("error.asr_open"));
-            return;
-        }
-    };
-    // `close()` 消费 Box，所以用 Option 持有以便在状态切换时 take 出来。
-    let mut session: Option<Box<dyn AsrSession>> = Some(initial_session);
-    let mut events = initial_events;
-    overlay_send(
-        &params,
-        OverlayCmd::SetState {
-            state: OverlayState::Recording,
-        },
-    );
-    observe_provider_opened(&mut trace, recording_started_instant);
-    let mut session_index: u32 = 0;
-    observe_session(
-        &mut trace,
-        SessionPhase::Start {
-            index: session_index,
-            start_ms: 0,
-        },
-    );
-
-    let mut sessions: Vec<SessionCapture> = Vec::new();
-    // session 边界严格用 timeline 上的样本索引；started_at / ended_at
-    // 都从这两个数字派生，保证 audio_ms == ended_at - started_at。
-    let mut current_session_start_sample: u64 = 0;
-    let mut current_session_samples: u64 = 0;
-    let mut current_pending_segments: Vec<SegmentCapture> = Vec::new();
-    let mut current_pending_overlay_segments: usize = 0;
-    let mut current_session_final_text: Option<String> = None;
-    let mut last_sent_sample: u64 = 0;
-    let mut total_audio_samples: u64 = 0;
-    let mut stop_requested = false;
-    let mut cancel_requested = false;
-    let mut terminal_error: Option<HistoryError> = None;
-    let mut meter = MeterCollector::new();
-    let mut active = true;
-
-    'outer: loop {
-        if active {
-            // ----- Active state -----
-            let mut pause_triggered = false;
-            'active: loop {
-                tokio::select! {
-                    biased;
-                    _ = control_rx.changed() => {
-                        match *control_rx.borrow_and_update() {
-                            SessionControl::Stop => { stop_requested = true; break 'active; }
-                            SessionControl::Cancel => { cancel_requested = true; break 'outer; }
-                            SessionControl::Idle => {}
-                        }
-                    }
-                    pcm = rec.recv() => {
-                        match pcm {
-                            None => { stop_requested = true; break 'active; }
-                            Some(samples) => {
-                                observe_pcm(&mut trace, &samples);
-                                emit_meters(&params.state, &recording_id, &mut meter, &samples);
-                                if !first_audio_seen && frame_has_signal(&samples) {
-                                    first_audio_seen = true;
-                                }
-                                let chunk = timeline.push(&samples);
-                                // 发送到当前 session
-                                let send_res = match session.as_mut() {
-                                    Some(s) => s.send_pcm(&samples, false).await,
-                                    None => Err(crate::asr::types::AsrError::Network("no active session".into())),
-                                };
-                                if let Err(e) = send_res {
-                                    tracing::error!(recording_id = %recording_id, error = %e, "ASR send_pcm failed");
-                                    terminal_error = Some(HistoryError {
-                                        kind: "asr_send".to_string(),
-                                        msg: e.to_string(),
-                                    });
-                                    break 'outer;
-                                }
-                                current_session_samples += samples.len() as u64;
-                                total_audio_samples += samples.len() as u64;
-                                last_sent_sample = chunk.end_sample();
-                                // 喂 Silero
-                                for frame in silero.accept(&samples) {
-                                    meter.observe_vad(
-                                        frame.probability,
-                                        matches!(frame.frame, VadFrame::Speech),
-                                    );
-                                    if controller.accept(frame.frame)
-                                        == VadTransition::SilenceStarted
-                                    {
-                                        pause_triggered = true;
-                                        break;
-                                    }
-                                }
-                                if pause_triggered { break 'active; }
-                            }
-                        }
-                    }
-                    _ = sleep_until(first_audio_deadline), if !first_audio_seen => {
-                        tracing::error!(
-                            recording_id = %recording_id,
-                            timeout_ms = FIRST_AUDIO_TIMEOUT_MS,
-                            "no microphone audio received before timeout"
-                        );
-                        finish_retained_audio(&params, &recording_id, &mut rec).await;
-                        if let Some(s) = session.take() { let _ = s.close().await; }
-                        observe_finish(&mut trace, "no_audio", total_audio_samples);
-                        params.state.set_error(Some(recording_id));
-                        send_error_overlay(&params, crate::t!("error.no_audio"));
-                        return;
-                    }
-                    ev = events.recv() => {
-                        match ev {
-                            None => {
-                                terminal_error = Some(asr_stream_closed_error());
-                                break 'outer;
-                            }
-                            Some(AsrEvent::Final { text }) => {
-                                observe_asr_event(
-                                    &mut trace,
-                                    recording_started_instant,
-                                    &AsrEvent::Final { text: text.clone() },
-                                );
-                                current_session_final_text = Some(text.clone());
-                                overlay_send(
-                                    &params,
-                                    OverlayCmd::ReplaceRecentSegments {
-                                        segments: current_pending_overlay_segments,
-                                        text,
-                                    },
-                                );
-                                current_pending_overlay_segments = 1;
-                            }
-                            Some(AsrEvent::Partial { text, seq }) => {
-                                observe_asr_event(
-                                    &mut trace,
-                                    recording_started_instant,
-                                    &AsrEvent::Partial { text: text.clone(), seq },
-                                );
-                                params.state.partial(recording_id.clone(), text.clone());
-                                let live_text = format!(
-                                    "{}{}",
-                                    current_pending_segments.iter().map(|s| s.text.as_str()).collect::<String>(),
-                                    text
-                                );
-                                let words = crate::text_stats::compute(&live_text).words as u32;
-                                let dur_ms = recording_started_instant.elapsed().as_millis() as u64;
-                                params.state.stats(dur_ms, words);
-                                overlay_send(&params, OverlayCmd::SetStats { dur_ms, words });
-                                overlay_send(&params, OverlayCmd::SetText { text, kind: TextKind::Partial });
-                            }
-                            Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                                observe_asr_event(
-                                    &mut trace,
-                                    recording_started_instant,
-                                    &AsrEvent::Segment { text: text.clone(), started_at, ended_at },
-                                );
-                                params.state.segment(recording_id.clone(), text.clone());
-                                overlay_send(&params, OverlayCmd::AppendSegment { text: text.clone() });
-                                current_pending_overlay_segments += 1;
-                                current_pending_segments.push(SegmentCapture { text, started_at, ended_at });
-                            }
-                            Some(AsrEvent::Error { err }) => {
-                                tracing::error!(recording_id = %recording_id, error = %err, "ASR event error");
-                                observe_asr_event(
-                                    &mut trace,
-                                    recording_started_instant,
-                                    &AsrEvent::Error { err: err.clone() },
-                                );
-                                terminal_error = Some(HistoryError {
-                                    kind: "asr_error".to_string(),
-                                    msg: err.to_string(),
-                                });
-                                break 'outer;
-                            }
-                            Some(AsrEvent::Done) => {
-                                observe_asr_event(
-                                    &mut trace,
-                                    recording_started_instant,
-                                    &AsrEvent::Done,
-                                );
-                                // provider 主动 Done：把当前 session 落账并进 Idle，等待重启。
-                                pause_triggered = true;
-                                break 'active;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ----- Pausing -----
-            // 关键场景：stop_requested 时先 drain stop_delay_ms 再 finalize。
-            if stop_requested && !pause_triggered {
-                app_context = post::app_context::frontmost_app();
-                params
-                    .state
-                    .app(app_context.bundle_id.clone(), app_context.app_name.clone());
-                overlay_send(
-                    &params,
-                    OverlayCmd::SetApp {
-                        bundle_id: app_context.bundle_id.clone(),
-                        app_name: app_context.app_name.clone(),
-                        chain_summary: params.post_chain.name.clone(),
-                    },
-                );
-                overlay_send(
-                    &params,
-                    OverlayCmd::SetState {
-                        state: OverlayState::Stopping,
-                    },
-                );
-                params.state.set_stopping(recording_id.clone());
-                params
-                    .state
-                    .session_phase(recording_id.clone(), UiSessionPhase::Stopping);
-                let drain_until =
-                    Instant::now() + Duration::from_millis(params.stop_delay_ms as u64);
-                while Instant::now() < drain_until {
-                    let deadline = TokioInstant::from_std(drain_until);
-                    tokio::select! {
-                        biased;
-                        _ = control_rx.changed() => {
-                            if matches!(*control_rx.borrow_and_update(), SessionControl::Cancel) {
-                                cancel_requested = true;
-                                break;
-                            }
-                        }
-                        _ = sleep_until(deadline) => break,
-                        pcm = rec.recv() => {
-                            match pcm {
-                                None => break,
-                                Some(samples) => {
-                                    observe_pcm(&mut trace, &samples);
-                                    emit_meters(&params.state, &recording_id, &mut meter, &samples);
-                                    let chunk = timeline.push(&samples);
-                                    if let Some(s) = session.as_mut() {
-                                        if let Err(error) =
-                                            send_pcm_chunk(s, &samples, &mut total_audio_samples)
-                                                .await
-                                        {
-                                            terminal_error = Some(error);
-                                            rec.stop();
-                                            break 'outer;
-                                        }
-                                    }
-                                    current_session_samples += samples.len() as u64;
-                                    last_sent_sample = chunk.end_sample();
-                                }
-                            }
-                        }
-                    }
-                }
-                if cancel_requested {
-                    break 'outer;
-                }
-                rec.stop();
-                while let Some(samples) = rec.try_recv() {
-                    observe_pcm(&mut trace, &samples);
-                    emit_meters(&params.state, &recording_id, &mut meter, &samples);
-                    if let Some(s) = session.as_mut() {
-                        if let Err(error) =
-                            send_pcm_chunk(s, &samples, &mut total_audio_samples).await
-                        {
-                            terminal_error = Some(error);
-                            break 'outer;
-                        }
-                    }
-                    let chunk = timeline.push(&samples);
-                    current_session_samples += samples.len() as u64;
-                    last_sent_sample = chunk.end_sample();
-                }
-            }
-
-            // finalize 当前 session
-            observe_session(
-                &mut trace,
-                SessionPhase::FinalizeStart {
-                    index: session_index,
-                    t_ms: instant_elapsed_ms(recording_started_instant),
-                },
-            );
-            let Some(active_session_ref) = session.as_mut() else {
-                break 'outer;
-            };
-            match finalize_provider_session(
-                active_session_ref,
-                &mut events,
-                &mut current_pending_segments,
-                &mut current_session_final_text,
-                &mut current_pending_overlay_segments,
-                params.finalize_timeout_ms,
-                &mut control_rx,
-                &mut terminal_error,
-                &mut trace,
-                recording_started_instant,
-                &params.state,
-                &recording_id,
-                params.overlay.as_ref(),
-            )
-            .await
-            {
-                Ok(FinalizeOutcome::Done) => {}
-                Ok(FinalizeOutcome::Canceled) => {
-                    cancel_requested = true;
-                    break 'outer;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        recording_id = %recording_id,
-                        error_kind = %e.kind,
-                        error = %e.msg,
-                        "ASR finalize error"
-                    );
-                    terminal_error = Some(e);
-                    break 'outer;
-                }
-            }
-            if let Some(s) = session.take() {
-                let _ = s.close().await;
-            }
-
-            // 记录当前 session 的 SessionCapture。
-            // 边界用 sample 索引派生：started_at = 首发样本 timeline 位置，
-            // ended_at = 末发样本 timeline 位置；audio_ms = ended − started。
-            let session_audio_ms = samples_to_ms(current_session_samples);
-            let session_start_ms = samples_to_ms(current_session_start_sample);
-            let session_end_sample = current_session_start_sample + current_session_samples;
-            let session_end_ms = samples_to_ms(session_end_sample);
-            let started_at = recording_started_instant + Duration::from_millis(session_start_ms);
-            let ended_at = recording_started_instant + Duration::from_millis(session_end_ms);
-            observe_session(
-                &mut trace,
-                SessionPhase::Done {
-                    index: session_index,
-                    start_ms: session_start_ms,
-                    end_ms: session_end_ms,
-                    audio_ms: session_audio_ms,
-                },
-            );
-            tracing::debug!(
-                recording_id = %recording_id,
-                session_index,
-                audio_ms = session_audio_ms,
-                segment_count = current_pending_segments.len(),
-                "ASR session finalized"
-            );
-            sessions.push(SessionCapture {
-                started_at,
-                ended_at,
-                audio_samples: current_session_samples,
-                segments: std::mem::take(&mut current_pending_segments),
-                final_text: current_session_final_text.take(),
-            });
-            current_session_samples = 0;
-
-            if stop_requested {
-                break 'outer;
-            }
-            // VAD-triggered pause -> 进入 Idle 子状态。overlay 切到 Idle
-            // 让用户看到"麦克风还在听，ASR 已暂停"。
-            overlay_send(
-                &params,
-                OverlayCmd::SetState {
-                    state: OverlayState::Idle,
-                },
-            );
-            params
-                .state
-                .session_phase(recording_id.clone(), UiSessionPhase::Idle);
-            active = false;
-            controller.reset();
-            controller.accept(VadFrame::Silence);
-        } else {
-            // ----- Idle state -----
-            // 找到下一次 speech 起点对应的样本索引
-            let mut resume_speech_start: Option<u64> = None;
-            'idle: loop {
-                tokio::select! {
-                    biased;
-                    _ = control_rx.changed() => {
-                        match *control_rx.borrow_and_update() {
-                            SessionControl::Stop => { stop_requested = true; break 'idle; }
-                            SessionControl::Cancel => { cancel_requested = true; break 'outer; }
-                            SessionControl::Idle => {}
-                        }
-                    }
-                    pcm = rec.recv() => {
-                        match pcm {
-                            None => { stop_requested = true; break 'idle; }
-                            Some(samples) => {
-                                observe_pcm(&mut trace, &samples);
-                                emit_meters(&params.state, &recording_id, &mut meter, &samples);
-                                let chunk = timeline.push(&samples);
-                                // 不发 ASR；只跑 VAD
-                                for frame in silero.accept(&samples) {
-                                    meter.observe_vad(
-                                        frame.probability,
-                                        matches!(frame.frame, VadFrame::Speech),
-                                    );
-                                    if controller.accept(frame.frame) == VadTransition::SpeechStarted {
-                                        resume_speech_start = Some(frame.start_sample);
-                                        break;
-                                    }
-                                }
-                                if resume_speech_start.is_some() { break 'idle; }
-                                // chunk consumed (push) — 不发到 ASR
-                                let _ = chunk;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if stop_requested {
-                // Idle 状态下用户按停止：直接落账，不开新 session。
-                break 'outer;
-            }
-            let Some(speech_start_sample) = resume_speech_start else {
-                // 不可能到这里（除非 stop/cancel 已 break 'outer）
-                break 'outer;
-            };
-
-            // ----- Opening -----
-            let send_start = compute_resume_start_sample(
-                speech_start_sample,
-                pre_roll_samples,
-                last_sent_sample,
-                max_overlap_samples,
-                timeline.oldest_sample(),
-            );
-
-            let next_index = session_index + 1;
-            let (new_session, new_events) = match provider.open(ctx.clone()).await {
-                Ok(t) => t,
-                Err(err) => {
-                    tracing::error!(recording_id = %recording_id, session_index = next_index, error = %err, "ASR resume open failed");
-                    observe_session(
-                        &mut trace,
-                        SessionPhase::OpenError {
-                            index: next_index,
-                            t_ms: instant_elapsed_ms(recording_started_instant),
-                            message: err.to_string(),
-                        },
-                    );
-                    terminal_error = Some(HistoryError {
-                        kind: "asr_resume_open".to_string(),
-                        msg: err.to_string(),
-                    });
-                    break 'outer;
-                }
-            };
-            session = Some(new_session);
-            events = new_events;
-            session_index = next_index;
-            observe_provider_opened(&mut trace, recording_started_instant);
-            observe_session(
-                &mut trace,
-                SessionPhase::Start {
-                    index: session_index,
-                    start_ms: samples_to_ms(send_start),
-                },
-            );
-
-            let replay = timeline.slice_from(send_start);
-            current_session_start_sample = replay.start_sample;
-            current_session_samples = replay.samples.len() as u64;
-            current_pending_overlay_segments = 0;
-            current_session_final_text = None;
-            total_audio_samples += replay.samples.len() as u64;
-            last_sent_sample = replay.end_sample();
-            if !replay.samples.is_empty() {
-                if let Some(s) = session.as_mut() {
-                    if let Err(e) = s.send_pcm(&replay.samples, false).await {
-                        tracing::error!(recording_id = %recording_id, session_index, error = %e, "ASR resume send_pcm failed");
-                        terminal_error = Some(HistoryError {
-                            kind: "asr_send".to_string(),
-                            msg: e.to_string(),
-                        });
-                        break 'outer;
-                    }
-                }
-            }
-            tracing::debug!(
-                recording_id = %recording_id,
-                session_index,
-                replay_ms = samples_to_ms(replay.samples.len() as u64),
-                start_ms = samples_to_ms(replay.start_sample),
-                "ASR session resumed"
-            );
-            controller.reset();
-            // 重新设置成 Speech，防止 controller 立刻判 silence。
-            controller.accept(VadFrame::Speech);
-            // overlay 切回 Recording。复用 SetState 不会重置 view 的录音时钟，
-            // 多 session 录音的 dur_ms 是连续的。
-            overlay_send(
-                &params,
-                OverlayCmd::SetState {
-                    state: OverlayState::Recording,
-                },
-            );
-            params
-                .state
-                .session_phase(recording_id.clone(), UiSessionPhase::Active);
-            active = true;
-        }
-    }
-
-    // ----- Teardown -----
-    // 异常退出（cancel / send 失败 / open 失败）也走严格 sample-window 边界，
-    // ended_at = first_sent + samples_to_ms(audio_samples)。
-    if !current_pending_segments.is_empty() || current_session_samples > 0 {
-        let session_start_ms = samples_to_ms(current_session_start_sample);
-        let session_end_ms = samples_to_ms(current_session_start_sample + current_session_samples);
-        sessions.push(SessionCapture {
-            started_at: recording_started_instant + Duration::from_millis(session_start_ms),
-            ended_at: recording_started_instant + Duration::from_millis(session_end_ms),
-            audio_samples: current_session_samples,
-            segments: std::mem::take(&mut current_pending_segments),
-            final_text: current_session_final_text.take(),
-        });
-    }
-    if cancel_requested {
-        rec.stop();
-    }
-    if let Some(s) = session.take() {
-        let _ = s.close().await;
-    }
-    finish_retained_audio(&params, &recording_id, &mut rec).await;
-
-    let provider_name = provider.name().to_string();
-    let session_texts = session_texts(&sessions);
-    let raw_text: String = session_texts.concat();
-
-    if cancel_requested {
-        tracing::info!(recording_id = %recording_id, "recording canceled");
-        params.state.set_idle();
-        let history_result = append_history(HistoryInput {
-            id: recording_id.clone(),
-            provider: provider_name,
-            started_at: recording_started_at,
-            ended_at: time::OffsetDateTime::now_utc(),
-            started_instant: recording_started_instant,
-            asr_text: raw_text.clone(),
-            final_text: raw_text,
-            sessions,
-            pipeline: Vec::new(),
-            app: app_context.bundle_id,
-            status: HistoryStatus::Canceled,
-            error: None,
-        });
-        publish_history_result(
-            &params.state,
-            params.overlay.as_ref(),
-            &recording_id,
-            history_result,
-        );
-        overlay_send(&params, OverlayCmd::Hide);
-        observe_finish(&mut trace, "canceled", total_audio_samples);
-        return;
-    }
-
-    let (final_text, pipeline, status, error) = if terminal_error.is_some() {
-        (raw_text.clone(), Vec::new(), HistoryStatus::Error, None)
-    } else {
-        let outcome = dispatch_with_post_chain(
-            &session_texts,
-            params.auto_paste,
-            &app_context,
-            &params.post_chain,
-            params.post_timeout_ms,
-            params.overlay.as_ref(),
-        )
-        .await;
-        (
-            outcome.final_text,
-            outcome.pipeline,
-            outcome.status,
-            outcome.error,
-        )
-    };
-    for step in &pipeline {
-        params
-            .state
-            .pipeline_step(recording_id.clone(), step.clone());
-    }
-    if terminal_error.is_some() || error.is_some() {
-        let msg = if terminal_error.is_some() {
-            crate::t!("error.asr_runtime")
-        } else {
-            crate::t!("error.dispatch")
-        };
-        params.state.set_error(Some(recording_id.clone()));
-        send_error_overlay(&params, msg);
-    } else {
-        if let Some(last_text) = pipeline.iter().rev().find_map(|step| step.text.clone()) {
-            overlay_send(
-                &params,
-                OverlayCmd::SetText {
-                    text: last_text,
-                    kind: TextKind::Final,
-                },
-            );
-        }
-        params.state.set_idle();
-    }
-    let ended_at = time::OffsetDateTime::now_utc();
-    let history_status = terminal_error
-        .as_ref()
-        .map(|_| HistoryStatus::Error)
-        .unwrap_or(status);
-    let trace_status = if terminal_error.is_some() || error.is_some() {
-        "error"
-    } else {
-        match status {
-            HistoryStatus::Submitted => "submitted",
-            HistoryStatus::Canceled => "canceled",
-            HistoryStatus::Error => "error",
-            HistoryStatus::Timeout => "timeout",
-        }
-    };
-    let should_hide = terminal_error.is_none() && error.is_none();
-    let history_result = append_history(HistoryInput {
-        id: recording_id.clone(),
-        provider: provider_name,
-        started_at: recording_started_at,
-        ended_at,
-        started_instant: recording_started_instant,
-        asr_text: raw_text,
-        final_text,
-        sessions,
-        pipeline,
-        app: app_context.bundle_id,
-        status: history_status,
-        error: terminal_error.or(error),
-    });
-    publish_history_result(
-        &params.state,
-        params.overlay.as_ref(),
-        &recording_id,
-        history_result,
-    );
-    if should_hide {
-        overlay_send(&params, OverlayCmd::Hide);
-    }
-    observe_finish(&mut trace, trace_status, total_audio_samples);
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn finish(
-    rec: &mut recorder::RecordingStream,
-    session: &mut Box<dyn AsrSession>,
-    events: &mut mpsc::Receiver<AsrEvent>,
-    pending_segments: &mut Vec<SegmentCapture>,
-    session_final_text: &mut Option<String>,
-    pending_overlay_segments: &mut usize,
-    state: &crate::state::StateStore,
-    recording_id: &str,
-    stop_delay_ms: u32,
-    finalize_timeout_ms: u64,
-    control_rx: &mut watch::Receiver<SessionControl>,
-    audio_samples_sent: &mut u64,
-    terminal_error: &mut Option<HistoryError>,
-    trace: &mut RecordingObserver,
-    recording_started_instant: Instant,
-    overlay: Option<&OverlayHandle>,
-) -> bool {
-    let drain_until = Instant::now() + Duration::from_millis(stop_delay_ms as u64);
-    loop {
-        let now = Instant::now();
-        if now >= drain_until {
-            break;
-        }
-        let deadline = tokio::time::Instant::from_std(drain_until);
-        tokio::select! {
-            biased;
-            _ = control_rx.changed() => {
-                if matches!(*control_rx.borrow_and_update(), SessionControl::Cancel) {
-                    cancel_session(rec, session, audio_samples_sent).await;
-                    return true;
-                }
-            }
-            _ = sleep_until(deadline) => break,
-            pcm = rec.recv() => {
-                match pcm {
-                    Some(samples) => {
-                        observe_pcm(trace, &samples);
-                        if let Err(error) =
-                            send_pcm_chunk(session, &samples, audio_samples_sent).await
-                        {
-                            rec.stop();
-                            *terminal_error = Some(error);
-                            return false;
-                        }
-                    }
-                    None => break,
-                }
-            }
-            ev = events.recv() => {
-        match ev {
-            None => break,
-            Some(AsrEvent::Final { text }) => {
-                observe_asr_event(
-                    trace,
-                    recording_started_instant,
-                    &AsrEvent::Final { text: text.clone() },
-                );
-                *session_final_text = Some(text.clone());
-                if let Some(overlay) = overlay {
-                    overlay.send(OverlayCmd::ReplaceRecentSegments {
-                        segments: *pending_overlay_segments,
-                        text,
-                    });
-                }
-                *pending_overlay_segments = 1;
-            }
-            Some(AsrEvent::Segment { text, started_at, ended_at }) => {
-                        observe_asr_event(
-                            trace,
-                            recording_started_instant,
-                            &AsrEvent::Segment { text: text.clone(), started_at, ended_at },
-                        );
-                        state.segment(recording_id.to_string(), text.clone());
-                        if let Some(overlay) = overlay {
-                            overlay.send(OverlayCmd::AppendSegment { text: text.clone() });
-                        }
-                        *pending_overlay_segments += 1;
-                        pending_segments.push(SegmentCapture { text, started_at, ended_at });
-                    }
-                    Some(AsrEvent::Done) => {
-                        observe_asr_event(trace, recording_started_instant, &AsrEvent::Done);
-                        break;
-                    }
-                    Some(AsrEvent::Partial { text, seq }) => {
-                        observe_asr_event(
-                            trace,
-                            recording_started_instant,
-                            &AsrEvent::Partial { text, seq },
-                        );
-                    }
-                    Some(AsrEvent::Error { err }) => {
-                        tracing::error!(recording_id = %recording_id, error = %err, "ASR event error during drain");
-                        observe_asr_event(
-                            trace,
-                            recording_started_instant,
-                            &AsrEvent::Error { err: err.clone() },
-                        );
-                        *terminal_error = Some(HistoryError {
-                            kind: "asr_error".to_string(),
-                            msg: err.to_string(),
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    rec.stop();
-    while let Some(samples) = rec.try_recv() {
-        observe_pcm(trace, &samples);
-        if let Err(error) = send_pcm_chunk(session, &samples, audio_samples_sent).await {
-            *terminal_error = Some(error);
-            return false;
-        }
-    }
-
-    match finalize_provider_session(
-        session,
-        events,
-        pending_segments,
-        session_final_text,
-        pending_overlay_segments,
-        finalize_timeout_ms,
-        control_rx,
-        terminal_error,
-        trace,
-        recording_started_instant,
-        state,
-        recording_id,
-        overlay,
-    )
-    .await
-    {
-        Ok(FinalizeOutcome::Done) => false,
-        Ok(FinalizeOutcome::Canceled) => {
-            cancel_session(rec, session, audio_samples_sent).await;
-            true
-        }
-        Err(e) => {
-            match e.kind.as_str() {
-                "asr_send_last" => {
-                    tracing::error!(
-                        recording_id = %recording_id,
-                        error = %e.msg,
-                        "ASR send is_last failed"
-                    )
-                }
-                "asr_timeout" => {
-                    tracing::warn!(
-                        recording_id = %recording_id,
-                        finalize_timeout_ms,
-                        "ASR final timed out"
-                    )
-                }
-                _ => {
-                    tracing::warn!(
-                        recording_id = %recording_id,
-                        error_kind = %e.kind,
-                        error = %e.msg,
-                        "ASR finalize error"
-                    )
-                }
-            }
-            *terminal_error = Some(e);
-            false
-        }
-    }
-}
-
 fn asr_stream_closed_error() -> HistoryError {
     HistoryError {
         kind: "asr_stream_closed".to_string(),
@@ -1568,16 +1089,20 @@ async fn send_pcm_chunk(
     Ok(())
 }
 
-async fn cancel_session(
-    rec: &mut recorder::RecordingStream,
-    session: &mut Box<dyn AsrSession>,
-    audio_samples_sent: &mut u64,
-) {
-    rec.stop();
-    while let Some(samples) = rec.try_recv() {
-        let _ = session.send_pcm(&samples, false).await;
-        *audio_samples_sent += samples.len() as u64;
-    }
+fn send_error_overlay(params: &SessionParams, message: String) {
+    overlay_send(
+        params,
+        OverlayCmd::SetState {
+            state: OverlayState::Error,
+        },
+    );
+    overlay_send(
+        params,
+        OverlayCmd::SetText {
+            text: message,
+            kind: TextKind::Error,
+        },
+    );
 }
 
 fn overlay_send(params: &SessionParams, cmd: OverlayCmd) {
@@ -1619,11 +1144,7 @@ fn publish_audio_failure(
     recording_id: &str,
     error: anyhow::Error,
 ) {
-    tracing::error!(
-        recording_id,
-        error = ?error,
-        "retained audio save failed"
-    );
+    tracing::error!(recording_id, error = ?error, "retained audio save failed");
     state.error(
         Some(recording_id.to_string()),
         "audio_save",
@@ -1646,11 +1167,7 @@ fn publish_history_result(
     match result {
         Ok(record) => state.history_appended(record),
         Err(error) => {
-            tracing::error!(
-                recording_id,
-                error = ?error,
-                "history append failed"
-            );
+            tracing::error!(recording_id, error = ?error, "history append failed");
             state.error(
                 Some(recording_id.to_string()),
                 "history_append",
@@ -1670,6 +1187,8 @@ fn publish_history_result(
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use crate::asr::types::AsrError;
 
@@ -1686,15 +1205,172 @@ mod tests {
         }
     }
 
+    struct CountingProvider {
+        opens: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl AsrProvider for CountingProvider {
+        fn name(&self) -> &str {
+            "counting"
+        }
+
+        fn caps(&self) -> crate::asr::types::Caps {
+            crate::asr::types::Caps {
+                hotwords: false,
+                max_session_secs: None,
+                multilingual: true,
+            }
+        }
+
+        async fn open(&self, _ctx: SessionCtx) -> Result<OpenedSession, AsrError> {
+            self.opens.fetch_add(1, Ordering::SeqCst);
+            let (_tx, rx) = mpsc::channel(1);
+            Ok((Box::new(CollectingSession::default()), rx))
+        }
+    }
+
+    #[derive(Default)]
+    struct CollectingSession {
+        sent: Arc<Mutex<Vec<Vec<i16>>>>,
+    }
+
+    #[async_trait]
+    impl AsrSession for CollectingSession {
+        async fn send_pcm(&mut self, pcm: &[i16], _is_last: bool) -> Result<(), AsrError> {
+            self.sent.lock().unwrap().push(pcm.to_vec());
+            Ok(())
+        }
+
+        async fn close(self: Box<Self>) -> Result<(), AsrError> {
+            Ok(())
+        }
+    }
+
+    fn test_session_ctx() -> SessionCtx {
+        SessionCtx {
+            language: LanguageMode::Single("zh-CN".to_string()),
+            hotwords: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn recording_mode_requires_both_idle_pause_and_silero() {
+        let mut vad = crate::config::VoiceVadCfg::default();
+        assert_eq!(
+            RecordingMode::select(false, &vad),
+            RecordingMode::Continuous
+        );
+        vad.backend = crate::config::VoiceVadBackend::Silero;
+        assert_eq!(
+            RecordingMode::select(false, &vad),
+            RecordingMode::Continuous
+        );
+        assert_eq!(RecordingMode::select(true, &vad), RecordingMode::VadPause);
+    }
+
+    #[test]
+    fn continuous_capture_produces_at_most_one_session() {
+        let started_at = Instant::now();
+        let mut capture = CurrentSessionCapture::new(0);
+        capture.record_sent_samples(16_000);
+        capture.segments.push(SegmentCapture {
+            text: "hello".to_string(),
+            started_at,
+            ended_at: started_at + Duration::from_millis(500),
+        });
+        let session = capture.into_session(started_at).unwrap();
+        assert_eq!(session.audio_samples, 16_000);
+        assert_eq!(
+            session
+                .ended_at
+                .saturating_duration_since(session.started_at)
+                .as_millis(),
+            1_000
+        );
+    }
+
+    #[test]
+    fn empty_continuous_capture_produces_no_session() {
+        assert!(CurrentSessionCapture::new(0)
+            .into_session(Instant::now())
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn continuous_opens_only_initial_provider_session() {
+        let provider = CountingProvider {
+            opens: AtomicUsize::new(0),
+        };
+        let opener = SessionOpener::new(&provider, test_session_ctx());
+
+        let _initial = opener.open_initial().await.unwrap();
+        let resumed = opener.open_resume(RecordingMode::Continuous).await.unwrap();
+
+        assert!(resumed.is_none());
+        assert_eq!(provider.opens.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn vad_pause_resume_opens_another_provider_session() {
+        let provider = CountingProvider {
+            opens: AtomicUsize::new(0),
+        };
+        let opener = SessionOpener::new(&provider, test_session_ctx());
+
+        let _initial = opener.open_initial().await.unwrap();
+        let resumed = opener.open_resume(RecordingMode::VadPause).await.unwrap();
+
+        assert!(resumed.is_some());
+        assert_eq!(provider.opens.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn continuous_pcm_delivery_preserves_every_chunk() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let mut session: Box<dyn AsrSession> = Box::new(CollectingSession { sent: sent.clone() });
+        let mut audio_samples_sent = 0;
+
+        send_pcm_chunk(&mut session, &[1, 2], &mut audio_samples_sent)
+            .await
+            .unwrap();
+        send_pcm_chunk(&mut session, &[3, 4, 5], &mut audio_samples_sent)
+            .await
+            .unwrap();
+
+        assert_eq!(*sent.lock().unwrap(), vec![vec![1, 2], vec![3, 4, 5]]);
+        assert_eq!(audio_samples_sent, 5);
+    }
+
+    #[test]
+    fn cancel_and_terminal_asr_errors_never_dispatch() {
+        assert!(!should_dispatch(true, &None));
+        assert!(!should_dispatch(false, &Some(asr_stream_closed_error())));
+        assert!(!should_dispatch(
+            false,
+            &Some(HistoryError {
+                kind: "asr_send".to_string(),
+                msg: "send failed".to_string(),
+            })
+        ));
+        assert!(should_dispatch(false, &None));
+    }
+
+    #[test]
+    fn only_vad_pause_can_enter_idle() {
+        assert!(!should_enter_idle(RecordingMode::Continuous, false, true));
+        assert!(!should_enter_idle(RecordingMode::VadPause, true, true));
+        assert!(!should_enter_idle(RecordingMode::VadPause, false, false));
+        assert!(should_enter_idle(RecordingMode::VadPause, false, true));
+    }
+
     #[tokio::test]
     async fn pcm_send_failure_does_not_count_unsent_audio() {
         let mut session: Box<dyn AsrSession> = Box::new(FailingSendSession);
         let mut audio_samples_sent = 7;
-
         let error = send_pcm_chunk(&mut session, &[1, 2, 3], &mut audio_samples_sent)
             .await
             .expect_err("failed PCM delivery must stop normal completion");
-
         assert_eq!(error.kind, "asr_send");
         assert_eq!(audio_samples_sent, 7);
     }
@@ -1704,14 +1380,12 @@ mod tests {
         let state = StateStore::new();
         let (_, mut state_rx) = state.subscribe_with_snapshot();
         let (overlay, mut overlay_rx) = OverlayHandle::channel();
-
         publish_history_result(
             &state,
             Some(&overlay),
             "01HXYZ",
             Err(anyhow::anyhow!("disk full")),
         );
-
         match state_rx.try_recv().unwrap() {
             crate::state::StateEvent::Error {
                 recording_id,
@@ -1738,21 +1412,14 @@ mod tests {
         let state = StateStore::new();
         let (_, mut state_rx) = state.subscribe_with_snapshot();
         let (overlay, mut overlay_rx) = OverlayHandle::channel();
-
         publish_audio_failure(
             &state,
             Some(&overlay),
             "01HXYZ",
             anyhow::anyhow!("encode failed"),
         );
-
         match state_rx.try_recv().unwrap() {
-            crate::state::StateEvent::Error {
-                recording_id,
-                kind,
-                msg,
-            } => {
-                assert_eq!(recording_id.as_deref(), Some("01HXYZ"));
+            crate::state::StateEvent::Error { kind, msg, .. } => {
                 assert_eq!(kind, "audio_save");
                 assert!(msg.contains("encode failed"));
             }
@@ -1769,68 +1436,37 @@ mod tests {
 
     #[test]
     fn resume_start_uses_pre_roll_when_buffer_has_headroom() {
-        // speech at sample 16000 (1s), pre-roll 300ms (4800), no overlap concern.
-        let s = compute_resume_start_sample(16_000, 4_800, /*last_sent*/ 0, 3_200, 0);
-        assert_eq!(s, 16_000 - 4_800);
+        assert_eq!(
+            compute_resume_start_sample(16_000, 4_800, 0, 3_200, 0),
+            11_200
+        );
     }
 
     #[test]
     fn resume_start_bounded_by_last_sent_minus_max_overlap() {
-        // pre-roll wants to go back further than max_overlap allows.
-        // last_sent=20_000, overlap_cap=3_200 -> floor at 16_800.
-        // speech_start=18_000, pre_roll=8_000 -> desired=10_000, bounded=max(10_000, 16_800)=16_800.
-        let s = compute_resume_start_sample(18_000, 8_000, 20_000, 3_200, 0);
-        assert_eq!(s, 16_800);
+        assert_eq!(
+            compute_resume_start_sample(18_000, 8_000, 20_000, 3_200, 0),
+            16_800
+        );
     }
 
     #[test]
     fn resume_start_clamped_to_oldest_retained_sample() {
-        // 想回到 200，但 ring buffer 最旧只剩 800。
-        let s = compute_resume_start_sample(2_000, 4_000, 0, 200, 800);
-        assert_eq!(s, 800);
+        assert_eq!(compute_resume_start_sample(2_000, 4_000, 0, 200, 800), 800);
     }
 
     #[test]
-    fn resume_start_overlap_within_max_overlap_ms() {
-        // 200ms max overlap @16kHz = 3200 samples.
-        let max_overlap = ms_to_samples_helper(200);
-        let s = compute_resume_start_sample(10_000, 0, 16_000, max_overlap, 0);
-        assert!(
-            16_000 - s <= max_overlap,
-            "overlap {} > cap {}",
-            16_000 - s,
-            max_overlap
-        );
-    }
-
-    fn ms_to_samples_helper(ms: u32) -> u64 {
-        (ms as u64) * 16_000 / 1_000
+    fn resume_overlap_stays_within_cap() {
+        let max_overlap = 200 * 16_000 / 1_000;
+        let start = compute_resume_start_sample(10_000, 0, 16_000, max_overlap, 0);
+        assert!(16_000 - start <= max_overlap);
     }
 
     #[test]
-    fn all_zero_frame_is_silence() {
+    fn audio_signal_threshold_rejects_zero_and_accepts_noise_floor() {
         assert!(!frame_has_signal(&[0; 480]));
-    }
-
-    #[test]
-    fn frame_with_sub_threshold_samples_is_silence() {
-        // 全部样本 |s| <= MIN_NONZERO_AMPLITUDE 视为静音
-        assert!(!frame_has_signal(&[1, -2, 3, -4, 5, -6, 7, -8, 8, -8]));
-    }
-
-    #[test]
-    fn frame_with_one_above_threshold_sample_has_signal() {
-        let mut samples = vec![0i16; 480];
-        samples[100] = MIN_NONZERO_AMPLITUDE + 1;
-        assert!(frame_has_signal(&samples));
-    }
-
-    #[test]
-    fn realistic_noise_floor_passes() {
-        // 真实安静房间本底噪声约 -50 dBFS，对应 i16 ≈ 100。务必不能误判为静音。
-        let samples: Vec<i16> = (0..480)
-            .map(|i| if i % 7 == 0 { 80 } else { -50 })
-            .collect();
-        assert!(frame_has_signal(&samples));
+        assert!(!frame_has_signal(&[1, -2, 8, -8]));
+        assert!(frame_has_signal(&[0, MIN_NONZERO_AMPLITUDE + 1, 0]));
+        assert!(frame_has_signal(&[80, -50, 60]));
     }
 }

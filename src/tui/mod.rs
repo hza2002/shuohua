@@ -1,12 +1,11 @@
-pub mod audio;
 pub mod config_actions;
 pub mod configure;
+pub mod history;
 pub mod keybindings;
 pub mod page;
 pub mod panes;
 pub mod settings;
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -21,9 +20,9 @@ use tokio::sync::mpsc;
 
 use crate::ipc::client::IpcClient;
 use crate::ipc::protocol::{Command, Event, WireState};
-use crate::state::history::HistoryRecord;
 use crate::state::{AudioMeter, SessionMeta, SessionPhase};
 use crate::tui::configure::ConfigurePage;
+use crate::tui::history::HistoryPage;
 use crate::tui::page::Page as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,40 +38,6 @@ impl Page {
             Page::Status => 0,
             Page::History => 1,
             Page::Settings => 2,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HistoryDetail {
-    Details,
-    Asr,
-    Pipeline,
-    Sessions,
-    Error,
-    Json,
-}
-
-impl HistoryDetail {
-    fn next(self) -> Self {
-        match self {
-            Self::Details => Self::Asr,
-            Self::Asr => Self::Pipeline,
-            Self::Pipeline => Self::Sessions,
-            Self::Sessions => Self::Error,
-            Self::Error => Self::Json,
-            Self::Json => Self::Details,
-        }
-    }
-
-    fn prev(self) -> Self {
-        match self {
-            Self::Details => Self::Json,
-            Self::Asr => Self::Details,
-            Self::Pipeline => Self::Asr,
-            Self::Sessions => Self::Pipeline,
-            Self::Error => Self::Sessions,
-            Self::Json => Self::Error,
         }
     }
 }
@@ -93,22 +58,11 @@ pub struct App {
     pub session_meta: Option<SessionMeta>,
     pub session_phase: Option<SessionPhase>,
     pub meters: Vec<AudioMeter>,
-    pub history: Vec<HistoryRecord>,
-    pub selected_history: usize,
-    pub history_detail: HistoryDetail,
-    pub search: String,
-    pub searching: bool,
+    pub history: HistoryPage,
     pub status: String,
     pub theme: crate::config::theme::TuiTheme,
     pub configure: ConfigurePage,
     pub meter_width: usize,
-    pub audio_cache: HashMap<String, audio::AudioInfo>,
-    pub confirm: Option<Confirm>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Confirm {
-    DeleteAudio { record_id: String },
 }
 
 impl App {
@@ -132,39 +86,12 @@ impl App {
             session_meta: None,
             session_phase: None,
             meters: Vec::new(),
-            history: Vec::new(),
-            selected_history: 0,
-            history_detail: HistoryDetail::Details,
-            search: String::new(),
-            searching: false,
+            history: HistoryPage::new(),
             status: "connected".to_string(),
             theme,
             configure: ConfigurePage::new(),
             meter_width: 160,
-            audio_cache: HashMap::new(),
-            confirm: None,
         }
-    }
-
-    pub fn filtered_history(&self) -> Vec<&HistoryRecord> {
-        if self.search.is_empty() {
-            return self.history.iter().collect();
-        }
-        let query = self.search.to_lowercase();
-        self.history
-            .iter()
-            .filter(|record| {
-                [
-                    record.id.as_str(),
-                    record.app.as_deref().unwrap_or_default(),
-                    record.asr.text.as_str(),
-                    &record.text,
-                ]
-                .join("\n")
-                .to_lowercase()
-                .contains(&query)
-            })
-            .collect()
     }
 
     pub fn current_elapsed_ms(&self) -> u64 {
@@ -262,17 +189,8 @@ impl App {
             Event::SessionPhase { phase, .. } => {
                 self.session_phase = Some(phase);
             }
-            Event::HistoryAppended { record } => {
-                self.refresh_audio_cache_for_record(&record);
-                self.history.insert(0, *record);
-                self.selected_history = self
-                    .selected_history
-                    .min(self.history.len().saturating_sub(1));
-            }
-            Event::History { records } => {
-                self.history = records;
-                self.refresh_audio_cache_for_history();
-                self.selected_history = 0;
+            ref event @ (Event::HistoryAppended { .. } | Event::History { .. }) => {
+                self.history.apply_event(event, self.page == Page::History);
             }
             Event::DaemonStatus { .. } => {}
             Event::ConfigReloaded { ref path } => {
@@ -289,26 +207,6 @@ impl App {
                 self.status = format!("{kind}: {msg}");
             }
         }
-    }
-
-    fn refresh_audio_cache_for_history(&mut self) {
-        self.audio_cache.clear();
-        let records = self.history.clone();
-        for record in &records {
-            self.refresh_audio_cache_for_record(record);
-        }
-    }
-
-    fn refresh_audio_cache_for_record(&mut self, record: &HistoryRecord) {
-        self.audio_cache
-            .insert(record.id.clone(), audio::audio_info_for_record(record));
-    }
-
-    pub fn audio_info_for_record(&self, record: &HistoryRecord) -> audio::AudioInfo {
-        self.audio_cache
-            .get(&record.id)
-            .cloned()
-            .unwrap_or_else(|| audio::missing_audio_info_for_record(record))
     }
 }
 
@@ -406,10 +304,15 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
         }
         return Ok(false);
     }
-    if handle_confirm_key(app, key)? {
-        return Ok(false);
+    if app.page == Page::History {
+        if let Some(status) = app.history.feed_confirm_key(key) {
+            if !status.is_empty() {
+                app.status = status;
+            }
+            return Ok(false);
+        }
     }
-    match keybindings::action_for(key, app.searching) {
+    match keybindings::action_for(key, app.history.searching) {
         Action::Quit => return Ok(true),
         Action::NextPage => {
             app.page = match app.page {
@@ -437,76 +340,63 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
             if app.page == Page::Settings {
                 app.configure.move_selection(1);
             } else {
-                let len = app.filtered_history().len();
-                if len > 0 {
-                    app.selected_history = (app.selected_history + 1).min(len - 1);
-                }
+                app.history.move_down();
             }
         }
         Action::MoveUp => {
             if app.page == Page::Settings {
                 app.configure.move_selection(-1);
             } else {
-                app.selected_history = app.selected_history.saturating_sub(1);
+                app.history.move_up();
             }
         }
         Action::MoveTop => {
             if app.page == Page::Settings {
                 app.configure.move_top();
             } else {
-                app.selected_history = 0;
+                app.history.move_top();
             }
         }
         Action::MoveBottom => {
             if app.page == Page::Settings {
                 app.configure.move_bottom();
             } else {
-                let len = app.filtered_history().len();
-                app.selected_history = len.saturating_sub(1);
+                app.history.move_bottom();
             }
         }
         Action::NextFocus => {
             if app.page == Page::Settings {
                 app.configure.move_focus(1);
             } else {
-                app.history_detail = app.history_detail.next();
+                app.history.next_detail();
             }
         }
         Action::PrevFocus => {
             if app.page == Page::Settings {
                 app.configure.move_focus(-1);
             } else {
-                app.history_detail = app.history_detail.prev();
+                app.history.prev_detail();
             }
         }
         Action::StartSearch => {
             app.page = Page::History;
-            app.searching = true;
+            app.history.start_search();
         }
         Action::CancelSearch => {
-            app.searching = false;
+            app.history.cancel_search();
         }
         Action::ClearSearch => {
-            app.search.clear();
-            app.searching = false;
-            app.selected_history = 0;
-            app.confirm = None;
+            app.history.clear_search();
         }
         Action::SearchChar(ch) => {
-            app.search.push(ch);
-            app.selected_history = 0;
+            app.history.search_char(ch);
         }
         Action::Backspace => {
-            app.search.pop();
-            app.selected_history = 0;
+            app.history.search_backspace();
         }
         Action::CopySelected => {
             if app.page == Page::History {
-                let text = app
-                    .filtered_history()
-                    .get(app.selected_history)
-                    .map(|record| record.text.clone());
-                if let Some(text) = text {
+                if let Some(text) = app.history.copy_selected_text() {
                     crate::clipboard_darwin::write_string(&text)?;
                     app.status = "copied selected history text".to_string();
                 }
@@ -514,11 +404,7 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
         }
         Action::CopySelectedRaw => {
             if app.page == Page::History {
-                let text = app
-                    .filtered_history()
-                    .get(app.selected_history)
-                    .map(|record| record.asr.text.clone());
-                if let Some(text) = text {
+                if let Some(text) = app.history.copy_selected_asr() {
                     crate::clipboard_darwin::write_string(&text)?;
                     app.status = "copied selected ASR text".to_string();
                 }
@@ -527,32 +413,20 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
         Action::OpenAudio => {
             if app.page == Page::Settings {
                 app.status = app.configure.open_editor();
-            } else {
-                run_audio_action(app, audio::open_audio, "tui.history.audio.opening")
+            } else if app.page == Page::History {
+                app.status = app.history.open_selected_audio();
             }
         }
         Action::RevealAudio => {
             if app.page == Page::Settings {
                 app.status = app.configure.reveal_in_finder();
-            } else {
-                run_audio_action(app, audio::reveal_audio, "tui.history.audio.revealing")
+            } else if app.page == Page::History {
+                app.status = app.history.reveal_selected_audio();
             }
         }
         Action::DeleteAudio => {
             if app.page == Page::History {
-                if let Some(record_id) =
-                    selected_history_record(app).map(|record| record.id.clone())
-                {
-                    let info = selected_history_record(app)
-                        .map(|record| app.audio_info_for_record(record))
-                        .expect("selected record exists");
-                    if info.exists() {
-                        app.confirm = Some(Confirm::DeleteAudio { record_id });
-                        app.status = crate::t!("tui.confirm.delete_audio");
-                    } else {
-                        app.status = crate::t!("tui.history.audio.missing_status");
-                    }
-                }
+                app.status = app.history.request_delete_audio();
             }
         }
         Action::ValidateConfig => {
@@ -586,83 +460,6 @@ fn on_page_changed(app: &mut App) {
     if app.page == Page::Settings {
         app.configure.on_enter();
     }
-}
-
-fn handle_confirm_key(app: &mut App, key: KeyEvent) -> Result<bool> {
-    use crossterm::event::{KeyCode, KeyEventKind};
-    if key.kind != KeyEventKind::Press || app.confirm.is_none() {
-        return Ok(false);
-    }
-    match key.code {
-        KeyCode::Char('y') | KeyCode::Enter => {
-            confirm_yes(app)?;
-            Ok(true)
-        }
-        KeyCode::Char('n') | KeyCode::Esc => {
-            app.confirm = None;
-            app.status = crate::t!("tui.confirm.cancelled");
-            Ok(true)
-        }
-        _ => Ok(true),
-    }
-}
-
-fn confirm_yes(app: &mut App) -> Result<()> {
-    let Some(confirm) = app.confirm.take() else {
-        return Ok(());
-    };
-    match confirm {
-        Confirm::DeleteAudio { record_id } => {
-            let Some(record) = app.history.iter().find(|record| record.id == record_id) else {
-                app.status = crate::t!("tui.history.audio.record_missing");
-                return Ok(());
-            };
-            let info = app.audio_info_for_record(record);
-            if !info.exists() {
-                app.status = crate::t!("tui.history.audio.missing_status");
-                return Ok(());
-            }
-            let path = info.path;
-            match audio::delete_audio_path(&path)? {
-                audio::DeleteAudioResult::Deleted => {
-                    let info = audio::missing_audio_info_for_record(record);
-                    app.audio_cache.insert(record.id.clone(), info);
-                    app.status = crate::t!("tui.history.audio.deleted", path = path.display());
-                }
-                audio::DeleteAudioResult::Missing => {
-                    let info = audio::missing_audio_info_for_record(record);
-                    app.audio_cache.insert(record.id.clone(), info);
-                    app.status = crate::t!("tui.history.audio.missing_status");
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn run_audio_action(app: &mut App, action: fn(&std::path::Path) -> Result<()>, status_key: &str) {
-    if app.page != Page::History {
-        return;
-    }
-    let Some(record) = selected_history_record(app) else {
-        app.status = crate::t!("tui.no_history_selected");
-        return;
-    };
-    let info = app.audio_info_for_record(record);
-    if !info.exists() {
-        app.status = crate::t!("tui.history.audio.missing_status");
-        return;
-    }
-    match action(&info.path) {
-        Ok(()) => {
-            app.status = crate::i18n::tr(status_key, &[("path", info.path.display().to_string())])
-        }
-        Err(e) => app.status = crate::t!("tui.error.audio_action", error = e),
-    }
-}
-
-fn selected_history_record(app: &App) -> Option<&HistoryRecord> {
-    app.filtered_history().get(app.selected_history).copied()
 }
 
 struct TerminalGuard;

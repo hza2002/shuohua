@@ -1,14 +1,14 @@
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 
 use crate::config::theme::TuiTheme;
 use crate::ipc::protocol::WireState;
 use crate::state::SessionPhase;
 use crate::tui::page::Page as _;
-use crate::tui::{App, Confirm, HistoryDetail, Page};
+use crate::tui::{App, Page};
 
 mod ui {
     use ratatui::style::Color;
@@ -23,9 +23,6 @@ mod ui {
         )
     }
 
-    pub fn fg(theme: &TuiTheme) -> Color {
-        rgb(theme.foreground)
-    }
     pub fn muted(theme: &TuiTheme) -> Color {
         rgb(theme.muted)
     }
@@ -79,7 +76,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     match app.page {
         Page::Status => render_status(frame, app, root[1]),
-        Page::History => render_history(frame, app, root[1]),
+        Page::History => app.history.render(frame, root[1], &app.theme, &app.status),
         Page::Settings => render_settings(frame, app, root[1]),
     }
 
@@ -421,431 +418,12 @@ fn level_char(value: f32, levels: &[char]) -> char {
     levels[idx]
 }
 
-fn render_history(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(4), Constraint::Min(0)])
-        .split(area);
-    let summary = HistorySummary::from(app);
-    let search = if app.searching {
-        format!("/{}_", app.search)
-    } else if app.search.is_empty() {
-        crate::t!("tui.search_prompt")
-    } else {
-        format!("/{}", app.search)
-    };
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(search),
-            history_stats_line(&summary, &app.theme),
-        ])
-        .block(
-            Block::default()
-                .title(crate::t!("tui.history_stats"))
-                .borders(Borders::ALL),
-        ),
-        chunks[0],
-    );
-
-    let body = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
-        .split(chunks[1]);
-    let records = app.filtered_history();
-    let items: Vec<ListItem> = records
-        .iter()
-        .enumerate()
-        .map(|(idx, record)| {
-            ListItem::new(history_list_line(app, record, idx == app.selected_history))
-        })
-        .collect();
-    frame.render_widget(
-        List::new(items).block(
-            Block::default()
-                .title(crate::t!("tui.history_newest_first"))
-                .borders(Borders::ALL),
-        ),
-        body[0],
-    );
-
-    let selected = records
-        .get(app.selected_history)
-        .map(|record| history_detail_text(app, record, app.history_detail))
-        .unwrap_or_else(|| vec![Line::from(crate::t!("tui.no_history_selected"))]);
-    let selected = if let Some(confirm) = &app.confirm {
-        let mut lines = vec![Line::styled(
-            confirm_text(confirm),
-            Style::default()
-                .fg(ui::warning(&app.theme))
-                .add_modifier(Modifier::BOLD),
-        )];
-        lines.push(Line::from(""));
-        lines.extend(selected);
-        lines
-    } else {
-        selected
-    };
-    frame.render_widget(
-        Paragraph::new(selected).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .title(history_detail_title(app.history_detail))
-                .borders(Borders::ALL),
-        ),
-        body[1],
-    );
-}
-
-fn history_stats_line(summary: &HistorySummary, theme: &TuiTheme) -> Line<'static> {
-    Line::from(vec![
-        label_span("records ", theme),
-        value_span(summary.shown.to_string(), ui::accent(theme)),
-        label_span(" shown / ", theme),
-        value_span(summary.total.to_string(), ui::accent(theme)),
-        label_span(" total    duration ", theme),
-        value_span(
-            format_duration(summary.total_duration_ms),
-            ui::warning(theme),
-        ),
-        label_span("    words ", theme),
-        value_span(summary.total_words.to_string(), ui::success(theme)),
-        label_span("    avg ", theme),
-        value_span(format_duration(summary.avg_duration_ms), ui::warning(theme)),
-    ])
-}
-
-fn history_list_line(
-    app: &App,
-    record: &crate::state::history::HistoryRecord,
-    selected: bool,
-) -> Line<'static> {
-    let marker = if selected { "> " } else { "  " };
-    let audio = history_audio_marker(app, record);
-    let audio_color = if app.audio_info_for_record(record).exists() {
-        ui::success(&app.theme)
-    } else {
-        ui::muted(&app.theme)
-    };
-    Line::from(vec![
-        Span::styled(
-            marker.to_string(),
-            Style::default()
-                .fg(if selected {
-                    ui::accent(&app.theme)
-                } else {
-                    ui::muted(&app.theme)
-                })
-                .add_modifier(if selected {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        ),
-        Span::styled(
-            format!("{:<19}", format_local_time(record.started_at)),
-            Style::default().fg(ui::muted(&app.theme)),
-        ),
-        Span::raw(" "),
-        Span::styled(
-            format!(
-                "{:<10}",
-                truncate_display(&short_app_label(record.app.as_deref()), 10)
-            ),
-            Style::default().fg(ui::accent(&app.theme)),
-        ),
-        Span::raw(" "),
-        Span::styled(
-            format!("{:>5}", format_duration(record.duration_ms)),
-            Style::default().fg(ui::warning(&app.theme)),
-        ),
-        Span::raw(" "),
-        Span::styled(format!("{audio:<1}"), Style::default().fg(audio_color)),
-        Span::raw(" "),
-        Span::raw(record.text.replace('\n', " ")),
-    ])
-}
-
-fn history_detail_title(detail: HistoryDetail) -> String {
-    match detail {
-        HistoryDetail::Details => crate::t!("tui.history.detail.details"),
-        HistoryDetail::Asr => crate::t!("tui.history.detail.asr"),
-        HistoryDetail::Pipeline => crate::t!("tui.history.detail.pipeline"),
-        HistoryDetail::Sessions => crate::t!("tui.history.detail.sessions"),
-        HistoryDetail::Error => crate::t!("tui.history.detail.error"),
-        HistoryDetail::Json => crate::t!("tui.history.detail.json"),
-    }
-}
-
-fn history_detail_text(
-    app: &App,
-    record: &crate::state::history::HistoryRecord,
-    detail: HistoryDetail,
-) -> Vec<Line<'static>> {
-    match detail {
-        HistoryDetail::Details => history_details_lines(app, record),
-        HistoryDetail::Asr => text_lines(format!(
-            "provider: {}\naudio: {}\nstarted: {}\n\n{}",
-            record.asr.provider,
-            format_duration(record.asr.audio_ms),
-            format_local_time(record.started_at),
-            record.asr.text
-        )),
-        HistoryDetail::Pipeline => {
-            if record.pipeline.is_empty() {
-                return vec![Line::from("no pipeline steps")];
-            }
-            text_lines(
-                record
-                    .pipeline
-                    .iter()
-                    .map(|step| {
-                        let body = step.text.as_deref().or(step.error.as_deref()).unwrap_or("");
-                        format!(
-                            "{}  {:?}  {:.1}ms\n{}",
-                            step.name, step.status, step.duration_ms, body
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            )
-        }
-        HistoryDetail::Sessions => {
-            if record.asr.sessions.is_empty() {
-                return vec![Line::from("no ASR sessions")];
-            }
-            text_lines(
-                record
-                    .asr
-                    .sessions
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, session)| {
-                        format!(
-                            "#{}  {} -> {}  audio {}\n{}",
-                            idx + 1,
-                            format_local_time(session.started_at),
-                            format_local_time(session.ended_at),
-                            format_duration(session.audio_ms),
-                            session.text
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            )
-        }
-        HistoryDetail::Error => text_lines(
-            record
-                .error
-                .as_ref()
-                .map(|error| format!("{}: {}", error.kind, error.msg))
-                .unwrap_or_else(|| "no error".to_string()),
-        ),
-        HistoryDetail::Json => text_lines(
-            serde_json::to_string_pretty(record)
-                .unwrap_or_else(|e| format!("failed to render json: {e}")),
-        ),
-    }
-}
-
-fn history_audio_marker(app: &App, record: &crate::state::history::HistoryRecord) -> String {
-    if app.audio_info_for_record(record).exists() {
-        crate::t!("tui.history.audio.present_short")
-    } else {
-        crate::t!("tui.history.audio.missing_short")
-    }
-}
-
-fn history_details_lines(
-    app: &App,
-    record: &crate::state::history::HistoryRecord,
-) -> Vec<Line<'static>> {
-    let info = app.audio_info_for_record(record);
-    let status = if info.exists() {
-        crate::t!("tui.history.audio.present")
-    } else {
-        crate::t!("tui.history.audio.missing")
-    };
-    let size = info
-        .size_bytes
-        .map(format_bytes)
-        .unwrap_or_else(|| "-".to_string());
-    let modified = info
-        .modified
-        .map(format_system_time)
-        .unwrap_or_else(|| "-".to_string());
-    let mut lines = vec![
-        kv_line(
-            "status",
-            format!("{:?}", record.status),
-            ui::success(&app.theme),
-        ),
-        kv_line(
-            "app",
-            short_app_label(record.app.as_deref()),
-            ui::accent(&app.theme),
-        ),
-        kv_line(
-            "started",
-            format_local_time(record.started_at),
-            ui::fg(&app.theme),
-        ),
-        kv_line(
-            "duration",
-            format_duration(record.duration_ms),
-            ui::warning(&app.theme),
-        ),
-        kv_line(
-            "words",
-            record.text_stats().words.to_string(),
-            ui::accent(&app.theme),
-        ),
-        kv_line("asr", record.asr.provider.clone(), ui::info(&app.theme)),
-        kv_line("pipeline", pipeline_summary(record), ui::fg(&app.theme)),
-        kv_line(
-            "audio",
-            status,
-            if info.exists() {
-                ui::success(&app.theme)
-            } else {
-                ui::muted(&app.theme)
-            },
-        ),
-        kv_line(
-            crate::t!("tui.history.audio.size"),
-            size,
-            ui::fg(&app.theme),
-        ),
-        kv_line(
-            crate::t!("tui.history.audio.mtime"),
-            modified,
-            ui::fg(&app.theme),
-        ),
-        Line::from(""),
-        kv_line("text", "", ui::fg(&app.theme)),
-    ];
-    lines.extend(text_lines(record.text.clone()));
-    lines
-}
-
-fn confirm_text(confirm: &Confirm) -> String {
-    match confirm {
-        Confirm::DeleteAudio { record_id } => {
-            crate::t!("tui.confirm.delete_audio_detail", id = record_id)
-        }
-    }
-}
-
-fn kv_line(label: impl Into<String>, value: impl Into<String>, color: Color) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            format!("{}: ", label.into()),
-            Style::default().fg(Color::DarkGray),
-        ),
-        value_span(value.into(), color),
-    ])
-}
-
 fn label_span(text: impl Into<String>, theme: &TuiTheme) -> Span<'static> {
     Span::styled(text.into(), Style::default().fg(ui::muted(theme)))
 }
 
 fn value_span(text: impl Into<String>, color: Color) -> Span<'static> {
     Span::styled(text.into(), Style::default().fg(color))
-}
-
-fn text_lines(text: String) -> Vec<Line<'static>> {
-    text.lines()
-        .map(|line| Line::from(line.to_string()))
-        .collect()
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const KIB: f64 = 1024.0;
-    const MIB: f64 = KIB * 1024.0;
-    const GIB: f64 = MIB * 1024.0;
-    let bytes_f = bytes as f64;
-    if bytes_f >= GIB {
-        format!("{:.1} GiB", bytes_f / GIB)
-    } else if bytes_f >= MIB {
-        format!("{:.1} MiB", bytes_f / MIB)
-    } else if bytes_f >= KIB {
-        format!("{:.1} KiB", bytes_f / KIB)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
-fn format_system_time(value: std::time::SystemTime) -> String {
-    let Ok(duration) = value.duration_since(std::time::UNIX_EPOCH) else {
-        return "-".to_string();
-    };
-    let Ok(datetime) = time::OffsetDateTime::from_unix_timestamp(duration.as_secs() as i64) else {
-        return "-".to_string();
-    };
-    format_local_time(datetime)
-}
-
-fn pipeline_summary(record: &crate::state::history::HistoryRecord) -> String {
-    if record.pipeline.is_empty() {
-        return "-".to_string();
-    }
-    record
-        .pipeline
-        .iter()
-        .map(|step| format!("{}:{:?}", step.name, step.status))
-        .collect::<Vec<_>>()
-        .join(" -> ")
-}
-
-fn short_app_label(app: Option<&str>) -> String {
-    let Some(app) = app else {
-        return "-".to_string();
-    };
-    app.rsplit('.').next().unwrap_or(app).to_string()
-}
-
-fn truncate_display(value: &str, max_chars: usize) -> String {
-    let mut out = value.chars().take(max_chars).collect::<String>();
-    if value.chars().count() > max_chars && max_chars > 0 {
-        out.pop();
-        out.push('…');
-    }
-    out
-}
-
-struct HistorySummary {
-    total: usize,
-    shown: usize,
-    total_duration_ms: u64,
-    avg_duration_ms: u64,
-    total_words: usize,
-}
-
-impl HistorySummary {
-    fn from(app: &App) -> Self {
-        let filtered = app.filtered_history();
-        let total_duration_ms = app
-            .history
-            .iter()
-            .map(|record| record.duration_ms)
-            .sum::<u64>();
-        let total_words = app
-            .history
-            .iter()
-            .map(|record| record.text_stats().words)
-            .sum::<usize>();
-        let avg_duration_ms = if app.history.is_empty() {
-            0
-        } else {
-            total_duration_ms / app.history.len() as u64
-        };
-        Self {
-            total: app.history.len(),
-            shown: filtered.len(),
-            total_duration_ms,
-            avg_duration_ms,
-            total_words,
-        }
-    }
 }
 
 fn state_label(state: WireState) -> String {
@@ -866,19 +444,6 @@ fn format_duration(ms: u64) -> String {
     } else {
         format!("{:02}:{:02}", minutes, seconds % 60)
     }
-}
-
-fn format_local_time(value: time::OffsetDateTime) -> String {
-    let value = match time::UtcOffset::current_local_offset() {
-        Ok(offset) => value.to_offset(offset),
-        Err(_) => value,
-    };
-    value
-        .format(
-            &time::format_description::parse("[year]-[month]-[day] [hour]:[minute]:[second]")
-                .expect("valid static time format"),
-        )
-        .unwrap_or_else(|_| value.to_string())
 }
 
 fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -918,29 +483,6 @@ mod tests {
 
         assert_eq!(audio_upper(&meters).chars().count(), 2);
         assert_eq!(audio_lower(&meters).chars().count(), 2);
-    }
-
-    #[test]
-    fn local_time_format_omits_fraction_and_offset() {
-        let value = time::macros::datetime!(2026-06-17 12:34:56.789 UTC);
-        let text = format_local_time(value);
-
-        assert!(!text.contains('.'));
-        assert!(!text.ends_with('Z'));
-        assert_eq!(text.len(), "2026-06-17 12:34:56".len());
-    }
-
-    #[test]
-    fn short_app_label_uses_bundle_tail() {
-        assert_eq!(short_app_label(Some("com.mitchellh.ghostty")), "ghostty");
-        assert_eq!(short_app_label(None), "-");
-    }
-
-    #[test]
-    fn truncate_display_marks_long_values() {
-        assert_eq!(truncate_display("Ghostty", 9), "Ghostty");
-        assert_eq!(truncate_display("Ghostty", 10), "Ghostty");
-        assert_eq!(truncate_display("VeryLongApp", 9), "VeryLong…");
     }
 
     #[test]

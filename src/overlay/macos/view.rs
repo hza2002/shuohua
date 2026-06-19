@@ -521,7 +521,7 @@ impl OverlayView {
         let screens = screen_frames(self.mtm);
         let fallback = fallback_screen(self.mtm, &screens);
         let (anchor, screen) =
-            crate::focused_window_darwin::focused_window_frame_for_screens(&screens)
+            crate::platform::macos::window::focused_window_frame_for_screens(&screens)
                 .unwrap_or((fallback, fallback));
         let frame = to_nsrect(L::panel_frame(
             from_nsrect(anchor),

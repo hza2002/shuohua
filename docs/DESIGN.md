@@ -1032,8 +1032,8 @@ shuohua/
 │   ├── overlay/
 │   │   ├── mod.rs              # 后台线程一侧：构造 OverlayCmd 推到主线程 channel
 │   │   ├── view.rs             # AppKit 视图层（NSPanel + NSGlassEffectView + 子视图）
-│   ├── autotype_darwin.rs      # CGEventPost Cmd+V
-│   ├── clipboard_darwin.rs     # NSPasteboard
+│   ├── platform/
+│   │   └── macos/              # shared macOS adapters: clipboard / autotype / app context / window geometry
 │   ├── cli/
 │   │   ├── mod.rs              # clap derive，子命令分发
 │   │   ├── doctor.rs           # shuo doctor（包含配置 validate + 打印 effective config）

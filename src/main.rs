@@ -9,18 +9,15 @@
 //!   * 配置热重载靠 `reload` 模块（独立）：watcher 在 `~/.config/shuohua/`
 //!     上跑 notify；各 subscriber 自取所需。
 
-mod app_context_darwin;
 mod asr;
-mod autotype_darwin;
 mod cli;
-mod clipboard_darwin;
 mod config;
-mod focused_window_darwin;
 mod hotkey;
 mod i18n;
 mod ipc;
 mod log;
 mod overlay;
+mod platform;
 mod post;
 mod reload;
 mod state;

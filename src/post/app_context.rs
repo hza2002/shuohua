@@ -7,7 +7,7 @@ pub use super::AppContext;
 
 #[cfg(target_os = "macos")]
 pub fn frontmost_app() -> AppContext {
-    crate::app_context_darwin::frontmost_app()
+    crate::platform::macos::app_context::frontmost_app()
 }
 
 #[cfg(not(target_os = "macos"))]

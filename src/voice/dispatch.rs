@@ -7,8 +7,7 @@
 //!
 //! 各步骤的日志由本模块自己负责，调用方只看 Result 决定是否记 history.
 
-use crate::autotype_darwin;
-use crate::clipboard_darwin;
+use crate::platform::macos::{autotype, clipboard};
 use anyhow::{Context, Result};
 
 pub fn dispatch(text: &str, auto_paste: bool) -> Result<()> {
@@ -16,11 +15,11 @@ pub fn dispatch(text: &str, auto_paste: bool) -> Result<()> {
         // 没识别出文本就别污染剪贴板。voice 层应在调用前就拦掉，这里多一道防线。
         return Ok(());
     }
-    clipboard_darwin::write_string(text).context("write clipboard")?;
+    clipboard::write_string(text).context("write clipboard")?;
     tracing::debug!("clipboard write succeeded");
 
     if auto_paste {
-        match autotype_darwin::paste() {
+        match autotype::paste() {
             Ok(()) => tracing::debug!("auto paste succeeded"),
             Err(e) => tracing::warn!(error = ?e, "auto paste failed; text remains on clipboard"),
         }

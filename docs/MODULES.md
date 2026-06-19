@@ -35,10 +35,14 @@ src/
 │   └── theme.rs                         # theme TOML parse/merge + builtin fallback + effective TUI/overlay theme
 ├── log.rs                                # tracing 初始化：daily file appender、本地时间格式、TTY mirror
 ├── reload.rs                             # notify watcher + watch::Sender 广播；overlay/i18n/hotkey subscriber；UDS 手动 reload 复用同一路径
-├── clipboard_darwin.rs                  # NSPasteboard 写文本
-├── autotype_darwin.rs                   # CGEventPost Cmd+V
-├── focused_window_darwin.rs              # CGWindow + AX 拿 focused window 几何，给 overlay 定位
-├── app_context_darwin.rs                 # frontmost app bundle id / 名字，给 overlay header 显示
+├── platform/
+│   ├── mod.rs                           # shared OS capability namespace
+│   └── macos/
+│       ├── mod.rs                       # macOS shared adapters
+│       ├── clipboard.rs                 # NSPasteboard 写文本
+│       ├── autotype.rs                  # CGEventPost Cmd+V
+│       ├── window.rs                    # CGWindow + AX 拿 focused window 几何，给 overlay 定位
+│       └── app_context.rs               # frontmost app bundle id / 名字
 ├── hotkey/
 │   ├── mod.rs                           # 4 字节 RawEvent 线协议 + 公共类型 re-export
 │   ├── bindings.rs                      # trigger/cancel binding 集合 + cancel-first TrackerSet
@@ -60,7 +64,7 @@ src/
 │       └── doubao.rs                    # bigmodel_async WS + 二进制帧 + Partial/Segment 映射 + DriftProbe (debug-only)
 ├── post/
 │   ├── mod.rs                           # PostProcessor trait + PipelineText + run_chain
-│   ├── app_context.rs                   # post 层 AppContext 入口；macOS 复用 app_context_darwin
+│   ├── app_context.rs                   # post 层 AppContext 入口；macOS 复用 platform::macos
 │   ├── zh_filter.rs                     # ZhFilter
 │   └── llm.rs                           # LlmCleanup；OpenAI-compatible / Anthropic native 一次性调用
 ├── voice/

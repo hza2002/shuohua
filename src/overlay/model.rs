@@ -1,4 +1,22 @@
+use std::time::{Duration, Instant};
+
 use crate::overlay::command::{OverlayCmd, OverlayState, TextKind};
+
+/// Notice 默认 TTL。配置以 `OverlayCmd::Notice.ttl_ms` 字段覆盖。
+pub const NOTICE_DEFAULT_TTL_MS: u32 = 3000;
+
+/// `SetText{Error}` 后自动 hide overlay 的等待时长。比 notice 长，让用户读完
+/// 错误并决定是否重试。
+pub const ERROR_TTL_MS: u64 = 5000;
+
+/// `model.tick(now)` 的返回值：模型是否要求 view 采取可见性动作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickOutcome {
+    /// 模型无外显变化要求（dur_ms 可能已更新）。
+    Idle,
+    /// 模型决定 overlay 该开始隐藏。view 应触发 fade-out 动画。
+    Hide,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notice {
@@ -24,6 +42,15 @@ pub struct OverlayModel {
     /// 当前 meta 行的临时 warn；非空时 meta 显示 notice.text 黄字，定时器到点自动恢复。
     pub notice: Option<Notice>,
     pub visible: bool,
+
+    /// Session 时钟：`SetState{Connecting}` 时起跳，`Hide`/`Dismiss` 时清。
+    pub recording_started: Option<Instant>,
+    /// Notice（meta 行 warn）到期点。`tick(now)` 到点恢复 chain_summary。
+    pub notice_until: Option<Instant>,
+    /// Error 文本到期点。`tick(now)` 到点自动 hide overlay。
+    pub error_until: Option<Instant>,
+    /// `Hide` 到达时若 notice 还活着就延期；`tick(now)` 在 notice 到期时释放。
+    pub pending_hide: bool,
 }
 
 impl OverlayModel {
@@ -43,6 +70,10 @@ impl OverlayModel {
             error_text: String::new(),
             notice: None,
             visible: false,
+            recording_started: None,
+            notice_until: None,
+            error_until: None,
+            pending_hide: false,
         }
     }
 }
@@ -57,14 +88,13 @@ impl OverlayModel {
     pub fn apply(&mut self, cmd: OverlayCmd, theme: &crate::config::theme::OverlayStateTheme) {
         match cmd {
             OverlayCmd::SetState { state } => {
-                // `Connecting` 是 session 起点；只有它把 overlay 拉起来。
-                // 多 session 路径上 `Idle` 表示"当前没 ASR session，麦克风
-                // 仍在听" — 这种状态下 overlay 必须保持可见，所以 SetState
-                // 不再隐式地把 visible 跟 Idle 绑死。可见性只由 Connecting
-                // 拉起，由 Hide / Dismiss 关闭。
                 if matches!(state, OverlayState::Connecting) {
                     self.clear_session();
                     self.visible = true;
+                    self.recording_started = Some(Instant::now());
+                    self.notice_until = None;
+                    self.error_until = None;
+                    self.pending_hide = false;
                 }
                 self.state = state;
                 self.state_label = crate::t!(state.label_key());
@@ -92,6 +122,7 @@ impl OverlayModel {
                 TextKind::Error => {
                     self.error_text = text;
                     self.partial.clear();
+                    self.error_until = Some(Instant::now() + Duration::from_millis(ERROR_TTL_MS));
                 }
             },
             OverlayCmd::AppendSegment { text } => {
@@ -108,17 +139,30 @@ impl OverlayModel {
             }
             OverlayCmd::Notice { text, ttl_ms } => {
                 self.notice = Some(Notice { text, ttl_ms });
+                self.notice_until = Some(Instant::now() + Duration::from_millis(ttl_ms as u64));
             }
-            OverlayCmd::Dismiss | OverlayCmd::Hide => {
+            OverlayCmd::Hide => {
+                if self.notice_until.is_some() {
+                    self.pending_hide = true;
+                } else {
+                    self.clear_session();
+                    self.visible = false;
+                    self.state = OverlayState::Idle;
+                    self.state_label = crate::t!("overlay.state_idle");
+                    self.state_color = OverlayState::Idle.color_rgb(theme);
+                    self.recording_started = None;
+                }
+            }
+            OverlayCmd::Dismiss => {
                 self.clear_session();
                 self.visible = false;
                 self.state = OverlayState::Idle;
                 self.state_label = crate::t!("overlay.state_idle");
                 self.state_color = OverlayState::Idle.color_rgb(theme);
+                self.recording_started = None;
+                self.pending_hide = false;
             }
-            OverlayCmd::ReloadConfig { .. } => {
-                // 仅 view 关心；model 无状态变更。
-            }
+            OverlayCmd::ReloadConfig { .. } => {}
             OverlayCmd::Relabel => {
                 self.state_label = crate::t!(self.state.label_key());
             }
@@ -133,6 +177,49 @@ impl OverlayModel {
         self.final_text.clear();
         self.error_text.clear();
         self.notice = None;
+        self.notice_until = None;
+        self.error_until = None;
+    }
+
+    pub fn tick(
+        &mut self,
+        now: Instant,
+        theme: &crate::config::theme::OverlayStateTheme,
+    ) -> TickOutcome {
+        if let Some(started) = self.recording_started {
+            if now >= started {
+                self.dur_ms = (now - started).as_millis() as u64;
+            }
+        }
+        if let Some(until) = self.notice_until {
+            if now >= until {
+                self.notice = None;
+                self.notice_until = None;
+                if self.pending_hide {
+                    self.clear_session();
+                    self.visible = false;
+                    self.state = OverlayState::Idle;
+                    self.state_label = crate::t!("overlay.state_idle");
+                    self.state_color = OverlayState::Idle.color_rgb(theme);
+                    self.recording_started = None;
+                    self.pending_hide = false;
+                    return TickOutcome::Hide;
+                }
+            }
+        }
+        if let Some(until) = self.error_until {
+            if now >= until {
+                self.error_until = None;
+                self.clear_session();
+                self.visible = false;
+                self.state = OverlayState::Idle;
+                self.state_label = crate::t!("overlay.state_idle");
+                self.state_color = OverlayState::Idle.color_rgb(theme);
+                self.recording_started = None;
+                return TickOutcome::Hide;
+            }
+        }
+        TickOutcome::Idle
     }
 
     pub fn display_text(&self) -> String {
@@ -154,7 +241,7 @@ impl OverlayModel {
 mod tests {
     use super::*;
     use crate::i18n;
-    use crate::overlay::command::OverlayHandle;
+    use crate::overlay::command::{OverlayCmd, OverlayHandle, OverlayState, TextKind};
 
     fn apply(model: &mut OverlayModel, cmd: OverlayCmd) {
         model.apply(cmd, &crate::config::theme::OverlayStateTheme::default());
@@ -345,5 +432,154 @@ mod tests {
 
         assert_eq!(model.display_text(), "");
         assert!(model.visible);
+    }
+
+    // ── TTL / timing 测试 ──
+
+    #[test]
+    fn tick_updates_dur_ms_from_recording_started() {
+        i18n::init("en-US");
+        let mut model = OverlayModel::default();
+        apply(
+            &mut model,
+            OverlayCmd::SetState {
+                state: OverlayState::Connecting,
+            },
+        );
+        let started = model.recording_started.expect("Connecting sets clock");
+        let now = started + Duration::from_millis(1234);
+        model.tick(now, &crate::config::theme::OverlayStateTheme::default());
+        assert_eq!(model.dur_ms, 1234);
+    }
+
+    #[test]
+    fn notice_expires_after_ttl() {
+        i18n::init("en-US");
+        let mut model = OverlayModel::default();
+        apply(
+            &mut model,
+            OverlayCmd::Notice {
+                text: "warn".into(),
+                ttl_ms: 1000,
+            },
+        );
+        assert!(model.notice.is_some());
+        let until = model.notice_until.expect("notice_until set");
+        let theme = crate::config::theme::OverlayStateTheme::default();
+        let out = model.tick(until + Duration::from_millis(1), &theme);
+        assert_eq!(out, TickOutcome::Idle);
+        assert!(model.notice.is_none());
+        assert!(model.notice_until.is_none());
+    }
+
+    #[test]
+    fn hide_during_active_notice_defers_until_notice_expires() {
+        i18n::init("en-US");
+        let mut model = OverlayModel::default();
+        let theme = crate::config::theme::OverlayStateTheme::default();
+        apply(
+            &mut model,
+            OverlayCmd::SetState {
+                state: OverlayState::Connecting,
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::Notice {
+                text: "skipped".into(),
+                ttl_ms: 500,
+            },
+        );
+        let until = model.notice_until.unwrap();
+        apply(&mut model, OverlayCmd::Hide);
+        assert!(model.pending_hide, "Hide 设 pending_hide");
+        assert!(model.visible, "Hide 时 notice 活着，overlay 仍可见");
+
+        let out = model.tick(until + Duration::from_millis(1), &theme);
+        assert_eq!(out, TickOutcome::Hide);
+        assert!(!model.visible);
+        assert!(!model.pending_hide);
+    }
+
+    #[test]
+    fn error_text_expires_and_returns_hide() {
+        i18n::init("en-US");
+        let mut model = OverlayModel::default();
+        let theme = crate::config::theme::OverlayStateTheme::default();
+        apply(
+            &mut model,
+            OverlayCmd::SetState {
+                state: OverlayState::Connecting,
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::SetText {
+                text: "请检查输入设备".into(),
+                kind: TextKind::Error,
+            },
+        );
+        let until = model.error_until.expect("error_until set");
+        let out = model.tick(until + Duration::from_millis(1), &theme);
+        assert_eq!(out, TickOutcome::Hide);
+        assert!(!model.visible);
+        assert!(model.error_text.is_empty());
+    }
+
+    #[test]
+    fn dismiss_skips_notice_deferral() {
+        i18n::init("en-US");
+        let mut model = OverlayModel::default();
+        apply(
+            &mut model,
+            OverlayCmd::SetState {
+                state: OverlayState::Connecting,
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::Notice {
+                text: "warn".into(),
+                ttl_ms: 5000,
+            },
+        );
+        apply(&mut model, OverlayCmd::Dismiss);
+        assert!(!model.visible);
+        assert!(!model.pending_hide);
+        assert!(model.notice.is_none());
+    }
+
+    #[test]
+    fn connecting_resets_all_until_fields() {
+        i18n::init("en-US");
+        let mut model = OverlayModel::default();
+        apply(
+            &mut model,
+            OverlayCmd::Notice {
+                text: "old".into(),
+                ttl_ms: 5000,
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::SetText {
+                text: "old err".into(),
+                kind: TextKind::Error,
+            },
+        );
+        apply(&mut model, OverlayCmd::Hide);
+        assert!(model.pending_hide);
+
+        apply(
+            &mut model,
+            OverlayCmd::SetState {
+                state: OverlayState::Connecting,
+            },
+        );
+        assert!(!model.pending_hide);
+        assert!(model.notice_until.is_none());
+        assert!(model.error_until.is_none());
+        assert!(model.visible);
+        assert!(model.recording_started.is_some());
     }
 }

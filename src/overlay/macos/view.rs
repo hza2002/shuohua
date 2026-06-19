@@ -5,8 +5,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{NSObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSColor, NSFont,
-    NSFontWeightBold, NSForegroundColorAttributeName, NSGlassEffectView, NSImage, NSImageAlignment,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSFont, NSFontWeightBold,
+    NSForegroundColorAttributeName, NSGlassEffectView, NSImage, NSImageAlignment,
     NSImageFrameStyle, NSImageScaling, NSImageSymbolConfiguration, NSImageSymbolScale, NSImageView,
     NSLineBreakMode, NSPanel, NSScreen, NSTextAlignment, NSTextField, NSView,
 };
@@ -25,11 +25,6 @@ use super::chrome::{
     apply_background_settings, apply_glass_settings, apply_panel_background_blur, build_chrome,
     color_from_rgb_alpha, make_panel,
 };
-
-/// SetText{Error} 后多久自动 hide overlay。比 NOTICE_TTL_MS 长，因为 error 文案
-/// 用户需要读完并决定是否重试；notice 只是顺手提示，过去就过去。仍然不挂太久，
-/// shuo 是键盘工具，5s 后还没看就靠 ESC 自己关。
-const ERROR_TTL_MS: u64 = 5000;
 
 fn to_nsrect(f: L::LayoutFrame) -> NSRect {
     NSRect::new(NSPoint::new(f.x, f.y), NSSize::new(f.w, f.h))
@@ -141,14 +136,7 @@ struct OverlayView {
     meta: Retained<NSTextField>,
     text: Retained<NSTextField>,
     animation_started: Instant,
-    recording_started: Option<Instant>,
     last_text_update: Option<Instant>,
-    /// notice（meta 行 warn）到期点：到点 tick 把 meta 恢复成 chain_summary。
-    notice_until: Option<Instant>,
-    /// error 文本（text 区红字）到期点：到点 tick 自动 hide overlay。
-    error_until: Option<Instant>,
-    /// Hide 命令到达时若 notice 还活着就延期；标记 true，待 notice 到期再真隐藏。
-    pending_hide: bool,
     last_panel_frame: Option<NSRect>,
     last_visible_text: String,
     last_status_text: String,
@@ -237,11 +225,7 @@ impl OverlayView {
             meta,
             text,
             animation_started: Instant::now(),
-            recording_started: None,
             last_text_update: None,
-            notice_until: None,
-            error_until: None,
-            pending_hide: false,
             last_panel_frame: None,
             last_visible_text: String::new(),
             last_status_text: String::new(),
@@ -264,103 +248,42 @@ impl OverlayView {
             self.render();
             return;
         }
+        // View-only pre-processing（model.apply 不知道的事）.
         match &cmd {
-            OverlayCmd::SetState { state } => match state {
-                OverlayState::Recording => {
-                    // 多 session 路径上每次 resume 都会回到 Recording。
-                    // 时钟只在录音首次起跳时归零，后续 resume 不能让它跳回 0。
-                    if self.recording_started.is_none() {
-                        self.recording_started = Some(Instant::now());
-                    }
-                    self.last_text_update = Some(Instant::now());
-                }
-                OverlayState::Idle => {
-                    // 多 session 路径上 `Idle` 表示"当前没 ASR，麦克风还在听"。
-                    // 不清时钟、不清 segments — Hide / Dismiss 会负责真正收尾。
-                }
-                OverlayState::Connecting => {
-                    // 新 session 接管：抢断旧 session 留下的 lingering 状态。
-                    self.notice_until = None;
-                    self.error_until = None;
-                    self.pending_hide = false;
-                    self.clear_rendered_session();
-                }
-                _ => {}
-            },
-            OverlayCmd::SetText { kind, .. } => match kind {
-                TextKind::Partial => {
-                    self.last_text_update = Some(Instant::now());
-                }
-                TextKind::Error => {
-                    self.error_until = Some(Instant::now() + Duration::from_millis(ERROR_TTL_MS));
-                }
-                TextKind::Final => {}
-            },
-            OverlayCmd::AppendSegment { .. } => {
+            OverlayCmd::SetState {
+                state: OverlayState::Connecting,
+            } => {
+                self.clear_rendered_session();
+            }
+            OverlayCmd::SetState {
+                state: OverlayState::Recording,
+            } => {
                 self.last_text_update = Some(Instant::now());
             }
-            OverlayCmd::Notice { ttl_ms, .. } => {
-                self.notice_until = Some(Instant::now() + Duration::from_millis(*ttl_ms as u64));
+            OverlayCmd::SetText {
+                kind: TextKind::Partial,
+                ..
             }
-            OverlayCmd::Hide => {
-                // notice 还活着就延期，等 tick 到点真隐藏，避免 warn 一闪就没。
-                if self
-                    .notice_until
-                    .is_some_and(|until| Instant::now() < until)
-                {
-                    self.pending_hide = true;
-                    return;
-                }
-                self.recording_started = None;
-                self.last_text_update = None;
-                self.notice_until = None;
-                self.error_until = None;
-                self.pending_hide = false;
-                self.peak_text_lines = 1;
-                self.clear_rendered_session();
-            }
-            OverlayCmd::Dismiss => {
-                // ESC 强制关，绕过 notice / error 延期。
-                self.recording_started = None;
-                self.last_text_update = None;
-                self.notice_until = None;
-                self.error_until = None;
-                self.pending_hide = false;
-                self.peak_text_lines = 1;
-                self.clear_rendered_session();
+            | OverlayCmd::AppendSegment { .. } => {
+                self.last_text_update = Some(Instant::now());
             }
             _ => {}
         }
+        let prev_visible = self.model.visible;
         self.model.apply(cmd, &self.cfg.state);
+        if prev_visible && !self.model.visible {
+            self.last_text_update = None;
+            self.peak_text_lines = 1;
+            self.clear_rendered_session();
+        }
         self.render();
     }
 
     fn tick(&mut self) {
-        if let Some(started) = self.recording_started {
-            self.model.dur_ms = started.elapsed().as_millis() as u64;
-        }
-        let now = Instant::now();
-        if self.notice_until.is_some_and(|until| now >= until) {
-            self.model.notice = None;
-            self.notice_until = None;
-            if self.pending_hide {
-                // 等到的就是这一刻——notice 到期，把延期的 Hide 真正执行。
-                self.model.apply(OverlayCmd::Hide, &self.cfg.state);
-                self.recording_started = None;
-                self.last_text_update = None;
-                self.pending_hide = false;
-                self.peak_text_lines = 1;
-                self.clear_rendered_session();
-            }
-        }
-        if self.error_until.is_some_and(|until| now >= until) {
-            // error 文本到期：自动关 overlay。
-            self.error_until = None;
-            self.model.apply(OverlayCmd::Hide, &self.cfg.state);
-            self.recording_started = None;
+        let prev_visible = self.model.visible;
+        let _ = self.model.tick(Instant::now(), &self.cfg.state);
+        if prev_visible && !self.model.visible {
             self.last_text_update = None;
-            self.notice_until = None;
-            self.pending_hide = false;
             self.peak_text_lines = 1;
             self.clear_rendered_session();
         }
@@ -370,10 +293,15 @@ impl OverlayView {
     fn render(&mut self) {
         if self.model.visible {
             // 首次可见时，把 chrome 初始化 / 热重载攒下的错误塞进 error 文本区。
-            if self.model.error_text.is_empty() && self.error_until.is_none() {
+            if self.model.error_text.is_empty() && self.model.error_until.is_none() {
                 if let Some(err) = self.pending_chrome_error.take() {
-                    self.model.error_text = err;
-                    self.error_until = Some(Instant::now() + Duration::from_millis(ERROR_TTL_MS));
+                    self.model.apply(
+                        OverlayCmd::SetText {
+                            text: err,
+                            kind: TextKind::Error,
+                        },
+                        &self.cfg.state,
+                    );
                 }
             }
 
@@ -498,7 +426,8 @@ impl OverlayView {
     fn render_state_icon(&self, state: OverlayState, color_rgb: u32) {
         let symbol = state_symbol(state);
         let phase = if state == OverlayState::Recording {
-            self.recording_started
+            self.model
+                .recording_started
                 .map(|started| ((started.elapsed().as_millis() / 160) % 6) as usize)
                 .unwrap_or(0)
         } else {

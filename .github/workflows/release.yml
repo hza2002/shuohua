@@ -1,0 +1,64 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # 创建 Release 需要
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry / target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver=$(grep -E '^version = ' Cargo.toml | head -1 | cut -d'"' -f2)
+          if [ "$tag" != "$ver" ]; then
+            echo "ERROR: tag v$tag does not match Cargo.toml version $ver"
+            exit 1
+          fi
+          echo "tag=$tag matches Cargo.toml"
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Package tarball + sha256
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          name="shuo-v${ver}-aarch64-apple-darwin"
+          mkdir -p "dist/${name}"
+          cp target/release/shuo "dist/${name}/"
+          cp LICENSE README.md "dist/${name}/"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          shasum -a 256 "dist/${name}.tar.gz" | awk '{print $1}' > "dist/${name}.tar.gz.sha256"
+          ls -lh dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          body_path: .github/release-body.md
+          fail_on_unmatched_files: true

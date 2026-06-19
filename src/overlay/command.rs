@@ -43,8 +43,8 @@ pub enum OverlayCmd {
     /// 正常隐藏。如果当前有活跃 notice（warn 还没自动消失），延期到 notice
     /// 到期再真正隐藏，让用户有机会看到 warn。
     Hide,
-    /// 配置热重载：替换 chrome（glass / tint / 文本布局相关参数）。
-    /// model 不消费，view 单独处理。
+    /// Overlay runtime config 热重载：替换 chrome、tint、文字布局等渲染参数。
+    /// 这是 config/theme 合并后的 snapshot；model 不消费，view 单独处理。
     ReloadConfig {
         cfg: crate::config::theme::EffectiveOverlayCfg,
     },

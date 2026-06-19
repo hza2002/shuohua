@@ -53,6 +53,8 @@ pub struct TuiTheme {
     pub segment: u32,
 }
 
+/// Overlay runtime configuration after merging main config and theme files.
+/// This is consumed directly by overlay renderers; it is not a TOML schema.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct EffectiveOverlayCfg {
     pub core: CoreOverlayCfg,

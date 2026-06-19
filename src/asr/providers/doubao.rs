@@ -262,7 +262,11 @@ async fn session_task(
             }
             msg = stream.next() => {
                 let Some(msg) = msg else {
-                    let _ = evt_tx.send(AsrEvent::Done).await;
+                    let _ = evt_tx
+                        .send(transport_closed_before_done_event(
+                            "websocket stream ended before final response",
+                        ))
+                        .await;
                     return;
                 };
                 match msg {
@@ -288,13 +292,23 @@ async fn session_task(
                         }
                     }
                     Ok(Message::Close(_)) => {
-                        let _ = evt_tx.send(AsrEvent::Done).await;
+                        let _ = evt_tx
+                            .send(transport_closed_before_done_event(
+                                "websocket closed before final response",
+                            ))
+                            .await;
                         return;
                     }
                     Ok(_) => {} // ping/pong/text — 忽略
                 }
             }
         }
+    }
+}
+
+fn transport_closed_before_done_event(message: impl Into<String>) -> AsrEvent {
+    AsrEvent::Error {
+        err: AsrError::Network(message.into()),
     }
 }
 
@@ -789,6 +803,16 @@ access_key = "sk"
         data.extend_from_slice(&100u32.to_be_bytes()); // claims 100 bytes
         data.extend_from_slice(b"only-a-few"); // but supplies few
         assert!(parse_response_frame(&data).is_err());
+    }
+
+    #[test]
+    fn transport_close_before_last_response_is_error_not_done() {
+        let event = transport_closed_before_done_event("websocket closed before final response");
+        match event {
+            AsrEvent::Error { err } => assert!(matches!(err, AsrError::Network(_))),
+            AsrEvent::Done => panic!("transport close before protocol completion must not be Done"),
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[test]

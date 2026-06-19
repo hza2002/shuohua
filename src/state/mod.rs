@@ -1,6 +1,6 @@
 pub mod history;
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 
 use history::{HistoryRecord, PipelineStepHistory};
 use serde::{Deserialize, Serialize};
@@ -120,35 +120,47 @@ pub enum StateEvent {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StateStore {
-    snapshot: Arc<RwLock<StateSnapshot>>,
+    inner: Arc<Mutex<StateInner>>,
+}
+
+struct StateInner {
+    snapshot: StateSnapshot,
     tx: broadcast::Sender<StateEvent>,
+    #[cfg(test)]
+    before_subscribe: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl StateStore {
     pub fn new() -> Self {
         let (tx, _rx) = broadcast::channel(128);
         Self {
-            snapshot: Arc::new(RwLock::new(StateSnapshot::default())),
-            tx,
+            inner: Arc::new(Mutex::new(StateInner {
+                snapshot: StateSnapshot::default(),
+                tx,
+                #[cfg(test)]
+                before_subscribe: None,
+            })),
         }
     }
 
     pub fn subscribe_with_snapshot(&self) -> (StateSnapshot, broadcast::Receiver<StateEvent>) {
-        let snapshot = self
-            .snapshot
-            .read()
-            .expect("state snapshot lock poisoned")
-            .clone();
-        let rx = self.tx.subscribe();
+        let inner = self.inner.lock().expect("state lock poisoned");
+        #[cfg(test)]
+        if let Some(hook) = &inner.before_subscribe {
+            hook();
+        }
+        let rx = inner.tx.subscribe();
+        let snapshot = inner.snapshot.clone();
         (snapshot, rx)
     }
 
     pub fn snapshot(&self) -> StateSnapshot {
-        self.snapshot
-            .read()
-            .expect("state snapshot lock poisoned")
+        self.inner
+            .lock()
+            .expect("state lock poisoned")
+            .snapshot
             .clone()
     }
 
@@ -171,63 +183,62 @@ impl StateStore {
     }
 
     pub fn app(&self, bundle_id: Option<String>, app_name: Option<String>) {
-        {
-            let mut snapshot = self.snapshot.write().expect("state snapshot lock poisoned");
-            snapshot.app_bundle_id = bundle_id.clone();
-            snapshot.app_name = app_name.clone();
-        }
-        let _ = self.tx.send(StateEvent::AppChanged {
+        let mut inner = self.inner.lock().expect("state lock poisoned");
+        inner.snapshot.app_bundle_id = bundle_id.clone();
+        inner.snapshot.app_name = app_name.clone();
+        let _ = inner.tx.send(StateEvent::AppChanged {
             bundle_id,
             app_name,
         });
     }
 
     pub fn stats(&self, dur_ms: u64, words: u32) {
-        {
-            let mut snapshot = self.snapshot.write().expect("state snapshot lock poisoned");
-            snapshot.dur_ms = dur_ms;
-            snapshot.words = words;
-        }
-        let _ = self.tx.send(StateEvent::StatsChanged { dur_ms, words });
+        let mut inner = self.inner.lock().expect("state lock poisoned");
+        inner.snapshot.dur_ms = dur_ms;
+        inner.snapshot.words = words;
+        let _ = inner.tx.send(StateEvent::StatsChanged { dur_ms, words });
     }
 
     pub fn partial(&self, recording_id: String, text: String) {
-        self.snapshot
-            .write()
-            .expect("state snapshot lock poisoned")
-            .partial = text.clone();
-        let _ = self.tx.send(StateEvent::Partial { recording_id, text });
+        let mut inner = self.inner.lock().expect("state lock poisoned");
+        inner.snapshot.partial = text.clone();
+        let _ = inner.tx.send(StateEvent::Partial { recording_id, text });
     }
 
     pub fn segment(&self, recording_id: String, text: String) {
-        {
-            let mut snapshot = self.snapshot.write().expect("state snapshot lock poisoned");
-            snapshot.segments.push(text.clone());
-            snapshot.partial.clear();
-            snapshot.words = crate::text_stats::compute(&snapshot.segments.join("")).words as u32;
-        }
-        let _ = self.tx.send(StateEvent::Segment { recording_id, text });
+        let mut inner = self.inner.lock().expect("state lock poisoned");
+        inner.snapshot.segments.push(text.clone());
+        inner.snapshot.partial.clear();
+        inner.snapshot.words =
+            crate::text_stats::compute(&inner.snapshot.segments.join("")).words as u32;
+        let _ = inner.tx.send(StateEvent::Segment { recording_id, text });
     }
 
     pub fn pipeline_step(&self, recording_id: String, step: PipelineStepHistory) {
-        let _ = self
+        let inner = self.inner.lock().expect("state lock poisoned");
+        let _ = inner
             .tx
             .send(StateEvent::PipelineStep { recording_id, step });
     }
 
     pub fn audio_meter(&self, recording_id: String, meter: AudioMeter) {
-        let _ = self.tx.send(StateEvent::AudioMeter {
+        let inner = self.inner.lock().expect("state lock poisoned");
+        let _ = inner.tx.send(StateEvent::AudioMeter {
             recording_id,
             meter,
         });
     }
 
     pub fn session_meta(&self, recording_id: String, meta: SessionMeta) {
-        let _ = self.tx.send(StateEvent::SessionMeta { recording_id, meta });
+        let inner = self.inner.lock().expect("state lock poisoned");
+        let _ = inner
+            .tx
+            .send(StateEvent::SessionMeta { recording_id, meta });
     }
 
     pub fn session_phase(&self, recording_id: String, phase: SessionPhase) {
-        let _ = self.tx.send(StateEvent::SessionPhase {
+        let inner = self.inner.lock().expect("state lock poisoned");
+        let _ = inner.tx.send(StateEvent::SessionPhase {
             recording_id,
             phase,
         });
@@ -239,7 +250,8 @@ impl StateStore {
         kind: impl Into<String>,
         msg: impl Into<String>,
     ) {
-        let _ = self.tx.send(StateEvent::Error {
+        let inner = self.inner.lock().expect("state lock poisoned");
+        let _ = inner.tx.send(StateEvent::Error {
             recording_id,
             kind: kind.into(),
             msg: msg.into(),
@@ -247,9 +259,18 @@ impl StateStore {
     }
 
     pub fn history_appended(&self, record: HistoryRecord) {
-        let _ = self.tx.send(StateEvent::HistoryAppended {
+        let inner = self.inner.lock().expect("state lock poisoned");
+        let _ = inner.tx.send(StateEvent::HistoryAppended {
             record: Box::new(record),
         });
+    }
+
+    #[cfg(test)]
+    fn set_before_subscribe_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        self.inner
+            .lock()
+            .expect("state lock poisoned")
+            .before_subscribe = Some(hook);
     }
 
     fn set_state(
@@ -258,21 +279,19 @@ impl StateStore {
         recording_id: Option<String>,
         started_at: Option<OffsetDateTime>,
     ) {
-        {
-            let mut snapshot = self.snapshot.write().expect("state snapshot lock poisoned");
-            snapshot.state = state;
-            snapshot.recording_id = recording_id.clone();
-            snapshot.started_at = started_at;
-            if matches!(state, DaemonState::Idle) {
-                snapshot.partial.clear();
-                snapshot.segments.clear();
-                snapshot.app_bundle_id = None;
-                snapshot.app_name = None;
-                snapshot.dur_ms = 0;
-                snapshot.words = 0;
-            }
+        let mut inner = self.inner.lock().expect("state lock poisoned");
+        inner.snapshot.state = state;
+        inner.snapshot.recording_id = recording_id.clone();
+        inner.snapshot.started_at = started_at;
+        if matches!(state, DaemonState::Idle) {
+            inner.snapshot.partial.clear();
+            inner.snapshot.segments.clear();
+            inner.snapshot.app_bundle_id = None;
+            inner.snapshot.app_name = None;
+            inner.snapshot.dur_ms = 0;
+            inner.snapshot.words = 0;
         }
-        let _ = self.tx.send(StateEvent::StateChanged {
+        let _ = inner.tx.send(StateEvent::StateChanged {
             state,
             recording_id,
             started_at,
@@ -289,6 +308,8 @@ impl Default for StateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::Duration;
     use time::macros::datetime;
 
     #[test]
@@ -389,6 +410,41 @@ mod tests {
 
         store.segment("01HXYZ".to_string(), "hello".to_string());
         assert!(matches!(rx.try_recv().unwrap(), StateEvent::Segment { .. }));
+    }
+
+    #[test]
+    fn subscribe_with_snapshot_does_not_miss_concurrent_updates() {
+        let store = StateStore::new();
+        store.set_recording("01HXYZ".to_string(), datetime!(2026-06-13 12:00:00 UTC));
+
+        let (hook_entered_tx, hook_entered_rx) = mpsc::channel();
+        let (release_hook_tx, release_hook_rx) = mpsc::channel();
+        let release_hook_rx = Arc::new(Mutex::new(release_hook_rx));
+        store.set_before_subscribe_hook(Arc::new(move || {
+            hook_entered_tx.send(()).unwrap();
+            release_hook_rx.lock().unwrap().recv().unwrap();
+        }));
+
+        let subscriber_store = store.clone();
+        let subscriber = std::thread::spawn(move || subscriber_store.subscribe_with_snapshot());
+
+        hook_entered_rx.recv().unwrap();
+        let writer_store = store.clone();
+        let writer = std::thread::spawn(move || {
+            writer_store.partial("01HXYZ".to_string(), "concurrent".to_string());
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        release_hook_tx.send(()).unwrap();
+
+        let (snapshot, mut rx) = subscriber.join().unwrap();
+        writer.join().unwrap();
+
+        if snapshot.partial != "concurrent" {
+            assert!(matches!(
+                rx.try_recv().unwrap(),
+                StateEvent::Partial { text, .. } if text == "concurrent"
+            ));
+        }
     }
 
     #[test]

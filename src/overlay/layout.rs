@@ -19,8 +19,6 @@ impl LayoutFrame {
 }
 
 pub mod constants {
-    use super::LayoutFrame;
-
     pub const WIDTH: f64 = 572.0;
     pub const BASE_HEIGHT: f64 = 64.0;
     pub const WINDOW_MARGIN: f64 = 16.0;
@@ -43,16 +41,6 @@ pub mod constants {
     pub const STATS_W: f64 = 220.0;
     pub const META_GAP: f64 = 8.0;
     pub const META_MIN_W: f64 = 180.0;
-
-    /// 跟 LayoutFrame::new 同款的 const 构造，给静态计算用。
-    pub const fn root_frame() -> LayoutFrame {
-        LayoutFrame {
-            x: 0.0,
-            y: 0.0,
-            w: WIDTH,
-            h: BASE_HEIGHT,
-        }
-    }
 }
 
 pub fn frame_y_for_visual_center(center_y: f64, height: f64, optical_y: f64) -> f64 {

@@ -786,8 +786,8 @@ fn build_chrome(
         let glass = NSGlassEffectView::initWithFrame(NSGlassEffectView::alloc(mtm), root_frame());
         #[cfg(debug_assertions)]
         {
-            crate::overlay::debug::dump_glass_selectors(&glass);
-            crate::overlay::debug::probe_glass_state_ranges(&glass);
+            crate::overlay::macos::debug::dump_glass_selectors(&glass);
+            crate::overlay::macos::debug::probe_glass_state_ranges(&glass);
         }
         let missing = apply_glass_settings(&glass, cfg);
         glass.setAutoresizingMask(
@@ -890,7 +890,7 @@ fn try_set_long(
         if msg_send![obj, respondsToSelector: private] {
             let _: () = obj.send_message(private, (value,));
             #[cfg(debug_assertions)]
-            crate::overlay::debug::trace(format!(
+            crate::overlay::macos::debug::trace(format!(
                 "dispatched {} <- {value}",
                 private_name.to_string_lossy()
             ));
@@ -900,14 +900,14 @@ fn try_set_long(
         if msg_send![obj, respondsToSelector: public] {
             let _: () = obj.send_message(public, (value,));
             #[cfg(debug_assertions)]
-            crate::overlay::debug::trace(format!(
+            crate::overlay::macos::debug::trace(format!(
                 "dispatched {} <- {value}",
                 public_name.to_string_lossy()
             ));
             return true;
         }
         #[cfg(debug_assertions)]
-        crate::overlay::debug::trace(format!(
+        crate::overlay::macos::debug::trace(format!(
             "missing {} / {}",
             private_name.to_string_lossy(),
             public_name.to_string_lossy()

@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod config_actions;
 pub mod keybindings;
+pub mod page;
 pub mod panes;
 pub mod settings;
 

@@ -18,6 +18,7 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use super::combo::{ModMask, ModType, Side};
+use super::key::key_from_macos_keycode;
 use super::{EventKind, RawEvent, Suppressor};
 
 // Device-specific modifier bits inside `CGEventFlags::bits()` (low 16 bits).
@@ -56,9 +57,11 @@ pub fn run(writer: PipeWriter, suppressor: Arc<Mutex<Suppressor>>) -> Result<()>
                 CGEventType::FlagsChanged => EventKind::FlagsChanged,
                 _ => return CallbackResult::Keep,
             };
-            let code = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+            let key = key_from_macos_keycode(
+                event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16,
+            );
             let mods = decode_mods(event.get_flags().bits());
-            let raw = RawEvent { kind, code, mods };
+            let raw = RawEvent { kind, key, mods };
 
             // Always forward — Tracker (tokio side) needs every event even
             // for keys we end up dropping for the foreground.
@@ -177,5 +180,43 @@ mod tests {
         // without a side bit → we ignore it.
         let m = decode_mods(0x0010_0000);
         assert_eq!(m, ModMask::empty());
+    }
+
+    #[test]
+    fn keycode_mapping_keeps_modifier_sides() {
+        assert_eq!(
+            key_from_macos_keycode(0x37).modifier(),
+            Some((ModType::Cmd, Side::Left))
+        );
+        assert_eq!(
+            key_from_macos_keycode(0x36).modifier(),
+            Some((ModType::Cmd, Side::Right))
+        );
+        assert_eq!(
+            key_from_macos_keycode(0x38).modifier(),
+            Some((ModType::Shift, Side::Left))
+        );
+        assert_eq!(
+            key_from_macos_keycode(0x3C).modifier(),
+            Some((ModType::Shift, Side::Right))
+        );
+        assert_eq!(
+            key_from_macos_keycode(0x3A).modifier(),
+            Some((ModType::Opt, Side::Left))
+        );
+        assert_eq!(
+            key_from_macos_keycode(0x3D).modifier(),
+            Some((ModType::Opt, Side::Right))
+        );
+        assert_eq!(
+            key_from_macos_keycode(0x3B).modifier(),
+            Some((ModType::Ctrl, Side::Left))
+        );
+        assert_eq!(
+            key_from_macos_keycode(0x3E).modifier(),
+            Some((ModType::Ctrl, Side::Right))
+        );
+        assert_eq!(key_from_macos_keycode(0x6A), crate::hotkey::Key::F(16));
+        assert_eq!(key_from_macos_keycode(0x00), crate::hotkey::Key::Char('a'));
     }
 }

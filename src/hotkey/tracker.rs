@@ -33,7 +33,7 @@
 use std::time::{Duration, Instant};
 
 use super::combo::Combo;
-use super::parse::modifier_from_keycode;
+use super::key::Key;
 use super::{EventKind, HotkeyEvent, RawEvent};
 
 /// How long the configured modifier(s) may stay down before a release no
@@ -80,6 +80,7 @@ impl Tracker {
         }
     }
 
+    #[cfg(test)]
     pub fn set_trigger(&mut self, trigger: Combo) {
         // Trigger swap: clear in-flight tap candidates so old state can't
         // bleed into the new trigger. Pressing held trigger keys at the
@@ -100,9 +101,9 @@ impl Tracker {
 
     // --- keyed combo / pure key ---
 
-    fn on_keyed_combo(&mut self, ev: RawEvent, now: Instant, key: u16) -> Option<HotkeyEvent> {
+    fn on_keyed_combo(&mut self, ev: RawEvent, now: Instant, key: Key) -> Option<HotkeyEvent> {
         match ev.kind {
-            EventKind::KeyDown if ev.code == key => {
+            EventKind::KeyDown if ev.key == key => {
                 if self.key_held {
                     return None; // auto-repeat
                 }
@@ -113,7 +114,7 @@ impl Tracker {
                     None
                 }
             }
-            EventKind::KeyUp if ev.code == key => {
+            EventKind::KeyUp if ev.key == key => {
                 self.key_held = false;
                 None
             }
@@ -153,7 +154,7 @@ impl Tracker {
             // tap candidate) from "extra modifier added" (abort — the user
             // is composing a longer combo, not tapping).
             let started = self.mod_match_since.take().unwrap();
-            let Some((ty, side)) = modifier_from_keycode(ev.code) else {
+            let Some((ty, side)) = ev.key.modifier() else {
                 // Match was broken by something other than a modifier
                 // transition? Shouldn't happen — FlagsChanged events
                 // always carry a modifier keycode on macOS. Treat as
@@ -208,13 +209,13 @@ mod tests {
     use crate::hotkey::combo::{ModMask, ModMatcher, ModType, Side};
 
     // --- keycodes used throughout tests ---
-    const F16: u16 = 0x6A;
-    const R: u16 = 0x0F;
-    const A: u16 = 0x00;
-    const L_CMD: u16 = 0x37;
-    const R_CMD: u16 = 0x36;
-    const L_SHIFT: u16 = 0x38;
-    const R_SHIFT: u16 = 0x3C;
+    const F16: Key = Key::F(16);
+    const R: Key = Key::Char('r');
+    const A: Key = Key::Char('a');
+    const L_CMD: Key = Key::Modifier(ModType::Cmd, Side::Left);
+    const R_CMD: Key = Key::Modifier(ModType::Cmd, Side::Right);
+    const L_SHIFT: Key = Key::Modifier(ModType::Shift, Side::Left);
+    const R_SHIFT: Key = Key::Modifier(ModType::Shift, Side::Right);
 
     fn now_zero() -> Instant {
         Instant::now()
@@ -222,20 +223,20 @@ mod tests {
 
     // --- combo constructors ---
 
-    fn pure_key(code: u16, double: bool) -> Combo {
+    fn pure_key(key: Key, double: bool) -> Combo {
         Combo {
             mods: [ModMatcher::NotPresent; 4],
-            key: Some(code),
+            key: Some(key),
             double,
         }
     }
 
-    fn cmd_plus_key(code: u16, double: bool) -> Combo {
+    fn cmd_plus_key(key: Key, double: bool) -> Combo {
         let mut mods = [ModMatcher::NotPresent; 4];
         mods[ModType::Cmd as usize] = ModMatcher::EitherSide;
         Combo {
             mods,
-            key: Some(code),
+            key: Some(key),
             double,
         }
     }
@@ -252,26 +253,26 @@ mod tests {
 
     // --- event constructors ---
 
-    fn key_down(code: u16, mods: ModMask) -> RawEvent {
+    fn key_down(key: Key, mods: ModMask) -> RawEvent {
         RawEvent {
             kind: EventKind::KeyDown,
-            code,
+            key,
             mods,
         }
     }
 
-    fn key_up(code: u16, mods: ModMask) -> RawEvent {
+    fn key_up(key: Key, mods: ModMask) -> RawEvent {
         RawEvent {
             kind: EventKind::KeyUp,
-            code,
+            key,
             mods,
         }
     }
 
-    fn flags(code: u16, mods: ModMask) -> RawEvent {
+    fn flags(key: Key, mods: ModMask) -> RawEvent {
         RawEvent {
             kind: EventKind::FlagsChanged,
-            code,
+            key,
             mods,
         }
     }

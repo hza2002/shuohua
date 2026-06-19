@@ -20,13 +20,13 @@
 
 use std::fmt;
 
+use super::key::Key;
+
 /// macOS virtual keycode (HIToolbox/Events.h). Side-agnostic — modifiers'
 /// L/R distinction lives in [`Side`] / [`ModMatcher`], not here.
-pub type KeyCode = u16;
-
 /// The four modifier classes we recognize. Stored as an index 0..4 so they
 /// can address into `Combo::mods` and `ModMask` bit pairs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModType {
     Cmd = 0,
     Ctrl = 1,
@@ -47,7 +47,7 @@ impl ModType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Side {
     Left,
     Right,
@@ -81,7 +81,7 @@ pub struct Combo {
     /// Required state of each modifier, indexed by `ModType as usize`.
     pub mods: [ModMatcher; 4],
     /// `Some(keycode)` for key-bearing combos, `None` for modifier-only.
-    pub key: Option<KeyCode>,
+    pub key: Option<Key>,
     /// `:double` suffix — fires only on the second tap within
     /// [`crate::hotkey::tracker::DOUBLE_TAP_WINDOW`].
     pub double: bool,
@@ -195,8 +195,8 @@ impl fmt::Display for Combo {
                 }
             }
         }
-        if let Some(code) = self.key {
-            let name = crate::hotkey::parse::keycode_to_name(code).unwrap_or("?");
+        if let Some(key) = self.key {
+            let name = key.name().unwrap_or("?");
             write_token(name, f)?;
         }
         if self.double {
@@ -210,10 +210,10 @@ impl fmt::Display for Combo {
 mod tests {
     use super::*;
 
-    fn combo_pure_key(code: KeyCode) -> Combo {
+    fn combo_pure_key(key: Key) -> Combo {
         Combo {
             mods: [ModMatcher::NotPresent; 4],
-            key: Some(code),
+            key: Some(key),
             double: false,
         }
     }
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn matches_pure_key_requires_no_mods() {
-        let c = combo_pure_key(0x6A);
+        let c = combo_pure_key(Key::F(16));
         assert!(ModMask::empty().matches_combo(&c));
 
         let mut m = ModMask::empty();
@@ -251,7 +251,7 @@ mod tests {
                 ModMatcher::NotPresent,
                 ModMatcher::NotPresent,
             ],
-            key: Some(0),
+            key: Some(Key::Char('r')),
             double: false,
         };
         let mut m = ModMask::empty();
@@ -271,7 +271,7 @@ mod tests {
                 ModMatcher::NotPresent,
                 ModMatcher::NotPresent,
             ],
-            key: Some(0),
+            key: Some(Key::Char('r')),
             double: false,
         };
         let mut m = ModMask::empty();
@@ -294,7 +294,7 @@ mod tests {
                 ModMatcher::NotPresent,
                 ModMatcher::NotPresent,
             ],
-            key: Some(0),
+            key: Some(Key::Char('r')),
             double: false,
         };
         let mut m = ModMask::empty();

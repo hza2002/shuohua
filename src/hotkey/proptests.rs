@@ -14,17 +14,17 @@
 //!   reference model has to mirror almost the entire impl.
 
 use super::combo::{Combo, ModMatcher};
-use super::{EventKind, HotkeyEvent, ModMask, RawEvent, Suppressor, Tracker};
+use super::{EventKind, HotkeyEvent, Key, ModMask, RawEvent, Suppressor, Tracker};
 use proptest::prelude::*;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-const F16: u16 = 0x6A;
-const F17: u16 = 0x40;
-const A: u16 = 0x00;
-const B: u16 = 0x0B;
+const F16: Key = Key::F(16);
+const F17: Key = Key::F(17);
+const A: Key = Key::Char('a');
+const B: Key = Key::Char('b');
 
-fn keycode() -> impl Strategy<Value = u16> {
+fn key() -> impl Strategy<Value = Key> {
     prop_oneof![Just(F16), Just(F17), Just(A), Just(B)]
 }
 
@@ -33,17 +33,17 @@ fn key_event_kind() -> impl Strategy<Value = EventKind> {
 }
 
 fn key_event() -> impl Strategy<Value = RawEvent> {
-    (key_event_kind(), keycode()).prop_map(|(kind, code)| RawEvent {
+    (key_event_kind(), key()).prop_map(|(kind, key)| RawEvent {
         kind,
-        code,
+        key,
         mods: ModMask::empty(),
     })
 }
 
-fn pure_key_combo(code: u16) -> Combo {
+fn pure_key_combo(key: Key) -> Combo {
     Combo {
         mods: [ModMatcher::NotPresent; 4],
-        key: Some(code),
+        key: Some(key),
         double: false,
     }
 }
@@ -51,13 +51,13 @@ fn pure_key_combo(code: u16) -> Combo {
 #[derive(Debug, Clone)]
 enum Action {
     Event(RawEvent),
-    SwapTrigger(u16),
+    SwapTrigger(Key),
 }
 
 fn action() -> impl Strategy<Value = Action> {
     prop_oneof![
         9 => key_event().prop_map(Action::Event),
-        1 => keycode().prop_map(Action::SwapTrigger),
+        1 => key().prop_map(Action::SwapTrigger),
     ]
 }
 
@@ -68,11 +68,11 @@ proptest! {
     /// everything else returns false. Trigger swap preserves the held set.
     #[test]
     fn suppressor_matches_reference_model(
-        initial in keycode(),
+        initial in key(),
         actions in proptest::collection::vec(action(), 0..64),
     ) {
         let mut s = Suppressor::new(pure_key_combo(initial));
-        let mut model_held: HashSet<u16> = HashSet::new();
+        let mut model_held: HashSet<Key> = HashSet::new();
         let mut model_trigger = initial;
 
         for a in actions {
@@ -85,22 +85,22 @@ proptest! {
                     let actual = s.on_raw(ev);
                     let expected = match ev.kind {
                         EventKind::KeyDown => {
-                            if model_held.contains(&ev.code) {
+                            if model_held.contains(&ev.key) {
                                 true
-                            } else if ev.code == model_trigger {
+                            } else if ev.key == model_trigger {
                                 // ev.mods is always empty for pure-key combos,
                                 // and pure-key combo requires empty mods → match.
-                                model_held.insert(ev.code);
+                                model_held.insert(ev.key);
                                 true
                             } else {
                                 false
                             }
                         }
-                        EventKind::KeyUp => model_held.remove(&ev.code),
+                        EventKind::KeyUp => model_held.remove(&ev.key),
                         EventKind::FlagsChanged => false,
                     };
-                    prop_assert_eq!(actual, expected, "ev={:?} trigger={:#x}", ev, model_trigger);
-                    let impl_held: HashSet<u16> = s.held().iter().copied().collect();
+                    prop_assert_eq!(actual, expected, "ev={:?} trigger={:?}", ev, model_trigger);
+                    let impl_held: HashSet<Key> = s.held().iter().copied().collect();
                     prop_assert_eq!(impl_held, model_held.clone());
                 }
             }
@@ -114,13 +114,13 @@ proptest! {
     /// `KeyUp` either way).
     #[test]
     fn suppressed_downs_pair_with_suppressed_ups(
-        initial in keycode(),
+        initial in key(),
         actions in proptest::collection::vec(action(), 0..64),
     ) {
         let mut s = Suppressor::new(pure_key_combo(initial));
-        let mut entered = std::collections::HashMap::<u16, i32>::new();
-        let mut left = std::collections::HashMap::<u16, i32>::new();
-        let mut held_set: HashSet<u16> = HashSet::new();
+        let mut entered = std::collections::HashMap::<Key, i32>::new();
+        let mut left = std::collections::HashMap::<Key, i32>::new();
+        let mut held_set: HashSet<Key> = HashSet::new();
 
         for a in actions {
             match a {
@@ -128,14 +128,14 @@ proptest! {
                 Action::Event(ev) => {
                     let suppressed = s.on_raw(ev);
                     match ev.kind {
-                        EventKind::KeyDown if suppressed && !held_set.contains(&ev.code) => {
+                        EventKind::KeyDown if suppressed && !held_set.contains(&ev.key) => {
                             // Fresh entry into held.
-                            *entered.entry(ev.code).or_default() += 1;
-                            held_set.insert(ev.code);
+                            *entered.entry(ev.key).or_default() += 1;
+                            held_set.insert(ev.key);
                         }
                         EventKind::KeyUp if suppressed => {
-                            *left.entry(ev.code).or_default() += 1;
-                            held_set.remove(&ev.code);
+                            *left.entry(ev.key).or_default() += 1;
+                            held_set.remove(&ev.key);
                         }
                         _ => {}
                     }
@@ -148,7 +148,7 @@ proptest! {
             let l = left.get(&code).copied().unwrap_or(0);
             let still_held = held_set.contains(&code);
             let expected_diff = if still_held { 1 } else { 0 };
-            prop_assert_eq!(e - l, expected_diff, "code={:#x}", code);
+            prop_assert_eq!(e - l, expected_diff, "key={:?}", code);
         }
     }
 
@@ -158,7 +158,7 @@ proptest! {
     /// Other codes never fire.
     #[test]
     fn tracker_pure_key_matches_reference(
-        trigger in keycode(),
+        trigger in key(),
         events in proptest::collection::vec(key_event(), 0..64),
     ) {
         let mut t = Tracker::new(pure_key_combo(trigger));
@@ -168,7 +168,7 @@ proptest! {
         for (i, ev) in events.iter().enumerate() {
             let now = base + Duration::from_millis((i as u64) * 10);
             let actual = t.on_event(*ev, now);
-            let expected = if ev.code != trigger {
+            let expected = if ev.key != trigger {
                 None
             } else {
                 match ev.kind {
@@ -196,7 +196,7 @@ proptest! {
     /// the window.
     #[test]
     fn tracker_double_tap_fires_on_even_taps(
-        trigger in keycode(),
+        trigger in key(),
         n_taps in 0u32..8,
     ) {
         let mut combo = pure_key_combo(trigger);
@@ -209,14 +209,14 @@ proptest! {
             // All within window: 50ms spacing → far below 400ms default.
             let now = base + Duration::from_millis(i as u64 * 50);
             let r = t.on_event(
-                RawEvent { kind: EventKind::KeyDown, code: trigger, mods: ModMask::empty() },
+                RawEvent { kind: EventKind::KeyDown, key: trigger, mods: ModMask::empty() },
                 now,
             );
             if matches!(r, Some(HotkeyEvent::TriggerRecord)) {
                 emits += 1;
             }
             t.on_event(
-                RawEvent { kind: EventKind::KeyUp, code: trigger, mods: ModMask::empty() },
+                RawEvent { kind: EventKind::KeyUp, key: trigger, mods: ModMask::empty() },
                 now + Duration::from_millis(1),
             );
         }

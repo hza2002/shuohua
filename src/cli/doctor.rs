@@ -98,13 +98,24 @@ fn check_microphone_input() {
 }
 
 fn check_hotkey() {
-    match crate::config::load_from(&crate::config::default_path())
-        .and_then(|cfg| crate::HotkeyBindings::parse(&cfg.hotkey).map(|bindings| (cfg, bindings)))
-    {
-        Ok((cfg, bindings)) => println!(
-            "hotkey: OK trigger {:?} -> {}, cancel {:?} -> {}",
-            cfg.hotkey.trigger, bindings.trigger, cfg.hotkey.cancel, bindings.cancel
-        ),
+    match crate::config::load_from(&crate::config::default_path()).and_then(|cfg| {
+        crate::hotkey::Bindings::parse(&cfg.hotkey.trigger, &cfg.hotkey.cancel)
+            .map(|bindings| (cfg, bindings))
+    }) {
+        Ok((cfg, bindings)) => {
+            let trigger = bindings
+                .combo_for(crate::hotkey::HotkeyAction::ToggleRecord)
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "<missing>".to_string());
+            let cancel = bindings
+                .combo_for(crate::hotkey::HotkeyAction::CancelRecord)
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "<missing>".to_string());
+            println!(
+                "hotkey: OK trigger {:?} -> {}, cancel {:?} -> {}",
+                cfg.hotkey.trigger, trigger, cfg.hotkey.cancel, cancel
+            );
+        }
         Err(e) => {
             println!("hotkey: ERROR {e:#}");
             println!("hint: see docs/DESIGN.md §2.4 for the supported hotkey grammar");

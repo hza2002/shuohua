@@ -29,7 +29,8 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use super::combo::{Combo, KeyCode, ModMatcher, ModType, Side};
+use super::combo::{Combo, ModMatcher, ModType, Side};
+use super::key::{key_from_name, Key};
 
 pub fn parse(s: &str) -> Result<Combo> {
     let s = s.trim();
@@ -61,7 +62,7 @@ pub fn parse(s: &str) -> Result<Combo> {
     // Classify each token. Modifiers go into the matcher array; the last
     // non-modifier (if any) is the key.
     let mut mods: [ModMatcher; 4] = [ModMatcher::NotPresent; 4];
-    let mut key: Option<KeyCode> = None;
+    let mut key: Option<Key> = None;
 
     for (i, token) in tokens.iter().enumerate() {
         if let Some((ty, side_req)) = parse_modifier_token(token) {
@@ -75,7 +76,7 @@ pub fn parse(s: &str) -> Result<Combo> {
             merge_mod_matcher(&mut mods, ty, side_req).with_context(|| {
                 format!("duplicate / contradictory modifier {token:?} in hotkey {body:?}")
             })?;
-        } else if let Some(code) = name_to_keycode(token) {
+        } else if let Some(code) = key_from_name(token) {
             // Key token must be the last token.
             if i != tokens.len() - 1 {
                 bail!("key {token:?} must be the last token in hotkey {body:?}");
@@ -92,32 +93,6 @@ pub fn parse(s: &str) -> Result<Combo> {
         bail!("hotkey {body:?} resolved to nothing — must have at least a key or modifier");
     }
     Ok(combo)
-}
-
-/// `parse(combo.to_string()) == combo` for any combo we can construct.
-/// Useful so `Display` impl on `Combo` round-trips through this module.
-pub fn keycode_to_name(code: KeyCode) -> Option<&'static str> {
-    LEXICON
-        .iter()
-        .find(|(_, c)| *c == code)
-        .map(|(name, _)| *name)
-}
-
-/// macOS modifier-key keycodes (FlagsChanged events). Used by the
-/// CGEventTap callback to maintain a `ModMask` snapshot, and by the
-/// Suppressor to decide whether a key event is for a modifier.
-pub fn modifier_from_keycode(code: KeyCode) -> Option<(ModType, Side)> {
-    match code {
-        0x37 => Some((ModType::Cmd, Side::Left)),
-        0x36 => Some((ModType::Cmd, Side::Right)),
-        0x38 => Some((ModType::Shift, Side::Left)),
-        0x3C => Some((ModType::Shift, Side::Right)),
-        0x3A => Some((ModType::Opt, Side::Left)),
-        0x3D => Some((ModType::Opt, Side::Right)),
-        0x3B => Some((ModType::Ctrl, Side::Left)),
-        0x3E => Some((ModType::Ctrl, Side::Right)),
-        _ => None,
-    }
 }
 
 // --- modifier token parsing ---
@@ -178,104 +153,6 @@ fn merge_mod_matcher(
     Ok(())
 }
 
-// --- lexicon ---
-
-/// (name, macOS HIToolbox virtual keycode). Side-agnostic — modifier keys
-/// are intentionally absent here; see [`modifier_from_keycode`].
-const LEXICON: &[(&str, KeyCode)] = &[
-    // Function keys F1–F20.
-    ("f1", 0x7A),
-    ("f2", 0x78),
-    ("f3", 0x63),
-    ("f4", 0x76),
-    ("f5", 0x60),
-    ("f6", 0x61),
-    ("f7", 0x62),
-    ("f8", 0x64),
-    ("f9", 0x65),
-    ("f10", 0x6D),
-    ("f11", 0x67),
-    ("f12", 0x6F),
-    ("f13", 0x69),
-    ("f14", 0x6B),
-    ("f15", 0x71),
-    ("f16", 0x6A),
-    ("f17", 0x40),
-    ("f18", 0x4F),
-    ("f19", 0x50),
-    ("f20", 0x5A),
-    // Letters a–z.
-    ("a", 0x00),
-    ("b", 0x0B),
-    ("c", 0x08),
-    ("d", 0x02),
-    ("e", 0x0E),
-    ("f", 0x03),
-    ("g", 0x05),
-    ("h", 0x04),
-    ("i", 0x22),
-    ("j", 0x26),
-    ("k", 0x28),
-    ("l", 0x25),
-    ("m", 0x2E),
-    ("n", 0x2D),
-    ("o", 0x1F),
-    ("p", 0x23),
-    ("q", 0x0C),
-    ("r", 0x0F),
-    ("s", 0x01),
-    ("t", 0x11),
-    ("u", 0x20),
-    ("v", 0x09),
-    ("w", 0x0D),
-    ("x", 0x07),
-    ("y", 0x10),
-    ("z", 0x06),
-    // Digits 0–9 (top row).
-    ("0", 0x1D),
-    ("1", 0x12),
-    ("2", 0x13),
-    ("3", 0x14),
-    ("4", 0x15),
-    ("5", 0x17),
-    ("6", 0x16),
-    ("7", 0x1A),
-    ("8", 0x1C),
-    ("9", 0x19),
-    // Whitespace / control.
-    ("space", 0x31),
-    ("tab", 0x30),
-    ("return", 0x24),
-    ("escape", 0x35),
-    ("esc", 0x35),
-    ("backspace", 0x33),
-    ("delete", 0x75),
-    // Arrows.
-    ("up", 0x7E),
-    ("down", 0x7D),
-    ("left", 0x7B),
-    ("right", 0x7C),
-    // Punctuation.
-    (";", 0x29),
-    (",", 0x2B),
-    (".", 0x2F),
-    ("/", 0x2C),
-    ("\\", 0x2A),
-    ("[", 0x21),
-    ("]", 0x1E),
-    ("'", 0x27),
-    ("`", 0x32),
-    ("-", 0x1B),
-    ("=", 0x18),
-];
-
-fn name_to_keycode(name: &str) -> Option<KeyCode> {
-    LEXICON
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, code)| *code)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,7 +174,7 @@ mod tests {
     fn pure_function_key() {
         let c = parse("f16").unwrap();
         assert_eq!(c.mods, [notpresent(); 4]);
-        assert_eq!(c.key, Some(0x6A));
+        assert_eq!(c.key, Some(Key::F(16)));
         assert!(!c.double);
     }
 
@@ -317,7 +194,7 @@ mod tests {
         let c = parse("cmd+r").unwrap();
         assert_eq!(c.mods[ModType::Cmd as usize], eitherside());
         assert_eq!(c.mods[ModType::Ctrl as usize], notpresent());
-        assert_eq!(c.key, Some(0x0F));
+        assert_eq!(c.key, Some(Key::Char('r')));
     }
 
     #[test]
@@ -326,7 +203,7 @@ mod tests {
         assert_eq!(c.mods[ModType::Cmd as usize], left());
         assert_eq!(c.mods[ModType::Shift as usize], eitherside());
         assert_eq!(c.mods[ModType::Ctrl as usize], notpresent());
-        assert_eq!(c.key, Some(0x0F));
+        assert_eq!(c.key, Some(Key::Char('r')));
     }
 
     #[test]
@@ -355,7 +232,7 @@ mod tests {
         let c = parse("cmd+;:double").unwrap();
         assert!(c.double);
         assert_eq!(c.mods[ModType::Cmd as usize], eitherside());
-        assert_eq!(c.key, Some(0x29));
+        assert_eq!(c.key, Some(Key::Punct(';')));
     }
 
     #[test]
@@ -363,7 +240,7 @@ mod tests {
         // `left` is the Left Arrow key.
         let c = parse("cmd+left").unwrap();
         assert_eq!(c.mods[ModType::Cmd as usize], eitherside());
-        assert_eq!(c.key, Some(0x7B));
+        assert_eq!(c.key, Some(Key::ArrowLeft));
         // `left_cmd` is the modifier, not "left" + "cmd".
         let c = parse("left_cmd").unwrap();
         assert_eq!(c.mods[ModType::Cmd as usize], left());
@@ -372,21 +249,21 @@ mod tests {
 
     #[test]
     fn punctuation_keys() {
-        for &(name, code) in &[
-            (";", 0x29u16),
-            (",", 0x2B),
-            (".", 0x2F),
-            ("/", 0x2C),
-            ("\\", 0x2A),
-            ("[", 0x21),
-            ("]", 0x1E),
-            ("'", 0x27),
-            ("`", 0x32),
-            ("-", 0x1B),
-            ("=", 0x18),
+        for &(name, key) in &[
+            (";", Key::Punct(';')),
+            (",", Key::Punct(',')),
+            (".", Key::Punct('.')),
+            ("/", Key::Punct('/')),
+            ("\\", Key::Punct('\\')),
+            ("[", Key::Punct('[')),
+            ("]", Key::Punct(']')),
+            ("'", Key::Punct('\'')),
+            ("`", Key::Punct('`')),
+            ("-", Key::Punct('-')),
+            ("=", Key::Punct('=')),
         ] {
             let c = parse(&format!("cmd+{name}")).unwrap();
-            assert_eq!(c.key, Some(code), "punctuation {name:?}");
+            assert_eq!(c.key, Some(key), "punctuation {name:?}");
         }
     }
 
@@ -503,44 +380,5 @@ mod tests {
             let reparsed = parse(&printed).unwrap();
             assert_eq!(c, reparsed, "round trip failed for {input:?} → {printed:?}");
         }
-    }
-
-    #[test]
-    fn modifier_keycodes_distinguished_by_side() {
-        assert_eq!(
-            modifier_from_keycode(0x37),
-            Some((ModType::Cmd, Side::Left))
-        );
-        assert_eq!(
-            modifier_from_keycode(0x36),
-            Some((ModType::Cmd, Side::Right))
-        );
-        assert_eq!(
-            modifier_from_keycode(0x38),
-            Some((ModType::Shift, Side::Left))
-        );
-        assert_eq!(
-            modifier_from_keycode(0x3C),
-            Some((ModType::Shift, Side::Right))
-        );
-        assert_eq!(
-            modifier_from_keycode(0x3A),
-            Some((ModType::Opt, Side::Left))
-        );
-        assert_eq!(
-            modifier_from_keycode(0x3D),
-            Some((ModType::Opt, Side::Right))
-        );
-        assert_eq!(
-            modifier_from_keycode(0x3B),
-            Some((ModType::Ctrl, Side::Left))
-        );
-        assert_eq!(
-            modifier_from_keycode(0x3E),
-            Some((ModType::Ctrl, Side::Right))
-        );
-        // Non-modifier keys.
-        assert_eq!(modifier_from_keycode(0x6A), None); // f16
-        assert_eq!(modifier_from_keycode(0x00), None); // a
     }
 }

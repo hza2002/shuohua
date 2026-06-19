@@ -26,7 +26,7 @@
 //! `KeyDown`s of a held code are also suppressed.
 
 use super::combo::Combo;
-use super::{EventKind, RawEvent};
+use super::{EventKind, Key, RawEvent};
 
 #[derive(Debug)]
 pub struct Suppressor {
@@ -34,7 +34,7 @@ pub struct Suppressor {
     cancel: Option<Combo>,
     cancel_active: bool,
     /// Physical keycodes we've eaten the down of and not yet seen the up.
-    held: Vec<u16>,
+    held: Vec<Key>,
 }
 
 impl Suppressor {
@@ -65,21 +65,21 @@ impl Suppressor {
 
     /// Returns `true` when the OS-level event should be dropped.
     pub fn on_raw(&mut self, ev: RawEvent) -> bool {
-        let already_held = self.held.contains(&ev.code);
+        let already_held = self.held.contains(&ev.key);
         match ev.kind {
             EventKind::KeyDown => {
                 if already_held {
                     return true; // auto-repeat of a key whose down was eaten
                 }
                 if self.should_suppress_fresh_down(ev) {
-                    self.held.push(ev.code);
+                    self.held.push(ev.key);
                     return true;
                 }
                 false
             }
             EventKind::KeyUp => {
                 if already_held {
-                    self.held.retain(|c| *c != ev.code);
+                    self.held.retain(|c| *c != ev.key);
                     return true;
                 }
                 false
@@ -101,7 +101,7 @@ impl Suppressor {
     }
 
     #[cfg(test)]
-    pub fn held(&self) -> &[u16] {
+    pub fn held(&self) -> &[Key] {
         &self.held
     }
 }
@@ -110,7 +110,7 @@ fn matches_keyed_binding(binding: &Combo, ev: RawEvent) -> bool {
     let Some(key) = binding.key else {
         return false; // modifier-only binding: nothing to suppress
     };
-    ev.code == key && ev.mods.matches_combo(binding)
+    ev.key == key && ev.mods.matches_combo(binding)
 }
 
 #[cfg(test)]
@@ -118,34 +118,34 @@ mod tests {
     use super::*;
     use crate::hotkey::combo::{ModMask, ModMatcher, ModType, Side};
 
-    const F16: u16 = 0x6A;
-    const F17: u16 = 0x40;
-    const R: u16 = 0x0F;
-    const A: u16 = 0x00;
-    const L_CMD: u16 = 0x37;
+    const F16: Key = Key::F(16);
+    const F17: Key = Key::F(17);
+    const R: Key = Key::Char('r');
+    const A: Key = Key::Char('a');
+    const L_CMD: Key = Key::Modifier(ModType::Cmd, Side::Left);
 
-    fn pure_key(code: u16) -> Combo {
+    fn pure_key(key: Key) -> Combo {
         Combo {
             mods: [ModMatcher::NotPresent; 4],
-            key: Some(code),
+            key: Some(key),
             double: false,
         }
     }
 
-    fn pure_key_double(code: u16) -> Combo {
+    fn pure_key_double(key: Key) -> Combo {
         Combo {
             mods: [ModMatcher::NotPresent; 4],
-            key: Some(code),
+            key: Some(key),
             double: true,
         }
     }
 
-    fn cmd_plus(code: u16) -> Combo {
+    fn cmd_plus(key: Key) -> Combo {
         let mut mods = [ModMatcher::NotPresent; 4];
         mods[ModType::Cmd as usize] = ModMatcher::EitherSide;
         Combo {
             mods,
-            key: Some(code),
+            key: Some(key),
             double: false,
         }
     }
@@ -166,24 +166,24 @@ mod tests {
         m
     }
 
-    fn down(code: u16, mods: ModMask) -> RawEvent {
+    fn down(key: Key, mods: ModMask) -> RawEvent {
         RawEvent {
             kind: EventKind::KeyDown,
-            code,
+            key,
             mods,
         }
     }
-    fn up(code: u16, mods: ModMask) -> RawEvent {
+    fn up(key: Key, mods: ModMask) -> RawEvent {
         RawEvent {
             kind: EventKind::KeyUp,
-            code,
+            key,
             mods,
         }
     }
-    fn flag(code: u16, mods: ModMask) -> RawEvent {
+    fn flag(key: Key, mods: ModMask) -> RawEvent {
         RawEvent {
             kind: EventKind::FlagsChanged,
-            code,
+            key,
             mods,
         }
     }
@@ -224,23 +224,23 @@ mod tests {
     #[test]
     fn active_cancel_double_suppresses_both_press_cycles() {
         let mut s = Suppressor::new(pure_key(F16));
-        s.set_cancel(pure_key_double(0x35));
+        s.set_cancel(pure_key_double(Key::Escape));
         s.set_cancel_active(true);
 
-        assert!(s.on_raw(down(0x35, ModMask::empty())));
-        assert!(s.on_raw(up(0x35, ModMask::empty())));
-        assert!(s.on_raw(down(0x35, ModMask::empty())));
-        assert!(s.on_raw(up(0x35, ModMask::empty())));
+        assert!(s.on_raw(down(Key::Escape, ModMask::empty())));
+        assert!(s.on_raw(up(Key::Escape, ModMask::empty())));
+        assert!(s.on_raw(down(Key::Escape, ModMask::empty())));
+        assert!(s.on_raw(up(Key::Escape, ModMask::empty())));
     }
 
     #[test]
     fn inactive_cancel_passes_through() {
         let mut s = Suppressor::new(pure_key(F16));
-        s.set_cancel(pure_key_double(0x35));
+        s.set_cancel(pure_key_double(Key::Escape));
         s.set_cancel_active(false);
 
-        assert!(!s.on_raw(down(0x35, ModMask::empty())));
-        assert!(!s.on_raw(up(0x35, ModMask::empty())));
+        assert!(!s.on_raw(down(Key::Escape, ModMask::empty())));
+        assert!(!s.on_raw(up(Key::Escape, ModMask::empty())));
     }
 
     // ---------- combo ----------
@@ -280,7 +280,10 @@ mod tests {
     #[test]
     fn modifier_only_suppresses_nothing() {
         let mut s = Suppressor::new(right_shift_only());
-        assert!(!s.on_raw(flag(0x3C, ModMask::empty())));
+        assert!(!s.on_raw(flag(
+            Key::Modifier(ModType::Shift, Side::Right),
+            ModMask::empty()
+        )));
         assert!(!s.on_raw(down(A, ModMask::empty())));
         assert!(!s.on_raw(up(A, ModMask::empty())));
     }

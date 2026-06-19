@@ -180,7 +180,7 @@ pub fn spawn_i18n(mut rx: Rx, handle: OverlayHandle) {
 /// Hotkey subscriber：`[hotkey]` 变化 → 重新 parse，成功则发新 binding 到 daemon
 /// 主循环（主循环用 tokio::select 在 `RawEvent` 和这个 channel 之间多路复用，swap Tracker
 /// 与 Suppressor）。parse 失败保留旧 trigger，只打日志。
-pub fn spawn_hotkey(mut rx: Rx, combo_tx: mpsc::UnboundedSender<crate::HotkeyBindings>) {
+pub fn spawn_hotkey(mut rx: Rx, combo_tx: mpsc::UnboundedSender<crate::hotkey::Bindings>) {
     tokio::spawn(async move {
         let mut prev = rx.borrow().config.hotkey.clone();
         while rx.changed().await.is_ok() {
@@ -188,10 +188,16 @@ pub fn spawn_hotkey(mut rx: Rx, combo_tx: mpsc::UnboundedSender<crate::HotkeyBin
             if next.trigger == prev.trigger && next.cancel == prev.cancel {
                 continue;
             }
-            match crate::HotkeyBindings::parse(&next) {
+            match crate::hotkey::Bindings::parse(&next.trigger, &next.cancel) {
                 Ok(bindings) => {
-                    let printed_trigger = bindings.trigger.to_string();
-                    let printed_cancel = bindings.cancel.to_string();
+                    let printed_trigger = bindings
+                        .combo_for(crate::hotkey::HotkeyAction::ToggleRecord)
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "<missing>".to_string());
+                    let printed_cancel = bindings
+                        .combo_for(crate::hotkey::HotkeyAction::CancelRecord)
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "<missing>".to_string());
                     if combo_tx.send(bindings).is_err() {
                         return;
                     }

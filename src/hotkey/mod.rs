@@ -14,10 +14,12 @@
 //! - [`provider_darwin`] — CGEventTap on a dedicated CFRunLoop thread,
 //!   encoding every observed event to the 4-byte wire format.
 //!
-//! Virtual keycodes are macOS HIToolbox values, stable across keyboard
-//! layouts (physical-position based).
+//! The core model uses platform-neutral [`Key`] values. Platform providers map
+//! OS-specific keycodes at the boundary.
 
+mod bindings;
 pub mod combo;
+pub mod key;
 pub mod parse;
 pub mod provider_darwin;
 pub mod suppressor;
@@ -26,7 +28,9 @@ pub mod tracker;
 #[cfg(test)]
 mod proptests;
 
+pub(crate) use bindings::{Bindings, HotkeyAction, TrackerSet};
 pub use combo::{Combo, ModMask};
+pub use key::Key;
 pub use suppressor::Suppressor;
 pub use tracker::Tracker;
 
@@ -36,12 +40,12 @@ pub use tracker::Tracker;
 pub enum EventKind {
     KeyDown = 0,
     KeyUp = 1,
-    /// Modifier-key transition. `RawEvent::code` is the modifier's keycode
-    /// (e.g. 0x37 for left Cmd), `mods` is the post-transition snapshot.
+    /// Modifier-key transition. `RawEvent::key` is a `Key::Modifier`, `mods`
+    /// is the post-transition snapshot.
     FlagsChanged = 2,
 }
 
-/// A keyboard event decoded from the CGEventTap pipe.
+/// A keyboard event decoded from the provider pipe.
 ///
 /// Wire format: 4 bytes `[kind, code_lo, code_hi, mods]`. Time is *not* on
 /// the wire — the Tracker stamps `Instant::now()` on receipt, which adds
@@ -51,7 +55,7 @@ pub enum EventKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RawEvent {
     pub kind: EventKind,
-    pub code: u16,
+    pub key: Key,
     pub mods: ModMask,
 }
 
@@ -59,8 +63,8 @@ impl RawEvent {
     pub fn encode(self) -> [u8; 4] {
         [
             self.kind as u8,
-            (self.code & 0xff) as u8,
-            (self.code >> 8) as u8,
+            (self.key.wire_code() & 0xff) as u8,
+            (self.key.wire_code() >> 8) as u8,
             self.mods.0,
         ]
     }
@@ -72,9 +76,10 @@ impl RawEvent {
             2 => EventKind::FlagsChanged,
             _ => return None,
         };
+        let code = u16::from_le_bytes([buf[1], buf[2]]);
         Some(Self {
             kind,
-            code: u16::from_le_bytes([buf[1], buf[2]]),
+            key: Key::from_wire_code(code),
             mods: ModMask(buf[3]),
         })
     }
@@ -99,10 +104,14 @@ mod wire_tests {
             EventKind::KeyUp,
             EventKind::FlagsChanged,
         ] {
-            for &(code, mods) in &[(0u16, 0u8), (0x6A, 0b1010_1010), (0xFFFF, 0xFF)] {
+            for &(key, mods) in &[
+                (Key::Unknown(0), 0u8),
+                (Key::F(16), 0b1010_1010),
+                (Key::Unknown(0x0fff), 0xff),
+            ] {
                 let ev = RawEvent {
                     kind,
-                    code,
+                    key,
                     mods: ModMask(mods),
                 };
                 assert_eq!(RawEvent::decode(ev.encode()), Some(ev));

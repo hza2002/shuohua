@@ -125,7 +125,11 @@ pub fn monthly_history_files_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
             for entry in entries {
                 let entry = entry?;
                 let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "jsonl") {
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(is_monthly_history_file)
+                {
                     files.push(path);
                 }
             }
@@ -157,6 +161,23 @@ pub fn append_record(path: &Path, record: &HistoryRecord) -> Result<()> {
 
 fn local_offset() -> UtcOffset {
     UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC)
+}
+
+fn is_monthly_history_file(name: &str) -> bool {
+    let Some((stem, "jsonl")) = name.rsplit_once('.') else {
+        return false;
+    };
+    let bytes = stem.as_bytes();
+    if bytes.len() != 7 || bytes[4] != b'-' {
+        return false;
+    }
+    if !bytes[..4].iter().all(u8::is_ascii_digit) || !bytes[5..].iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    matches!(
+        &stem[5..],
+        "01" | "02" | "03" | "04" | "05" | "06" | "07" | "08" | "09" | "10" | "11" | "12"
+    )
 }
 
 #[cfg(test)]
@@ -258,6 +279,25 @@ mod tests {
             .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
             .collect();
         assert_eq!(names, vec!["2026-07.jsonl", "2026-05.jsonl"]);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn monthly_history_files_ignores_non_monthly_jsonl_files() {
+        let dir = std::env::temp_dir().join(format!("shuohua-history-list-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("2026-05.jsonl"), "").unwrap();
+        fs::write(dir.join("backup.jsonl"), "").unwrap();
+        fs::write(dir.join("2026-5.jsonl"), "").unwrap();
+        fs::write(dir.join("2026-13.jsonl"), "").unwrap();
+
+        let files = monthly_history_files_in_dir(&dir).unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["2026-05.jsonl"]);
 
         let _ = fs::remove_dir_all(dir);
     }

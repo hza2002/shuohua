@@ -169,8 +169,7 @@ impl StateStore {
     }
 
     pub fn set_stopping(&self, recording_id: String) {
-        let started_at = self.snapshot().started_at;
-        self.set_state(DaemonState::Stopping, Some(recording_id), started_at);
+        self.set_state_preserving_started_at(DaemonState::Stopping, Some(recording_id));
     }
 
     pub fn set_idle(&self) {
@@ -178,8 +177,7 @@ impl StateStore {
     }
 
     pub fn set_error(&self, recording_id: Option<String>) {
-        let started_at = self.snapshot().started_at;
-        self.set_state(DaemonState::Error, recording_id, started_at);
+        self.set_state_preserving_started_at(DaemonState::Error, recording_id);
     }
 
     pub fn app(&self, bundle_id: Option<String>, app_name: Option<String>) {
@@ -192,8 +190,16 @@ impl StateStore {
         });
     }
 
-    pub fn stats(&self, dur_ms: u64, words: u32) {
+    pub fn stats(&self, recording_id: String, dur_ms: u64, words: u32) {
         let mut inner = self.inner.lock().expect("state lock poisoned");
+        if !current_recording_matches(&inner.snapshot, &recording_id) {
+            tracing::debug!(
+                recording_id,
+                current = inner.snapshot.recording_id.as_deref(),
+                "drop stale state stats"
+            );
+            return;
+        }
         inner.snapshot.dur_ms = dur_ms;
         inner.snapshot.words = words;
         let _ = inner.tx.send(StateEvent::StatsChanged { dur_ms, words });
@@ -201,12 +207,28 @@ impl StateStore {
 
     pub fn partial(&self, recording_id: String, text: String) {
         let mut inner = self.inner.lock().expect("state lock poisoned");
+        if !current_recording_matches(&inner.snapshot, &recording_id) {
+            tracing::debug!(
+                recording_id,
+                current = inner.snapshot.recording_id.as_deref(),
+                "drop stale state partial"
+            );
+            return;
+        }
         inner.snapshot.partial = text.clone();
         let _ = inner.tx.send(StateEvent::Partial { recording_id, text });
     }
 
     pub fn segment(&self, recording_id: String, text: String) {
         let mut inner = self.inner.lock().expect("state lock poisoned");
+        if !current_recording_matches(&inner.snapshot, &recording_id) {
+            tracing::debug!(
+                recording_id,
+                current = inner.snapshot.recording_id.as_deref(),
+                "drop stale state segment"
+            );
+            return;
+        }
         inner.snapshot.segments.push(text.clone());
         inner.snapshot.partial.clear();
         inner.snapshot.words =
@@ -297,6 +319,23 @@ impl StateStore {
             started_at,
         });
     }
+
+    fn set_state_preserving_started_at(&self, state: DaemonState, recording_id: Option<String>) {
+        let mut inner = self.inner.lock().expect("state lock poisoned");
+        let started_at = inner.snapshot.started_at;
+        inner.snapshot.state = state;
+        inner.snapshot.recording_id = recording_id.clone();
+        inner.snapshot.started_at = started_at;
+        let _ = inner.tx.send(StateEvent::StateChanged {
+            state,
+            recording_id,
+            started_at,
+        });
+    }
+}
+
+fn current_recording_matches(snapshot: &StateSnapshot, recording_id: &str) -> bool {
+    snapshot.recording_id.as_deref() == Some(recording_id)
 }
 
 impl Default for StateStore {
@@ -322,7 +361,7 @@ mod tests {
             Some("com.apple.dt.Xcode".to_string()),
             Some("Xcode".to_string()),
         );
-        store.stats(3000, 1);
+        store.stats("01HXYZ".to_string(), 3000, 1);
         store.segment("01HXYZ".to_string(), "he".to_string());
         store.partial("01HXYZ".to_string(), "hello".to_string());
         store.audio_meter(
@@ -467,5 +506,25 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    #[test]
+    fn stale_recording_updates_do_not_mutate_snapshot_or_broadcast() {
+        let store = StateStore::new();
+        let (_, mut rx) = store.subscribe_with_snapshot();
+        store.set_recording("new".to_string(), datetime!(2026-06-13 12:00:00 UTC));
+        let _ = rx.try_recv().unwrap();
+
+        store.partial("old".to_string(), "stale partial".to_string());
+        store.segment("old".to_string(), "stale segment".to_string());
+        store.stats("old".to_string(), 9000, 42);
+
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.recording_id.as_deref(), Some("new"));
+        assert_eq!(snapshot.partial, "");
+        assert!(snapshot.segments.is_empty());
+        assert_eq!(snapshot.dur_ms, 0);
+        assert_eq!(snapshot.words, 0);
+        assert!(rx.try_recv().is_err());
     }
 }

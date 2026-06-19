@@ -797,7 +797,7 @@ fn handle_asr_event(
             );
             let words = crate::text_stats::compute(&live_text).words as u32;
             let dur_ms = recording_started_instant.elapsed().as_millis() as u64;
-            params.state.stats(dur_ms, words);
+            params.state.stats(recording_id.to_string(), dur_ms, words);
             overlay_send(params, OverlayCmd::SetStats { dur_ms, words });
             overlay_send(
                 params,

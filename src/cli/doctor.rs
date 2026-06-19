@@ -21,6 +21,7 @@ pub fn run(args: DoctorArgs) -> Result<()> {
     println!("shuo doctor");
     println!("version: {}", env!("CARGO_PKG_VERSION"));
     check_config();
+    check_i18n();
     check_hotkey();
     check_microphone_input();
     check_uds();
@@ -32,6 +33,18 @@ pub fn run(args: DoctorArgs) -> Result<()> {
         println!("runtime: skipped (run `shuo doctor --runtime` to test configured ASR/LLM runtime paths)");
     }
     Ok(())
+}
+
+fn check_i18n() {
+    let diagnostics = crate::i18n::diagnostics::diagnose_embedded();
+    if diagnostics.is_empty() {
+        println!("i18n.embedded: OK");
+        return;
+    }
+    println!("i18n.embedded: ERROR {} diagnostics", diagnostics.len());
+    for diagnostic in diagnostics {
+        println!("i18n.embedded: {diagnostic:?}");
+    }
 }
 
 fn check_config() {

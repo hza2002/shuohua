@@ -80,6 +80,7 @@ tracing-appender = "0.2"
 proptest = "1"
 
 [build-dependencies]
+ferrous-opencc = { version = "0.4", default-features = false, features = ["s2t-conversion"] }
 toml = "0.8"
 
 [features]

@@ -8,7 +8,7 @@ pub struct ConfigTemplateArgs {
     /// Directory to write generated templates into.
     #[arg(long)]
     pub out: Option<PathBuf>,
-    /// Comment language for generated templates: auto, en-US, or zh-CN.
+    /// Comment language for generated templates: auto, en-US, zh-CN, zh-Hant, zh-TW, zh-HK, or pseudo.
     #[arg(long, default_value = "auto")]
     pub lang: String,
 }

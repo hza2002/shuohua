@@ -46,7 +46,7 @@ fn template_lang(value: &str) -> crate::i18n::Lang {
 }
 
 fn write_templates(out: &Path, lang: crate::i18n::Lang) -> Result<()> {
-    std::fs::create_dir_all(out).with_context(|| format!("create {}", out.display()))?;
+    std::fs::create_dir_all(out).with_context(|| create_dir_context(out))?;
     let templates = template_outputs(out, lang);
     let conflicts: Vec<_> = templates
         .iter()
@@ -90,9 +90,23 @@ fn template_outputs(out: &Path, lang: crate::i18n::Lang) -> Vec<(PathBuf, String
 
 fn write_new_file(path: &Path, body: String) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| create_dir_context(parent))?;
     }
-    std::fs::write(path, body).with_context(|| format!("write {}", path.display()))
+    std::fs::write(path, body).with_context(|| write_file_context(path))
+}
+
+fn create_dir_context(path: &Path) -> String {
+    crate::i18n::tr(
+        "cli.config_template.create_dir_failed",
+        &[("path", path.display().to_string())],
+    )
+}
+
+fn write_file_context(path: &Path) -> String {
+    crate::i18n::tr(
+        "cli.config_template.write_file_failed",
+        &[("path", path.display().to_string())],
+    )
 }
 
 #[cfg(test)]
@@ -175,5 +189,17 @@ mod tests {
             }
             other => panic!("expected config-template command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn write_failure_context_is_localized() {
+        crate::i18n::init("en-US");
+
+        let path = Path::new("/tmp/shuohua/config.toml");
+
+        assert_eq!(
+            write_file_context(path),
+            "failed to write template file /tmp/shuohua/config.toml"
+        );
     }
 }

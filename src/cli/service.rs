@@ -1,3 +1,4 @@
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 use std::time::Duration;
@@ -16,22 +17,33 @@ pub fn plist_path() -> PathBuf {
 pub fn install() -> Result<()> {
     let state_dir = crate::state::history::state_dir();
     std::fs::create_dir_all(&state_dir)
-        .with_context(|| format!("create state dir {}", state_dir.display()))?;
+        .with_context(|| tr_path("cli.service.create_state_dir_failed", &state_dir))?;
     let plist = plist_path();
     if let Some(parent) = plist.parent() {
         std::fs::create_dir_all(parent)
-            .with_context(|| format!("create launch agents dir {}", parent.display()))?;
+            .with_context(|| tr_path("cli.service.create_launch_agents_dir_failed", parent))?;
     }
-    let exe = std::env::current_exe().context("resolve current shuo path")?;
+    let exe =
+        std::env::current_exe().context(crate::i18n::tr("cli.service.resolve_exe_failed", &[]))?;
     let body = plist_body(&exe, &state_dir);
-    std::fs::write(&plist, body).with_context(|| format!("write {}", plist.display()))?;
-    let _ = run_launchctl(&["bootout", &gui_domain(), plist.to_str().unwrap_or_default()]);
-    run_launchctl(&[
-        "bootstrap",
-        &gui_domain(),
-        plist.to_str().unwrap_or_default(),
-    ])?;
-    run_launchctl(&["kickstart", "-k", &format!("{}/{}", gui_domain(), LABEL)])?;
+    std::fs::write(&plist, body)
+        .with_context(|| tr_path("cli.service.write_plist_failed", &plist))?;
+    let _ = run_launchctl(
+        &["bootout", &gui_domain(), plist.to_str().unwrap_or_default()],
+        "cli.service.action_uninstall",
+    );
+    run_launchctl(
+        &[
+            "bootstrap",
+            &gui_domain(),
+            plist.to_str().unwrap_or_default(),
+        ],
+        "cli.service.action_install",
+    )?;
+    run_launchctl(
+        &["kickstart", "-k", &format!("{}/{}", gui_domain(), LABEL)],
+        "cli.service.action_start",
+    )?;
     println!(
         "{}",
         crate::i18n::tr(
@@ -44,9 +56,13 @@ pub fn install() -> Result<()> {
 
 pub fn uninstall() -> Result<()> {
     let plist = plist_path();
-    let _ = run_launchctl(&["bootout", &gui_domain(), plist.to_str().unwrap_or_default()]);
+    let _ = run_launchctl(
+        &["bootout", &gui_domain(), plist.to_str().unwrap_or_default()],
+        "cli.service.action_uninstall",
+    );
     if plist.exists() {
-        std::fs::remove_file(&plist).with_context(|| format!("remove {}", plist.display()))?;
+        std::fs::remove_file(&plist)
+            .with_context(|| tr_path("cli.service.remove_plist_failed", &plist))?;
     }
     println!(
         "{}",
@@ -59,7 +75,10 @@ pub fn uninstall() -> Result<()> {
 }
 
 pub fn start() -> Result<()> {
-    run_launchctl(&["kickstart", "-k", &format!("{}/{}", gui_domain(), LABEL)])?;
+    run_launchctl(
+        &["kickstart", "-k", &format!("{}/{}", gui_domain(), LABEL)],
+        "cli.service.action_start",
+    )?;
     println!(
         "{}",
         crate::i18n::tr("cli.service.started", &[("label", LABEL.to_string())])
@@ -68,7 +87,10 @@ pub fn start() -> Result<()> {
 }
 
 pub fn stop() -> Result<()> {
-    run_launchctl(&["kill", "TERM", &format!("{}/{}", gui_domain(), LABEL)])?;
+    run_launchctl(
+        &["kill", "TERM", &format!("{}/{}", gui_domain(), LABEL)],
+        "cli.service.action_stop",
+    )?;
     println!(
         "{}",
         crate::i18n::tr("cli.service.stopped", &[("label", LABEL.to_string())])
@@ -135,42 +157,76 @@ async fn uds_status() -> Result<Option<String>> {
             Err(_) => return Ok(None),
         };
     client.send(&Command::DaemonStatus).await?;
-    while let Some(event) = client.recv().await? {
-        match event {
+    client
+        .recv_until(|event| match event {
             Event::DaemonStatus {
                 pid,
                 uptime_ms,
                 state,
                 recording_id,
-            } => {
-                return Ok(Some(format!(
-                    "daemon: running pid={pid} uptime={} state={state:?} recording={}",
-                    format_duration(uptime_ms),
-                    recording_id.as_deref().unwrap_or("-")
-                )));
-            }
+            } => Ok(ControlFlow::Break(format!(
+                "daemon: running pid={pid} uptime={} state={state:?} recording={}",
+                format_duration(uptime_ms),
+                recording_id.as_deref().unwrap_or("-")
+            ))),
             Event::Error { kind, msg, .. } => anyhow::bail!("{kind}: {msg}"),
-            _ => {}
-        }
-    }
-    Ok(None)
+            _ => Ok(ControlFlow::Continue(())),
+        })
+        .await
 }
 
-fn run_launchctl(args: &[&str]) -> Result<()> {
+fn run_launchctl(args: &[&str], action_key: &str) -> Result<()> {
     let output = ProcessCommand::new("/bin/launchctl")
         .args(args)
         .output()
-        .with_context(|| format!("run launchctl {}", args.join(" ")))?;
+        .with_context(|| launchctl_spawn_context(args, action_key))?;
     if !output.status.success() {
         anyhow::bail!(
-            "launchctl {} failed with status {}\nstdout: {}\nstderr: {}",
-            args.join(" "),
-            output.status,
-            String::from_utf8_lossy(&output.stdout).trim(),
-            String::from_utf8_lossy(&output.stderr).trim()
+            "{}",
+            launchctl_failure_message(
+                args,
+                action_key,
+                &output.status.to_string(),
+                String::from_utf8_lossy(&output.stdout).trim(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
         );
     }
     Ok(())
+}
+
+fn launchctl_spawn_context(args: &[&str], action_key: &str) -> String {
+    format!(
+        "{}\n{}",
+        crate::i18n::tr(action_key, &[]),
+        crate::i18n::tr("cli.service.launchctl_command", &[("args", args.join(" "))])
+    )
+}
+
+fn tr_path(key: &str, path: &std::path::Path) -> String {
+    crate::i18n::tr(key, &[("path", path.display().to_string())])
+}
+
+fn launchctl_failure_message(
+    args: &[&str],
+    action_key: &str,
+    status: &str,
+    stdout: &str,
+    stderr: &str,
+) -> String {
+    format!(
+        "{}\n{}",
+        crate::i18n::tr(action_key, &[]),
+        crate::i18n::tr(
+            "cli.service.launchctl_failed",
+            &[
+                ("args", args.join(" ")),
+                ("status", status.to_string()),
+                ("stdout", stdout.to_string()),
+                ("stderr", stderr.to_string())
+            ]
+        )
+    )
 }
 
 fn plist_body(exe: &std::path::Path, state_dir: &std::path::Path) -> String {
@@ -250,5 +306,22 @@ mod tests {
     #[test]
     fn status_timeout_matches_cli_contract() {
         assert_eq!(super::DAEMON_STATUS_TIMEOUT, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn launchctl_failure_keeps_raw_output_with_action_hint() {
+        crate::i18n::init("en-US");
+
+        let msg = super::launchctl_failure_message(
+            &["kickstart", "-k", "gui/501/com.hza2002.shuohua"],
+            "cli.service.action_start",
+            "exit status: 113",
+            "out",
+            "service not found",
+        );
+
+        assert!(msg.contains("starting launchd service"), "{msg}");
+        assert!(msg.contains("run `shuo install` first"), "{msg}");
+        assert!(msg.contains("service not found"), "{msg}");
     }
 }

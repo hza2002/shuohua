@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use std::ops::ControlFlow;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
@@ -39,5 +40,17 @@ impl IpcClient {
             return Ok(None);
         };
         Ok(Some(crate::ipc::protocol::decode_event(&line)?))
+    }
+
+    pub async fn recv_until<T>(
+        &mut self,
+        mut f: impl FnMut(Event) -> Result<ControlFlow<T>>,
+    ) -> Result<Option<T>> {
+        while let Some(event) = self.recv().await? {
+            if let ControlFlow::Break(value) = f(event)? {
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
     }
 }

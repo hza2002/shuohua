@@ -3,6 +3,7 @@ use clap::Args;
 use objc2::msg_send;
 use objc2::runtime::AnyClass;
 use objc2_foundation::ns_string;
+use std::ops::ControlFlow;
 use std::time::Duration;
 
 use crate::asr::types::{LanguageMode, SessionCtx};
@@ -31,17 +32,21 @@ pub fn run(args: DoctorArgs) -> Result<()> {
             &[("version", env!("CARGO_PKG_VERSION").to_string())]
         )
     );
-    report.record(check_config());
-    report.record(check_i18n());
-    report.record(check_hotkey());
-    report.record(check_microphone_input());
-    report.record(check_uds());
-    report.record(check_launchd());
-    report.record(check_permissions());
+    report.record_with_step(check_config(), "cli.doctor.next_step_config");
+    report.record_with_step(check_i18n(), "cli.doctor.next_step_report_issue");
+    report.record_with_step(check_hotkey(), "cli.doctor.next_step_hotkey");
+    report.record_with_step(
+        check_microphone_input(),
+        "cli.doctor.next_step_microphone_input",
+    );
+    report.record_with_step(check_uds(), "cli.doctor.next_step_daemon");
+    report.record_with_step(check_launchd(), "cli.doctor.next_step_launchd");
+    report.record_with_step(check_permissions(), "cli.doctor.next_step_permissions");
     if args.runtime {
-        report.record(check_runtime());
+        report.record_with_step(check_runtime(), "cli.doctor.next_step_runtime_config");
     } else {
         println!("runtime: {}", tr("cli.doctor.runtime_skipped", &[]));
+        report.add_next_step("cli.doctor.next_step_runtime");
     }
     report.into_result()
 }
@@ -60,16 +65,34 @@ enum CheckStatus {
 #[derive(Default)]
 struct DoctorReport {
     errors: usize,
+    warnings: usize,
+    next_steps: Vec<&'static str>,
 }
 
 impl DoctorReport {
     fn record(&mut self, status: CheckStatus) {
-        if status == CheckStatus::Error {
-            self.errors += 1;
+        match status {
+            CheckStatus::Ok => {}
+            CheckStatus::Warning => self.warnings += 1,
+            CheckStatus::Error => self.errors += 1,
+        }
+    }
+
+    fn record_with_step(&mut self, status: CheckStatus, key: &'static str) {
+        self.record(status);
+        if status != CheckStatus::Ok {
+            self.add_next_step(key);
+        }
+    }
+
+    fn add_next_step(&mut self, key: &'static str) {
+        if !self.next_steps.contains(&key) {
+            self.next_steps.push(key);
         }
     }
 
     fn into_result(self) -> Result<()> {
+        self.print_summary();
         if self.errors > 0 {
             anyhow::bail!(
                 "{}",
@@ -80,6 +103,28 @@ impl DoctorReport {
             );
         }
         Ok(())
+    }
+
+    fn print_summary(&self) {
+        println!("{}", tr("cli.doctor.summary_title", &[]));
+        println!(
+            "{}",
+            tr(
+                "cli.doctor.summary_counts",
+                &[
+                    ("errors", self.errors.to_string()),
+                    ("warnings", self.warnings.to_string())
+                ]
+            )
+        );
+        if self.next_steps.is_empty() {
+            println!("{}", tr("cli.doctor.next_steps_none", &[]));
+            return;
+        }
+        println!("{}", tr("cli.doctor.next_steps_title", &[]));
+        for key in &self.next_steps {
+            println!("  - {}", tr(key, &[]));
+        }
     }
 }
 
@@ -562,35 +607,32 @@ async fn query_daemon_status() -> Result<Option<String>> {
         Err(_) => return Ok(None),
     };
     client.send(&Command::DaemonStatus).await?;
-    while let Some(event) = client.recv().await? {
-        match event {
+    client
+        .recv_until(|event| match event {
             Event::DaemonStatus {
                 pid,
                 uptime_ms,
                 state,
                 recording_id,
-            } => {
-                return Ok(Some(format!(
-                    "daemon: OK {}",
-                    tr(
-                        "cli.doctor.daemon_ok",
-                        &[
-                            ("pid", pid.to_string()),
-                            ("uptime", format_duration(uptime_ms)),
-                            ("state", format!("{state:?}")),
-                            (
-                                "recording",
-                                recording_id.as_deref().unwrap_or("-").to_string()
-                            )
-                        ]
-                    )
-                )));
-            }
+            } => Ok(ControlFlow::Break(format!(
+                "daemon: OK {}",
+                tr(
+                    "cli.doctor.daemon_ok",
+                    &[
+                        ("pid", pid.to_string()),
+                        ("uptime", format_duration(uptime_ms)),
+                        ("state", format!("{state:?}")),
+                        (
+                            "recording",
+                            recording_id.as_deref().unwrap_or("-").to_string()
+                        )
+                    ]
+                )
+            ))),
             Event::Error { kind, msg, .. } => anyhow::bail!("{kind}: {msg}"),
-            _ => {}
-        }
-    }
-    Ok(None)
+            _ => Ok(ControlFlow::Continue(())),
+        })
+        .await
 }
 
 fn check_launchd() -> CheckStatus {
@@ -748,6 +790,19 @@ mod tests {
         report.record(super::CheckStatus::Error);
 
         assert!(report.into_result().is_err());
+    }
+
+    #[test]
+    fn doctor_report_counts_warnings_and_deduplicates_next_steps() {
+        let mut report = super::DoctorReport::default();
+
+        report.record(super::CheckStatus::Warning);
+        report.add_next_step("cli.doctor.next_step_runtime");
+        report.add_next_step("cli.doctor.next_step_runtime");
+
+        assert_eq!(report.errors, 0);
+        assert_eq!(report.warnings, 1);
+        assert_eq!(report.next_steps, ["cli.doctor.next_step_runtime"]);
     }
 
     #[test]

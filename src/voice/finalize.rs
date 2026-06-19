@@ -166,8 +166,10 @@ mod tests {
         }
     }
 
+    type SendPcmCalls = Arc<Mutex<Vec<(Vec<i16>, bool)>>>;
+
     struct FinalizingSession {
-        calls: Arc<Mutex<Vec<(Vec<i16>, bool)>>>,
+        calls: SendPcmCalls,
         event_tx: mpsc::Sender<AsrEvent>,
     }
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-06-19 - Voice engine lifecycle hardening
+
+- Treated provider-initiated `AsrEvent::Done` as session completion in both
+  modes. VadPause previously left `provider_done = false`, which forced a second
+  `send_pcm(is_last=true)` plus another Done wait and surfaced as a spurious
+  `asr_timeout` whenever the provider closed a session on its own.
+- Added a `RecordingStream::for_test` constructor and split `engine::run` into
+  an outer recorder bootstrap and a `run_with_recorder` core. Tests can drive
+  the engine end to end without cpal.
+- Added `voice/engine_lifecycle_tests.rs` covering Continuous stop/finalize,
+  Continuous cancel, ASR stream close, PCM send failure, VadPause Done → Idle,
+  VadPause resume open failure, and the multi-session audio-ms invariant.
+- Replaced the `Arc<Mutex<Vec<(Vec<i16>, bool)>>>` clippy hot spot in
+  `voice::finalize` tests with a `SendPcmCalls` type alias so
+  `cargo clippy --all-targets -- -D warnings` is clean.
+
 ## 2026-06-19 - Build-generated embedded theme registry
 
 - Made `assets/themes/*.toml` the single source of truth for built-in themes.

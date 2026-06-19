@@ -87,6 +87,21 @@ impl Drop for RecordingStream {
     }
 }
 
+#[cfg(test)]
+impl RecordingStream {
+    /// 测试用构造：跳过 cpal/wav，外部 mpsc::UnboundedSender 驱动 PCM；
+    /// `finish_audio()` 立即返回 `Ok(None)`。
+    pub(crate) fn for_test(pcm_rx: mpsc::UnboundedReceiver<Vec<i16>>) -> Self {
+        let (audio_tx, audio_rx) = oneshot::channel();
+        let _ = audio_tx.send(Ok(None));
+        Self {
+            pcm_rx,
+            stop: None,
+            audio_result: Some(audio_rx),
+        }
+    }
+}
+
 /// 启动一路录音。`audio_output = Some(...)` 时把同一份 PCM 写入临时 WAV，
 /// 录音线程停止后转换成最终 retained-audio 文件。
 pub fn start(audio_output: Option<AudioOutput>) -> Result<RecordingStream> {

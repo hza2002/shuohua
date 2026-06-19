@@ -8,6 +8,8 @@ pub(crate) mod audio;
 pub(crate) mod capture;
 pub mod dispatch;
 pub(crate) mod engine;
+#[cfg(test)]
+mod engine_lifecycle_tests;
 pub(crate) mod finalize;
 pub mod finish;
 pub(crate) mod history_build;

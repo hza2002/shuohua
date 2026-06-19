@@ -28,13 +28,13 @@ const MIN_NONZERO_AMPLITUDE: i16 = 8;
 const NOTICE_TTL_MS: u32 = 3_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RecordingMode {
+pub(crate) enum RecordingMode {
     Continuous,
     VadPause,
 }
 
 impl RecordingMode {
-    fn select(idle_pause: bool, vad: &crate::config::VoiceVadCfg) -> Self {
+    pub(crate) fn select(idle_pause: bool, vad: &crate::config::VoiceVadCfg) -> Self {
         if idle_pause && matches!(vad.backend, crate::config::VoiceVadBackend::Silero) {
             Self::VadPause
         } else {
@@ -178,7 +178,7 @@ pub(crate) struct EngineOutcome {
 pub(crate) async fn run(
     provider: &dyn AsrProvider,
     params: SessionParams,
-    mut control_rx: watch::Receiver<SessionControl>,
+    control_rx: watch::Receiver<SessionControl>,
 ) -> Option<EngineOutcome> {
     let mode = RecordingMode::select(params.idle_pause, &params.vad);
     let recording_id = ulid::Ulid::new().to_string();
@@ -203,6 +203,46 @@ pub(crate) async fn run(
         tracing::info!(recording_id = %recording_id, "dev voice trace enabled");
     }
 
+    let audio_output = prepare_audio_output(&params, &recording_id);
+    let rec = match recorder::start(audio_output) {
+        Ok(rec) => rec,
+        Err(error) => {
+            tracing::error!(recording_id = %recording_id, error = ?error, "recorder start failed");
+            observe_finish_ms(&mut trace, "recorder_start_error", 0);
+            params.state.set_error(Some(recording_id));
+            send_error_overlay(&params, crate::t!("error.recorder_start"));
+            return None;
+        }
+    };
+
+    run_with_recorder(
+        provider,
+        params,
+        control_rx,
+        rec,
+        recording_id,
+        recording_started_at,
+        recording_started_instant,
+        mode,
+        trace,
+    )
+    .await
+}
+
+/// 录音引擎主循环。测试可直接调用并注入 [`recorder::RecordingStream::for_test`]
+/// 构造的 fake recorder。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_with_recorder(
+    provider: &dyn AsrProvider,
+    params: SessionParams,
+    mut control_rx: watch::Receiver<SessionControl>,
+    mut rec: recorder::RecordingStream,
+    recording_id: String,
+    recording_started_at: time::OffsetDateTime,
+    recording_started_instant: Instant,
+    mode: RecordingMode,
+    mut trace: RecordingObserver,
+) -> Option<EngineOutcome> {
     let mut app_context = params.start_app_context.clone();
     params
         .state
@@ -228,18 +268,6 @@ pub(crate) async fn run(
             chain_summary: params.post_chain.name.clone(),
         },
     );
-
-    let audio_output = prepare_audio_output(&params, &recording_id);
-    let mut rec = match recorder::start(audio_output) {
-        Ok(rec) => rec,
-        Err(error) => {
-            tracing::error!(recording_id = %recording_id, error = ?error, "recorder start failed");
-            observe_finish_ms(&mut trace, "recorder_start_error", 0);
-            params.state.set_error(Some(recording_id));
-            send_error_overlay(&params, crate::t!("error.recorder_start"));
-            return None;
-        }
-    };
 
     let mut vad_pause = if mode == RecordingMode::VadPause {
         match VadPauseState::new(&params.vad) {
@@ -410,10 +438,11 @@ pub(crate) async fn run(
                             }
                             Some(AsrEvent::Done) => {
                                 observe_asr_event(&mut trace, recording_started_instant, &AsrEvent::Done);
+                                // Provider 主动结束当前 session：不再向同一个 session 发 is_last，
+                                // 也不能再等第二个 Done。VadPause 同时进入 Idle 等下一段 speech。
+                                provider_done = true;
                                 if mode == RecordingMode::VadPause {
                                     pause_requested = true;
-                                } else {
-                                    provider_done = true;
                                 }
                                 break 'active;
                             }

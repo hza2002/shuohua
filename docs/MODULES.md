@@ -111,7 +111,15 @@ StateStore / Overlay completion。
 `finish.rs` 是 voice 子系统 completion 顶层，依赖
 `engine / capture / history_build / post_dispatch`；`engine.rs` 只依赖录音运行期的
 `capture / finalize / meter / observer / vad / silero / timeline / recorder / audio`，
-不依赖 post、dispatch 或 history。
+不调用 `post::run_chain`、`dispatch::dispatch` 或 history append。
+engine 对 `post` 的全部接触面是：用 `post::AppContext` 作为前台 App 上下文的数据
+载体、在 stop 时调一次 `post::app_context::frontmost_app()`、以及读
+`SessionParams.post_chain.name` 作为 overlay header 的 chain summary 字符串。
 `SegmentCapture / SessionCapture` 仅 `pub(crate)` 暴露在 voice 模块内部。
+
+`engine::run` 负责 recorder 启动这一个 `!Send` 边界；其余初始化、ASR
+event、stop drain、provider finalize、错误/取消、retained audio 都在
+`engine::run_with_recorder` 内部。`#[cfg(test)] RecordingStream::for_test` 让
+`voice/engine_lifecycle_tests.rs` 不依赖 cpal 即可驱动整个录音生命周期。
 
 每条路径的详细职责见 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)；关键设计决策见 [DESIGN.md §2](DESIGN.md#2-关键设计决策)。

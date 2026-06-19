@@ -67,10 +67,10 @@ pub fn render_with_lang(template: &Template, lang: crate::i18n::Lang) -> String 
 pub struct ThemePreset {
     pub id: &'static str,
     pub path: &'static str,
-    pub title: &'static str,
-    pub description: &'static str,
     body: &'static str,
 }
+
+include!(concat!(env!("OUT_DIR"), "/embedded_themes.rs"));
 
 pub fn theme_presets() -> &'static [ThemePreset] {
     THEME_PRESETS
@@ -80,7 +80,7 @@ pub fn theme_preset_body(name: &str) -> Option<&'static str> {
     let id = if name == crate::config::theme::DEFAULT_THEME_NAME
         || name == crate::config::theme::LEGACY_DEFAULT_THEME_NAME
     {
-        "gruvbox-dark"
+        crate::config::theme::DEFAULT_THEME_NAME
     } else {
         name
     };
@@ -91,11 +91,7 @@ pub fn theme_preset_body(name: &str) -> Option<&'static str> {
 }
 
 pub fn render_theme_preset(preset: &ThemePreset) -> String {
-    let mut body = String::new();
-    body.push_str(&format!("# {}\n", preset.title));
-    body.push_str(&format!("# {}\n\n", preset.description));
-    body.push_str(preset.body);
-    body
+    preset.body.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -467,122 +463,6 @@ const ANTHROPIC_VALUES: &[(&str, TemplateValue)] = &[
     ("api_key", TemplateValue::String("")),
     ("model", TemplateValue::String("claude-haiku-4-5")),
     ("prompt", TemplateValue::String("{{text}}")),
-];
-
-const GRUVBOX_DARK_THEME: &str = include_str!("../../assets/themes/gruvbox-dark.toml");
-const GRUVBOX_LIGHT_THEME: &str = include_str!("../../assets/themes/gruvbox-light.toml");
-const CATPPUCCIN_LATTE_THEME: &str = include_str!("../../assets/themes/catppuccin-latte.toml");
-const CATPPUCCIN_MOCHA_THEME: &str = include_str!("../../assets/themes/catppuccin-mocha.toml");
-const NORD_THEME: &str = include_str!("../../assets/themes/nord.toml");
-const DRACULA_THEME: &str = include_str!("../../assets/themes/dracula.toml");
-const SOLARIZED_DARK_THEME: &str = include_str!("../../assets/themes/solarized-dark.toml");
-const SOLARIZED_LIGHT_THEME: &str = include_str!("../../assets/themes/solarized-light.toml");
-const TOKYO_NIGHT_THEME: &str = include_str!("../../assets/themes/tokyo-night.toml");
-const TOKYO_DAY_THEME: &str = include_str!("../../assets/themes/tokyo-day.toml");
-const ROSE_PINE_THEME: &str = include_str!("../../assets/themes/rose-pine.toml");
-const ROSE_PINE_DAWN_THEME: &str = include_str!("../../assets/themes/rose-pine-dawn.toml");
-const EVERFOREST_DARK_THEME: &str = include_str!("../../assets/themes/everforest-dark.toml");
-const EVERFOREST_LIGHT_THEME: &str = include_str!("../../assets/themes/everforest-light.toml");
-
-const THEME_PRESETS: &[ThemePreset] = &[
-    ThemePreset {
-        id: "gruvbox-dark",
-        path: "theme/gruvbox-dark.toml",
-        title: "Gruvbox Dark theme",
-        description: "Community Gruvbox dark palette mapped to shuohua tokens.",
-        body: GRUVBOX_DARK_THEME,
-    },
-    ThemePreset {
-        id: "gruvbox-light",
-        path: "theme/gruvbox-light.toml",
-        title: "Gruvbox Light theme",
-        description: "Community Gruvbox light palette mapped to shuohua tokens.",
-        body: GRUVBOX_LIGHT_THEME,
-    },
-    ThemePreset {
-        id: "catppuccin-latte",
-        path: "theme/catppuccin-latte.toml",
-        title: "Catppuccin Latte theme",
-        description: "Catppuccin Latte palette mapped to shuohua tokens.",
-        body: CATPPUCCIN_LATTE_THEME,
-    },
-    ThemePreset {
-        id: "catppuccin-mocha",
-        path: "theme/catppuccin-mocha.toml",
-        title: "Catppuccin Mocha theme",
-        description: "Catppuccin Mocha palette mapped to shuohua tokens.",
-        body: CATPPUCCIN_MOCHA_THEME,
-    },
-    ThemePreset {
-        id: "nord",
-        path: "theme/nord.toml",
-        title: "Nord theme",
-        description: "Nord palette mapped to shuohua tokens.",
-        body: NORD_THEME,
-    },
-    ThemePreset {
-        id: "dracula",
-        path: "theme/dracula.toml",
-        title: "Dracula theme",
-        description: "Dracula palette mapped to shuohua tokens.",
-        body: DRACULA_THEME,
-    },
-    ThemePreset {
-        id: "solarized-dark",
-        path: "theme/solarized-dark.toml",
-        title: "Solarized Dark theme",
-        description: "Solarized dark palette mapped to shuohua tokens.",
-        body: SOLARIZED_DARK_THEME,
-    },
-    ThemePreset {
-        id: "solarized-light",
-        path: "theme/solarized-light.toml",
-        title: "Solarized Light theme",
-        description: "Solarized light palette mapped to shuohua tokens.",
-        body: SOLARIZED_LIGHT_THEME,
-    },
-    ThemePreset {
-        id: "tokyo-night",
-        path: "theme/tokyo-night.toml",
-        title: "Tokyo Night theme",
-        description: "Tokyo Night palette mapped to shuohua tokens.",
-        body: TOKYO_NIGHT_THEME,
-    },
-    ThemePreset {
-        id: "tokyo-day",
-        path: "theme/tokyo-day.toml",
-        title: "Tokyo Day theme",
-        description: "Tokyo Night Day palette mapped to shuohua tokens.",
-        body: TOKYO_DAY_THEME,
-    },
-    ThemePreset {
-        id: "rose-pine",
-        path: "theme/rose-pine.toml",
-        title: "Rose Pine theme",
-        description: "Rosé Pine Main palette mapped to shuohua tokens.",
-        body: ROSE_PINE_THEME,
-    },
-    ThemePreset {
-        id: "rose-pine-dawn",
-        path: "theme/rose-pine-dawn.toml",
-        title: "Rose Pine Dawn theme",
-        description: "Rosé Pine Dawn palette mapped to shuohua tokens.",
-        body: ROSE_PINE_DAWN_THEME,
-    },
-    ThemePreset {
-        id: "everforest-dark",
-        path: "theme/everforest-dark.toml",
-        title: "Everforest Dark theme",
-        description: "Everforest dark palette mapped to shuohua tokens.",
-        body: EVERFOREST_DARK_THEME,
-    },
-    ThemePreset {
-        id: "everforest-light",
-        path: "theme/everforest-light.toml",
-        title: "Everforest Light theme",
-        description: "Everforest light palette mapped to shuohua tokens.",
-        body: EVERFOREST_LIGHT_THEME,
-    },
 ];
 
 const TEMPLATES: &[Template] = &[

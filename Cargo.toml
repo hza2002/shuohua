@@ -79,6 +79,9 @@ tracing-appender = "0.2"
 [dev-dependencies]
 proptest = "1"
 
+[build-dependencies]
+toml = "0.8"
+
 [features]
 default = []
 # Development-only tools. Do not enable in release builds.

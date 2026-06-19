@@ -19,7 +19,7 @@ src/
 │   ├── schema.rs                        # shared config schema registry + description i18n keys
 │   ├── inventory.rs                     # structured Configure/doctor inventory scan
 │   ├── diagnostics.rs                   # full-tree local config diagnostics shared by doctor/Configure
-│   ├── template.rs                      # official config template registry + theme presets + LLM component creation
+│   ├── template.rs                      # official config template registry + build-generated theme registry + LLM component creation
 │   ├── profile.rs                       # profile/*.toml schema + route loading
 │   ├── post/                            # post component config namespace
 │   ├── asr/                             # ASR provider config loaders
@@ -89,6 +89,10 @@ src/
 └── i18n/
     └── mod.rs                            # assets/i18n/*.toml 加载 + 静态 LANG 切换
 ```
+
+`assets/themes/*.toml` 是内置主题的唯一事实来源。`build.rs` 在编译期扫描并校验
+文件名、显示名、TOML 结构和 palette 引用，然后生成嵌入 binary 的稳定排序 registry；
+新增内置主题只需增加一个合法 TOML 文件。
 
 数据流：键盘事件 → CGEventTap 回调（Default 模式，可吞）→ 解码成 4 字节 `RawEvent`（含 `EventKind` + `keycode` + 8-bit `ModMask`）→ pipe → mpsc → `trigger_tracker` / `cancel_tracker` 分别 `on_event(ev, Instant::now())` → tokio main loop。回调里同步问 `Mutex<Suppressor>` 决定 `CallbackResult::Drop` / `Keep`，suppress `[hotkey].trigger`，并在 recording task 存活期间 suppress `[hotkey].cancel`；纯键 / combo 采用 reserved 语义，吞 key 部分的 down + 配对 up（`:double` 的第一次候选也吞，§5 不变量 8 保证 reload 中途换 binding 也安全），modifier-only 不吞任何事件（modifier 太常用，吞了破坏太多）。`Tracker` 内部分三个 sub-machine：纯键 / combo 走"KeyDown 时 mods 精确匹配 + auto-repeat 去抖"；modifier-only 走"FlagsChanged 检测 clean tap"（500ms hold 阈值 + 中间无普通键 + 中间无额外 modifier）；`:double` 后缀在 `register_tap` 用 400ms 窗口判定。`trigger` 第一次命中 = toggle ON 瞬间取一次 `frontmost_app`，按 `config.toml` 的 `[profile]` 路由选定 profile；profile 的 `[asr]` 决定 ASR provider、hotwords 和 provider 字段覆盖，`[post].chain` 再引用 `post/rule/*.toml` / `post/llm/*.toml` 组件并应用 `[post.llm.<name>]` 浅覆盖；spawn `finish::run_recording` 任务：cpal stream → `DoubaoSession.send_pcm` 流式推、`AsrEvent::Segment` 累积、`StateStore` 同步状态、`OverlayHandle` 推 UI 命令、UDS server fanout 给 TUI。`trigger` 第二次命中 = oneshot 通知 task 收尾：toggle OFF 瞬间再取一次 `frontmost_app` 只作为 prompt 变量，不重新选择 profile；drain `stop_delay_ms` 尾音 → send `is_last` → 等 Done（provider 私有 `finalize_timeout_ms`，Doubao 默认 12s）→ segments 直接 concat（provider 自带分隔） → 已选定的 post chain（执行时 overlay 显示 Thinking；单步失败/超时跳过 + meta 行 notice 黄字 3s + pipeline trace；致命错误经 text 区 error 红字反馈并跳过 dispatch）→ 剪贴板 + Cmd+V → monthly history JSONL 落一行 → `history_appended` 推给 TUI。provider 未发 `Done` 就关闭事件流，或正常录音/收尾阶段 `send_pcm` 失败时，voice 保留已确认 segment 到 error history 并跳过 dispatch；history append 自身失败时改发 UDS `error(kind=history_append)` + overlay Notice，不改变已经完成的输出。TUI 主循环按 `voice::meter::METER_INTERVAL_MS`（50ms）绘制，并在帧间 drain IPC/key event，避免 audio meter 事件堆满 per-client queue；IPC queue full warn 做 1s 节流，只作为异常诊断信号。配置热重载：notify watcher 监听 `~/.config/shuohua/` → 通过 `watch::Sender` 广播给 overlay / i18n / hotkey 三个 subscriber；hotkey subscriber 收到新 trigger/cancel binding 时同步更新两个 `Tracker`，并把 trigger/cancel 写入 `Suppressor`；UDS `reload_config` 复用同一个 parse + broadcast 入口；profile / ASR provider / post components 在下一次录音开始时生效。
 

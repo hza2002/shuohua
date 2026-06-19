@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-19 - Build-generated embedded theme registry
+
+- Made `assets/themes/*.toml` the single source of truth for built-in themes.
+- Added compile-time validation for theme IDs, display names, required fields,
+  palette references, duplicate names, and deterministic registry generation.
+- New valid theme files are embedded into `shuo` and exported by
+  `shuo config-template` without editing a Rust registry.
+
 ## 2026-06-19 - Unified voice recording lifecycle
 
 - Removed the duplicate single-session recording implementation. Continuous

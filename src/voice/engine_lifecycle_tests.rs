@@ -316,6 +316,51 @@ async fn continuous_normal_completion_yields_single_session() {
     assert!(calls.iter().any(|(_, last)| *last));
 }
 
+/// Stop drain 期间 provider 主动 Done：不得再向同一 session 发送 is_last。
+#[tokio::test]
+async fn provider_done_during_stop_drain_skips_finalize() {
+    let (event_tx, event_rx) = mpsc::channel(8);
+    let sent: SentLog = Arc::new(Mutex::new(Vec::new()));
+    let session = Box::new(RecordingSession { sent: sent.clone() });
+    let provider = Arc::new(ScriptedProvider::new(vec![OpenScript::Ok(
+        event_rx, session,
+    )]));
+
+    let state = StateStore::new();
+    let (overlay, _overlay_rx) = OverlayHandle::channel();
+    let mut params = make_params(state, Some(overlay), false, 200);
+    params.stop_delay_ms = 100;
+    let (control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let (rec, pcm_tx) = make_recorder();
+    pcm_tx.send(signal_frame(480)).unwrap();
+
+    let engine_task = tokio::spawn(drive_engine(
+        provider,
+        params,
+        control_rx,
+        rec,
+        RecordingMode::Continuous,
+    ));
+
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    control_tx.send(SessionControl::Stop).unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    event_tx.send(AsrEvent::Done).await.unwrap();
+
+    let outcome = engine_task.await.unwrap().expect("engine returned None");
+    assert!(
+        outcome.terminal_error.is_none(),
+        "{:?}",
+        outcome.terminal_error
+    );
+    let calls = sent.lock().unwrap();
+    assert_eq!(
+        calls.iter().filter(|(_, is_last)| *is_last).count(),
+        0,
+        "provider already sent Done during drain; engine must not send is_last: {calls:?}"
+    );
+}
+
 /// VadPause + provider 主动 Done：当前实现重复 finalize 并触发 asr_timeout。
 /// 修复后：跳过 finalize，进入 Idle，stop 后 1 个 session、无错误。
 #[tokio::test]
@@ -525,9 +570,9 @@ async fn first_audio_watchdog_returns_none_on_silent_input() {
     assert_eq!(provider.opens(), 1);
 }
 
-/// 多 session 历史落账：累计 audio_samples 等于各 session.audio_samples 之和。
+/// Continuous outcome：累计 audio_samples 等于唯一 session.audio_samples。
 #[tokio::test]
-async fn multi_session_outcome_preserves_audio_ms_invariant() {
+async fn continuous_outcome_preserves_audio_ms_invariant() {
     let (event_tx, event_rx) = mpsc::channel(8);
     let sent: SentLog = Arc::new(Mutex::new(Vec::new()));
     let session = Box::new(RecordingSession { sent: sent.clone() });

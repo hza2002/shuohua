@@ -274,7 +274,7 @@ pub(crate) async fn run_with_recorder(
             Ok(state) => Some(state),
             Err(error) => {
                 tracing::error!(recording_id = %recording_id, error = ?error, "Silero VAD init failed");
-                finish_retained_audio(&params, &recording_id, &mut rec).await;
+                discard_retained_audio(&recording_id, &mut rec).await;
                 observe_finish_ms(&mut trace, "vad_init_error", 0);
                 params.state.set_error(Some(recording_id));
                 send_error_overlay(&params, crate::t!("error.asr_runtime"));
@@ -296,7 +296,7 @@ pub(crate) async fn run_with_recorder(
         Ok(opened) => opened,
         Err(error) => {
             tracing::error!(recording_id = %recording_id, error = %error, "ASR open failed");
-            finish_retained_audio(&params, &recording_id, &mut rec).await;
+            discard_retained_audio(&recording_id, &mut rec).await;
             observe_asr_error(&mut trace, recording_started_instant, error);
             observe_finish_ms(&mut trace, "asr_open_error", 0);
             params.state.set_error(Some(recording_id));
@@ -420,11 +420,10 @@ pub(crate) async fn run_with_recorder(
                             timeout_ms = FIRST_AUDIO_TIMEOUT_MS,
                             "no microphone audio received before timeout"
                         );
-                        rec.stop();
                         if let Some(active_session) = session.take() {
                             let _ = active_session.close().await;
                         }
-                        finish_retained_audio(&params, &recording_id, &mut rec).await;
+                        discard_retained_audio(&recording_id, &mut rec).await;
                         observe_finish(&mut trace, "no_audio", total_audio_samples);
                         params.state.set_error(Some(recording_id));
                         send_error_overlay(&params, crate::t!("error.no_audio"));
@@ -469,9 +468,10 @@ pub(crate) async fn run_with_recorder(
                 let Some(active_session) = session.as_mut() else {
                     break 'recording;
                 };
-                if let Err(error) = drain_stop_audio(
+                match drain_stop_audio(
                     &mut rec,
                     active_session,
+                    &mut events,
                     &mut current,
                     vad_pause.as_mut(),
                     &mut total_audio_samples,
@@ -483,14 +483,18 @@ pub(crate) async fn run_with_recorder(
                     &params.state,
                     &recording_id,
                     &mut trace,
+                    &params,
+                    recording_started_instant,
                 )
                 .await
                 {
-                    terminal_error = Some(error);
-                    break 'recording;
-                }
-                if cancel_requested {
-                    break 'recording;
+                    Ok(StopDrainOutcome::FinalizeRequired) => {}
+                    Ok(StopDrainOutcome::ProviderDone) => provider_done = true,
+                    Ok(StopDrainOutcome::Canceled) => break 'recording,
+                    Err(error) => {
+                        terminal_error = Some(error);
+                        break 'recording;
+                    }
                 }
             }
 
@@ -829,10 +833,18 @@ fn handle_asr_event(
     None
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StopDrainOutcome {
+    FinalizeRequired,
+    ProviderDone,
+    Canceled,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn drain_stop_audio(
     rec: &mut recorder::RecordingStream,
     session: &mut Box<dyn AsrSession>,
+    events: &mut mpsc::Receiver<AsrEvent>,
     current: &mut CurrentSessionCapture,
     mut vad_pause: Option<&mut VadPauseState>,
     total_audio_samples: &mut u64,
@@ -844,7 +856,9 @@ async fn drain_stop_audio(
     state: &StateStore,
     recording_id: &str,
     trace: &mut RecordingObserver,
-) -> Result<(), HistoryError> {
+    params: &SessionParams,
+    recording_started_instant: Instant,
+) -> Result<StopDrainOutcome, HistoryError> {
     let drain_until = Instant::now() + Duration::from_millis(stop_delay_ms as u64);
     while Instant::now() < drain_until {
         tokio::select! {
@@ -854,7 +868,7 @@ async fn drain_stop_audio(
                     && matches!(*control_rx.borrow_and_update(), SessionControl::Cancel)
                 {
                     *cancel_requested = true;
-                    return Ok(());
+                    return Ok(StopDrainOutcome::Canceled);
                 }
             }
             _ = sleep_until(TokioInstant::from_std(drain_until)) => break,
@@ -872,6 +886,29 @@ async fn drain_stop_audio(
                     *last_sent_sample + samples.len() as u64
                 };
             }
+            event = events.recv() => {
+                match event {
+                    None => return Err(asr_stream_closed_error()),
+                    Some(AsrEvent::Done) => {
+                        observe_asr_event(trace, recording_started_instant, &AsrEvent::Done);
+                        rec.stop();
+                        while rec.try_recv().is_some() {}
+                        return Ok(StopDrainOutcome::ProviderDone);
+                    }
+                    Some(event) => {
+                        if let Some(error) = handle_asr_event(
+                            event,
+                            current,
+                            params,
+                            recording_id,
+                            recording_started_instant,
+                            trace,
+                        ) {
+                            return Err(error);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -887,7 +924,7 @@ async fn drain_stop_audio(
             *last_sent_sample + samples.len() as u64
         };
     }
-    Ok(())
+    Ok(StopDrainOutcome::FinalizeRequired)
 }
 
 fn refresh_stop_context(
@@ -1035,6 +1072,12 @@ async fn finish_retained_audio(
         Err(error) => {
             publish_audio_failure(&params.state, params.overlay.as_ref(), recording_id, error);
         }
+    }
+}
+
+async fn discard_retained_audio(recording_id: &str, recorder: &mut recorder::RecordingStream) {
+    if let Err(error) = recorder.discard_audio().await {
+        tracing::warn!(recording_id, error = ?error, "discard retained audio failed");
     }
 }
 

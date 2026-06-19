@@ -263,10 +263,8 @@ mod tests {
             .whole_milliseconds() as u64;
         assert_eq!(asr_duration_ms, 2_900);
         assert_eq!(record.asr.duration_ms, 2_900);
-        assert_eq!(
-            record.asr.duration_ms - record.asr.audio_ms,
-            2_900 - (800 + 900)
-        );
+        let net_saved_ms = record.asr.duration_ms as i64 - record.asr.audio_ms as i64;
+        assert_eq!(net_saved_ms, 2_900 - (800 + 900));
     }
 
     #[test]
@@ -330,5 +328,9 @@ mod tests {
         let record = build_record(input);
         assert_eq!(record.asr.sessions.len(), 2);
         assert!(record.asr.sessions[1].started_at < record.asr.sessions[0].ended_at);
+        assert_eq!(record.asr.duration_ms, 1_500);
+        assert_eq!(record.asr.audio_ms, 1_600);
+        let net_saved_ms = record.asr.duration_ms as i64 - record.asr.audio_ms as i64;
+        assert_eq!(net_saved_ms, -100);
     }
 }

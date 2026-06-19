@@ -54,7 +54,8 @@ pub struct AsrHistory {
     pub text: String,
     /// ASR 工作窗口（毫秒）= 首 session.started_at → 末 session.ended_at。
     /// 这是"如果不开 idle_pause、走单 session 会喂出去多少音频"的真实基线。
-    /// `duration_ms - audio_ms` = 跳过的纯静音时长。空 sessions = 0。
+    /// `duration_ms - audio_ms` 应按有符号数解释：正数是净省下的静音，
+    /// 负数是 resume overlap 带来的重复发送开销。空 sessions = 0。
     #[serde(default)]
     pub duration_ms: u64,
     /// 实际喂给 provider 的音频时长（毫秒）= Σ sessions[].audio_ms。

@@ -5,9 +5,9 @@
 //! unbounded mpsc，async 端按需 recv。启用 retained audio 时，同一线程先写
 //! 临时 WAV，停止后再交给 `voice::audio` 转成最终 FLAC/AAC。
 //!
-//! Stop 协议：voice 端调 stop()（drop oneshot sender 等价语义），cpal 线程收到
-//! 信号后 drop stream、finalize 临时 WAV 并完成格式转换。drop stream 时
-//! cpal 自动 drain callback in-flight 的 buffer。
+//! Stop 协议：voice 端显式选择发布或丢弃 retained audio，cpal 线程收到信号后
+//! drop stream。发布路径 finalize 临时 WAV 并完成格式转换；丢弃路径只清理临时
+//! 文件。drop stream 时 cpal 自动 drain callback in-flight 的 buffer。
 //!
 //! 这里保留简单的 linear resample：质量对识别足够好，后续只有在真实识别质量
 //! 出问题时才需要升级重采样算法。
@@ -25,9 +25,14 @@ const DST_RATE_HZ: u32 = 16_000;
 
 pub struct RecordingStream {
     pcm_rx: mpsc::UnboundedReceiver<Vec<i16>>,
-    /// drop 这边就告诉 cpal 线程退出。
-    stop: Option<std::sync::mpsc::Sender<()>>,
+    stop: Option<std::sync::mpsc::Sender<FinishMode>>,
     audio_result: Option<oneshot::Receiver<Result<Option<PathBuf>>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FinishMode {
+    Publish,
+    Discard,
 }
 
 #[derive(Debug, Clone)]
@@ -63,7 +68,13 @@ impl RecordingStream {
 
     /// 立刻收 cpal 线程；之后 recv() 会很快变成 None (取决于 cpal drain)。
     pub fn stop(&mut self) {
-        let _ = self.stop.take();
+        self.request_stop(FinishMode::Publish);
+    }
+
+    pub async fn discard_audio(&mut self) -> Result<()> {
+        self.request_stop(FinishMode::Discard);
+        let _ = self.take_audio_result().await?;
+        Ok(())
     }
 
     /// 非 await 的 try_recv（finishing 阶段一次性吸干残余帧用）。
@@ -72,6 +83,17 @@ impl RecordingStream {
     }
 
     pub async fn finish_audio(&mut self) -> Result<Option<PathBuf>> {
+        self.stop();
+        self.take_audio_result().await
+    }
+
+    fn request_stop(&mut self, mode: FinishMode) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(mode);
+        }
+    }
+
+    async fn take_audio_result(&mut self) -> Result<Option<PathBuf>> {
         let Some(receiver) = self.audio_result.take() else {
             return Ok(None);
         };
@@ -83,7 +105,7 @@ impl RecordingStream {
 
 impl Drop for RecordingStream {
     fn drop(&mut self) {
-        self.stop();
+        self.request_stop(FinishMode::Discard);
     }
 }
 
@@ -106,7 +128,7 @@ impl RecordingStream {
 /// 录音线程停止后转换成最终 retained-audio 文件。
 pub fn start(audio_output: Option<AudioOutput>) -> Result<RecordingStream> {
     let (pcm_tx, pcm_rx) = mpsc::unbounded_channel::<Vec<i16>>();
-    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<FinishMode>();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
     let (audio_result_tx, audio_result_rx) = oneshot::channel();
 
@@ -133,7 +155,7 @@ pub fn start(audio_output: Option<AudioOutput>) -> Result<RecordingStream> {
 
 fn run_recorder(
     pcm_tx: mpsc::UnboundedSender<Vec<i16>>,
-    stop_rx: std::sync::mpsc::Receiver<()>,
+    stop_rx: std::sync::mpsc::Receiver<FinishMode>,
     audio_output: Option<AudioOutput>,
     ready_tx: std::sync::mpsc::Sender<Result<()>>,
     audio_result_tx: oneshot::Sender<Result<Option<PathBuf>>>,
@@ -143,28 +165,23 @@ fn run_recorder(
     match startup {
         Ok((stream, wav)) => {
             let _ = ready_tx.send(Ok(()));
-            // 阻塞等 stop_tx 发信号或被 drop。cpal callback 同时在另一个 cpal 内部线程跑。
-            let _ = stop_rx.recv();
+            // 阻塞等 stop 信号。sender 意外被 drop 时按丢弃处理，避免发布半成品。
+            let finish_mode = stop_rx.recv().unwrap_or(FinishMode::Discard);
             drop(stream); // cpal drain & close
 
             let finalize_result = if let Ok(mut guard) = wav.lock() {
-                if let Some(w) = guard.take() {
-                    w.finalize().context("finalize wav")
-                } else {
-                    Ok(())
+                match (finish_mode, guard.take()) {
+                    (FinishMode::Publish, Some(w)) => w.finalize().context("finalize wav"),
+                    (_, Some(w)) => {
+                        drop(w);
+                        Ok(())
+                    }
+                    (_, None) => Ok(()),
                 }
             } else {
                 Err(anyhow!("retained audio writer lock poisoned"))
             };
-            let audio_result = match (finalize_result, audio_output) {
-                (Ok(()), Some(output)) => output.finish().map(Some),
-                (Ok(()), None) => Ok(None),
-                (Err(error), Some(output)) => {
-                    output.discard();
-                    Err(error)
-                }
-                (Err(error), None) => Err(error),
-            };
+            let audio_result = complete_audio(finish_mode, finalize_result, audio_output);
             let _ = audio_result_tx.send(audio_result);
             Ok(())
         }
@@ -177,6 +194,29 @@ fn run_recorder(
             let _ = ready_tx.send(Err(anyhow!(msg)));
             Err(e)
         }
+    }
+}
+
+fn complete_audio(
+    finish_mode: FinishMode,
+    finalize_result: Result<()>,
+    audio_output: Option<AudioOutput>,
+) -> Result<Option<PathBuf>> {
+    if finish_mode == FinishMode::Discard {
+        if let Some(output) = audio_output {
+            output.discard();
+        }
+        return Ok(None);
+    }
+
+    match (finalize_result, audio_output) {
+        (Ok(()), Some(output)) => output.finish().map(Some),
+        (Ok(()), None) => Ok(None),
+        (Err(error), Some(output)) => {
+            output.discard();
+            Err(error)
+        }
+        (Err(error), None) => Err(error),
     }
 }
 
@@ -291,6 +331,7 @@ fn resample_to_16k_mono_i16(data: &[f32], channels: usize, src_rate: u32) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::RecordAudioMode;
 
     #[test]
     fn resample_passthrough_when_rates_match() {
@@ -325,5 +366,22 @@ mod tests {
         let out = resample_to_16k_mono_i16(&data, 1, 16_000);
         assert_eq!(out[0], 32767);
         assert_eq!(out[1], -32767);
+    }
+
+    #[test]
+    fn discard_finish_mode_removes_retained_audio_without_conversion() {
+        let dir = std::env::temp_dir().join(format!("shuohua-recorder-{}", ulid::Ulid::new()));
+        let output =
+            crate::voice::audio::prepare_in_dir(&dir, "discard", RecordAudioMode::Lossless)
+                .unwrap()
+                .unwrap();
+        std::fs::write(&output.wav_path, b"invalid wav").unwrap();
+        let wav_path = output.wav_path.clone();
+
+        let result = complete_audio(FinishMode::Discard, Ok(()), Some(output)).unwrap();
+
+        assert!(result.is_none());
+        assert!(!wav_path.exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -707,6 +707,72 @@ chain = ["rule:missing", "llm:missing", "bad-item", "other:name"]
     }
 
     #[test]
+    fn theme_diagnostics_accepts_macos_overlay_fields() {
+        let home = temp_config_home();
+        let root = home.join("shuohua");
+        fs::create_dir_all(root.join("theme")).unwrap();
+        fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
+        fs::write(
+            root.join("theme/custom.toml"),
+            r#"
+[overlay.macos]
+glass_variant = 11
+glass_style = "clear"
+subdued = 0
+background_blur_radius = 3
+"#,
+        )
+        .unwrap();
+
+        let report = run_local_from_config_home(&home);
+
+        assert!(!report.diagnostics.iter().any(|d| {
+            d.source.ends_with("theme/custom.toml")
+                && d.severity == Severity::Warning
+                && d.path.starts_with("overlay.macos")
+                && d.message.contains("unknown")
+        }));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn theme_diagnostics_rejects_legacy_overlay_fields() {
+        let home = temp_config_home();
+        let root = home.join("shuohua");
+        fs::create_dir_all(root.join("theme")).unwrap();
+        fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
+        fs::write(
+            root.join("theme/legacy.toml"),
+            r#"
+[overlay.glass]
+variant = 11
+style = "clear"
+subdued = 0
+
+[overlay.surface]
+background_blur_radius = 3
+"#,
+        )
+        .unwrap();
+
+        let report = run_local_from_config_home(&home);
+
+        assert!(report.diagnostics.iter().any(|d| {
+            d.source.ends_with("theme/legacy.toml")
+                && d.severity == Severity::Warning
+                && d.path == "overlay.glass"
+                && d.message.contains("unknown")
+        }));
+        assert!(report.diagnostics.iter().any(|d| {
+            d.source.ends_with("theme/legacy.toml")
+                && d.severity == Severity::Warning
+                && d.path == "overlay.surface.background_blur_radius"
+                && d.message.contains("unknown")
+        }));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn unreferenced_llm_draft_empty_api_key_is_warning() {
         let home = temp_config_home();
         let root = home.join("shuohua");

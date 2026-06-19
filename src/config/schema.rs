@@ -94,17 +94,19 @@ fn description_key(name: &str) -> &'static str {
         "border" => "config.field.theme.border.description",
         "border_focus" => "config.field.theme.border_focus.description",
         "segment" => "config.field.theme.segment.description",
-        "overlay.glass" => "config.field.theme.overlay.glass.description",
-        "overlay.glass.variant" => "config.field.theme.overlay.glass.variant.description",
-        "overlay.glass.style" => "config.field.theme.overlay.glass.style.description",
-        "overlay.glass.subdued" => "config.field.theme.overlay.glass.subdued.description",
+        "overlay.macos" => "config.field.theme.overlay.macos.description",
+        "overlay.macos.glass_variant" => {
+            "config.field.theme.overlay.macos.glass_variant.description"
+        }
+        "overlay.macos.glass_style" => "config.field.theme.overlay.macos.glass_style.description",
+        "overlay.macos.subdued" => "config.field.theme.overlay.macos.subdued.description",
+        "overlay.macos.background_blur_radius" => {
+            "config.field.theme.overlay.macos.background_blur_radius.description"
+        }
         "overlay.surface" => "config.field.theme.overlay.surface.description",
         "overlay.surface.background" => "config.field.theme.overlay.surface.background.description",
         "overlay.surface.background_alpha" => {
             "config.field.theme.overlay.surface.background_alpha.description"
-        }
-        "overlay.surface.background_blur_radius" => {
-            "config.field.theme.overlay.surface.background_blur_radius.description"
         }
         "overlay.surface.corner_radius" => {
             "config.field.theme.overlay.surface.corner_radius.description"
@@ -284,18 +286,18 @@ pub fn theme_spec() -> ConfigSpec {
         .field(field(FieldSpec::color, "tui.border_focus").optional())
         .field(field(FieldSpec::color, "tui.segment").optional())
         .field(field(FieldSpec::table, "overlay").optional())
-        .field(field(FieldSpec::table, "overlay.glass").optional())
-        .field(field(FieldSpec::integer, "overlay.glass.variant").optional())
+        .field(field(FieldSpec::table, "overlay.macos").optional())
+        .field(field(FieldSpec::integer, "overlay.macos.glass_variant").optional())
         .field(
-            field(FieldSpec::string, "overlay.glass.style")
+            field(FieldSpec::string, "overlay.macos.glass_style")
                 .optional()
                 .allowed_values(["clear", "blur"]),
         )
-        .field(field(FieldSpec::integer, "overlay.glass.subdued").optional())
+        .field(field(FieldSpec::integer, "overlay.macos.subdued").optional())
+        .field(field(FieldSpec::integer, "overlay.macos.background_blur_radius").optional())
         .field(field(FieldSpec::table, "overlay.surface").optional())
         .field(field(FieldSpec::color, "overlay.surface.background").optional())
         .field(field(FieldSpec::float, "overlay.surface.background_alpha").optional())
-        .field(field(FieldSpec::integer, "overlay.surface.background_blur_radius").optional())
         .field(field(FieldSpec::float, "overlay.surface.corner_radius").optional())
         .field(field(FieldSpec::table, "overlay.text").optional())
         .field(field(FieldSpec::color, "overlay.text.primary").optional())

@@ -1,3 +1,4 @@
+mod chrome;
 mod view;
 
 #[cfg(debug_assertions)]

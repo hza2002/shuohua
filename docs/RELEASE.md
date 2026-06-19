@@ -154,7 +154,13 @@ Agent 按以下模板起草，**展示完整文本**给用户：
 
 **确认问题**：CHANGELOG 草案是否准确、是否遗漏？日期对吗？要不要加"重新授权"提醒（如果用户感知度高就加）？
 
-用户确认后，agent **写入** `CHANGELOG.md` 顶部（在最旧版本的上面，在文件最顶 H1 标题的下面）。**写完不要 commit**，`cargo release` 会一起 commit。
+用户确认后，agent **写入** `CHANGELOG.md` 顶部（在最旧版本的上面，在文件最顶 H1 标题的下面）。写入后立刻：
+
+```bash
+git add CHANGELOG.md
+```
+
+**不要自己 commit**——`cargo release` 在 bump 阶段会把 Cargo.toml 改动和这个已 stage 的 CHANGELOG 一起打到 release commit 里。**如果忘了 `git add`，cargo-release 会因 working tree 不干净而 abort，或者 release commit 不含 CHANGELOG。**
 
 ### Step 4 — 手动冒烟测试 【需用户确认】
 

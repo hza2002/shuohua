@@ -259,6 +259,39 @@ plist_not_installed = "未安装 {path}"
 written = "配置模板已写入 {path}"
 refuse_overwrite = "拒绝覆盖已存在的模板文件："
 
+[cli.help]
+about = "macOS 语音输入助手"
+
+[cli.help.doctor]
+about = "检查本地环境和配置"
+runtime = "检查已配置的 ASR 和 LLM 组件运行路径"
+
+[cli.help.config_template]
+about = "从内置注册表生成参考配置模板"
+out = "写入生成模板的目录"
+lang = "生成模板注释语言：auto、en-US、zh-CN、zh-Hant、zh-TW、zh-HK 或 pseudo"
+
+[cli.help.install]
+about = "安装并启动 launchd 服务"
+
+[cli.help.uninstall]
+about = "停止并移除 launchd 服务"
+
+[cli.help.start]
+about = "启动 launchd 服务"
+
+[cli.help.stop]
+about = "停止 launchd 服务"
+
+[cli.help.restart]
+about = "重启 launchd 服务"
+
+[cli.help.status]
+about = "显示 daemon 和 launchd 状态"
+
+[cli.help.version]
+about = "显示版本号"
+
 [cli.doctor]
 version = "版本：{version}"
 runtime_skipped = "已跳过（运行 `shuo doctor --runtime` 可测试已配置的 ASR/LLM 运行路径）"

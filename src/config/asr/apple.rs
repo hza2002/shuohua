@@ -53,7 +53,7 @@ fn load_config_with_overrides_from_path(
     overrides: Option<&toml::value::Table>,
 ) -> anyhow::Result<AppleConfig> {
     let mut value = if path.exists() {
-        let body = std::fs::read_to_string(&path)
+        let body = std::fs::read_to_string(path)
             .map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
         toml::from_str::<toml::Value>(&body)
             .map_err(|e| anyhow::anyhow!("parse {}: {e}", path.display()))?

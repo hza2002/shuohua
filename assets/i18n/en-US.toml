@@ -259,6 +259,39 @@ plist_not_installed = "not installed {path}"
 written = "config templates written to {path}"
 refuse_overwrite = "refusing to overwrite existing template files:"
 
+[cli.help]
+about = "macOS voice input assistant"
+
+[cli.help.doctor]
+about = "Check local environment and config"
+runtime = "Include runtime checks for configured ASR and LLM components"
+
+[cli.help.config_template]
+about = "Generate reference config templates from the built-in registry"
+out = "Directory to write generated templates into"
+lang = "Comment language for generated templates: auto, en-US, zh-CN, zh-Hant, zh-TW, zh-HK, or pseudo"
+
+[cli.help.install]
+about = "Install and start the launchd service"
+
+[cli.help.uninstall]
+about = "Stop and remove the launchd service"
+
+[cli.help.start]
+about = "Start the launchd service"
+
+[cli.help.stop]
+about = "Stop the launchd service"
+
+[cli.help.restart]
+about = "Restart the launchd service"
+
+[cli.help.status]
+about = "Show daemon and launchd status"
+
+[cli.help.version]
+about = "Print version information"
+
 [cli.doctor]
 version = "version: {version}"
 runtime_skipped = "skipped (run `shuo doctor --runtime` to test configured ASR/LLM runtime paths)"

@@ -3,7 +3,7 @@ pub mod doctor;
 pub mod service;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(name = "shuo", version, about = "macOS voice input assistant")]
@@ -31,7 +31,9 @@ pub enum Command {
 }
 
 pub fn parse() -> Cli {
-    Cli::parse()
+    init_i18n_for_cli();
+    let mut matches = localized_command().get_matches();
+    Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|e| e.exit())
 }
 
 pub fn run_command(command: Command) -> Result<()> {
@@ -57,6 +59,43 @@ fn init_i18n_for_cli() {
         .map(|cfg| cfg.ui.language)
         .unwrap_or_else(|_| "auto".to_string());
     crate::i18n::init(&language);
+}
+
+fn localized_command() -> clap::Command {
+    Cli::command()
+        .about(crate::t!("cli.help.about"))
+        .mut_subcommand("doctor", |cmd| {
+            cmd.about(crate::t!("cli.help.doctor.about"))
+                .mut_arg("runtime", |arg| {
+                    arg.help(crate::t!("cli.help.doctor.runtime"))
+                })
+        })
+        .mut_subcommand("config-template", |cmd| {
+            cmd.about(crate::t!("cli.help.config_template.about"))
+                .mut_arg("out", |arg| {
+                    arg.help(crate::t!("cli.help.config_template.out"))
+                })
+                .mut_arg("lang", |arg| {
+                    arg.help(crate::t!("cli.help.config_template.lang"))
+                })
+        })
+        .mut_subcommand("install", |cmd| {
+            cmd.about(crate::t!("cli.help.install.about"))
+        })
+        .mut_subcommand("uninstall", |cmd| {
+            cmd.about(crate::t!("cli.help.uninstall.about"))
+        })
+        .mut_subcommand("start", |cmd| cmd.about(crate::t!("cli.help.start.about")))
+        .mut_subcommand("stop", |cmd| cmd.about(crate::t!("cli.help.stop.about")))
+        .mut_subcommand("restart", |cmd| {
+            cmd.about(crate::t!("cli.help.restart.about"))
+        })
+        .mut_subcommand("status", |cmd| {
+            cmd.about(crate::t!("cli.help.status.about"))
+        })
+        .mut_subcommand("version", |cmd| {
+            cmd.about(crate::t!("cli.help.version.about"))
+        })
 }
 
 #[cfg(test)]
@@ -93,5 +132,29 @@ mod tests {
             crate::i18n::tr("cli.service.started", &[("label", "x".to_string())]),
             "started x"
         );
+    }
+
+    #[test]
+    fn help_uses_initialized_language() {
+        crate::i18n::init("zh-CN");
+
+        let err = localized_command()
+            .try_get_matches_from(["shuo", "doctor", "--help"])
+            .unwrap_err();
+        let help = err.to_string();
+
+        assert!(help.contains("检查本地环境和配置"), "{help}");
+        assert!(
+            help.contains("检查已配置的 ASR 和 LLM 组件运行路径"),
+            "{help}"
+        );
+
+        let err = localized_command()
+            .try_get_matches_from(["shuo", "--help"])
+            .unwrap_err();
+        let help = err.to_string();
+
+        assert!(help.contains("安装并启动 launchd 服务"), "{help}");
+        assert!(help.contains("显示版本号"), "{help}");
     }
 }

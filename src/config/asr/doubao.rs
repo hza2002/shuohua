@@ -67,7 +67,7 @@ fn load_config_with_overrides_from_path(
     path: &std::path::Path,
     overrides: Option<&Table>,
 ) -> anyhow::Result<DoubaoConfig> {
-    let body = std::fs::read_to_string(&path).map_err(|e| {
+    let body = std::fs::read_to_string(path).map_err(|e| {
         anyhow::anyhow!(
             "doubao config not found at {}: {e}\n\
              hint: create {} and fill in app_key/access_key",

@@ -21,5 +21,5 @@ pub trait Page {
     fn on_key(&mut self, key: KeyEvent) -> KeyOutcome;
     fn on_enter(&mut self) {}
     fn on_leave(&mut self) {}
-    fn render(&self, frame: &mut Frame, area: Rect, theme: &TuiTheme);
+    fn render(&self, frame: &mut Frame, area: Rect, theme: &TuiTheme, footer_status: &str);
 }

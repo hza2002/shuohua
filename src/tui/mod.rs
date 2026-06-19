@@ -1,16 +1,16 @@
 pub mod audio;
 pub mod config_actions;
+pub mod configure;
 pub mod keybindings;
 pub mod page;
 pub mod panes;
 pub mod settings;
 
 use std::collections::HashMap;
-use std::process::Command as ProcessCommand;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -23,6 +23,8 @@ use crate::ipc::client::IpcClient;
 use crate::ipc::protocol::{Command, Event, WireState};
 use crate::state::history::HistoryRecord;
 use crate::state::{AudioMeter, SessionMeta, SessionPhase};
+use crate::tui::configure::ConfigurePage;
+use crate::tui::page::Page as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -39,52 +41,6 @@ impl Page {
             Page::Settings => 2,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigureModule {
-    Overview,
-    Main,
-    Profile,
-    AsrProvider,
-    PostProcessor,
-}
-
-impl ConfigureModule {
-    fn next(self) -> Self {
-        match self {
-            Self::Overview | Self::Main => Self::Profile,
-            Self::Profile => Self::AsrProvider,
-            Self::AsrProvider => Self::PostProcessor,
-            Self::PostProcessor => Self::Overview,
-        }
-    }
-
-    fn prev(self) -> Self {
-        match self {
-            Self::Overview => Self::PostProcessor,
-            Self::Main => Self::Overview,
-            Self::Profile => Self::Overview,
-            Self::AsrProvider => Self::Profile,
-            Self::PostProcessor => Self::AsrProvider,
-        }
-    }
-
-    pub fn inventory_module(self) -> crate::config::inventory::InventoryModule {
-        match self {
-            Self::Overview => crate::config::inventory::InventoryModule::Overview,
-            Self::Main => crate::config::inventory::InventoryModule::Main,
-            Self::Profile => crate::config::inventory::InventoryModule::Profile,
-            Self::AsrProvider => crate::config::inventory::InventoryModule::AsrProvider,
-            Self::PostProcessor => crate::config::inventory::InventoryModule::PostProcessor,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigureFocus {
-    Modules,
-    Items,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,24 +99,11 @@ pub struct App {
     pub search: String,
     pub searching: bool,
     pub status: String,
-    pub config_path: String,
-    pub settings_rows: Vec<settings::SettingsRow>,
     pub theme: crate::config::theme::TuiTheme,
-    pub selected_settings: usize,
-    pub configure_module: ConfigureModule,
-    pub configure_focus: ConfigureFocus,
-    pub llm_wizard: Option<LlmWizard>,
-    pub doctor: DoctorState,
+    pub configure: ConfigurePage,
     pub meter_width: usize,
     pub audio_cache: HashMap<String, audio::AudioInfo>,
     pub confirm: Option<Confirm>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DoctorState {
-    pub ran_once: bool,
-    pub status: Option<String>,
-    pub output: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,28 +111,9 @@ pub enum Confirm {
     DeleteAudio { record_id: String },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LlmWizardStep {
-    Template,
-    FileId,
-    ProviderName,
-    Format,
-    BaseUrl,
-    Model,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LlmWizard {
-    pub step: LlmWizardStep,
-    pub templates: Vec<String>,
-    pub selected_template: usize,
-    pub draft: crate::config::template::LlmComponentDraft,
-}
-
 impl App {
     fn new() -> Self {
         let config_path = crate::config::default_path();
-        let settings_rows = settings::load_rows();
         let theme = crate::config::load_from(&config_path)
             .map(|cfg| crate::config::theme::load_effective(&cfg, &config_path).tui)
             .unwrap_or_default();
@@ -214,18 +138,8 @@ impl App {
             search: String::new(),
             searching: false,
             status: "connected".to_string(),
-            config_path: config_path.display().to_string(),
-            settings_rows,
             theme,
-            selected_settings: 0,
-            configure_module: ConfigureModule::Overview,
-            configure_focus: ConfigureFocus::Modules,
-            llm_wizard: None,
-            doctor: DoctorState {
-                ran_once: false,
-                status: None,
-                output: String::new(),
-            },
+            configure: ConfigurePage::new(),
             meter_width: 160,
             audio_cache: HashMap::new(),
             confirm: None,
@@ -361,9 +275,15 @@ impl App {
                 self.selected_history = 0;
             }
             Event::DaemonStatus { .. } => {}
-            Event::ConfigReloaded { path } => {
+            Event::ConfigReloaded { ref path } => {
                 self.status = format!("config reloaded: {path}");
-                self.refresh_configure();
+                self.configure.apply_event(&event, true);
+                self.theme = crate::config::load_from(&crate::config::default_path())
+                    .map(|cfg| {
+                        crate::config::theme::load_effective(&cfg, &crate::config::default_path())
+                            .tui
+                    })
+                    .unwrap_or_default();
             }
             Event::Error { kind, msg, .. } => {
                 self.status = format!("{kind}: {msg}");
@@ -389,121 +309,6 @@ impl App {
             .get(&record.id)
             .cloned()
             .unwrap_or_else(|| audio::missing_audio_info_for_record(record))
-    }
-
-    fn configure_rows_for_current_module(&self) -> Vec<&settings::SettingsRow> {
-        let module = self.configure_module.inventory_module();
-        self.settings_rows
-            .iter()
-            .filter(|row| row.group == module.label())
-            .collect()
-    }
-
-    fn configure_sources_for_current_module(&self) -> Vec<std::path::PathBuf> {
-        let mut sources = self
-            .configure_rows_for_current_module()
-            .into_iter()
-            .map(|row| std::path::PathBuf::from(&row.source))
-            .collect::<Vec<_>>();
-        sources.sort();
-        sources.dedup();
-        sources
-    }
-
-    fn selected_config_source(&self) -> Option<std::path::PathBuf> {
-        match self.configure_module {
-            ConfigureModule::Overview => Some(crate::config::default_path()),
-            ConfigureModule::Main => Some(crate::config::default_path()),
-            ConfigureModule::Profile
-            | ConfigureModule::PostProcessor
-            | ConfigureModule::AsrProvider => self
-                .configure_sources_for_current_module()
-                .get(self.selected_settings)
-                .cloned(),
-        }
-    }
-
-    fn config_directory(&self) -> Option<std::path::PathBuf> {
-        crate::config::default_path()
-            .parent()
-            .map(|path| path.to_path_buf())
-    }
-
-    fn clamp_selected_settings(&mut self) {
-        let len = match self.configure_module {
-            ConfigureModule::Profile
-            | ConfigureModule::PostProcessor
-            | ConfigureModule::AsrProvider => self.configure_sources_for_current_module().len(),
-            _ => self.configure_rows_for_current_module().len(),
-        };
-        self.selected_settings = self.selected_settings.min(len.saturating_sub(1));
-    }
-
-    fn move_configure_selection(&mut self, delta: isize) {
-        if self.configure_focus == ConfigureFocus::Modules {
-            self.configure_module = if delta >= 0 {
-                self.configure_module.next()
-            } else {
-                self.configure_module.prev()
-            };
-            self.selected_settings = 0;
-            self.clamp_selected_settings();
-            return;
-        }
-        let len = match self.configure_module {
-            ConfigureModule::Profile
-            | ConfigureModule::PostProcessor
-            | ConfigureModule::AsrProvider => self.configure_sources_for_current_module().len(),
-            _ => self.configure_rows_for_current_module().len(),
-        };
-        if len == 0 {
-            self.selected_settings = 0;
-            return;
-        }
-        if delta >= 0 {
-            self.selected_settings = (self.selected_settings + 1).min(len - 1);
-        } else {
-            self.selected_settings = self.selected_settings.saturating_sub(1);
-        }
-    }
-
-    fn move_configure_focus(&mut self, delta: isize) {
-        self.configure_focus = if delta >= 0 {
-            ConfigureFocus::Items
-        } else {
-            ConfigureFocus::Modules
-        };
-    }
-
-    fn refresh_configure(&mut self) {
-        self.settings_rows = settings::load_rows();
-        self.theme = crate::config::load_from(&crate::config::default_path())
-            .map(|cfg| {
-                crate::config::theme::load_effective(&cfg, &crate::config::default_path()).tui
-            })
-            .unwrap_or_default();
-        self.clamp_selected_settings();
-    }
-
-    fn start_llm_wizard(&mut self) {
-        let templates = crate::config::template::llm_templates()
-            .map(|template| template.id.to_string())
-            .collect::<Vec<_>>();
-        let Some(first_template) = templates.first() else {
-            self.status = crate::t!("tui.configure.wizard.no_templates");
-            return;
-        };
-        let Some(draft) = crate::config::template::llm_draft_from_template(first_template) else {
-            self.status = crate::t!("tui.configure.wizard.no_templates");
-            return;
-        };
-        self.llm_wizard = Some(LlmWizard {
-            step: LlmWizardStep::Template,
-            templates,
-            selected_template: 0,
-            draft,
-        });
-        self.status = crate::t!("tui.configure.wizard.started");
     }
 }
 
@@ -594,7 +399,11 @@ fn init_i18n_from_config() {
 
 async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Result<bool> {
     use keybindings::Action;
-    if handle_llm_wizard_key(app, key)? {
+
+    if app.configure.is_wizard_active() {
+        if let Some(status) = app.configure.feed_wizard_key(key) {
+            app.status = status;
+        }
         return Ok(false);
     }
     if handle_confirm_key(app, key)? {
@@ -626,7 +435,7 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
         }
         Action::MoveDown => {
             if app.page == Page::Settings {
-                app.move_configure_selection(1);
+                app.configure.move_selection(1);
             } else {
                 let len = app.filtered_history().len();
                 if len > 0 {
@@ -636,29 +445,21 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
         }
         Action::MoveUp => {
             if app.page == Page::Settings {
-                app.move_configure_selection(-1);
+                app.configure.move_selection(-1);
             } else {
                 app.selected_history = app.selected_history.saturating_sub(1);
             }
         }
         Action::MoveTop => {
             if app.page == Page::Settings {
-                app.selected_settings = 0;
+                app.configure.move_top();
             } else {
                 app.selected_history = 0;
             }
         }
         Action::MoveBottom => {
             if app.page == Page::Settings {
-                let len = match app.configure_module {
-                    ConfigureModule::Profile
-                    | ConfigureModule::PostProcessor
-                    | ConfigureModule::AsrProvider => {
-                        app.configure_sources_for_current_module().len()
-                    }
-                    _ => app.configure_rows_for_current_module().len(),
-                };
-                app.selected_settings = len.saturating_sub(1);
+                app.configure.move_bottom();
             } else {
                 let len = app.filtered_history().len();
                 app.selected_history = len.saturating_sub(1);
@@ -666,14 +467,14 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
         }
         Action::NextFocus => {
             if app.page == Page::Settings {
-                app.move_configure_focus(1);
+                app.configure.move_focus(1);
             } else {
                 app.history_detail = app.history_detail.next();
             }
         }
         Action::PrevFocus => {
             if app.page == Page::Settings {
-                app.move_configure_focus(-1);
+                app.configure.move_focus(-1);
             } else {
                 app.history_detail = app.history_detail.prev();
             }
@@ -725,14 +526,14 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
         }
         Action::OpenAudio => {
             if app.page == Page::Settings {
-                run_config_action(app, config_actions::open_in_editor, "tui.configure.opening")
+                app.status = app.configure.open_editor();
             } else {
                 run_audio_action(app, audio::open_audio, "tui.history.audio.opening")
             }
         }
         Action::RevealAudio => {
             if app.page == Page::Settings {
-                run_config_reveal_action(app)
+                app.status = app.configure.reveal_in_finder();
             } else {
                 run_audio_action(app, audio::reveal_audio, "tui.history.audio.revealing")
             }
@@ -756,22 +557,21 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
         }
         Action::ValidateConfig => {
             if app.page == Page::Settings {
-                app.refresh_configure();
-                app.doctor = run_doctor();
-                app.status = crate::t!("tui.configure.validated");
+                app.status = app.configure.validate();
             }
         }
         Action::ReloadConfig => {
             if app.page == Page::Settings {
-                client.send(&Command::ReloadConfig).await?;
-                app.refresh_configure();
-                app.status = crate::t!("tui.configure.reload_requested");
+                let (cmd, status) = app.configure.request_reload();
+                client.send(&cmd).await?;
+                app.status = status;
             }
         }
         Action::NewConfig => {
-            if app.page == Page::Settings && app.configure_module == ConfigureModule::PostProcessor
+            if app.page == Page::Settings
+                && app.configure.module == crate::tui::configure::ConfigureModule::PostProcessor
             {
-                app.start_llm_wizard();
+                app.status = app.configure.start_wizard();
             }
         }
         Action::None => {}
@@ -779,178 +579,12 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
     Ok(false)
 }
 
-fn handle_llm_wizard_key(app: &mut App, key: KeyEvent) -> Result<bool> {
-    if app.llm_wizard.is_none() {
-        return Ok(false);
-    }
-    if key.kind != crossterm::event::KeyEventKind::Press {
-        return Ok(true);
-    }
-    match key.code {
-        KeyCode::Esc => {
-            app.llm_wizard = None;
-            app.status = crate::t!("tui.configure.wizard.cancelled");
-        }
-        KeyCode::Enter => advance_llm_wizard(app)?,
-        KeyCode::Down | KeyCode::Right => move_llm_wizard_selection(app, 1),
-        KeyCode::Up | KeyCode::Left => move_llm_wizard_selection(app, -1),
-        KeyCode::Char('j') | KeyCode::Char('l') if llm_wizard_allows_selection(app) => {
-            move_llm_wizard_selection(app, 1);
-        }
-        KeyCode::Char('k') | KeyCode::Char('h') if llm_wizard_allows_selection(app) => {
-            move_llm_wizard_selection(app, -1);
-        }
-        KeyCode::Backspace => edit_llm_wizard_field(app, WizardEdit::Backspace),
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            edit_llm_wizard_field(app, WizardEdit::Clear);
-        }
-        KeyCode::Char(ch) => edit_llm_wizard_field(app, WizardEdit::Push(ch)),
-        _ => {}
-    }
-    Ok(true)
-}
-
-fn llm_wizard_allows_selection(app: &App) -> bool {
-    app.llm_wizard.as_ref().is_some_and(|wizard| {
-        matches!(wizard.step, LlmWizardStep::Template | LlmWizardStep::Format)
-    })
-}
-
-enum WizardEdit {
-    Push(char),
-    Backspace,
-    Clear,
-}
-
-fn move_llm_wizard_selection(app: &mut App, delta: isize) {
-    let Some(wizard) = &mut app.llm_wizard else {
-        return;
-    };
-    match wizard.step {
-        LlmWizardStep::Template => {
-            let len = wizard.templates.len();
-            if len == 0 {
-                return;
-            }
-            let next = (wizard.selected_template as isize + delta).rem_euclid(len as isize);
-            wizard.selected_template = next as usize;
-            if let Some(template_id) = wizard.templates.get(wizard.selected_template) {
-                if let Some(draft) = crate::config::template::llm_draft_from_template(template_id) {
-                    wizard.draft = draft;
-                }
-            }
-        }
-        LlmWizardStep::Format => {
-            wizard.draft.format = if wizard.draft.format == "openai" {
-                "anthropic".to_string()
-            } else {
-                "openai".to_string()
-            };
-        }
-        _ => {}
-    }
-}
-
-fn edit_llm_wizard_field(app: &mut App, edit: WizardEdit) {
-    let Some(wizard) = &mut app.llm_wizard else {
-        return;
-    };
-    let target = match wizard.step {
-        LlmWizardStep::FileId => Some(&mut wizard.draft.file_id),
-        LlmWizardStep::ProviderName => Some(&mut wizard.draft.provider_name),
-        LlmWizardStep::BaseUrl => Some(&mut wizard.draft.base_url),
-        LlmWizardStep::Model => Some(&mut wizard.draft.model),
-        _ => None,
-    };
-    let Some(value) = target else {
-        return;
-    };
-    match edit {
-        WizardEdit::Push(ch) => value.push(ch),
-        WizardEdit::Backspace => {
-            value.pop();
-        }
-        WizardEdit::Clear => value.clear(),
-    }
-}
-
-fn advance_llm_wizard(app: &mut App) -> Result<()> {
-    let Some(wizard) = &mut app.llm_wizard else {
-        return Ok(());
-    };
-    wizard.step = match wizard.step {
-        LlmWizardStep::Template => LlmWizardStep::FileId,
-        LlmWizardStep::FileId => LlmWizardStep::ProviderName,
-        LlmWizardStep::ProviderName => LlmWizardStep::Format,
-        LlmWizardStep::Format => LlmWizardStep::BaseUrl,
-        LlmWizardStep::BaseUrl => LlmWizardStep::Model,
-        LlmWizardStep::Model => {
-            finish_llm_wizard(app)?;
-            return Ok(());
-        }
-    };
-    Ok(())
-}
-
-fn finish_llm_wizard(app: &mut App) -> Result<()> {
-    let Some(wizard) = app.llm_wizard.take() else {
-        return Ok(());
-    };
-    match crate::config::template::create_llm_component(
-        &crate::config::post::default_dir(),
-        &wizard.draft,
-    ) {
-        Ok(path) => {
-            app.refresh_configure();
-            app.status = crate::t!("tui.configure.wizard.created", path = path.display());
-            let _ = config_actions::open_in_editor(&path);
-        }
-        Err(e) => {
-            app.status = crate::t!("tui.configure.wizard.error", error = e);
-            app.llm_wizard = Some(wizard);
-        }
-    }
-    Ok(())
-}
-
 fn on_page_changed(app: &mut App) {
     if app.page == Page::Status {
         app.meters.clear();
     }
     if app.page == Page::Settings {
-        app.refresh_configure();
-    }
-}
-
-fn run_doctor() -> DoctorState {
-    let output = ProcessCommand::new(std::env::current_exe().unwrap_or_else(|_| "shuo".into()))
-        .arg("doctor")
-        .output();
-    match output {
-        Ok(output) => {
-            let mut text = String::new();
-            text.push_str(&String::from_utf8_lossy(&output.stdout));
-            if !output.stderr.is_empty() {
-                if !text.is_empty() && !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                text.push_str(&String::from_utf8_lossy(&output.stderr));
-            }
-            DoctorState {
-                ran_once: true,
-                status: Some(if output.status.success() {
-                    "ok".to_string()
-                } else {
-                    format!("exit {}", output.status)
-                }),
-                output: text,
-            }
-        }
-        Err(e) => DoctorState {
-            ran_once: true,
-            status: Some("error".to_string()),
-            output: format!("failed to run doctor: {e}"),
-        },
+        app.configure.on_enter();
     }
 }
 
@@ -1027,41 +661,6 @@ fn run_audio_action(app: &mut App, action: fn(&std::path::Path) -> Result<()>, s
     }
 }
 
-fn run_config_action(app: &mut App, action: fn(&std::path::Path) -> Result<()>, status_key: &str) {
-    if app.page != Page::Settings {
-        return;
-    }
-    let Some(path) = app.selected_config_source() else {
-        app.status = crate::t!("tui.configure.no_config_selected");
-        return;
-    };
-    match action(&path) {
-        Ok(()) => {
-            app.status = crate::i18n::tr(status_key, &[("path", path.display().to_string())]);
-        }
-        Err(e) => app.status = crate::t!("tui.error.config_action", error = e),
-    }
-}
-
-fn run_config_reveal_action(app: &mut App) {
-    if app.page != Page::Settings {
-        return;
-    }
-    let Some(path) = app
-        .selected_config_source()
-        .or_else(|| app.config_directory())
-    else {
-        app.status = crate::t!("tui.configure.no_config_selected");
-        return;
-    };
-    match config_actions::reveal_in_finder(&path) {
-        Ok(()) => {
-            app.status = crate::t!("tui.configure.revealing", path = path.display());
-        }
-        Err(e) => app.status = crate::t!("tui.error.config_action", error = e),
-    }
-}
-
 fn selected_history_record(app: &App) -> Option<&HistoryRecord> {
     app.filtered_history().get(app.selected_history).copied()
 }
@@ -1116,114 +715,6 @@ mod tests {
     }
 
     #[test]
-    fn configure_modules_cycle_in_order() {
-        assert_eq!(ConfigureModule::Overview.next(), ConfigureModule::Profile);
-        assert_eq!(
-            ConfigureModule::Profile.next(),
-            ConfigureModule::AsrProvider
-        );
-        assert_eq!(
-            ConfigureModule::AsrProvider.next(),
-            ConfigureModule::PostProcessor
-        );
-        assert_eq!(
-            ConfigureModule::PostProcessor.next(),
-            ConfigureModule::Overview
-        );
-        assert_eq!(
-            ConfigureModule::Overview.prev(),
-            ConfigureModule::PostProcessor
-        );
-        assert_eq!(
-            ConfigureModule::AsrProvider.inventory_module(),
-            crate::config::inventory::InventoryModule::AsrProvider
-        );
-    }
-
-    #[test]
-    fn selected_config_source_tracks_current_module_row() {
-        let mut app = App::new();
-        app.configure_module = ConfigureModule::Main;
-        app.settings_rows = vec![
-            settings::SettingsRow {
-                group: "main".to_string(),
-                key: "config".to_string(),
-                display_key: "config".to_string(),
-                value: "ok".to_string(),
-                source: "/tmp/shuohua/config.toml".to_string(),
-                status: crate::config::inventory::InventoryStatus::Ok,
-                description_key: None,
-            },
-            settings::SettingsRow {
-                group: "asr".to_string(),
-                key: "apple.idle_pause".to_string(),
-                display_key: "idle_pause".to_string(),
-                value: "true".to_string(),
-                source: "/tmp/shuohua/asr/apple.toml".to_string(),
-                status: crate::config::inventory::InventoryStatus::Ok,
-                description_key: None,
-            },
-        ];
-        app.selected_settings = 0;
-
-        assert_eq!(
-            app.selected_config_source()
-                .unwrap()
-                .file_name()
-                .and_then(|name| name.to_str()),
-            Some("config.toml")
-        );
-
-        app.configure_module = ConfigureModule::AsrProvider;
-        app.clamp_selected_settings();
-        assert_eq!(
-            app.selected_config_source().unwrap(),
-            std::path::PathBuf::from("/tmp/shuohua/asr/apple.toml")
-        );
-    }
-
-    #[test]
-    fn configure_vertical_navigation_moves_focused_column() {
-        let mut app = App::new();
-        app.page = Page::Settings;
-        app.configure_module = ConfigureModule::Overview;
-        app.configure_focus = ConfigureFocus::Modules;
-
-        app.move_configure_selection(1);
-
-        assert_eq!(app.configure_module, ConfigureModule::Profile);
-
-        app.configure_focus = ConfigureFocus::Items;
-        app.settings_rows = vec![
-            settings::SettingsRow {
-                group: "profile".to_string(),
-                key: "default".to_string(),
-                display_key: "default".to_string(),
-                value: "default".to_string(),
-                source: "/tmp/shuohua/profile/default.toml".to_string(),
-                status: crate::config::inventory::InventoryStatus::Ok,
-                description_key: None,
-            },
-            settings::SettingsRow {
-                group: "profile".to_string(),
-                key: "coding".to_string(),
-                display_key: "coding".to_string(),
-                value: "coding".to_string(),
-                source: "/tmp/shuohua/profile/coding.toml".to_string(),
-                status: crate::config::inventory::InventoryStatus::Ok,
-                description_key: None,
-            },
-        ];
-        app.configure_module = ConfigureModule::Profile;
-        app.selected_settings = 0;
-
-        app.move_configure_selection(1);
-
-        assert_eq!(app.configure_module, ConfigureModule::Profile);
-        assert_eq!(app.selected_settings, 1);
-    }
-
-    #[test]
     fn init_i18n_from_config_uses_configured_language() {
         let home = std::env::temp_dir().join(format!("shuohua-tui-i18n-{}", ulid::Ulid::new()));
         let config_home = home.join("config");
@@ -1251,28 +742,5 @@ language = "zh-CN"
             None => std::env::remove_var("XDG_CONFIG_HOME"),
         }
         let _ = std::fs::remove_dir_all(home);
-    }
-
-    #[test]
-    fn llm_wizard_starts_with_template_defaults_and_allows_text_j() {
-        let mut app = App::new();
-        app.page = Page::Settings;
-        app.configure_module = ConfigureModule::PostProcessor;
-
-        app.start_llm_wizard();
-
-        let wizard = app.llm_wizard.as_ref().unwrap();
-        assert_eq!(wizard.step, LlmWizardStep::Template);
-        assert_eq!(wizard.draft.format, "openai");
-
-        advance_llm_wizard(&mut app).unwrap();
-        app.llm_wizard.as_mut().unwrap().draft.file_id.clear();
-        edit_llm_wizard_field(&mut app, WizardEdit::Push('j'));
-        edit_llm_wizard_field(&mut app, WizardEdit::Push('1'));
-
-        let wizard = app.llm_wizard.as_ref().unwrap();
-        assert_eq!(wizard.step, LlmWizardStep::FileId);
-        assert_eq!(wizard.draft.file_id, "j1");
-        assert!(!llm_wizard_allows_selection(&app));
     }
 }

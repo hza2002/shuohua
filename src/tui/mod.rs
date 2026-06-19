@@ -5,6 +5,7 @@ pub mod keybindings;
 pub mod page;
 pub mod panes;
 pub mod settings;
+pub mod status;
 
 use std::time::Duration;
 
@@ -19,11 +20,11 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use crate::ipc::client::IpcClient;
-use crate::ipc::protocol::{Command, Event, WireState};
-use crate::state::{AudioMeter, SessionMeta, SessionPhase};
+use crate::ipc::protocol::{Command, Event};
 use crate::tui::configure::ConfigurePage;
 use crate::tui::history::HistoryPage;
 use crate::tui::page::Page as _;
+use crate::tui::status::StatusPage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -45,24 +46,11 @@ impl Page {
 #[derive(Debug)]
 pub struct App {
     pub page: Page,
-    pub state: WireState,
-    pub recording_id: Option<String>,
-    pub started_at: Option<time::OffsetDateTime>,
-    pub app: Option<String>,
-    pub app_name: Option<String>,
-    pub dur_ms: u64,
-    pub words: u32,
-    pub segments: Vec<String>,
-    pub partial: String,
-    pub pipeline: Vec<String>,
-    pub session_meta: Option<SessionMeta>,
-    pub session_phase: Option<SessionPhase>,
-    pub meters: Vec<AudioMeter>,
+    pub status_page: StatusPage,
     pub history: HistoryPage,
     pub status: String,
     pub theme: crate::config::theme::TuiTheme,
     pub configure: ConfigurePage,
-    pub meter_width: usize,
 }
 
 impl App {
@@ -73,124 +61,18 @@ impl App {
             .unwrap_or_default();
         Self {
             page: Page::Status,
-            state: WireState::Idle,
-            recording_id: None,
-            started_at: None,
-            app: None,
-            app_name: None,
-            dur_ms: 0,
-            words: 0,
-            segments: Vec::new(),
-            partial: String::new(),
-            pipeline: Vec::new(),
-            session_meta: None,
-            session_phase: None,
-            meters: Vec::new(),
+            status_page: StatusPage::new(),
             history: HistoryPage::new(),
             status: "connected".to_string(),
             theme,
             configure: ConfigurePage::new(),
-            meter_width: 160,
         }
-    }
-
-    pub fn current_elapsed_ms(&self) -> u64 {
-        if matches!(self.state, WireState::Recording | WireState::Stopping) {
-            if let Some(started_at) = self.started_at {
-                if let Ok(duration) = (time::OffsetDateTime::now_utc() - started_at).try_into() {
-                    let duration: std::time::Duration = duration;
-                    return duration.as_millis() as u64;
-                }
-            }
-        }
-        self.dur_ms
     }
 
     fn apply_event(&mut self, event: Event) {
         match event {
-            Event::Snapshot {
-                state,
-                recording,
-                started_at,
-                app,
-                app_name,
-                dur_ms,
-                words,
-                segments,
-                partial,
-                ..
-            } => {
-                self.state = state;
-                self.recording_id = recording;
-                self.started_at = parse_time(started_at.as_deref());
-                self.app = app;
-                self.app_name = app_name;
-                self.dur_ms = dur_ms;
-                self.words = words;
-                self.segments = segments;
-                self.partial = partial;
-            }
-            Event::StateChanged {
-                state,
-                recording_id,
-                started_at,
-                ..
-            } => {
-                self.state = state;
-                self.recording_id = recording_id;
-                self.started_at = parse_time(started_at.as_deref());
-                if state == WireState::Idle {
-                    self.segments.clear();
-                    self.partial.clear();
-                    self.pipeline.clear();
-                    self.session_meta = None;
-                    self.session_phase = None;
-                    self.meters.clear();
-                    self.app = None;
-                    self.app_name = None;
-                    self.dur_ms = 0;
-                    self.words = 0;
-                }
-            }
-            Event::AppChanged { app, app_name } => {
-                self.app = app;
-                self.app_name = app_name;
-            }
-            Event::StatsChanged { dur_ms, words } => {
-                self.dur_ms = dur_ms;
-                self.words = words;
-            }
-            Event::Partial { text, .. } => self.partial = text,
-            Event::Segment { text, .. } => {
-                self.segments.push(text);
-                self.partial.clear();
-            }
-            Event::PipelineStep {
-                name,
-                status,
-                duration_ms,
-                text,
-                error,
-                ..
-            } => {
-                let detail = text.or(error).unwrap_or_default();
-                self.pipeline
-                    .push(format!("{name} {status} {duration_ms:.1}ms  {detail}"));
-            }
-            Event::AudioMeter { meter, .. } => {
-                if self.page == Page::Status {
-                    self.meters.push(meter);
-                    trim_meters_to_capacity(&mut self.meters);
-                }
-            }
-            Event::SessionMeta { meta, .. } => {
-                self.session_meta = Some(meta);
-            }
-            Event::SessionPhase { phase, .. } => {
-                self.session_phase = Some(phase);
-            }
-            ref event @ (Event::HistoryAppended { .. } | Event::History { .. }) => {
-                self.history.apply_event(event, self.page == Page::History);
+            Event::HistoryAppended { .. } | Event::History { .. } => {
+                self.history.apply_event(&event, self.page == Page::History);
             }
             Event::DaemonStatus { .. } => {}
             Event::ConfigReloaded { ref path } => {
@@ -206,26 +88,12 @@ impl App {
             Event::Error { kind, msg, .. } => {
                 self.status = format!("{kind}: {msg}");
             }
+            _ => {
+                self.status_page
+                    .apply_event(&event, self.page == Page::Status);
+            }
         }
     }
-}
-
-const MAX_METER_HISTORY: usize = 1024;
-
-fn trim_meters_to_capacity(meters: &mut Vec<crate::state::AudioMeter>) {
-    if meters.len() > MAX_METER_HISTORY {
-        meters.drain(..meters.len() - MAX_METER_HISTORY);
-    }
-}
-
-fn meter_capacity_for_terminal_width(width: u16) -> usize {
-    (width.saturating_sub(11).max(16) as usize).min(MAX_METER_HISTORY)
-}
-
-fn parse_time(value: Option<&str>) -> Option<time::OffsetDateTime> {
-    value.and_then(|value| {
-        time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
-    })
 }
 
 pub async fn run() -> Result<()> {
@@ -260,9 +128,9 @@ pub async fn run() -> Result<()> {
 
     let mut app = App::new();
     loop {
-        app.meter_width = terminal
+        app.status_page.meter_width = terminal
             .size()
-            .map(|area| meter_capacity_for_terminal_width(area.width))
+            .map(|area| StatusPage::meter_capacity_for_terminal_width(area.width))
             .unwrap_or(160);
         terminal.draw(|frame| panes::render(frame, &app))?;
 
@@ -455,7 +323,7 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
 
 fn on_page_changed(app: &mut App) {
     if app.page == Page::Status {
-        app.meters.clear();
+        app.status_page.on_enter();
     }
     if app.page == Page::Settings {
         app.configure.on_enter();
@@ -481,36 +349,6 @@ impl Drop for TerminalGuard {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    fn meter(peak: f32) -> AudioMeter {
-        AudioMeter {
-            rms: peak,
-            peak,
-            clipped: false,
-            vad_probability: None,
-            vad_speech: None,
-        }
-    }
-
-    #[test]
-    fn trim_meters_to_capacity_keeps_large_tail() {
-        let mut meters = (0..1100).map(|idx| meter(idx as f32)).collect::<Vec<_>>();
-
-        trim_meters_to_capacity(&mut meters);
-
-        assert_eq!(meters.len(), MAX_METER_HISTORY);
-        assert_eq!(meters.first().unwrap().peak, 76.0);
-        assert_eq!(meters.last().unwrap().peak, 1099.0);
-    }
-
-    #[test]
-    fn meter_capacity_tracks_terminal_width_with_minimum_and_4k_cap() {
-        assert_eq!(meter_capacity_for_terminal_width(200), 189);
-        assert_eq!(meter_capacity_for_terminal_width(20), 16);
-        assert_eq!(meter_capacity_for_terminal_width(3840), MAX_METER_HISTORY);
-    }
-
     #[test]
     fn init_i18n_from_config_uses_configured_language() {
         let home = std::env::temp_dir().join(format!("shuohua-tui-i18n-{}", ulid::Ulid::new()));
@@ -531,7 +369,7 @@ language = "zh-CN"
         let old = std::env::var("XDG_CONFIG_HOME").ok();
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
 
-        init_i18n_from_config();
+        super::init_i18n_from_config();
 
         assert_eq!(crate::i18n::tr("tui.tab_settings", &[]), "3 配置");
         match old {

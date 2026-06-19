@@ -1,0 +1,30 @@
+# cargo-release 配置：纪律 > 灵活
+# 文档：https://github.com/crate-ci/cargo-release/blob/master/docs/reference.md
+
+# 只允许从 main 发版
+allow-branch = ["main"]
+
+# 与仓库 commit.gpgsign=false 一致
+sign-commit = false
+sign-tag = false
+
+# tag 直接 vX.Y.Z，不带 crate 前缀
+tag-prefix = ""
+tag-name = "v{{version}}"
+tag-message = "shuo v{{version}}"
+
+# 不发到 crates.io（项目 Cargo.toml 已 publish = false，这里再保险）
+publish = false
+
+# cargo release 自动 push commit + tag 到 origin
+push = true
+
+# commit message
+pre-release-commit-message = "release: v{{version}}"
+
+# 发版前必须通过：fmt 检查、clippy 零警告、全量 test
+# 任何一项失败都停下，不进入 bump/commit/tag/push 阶段
+pre-release-hook = [
+  "sh", "-c",
+  "cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test"
+]

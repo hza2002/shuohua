@@ -204,7 +204,7 @@ fn run_daemon_process() -> Result<()> {
         })
         .context("spawn tokio daemon thread")?;
 
-    overlay::view::run(_overlay_rx, runtime_cfg.theme.overlay.clone());
+    overlay::run(_overlay_rx, runtime_cfg.theme.overlay.clone());
     Ok(())
 }
 

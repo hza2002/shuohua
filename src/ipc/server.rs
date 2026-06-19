@@ -12,11 +12,13 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc::{self, error::TrySendError};
 use tokio_util::sync::CancellationToken;
 
-use crate::ipc::protocol::{Command, Event, Stats, WireState, PROTO_VERSION};
+use crate::ipc::protocol::{Command, Event, WireState, PROTO_VERSION};
 use crate::state::history::{self, HistoryRecord, PipelineStepHistory, PipelineStepStatus};
 use crate::state::{DaemonState, StateEvent, StateSnapshot, StateStore};
 
 const CLIENT_QUEUE: usize = 256;
+const DEFAULT_HISTORY_LIMIT: usize = 50;
+const MAX_HISTORY_LIMIT: usize = 500;
 
 pub fn default_socket_path() -> PathBuf {
     let uid = unsafe { libc::getuid() };
@@ -134,12 +136,10 @@ async fn handle_client(
                 before,
                 query,
             } => {
-                let records = read_history(limit, before.as_deref(), query.as_deref())
-                    .unwrap_or_else(|e| {
-                        tracing::warn!(error = ?e, "history read failed");
-                        Vec::new()
-                    });
-                if !send_or_drop(&tx, Event::History { records }) {
+                let event = history_response_event(
+                    read_history(limit, before.as_deref(), query.as_deref()).await,
+                );
+                if !send_or_drop(&tx, event) {
                     cancel.cancel();
                     break;
                 }
@@ -279,7 +279,20 @@ fn snapshot_event(snapshot: StateSnapshot) -> Event {
         words: snapshot.words,
         segments: snapshot.segments,
         partial: snapshot.partial,
-        stats: Stats::default(),
+    }
+}
+
+fn history_response_event(result: Result<Vec<HistoryRecord>>) -> Event {
+    match result {
+        Ok(records) => Event::History { records },
+        Err(e) => {
+            tracing::warn!(error = ?e, "history read failed");
+            Event::Error {
+                recording_id: None,
+                kind: "history_read".to_string(),
+                msg: e.to_string(),
+            }
+        }
     }
 }
 
@@ -376,12 +389,19 @@ fn step_status(status: PipelineStepStatus) -> &'static str {
     }
 }
 
-fn read_history(
+async fn read_history(
     limit: usize,
     before: Option<&str>,
     query: Option<&str>,
 ) -> Result<Vec<HistoryRecord>> {
-    read_history_from_dir(&history::history_dir(), limit, before, query)
+    let dir = history::history_dir();
+    let before = before.map(str::to_string);
+    let query = query.map(str::to_string);
+    tokio::task::spawn_blocking(move || {
+        read_history_from_dir(&dir, limit, before.as_deref(), query.as_deref())
+    })
+    .await
+    .context("join history read task")?
 }
 
 fn read_history_from_dir(
@@ -390,6 +410,7 @@ fn read_history_from_dir(
     before: Option<&str>,
     query: Option<&str>,
 ) -> Result<Vec<HistoryRecord>> {
+    let limit = normalize_history_limit(limit);
     let before = before
         .map(|value| {
             time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
@@ -418,6 +439,14 @@ fn read_history_from_dir(
     records.sort_by(|a, b| b.started_at.cmp(&a.started_at));
     records.truncate(limit);
     Ok(records)
+}
+
+fn normalize_history_limit(limit: usize) -> usize {
+    if limit == 0 {
+        DEFAULT_HISTORY_LIMIT
+    } else {
+        limit.min(MAX_HISTORY_LIMIT)
+    }
 }
 
 fn history_matches(record: &HistoryRecord, query: &str) -> bool {
@@ -608,6 +637,48 @@ mod tests {
         assert_eq!(ids, vec!["jun"]);
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn read_history_from_dir_clamps_large_limits() {
+        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&dir).unwrap();
+        for n in 0..600 {
+            write_history_record(
+                &dir.join("2026-06.jsonl"),
+                history_record(
+                    &format!("record-{n:03}"),
+                    datetime!(2026-06-20 12:00:00 UTC) + time::Duration::seconds(n),
+                    "text",
+                ),
+            );
+        }
+
+        let records = read_history_from_dir(&dir, usize::MAX, None, None).unwrap();
+
+        assert_eq!(records.len(), 500);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn history_response_reports_read_errors() {
+        let event = history_response_event(Err(anyhow::anyhow!(
+            "parse history line in /tmp/history/2026-06.jsonl"
+        )));
+
+        match event {
+            Event::Error {
+                recording_id,
+                kind,
+                msg,
+            } => {
+                assert_eq!(recording_id, None);
+                assert_eq!(kind, "history_read");
+                assert!(msg.contains("parse history line in"), "{msg}");
+            }
+            event => panic!("expected history_read error, got {event:?}"),
+        }
     }
 
     struct TestClient {

@@ -51,7 +51,6 @@ pub enum Event {
         words: u32,
         segments: Vec<String>,
         partial: String,
-        stats: Stats,
     },
     StateChanged {
         state: WireState,
@@ -114,11 +113,6 @@ pub enum Event {
         kind: String,
         msg: String,
     },
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Stats {
-    pub history_count: usize,
 }
 
 pub fn encode_command(command: &Command) -> serde_json::Result<String> {

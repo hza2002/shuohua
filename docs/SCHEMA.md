@@ -23,7 +23,7 @@
 ### 1.2 daemon → TUI（事件）
 
 ```jsonc
-{"event":"snapshot","proto_version":2,"state":"idle","recording":null,"started_at":null,"app":null,"app_name":null,"dur_ms":0,"words":0,"segments":[],"partial":"","stats":{...}}   // subscribe 回包第一条，含协议版本
+{"event":"snapshot","proto_version":2,"state":"idle","recording":null,"started_at":null,"app":null,"app_name":null,"dur_ms":0,"words":0,"segments":[],"partial":""}   // subscribe 回包第一条，含协议版本
 {"event":"state_changed","state":"recording","recording_id":"01HXYZ...","started_at":"..."}
 {"event":"app_changed","app":"com.apple.dt.Xcode","app_name":"Xcode"}
 {"event":"session_meta","recording_id":"01HXYZ...","meta":{"provider":"doubao","chain":"rule:zh_filter → llm:deepseek","vad":"silero","hotwords":3}}

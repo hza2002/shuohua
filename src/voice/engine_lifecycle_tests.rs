@@ -2,7 +2,13 @@
 //!
 //! 用 `RecordingStream::for_test` 注入受控 PCM，用脚本化 `AsrProvider` /
 //! `AsrSession` 控制事件流。覆盖 Continuous / VadPause 双模式的 stop、cancel、
-//! 主动 Done、ASR stream close、PCM 发送失败、resume 打开失败等真实路径。
+//! 主动 Done、ASR stream close、PCM 发送失败、initial open 失败、no-audio
+//! watchdog、multi-session 不变量等真实路径。
+//!
+//! Resume open 失败本身是 `SessionOpener::open_resume` 的纯函数行为，在
+//! `voice::engine::tests::vad_pause_resume_propagates_provider_open_error` 中
+//! 用确定性单测覆盖；这里不再尝试用 Silero 触发，避免依赖 ML 模型对合成
+//! PCM 的行为而产生假阳性。
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -460,56 +466,63 @@ async fn pcm_send_failure_yields_terminal_error() {
     assert_eq!(err.kind, "asr_send");
 }
 
-/// VadPause + resume open 失败：engine 报 asr_resume_open terminal error。
+/// Initial ASR open 失败：engine 返回 None，不产生 EngineOutcome。
 #[tokio::test]
-async fn vad_pause_resume_open_failure_yields_terminal_error() {
-    let (event_tx, event_rx) = mpsc::channel(8);
-    let sent: SentLog = Arc::new(Mutex::new(Vec::new()));
-    let first_session = Box::new(AutoDoneSession {
-        sent: sent.clone(),
-        event_tx: event_tx.clone(),
-        done_after_n: 1,
-    });
-    // 第 2 次 open 失败 → engine 应当上报 asr_resume_open。
-    let provider = Arc::new(ScriptedProvider::new(vec![
-        OpenScript::Ok(event_rx, first_session),
-        OpenScript::Err(AsrError::Network("resume failed".into())),
-    ]));
+async fn initial_asr_open_failure_returns_none() {
+    let provider = Arc::new(ScriptedProvider::new(vec![OpenScript::Err(
+        AsrError::Auth("denied".into()),
+    )]));
 
     let state = StateStore::new();
     let (overlay, _overlay_rx) = OverlayHandle::channel();
-    let params = make_params(state, Some(overlay), true, 100);
-    let (control_tx, control_rx) = watch::channel(SessionControl::Idle);
-    let (rec, pcm_tx) = make_recorder();
+    let params = make_params(state, Some(overlay), false, 200);
+    let (_control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let (rec, _pcm_tx) = make_recorder();
 
-    // 先送 1 帧让 AutoDoneSession 在第 1 次 send_pcm 后主动 Done。
-    pcm_tx.send(signal_frame(480)).unwrap();
-    // 再灌入多帧高幅 PCM，给 Silero 机会在 Idle 中识别为 speech 触发 resume。
-    for _ in 0..6 {
-        pcm_tx.send(vec![i16::MAX / 2; 1024]).unwrap();
-    }
-
-    let engine_task = tokio::spawn(drive_engine(
+    let outcome = drive_engine(
         provider.clone(),
         params,
         control_rx,
         rec,
-        RecordingMode::VadPause,
-    ));
+        RecordingMode::Continuous,
+    )
+    .await;
+    assert!(outcome.is_none(), "initial open failure must return None");
+    assert_eq!(provider.opens(), 1);
+}
 
-    // 给 engine 充分时间消费 PCM；若 silero 触发 resume，本身已 terminal error 退出。
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    // 否则发 Stop 让 engine 干净退出（仍校验 opens 至少有一次 initial）。
-    let _ = control_tx.send(SessionControl::Stop);
-    let outcome = engine_task.await.unwrap().expect("engine returned None");
+/// First-audio watchdog：1 秒内所有 PCM 样本都低于阈值 → engine 返回 None。
+#[tokio::test]
+async fn first_audio_watchdog_returns_none_on_silent_input() {
+    let (_event_tx, event_rx) = mpsc::channel(8);
+    let session = Box::<RecordingSession>::default();
+    let provider = Arc::new(ScriptedProvider::new(vec![OpenScript::Ok(
+        event_rx, session,
+    )]));
 
-    assert!(provider.opens() >= 1);
-    if provider.opens() == 2 {
-        let err = outcome
-            .terminal_error
-            .expect("expected asr_resume_open terminal_error");
-        assert_eq!(err.kind, "asr_resume_open");
-    }
+    let state = StateStore::new();
+    let (overlay, _overlay_rx) = OverlayHandle::channel();
+    let params = make_params(state, Some(overlay), false, 200);
+    let (_control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let (rec, pcm_tx) = make_recorder();
+
+    // 全零帧低于 MIN_NONZERO_AMPLITUDE，无法触发 first_audio_seen。
+    pcm_tx.send(vec![0i16; 480]).unwrap();
+    pcm_tx.send(vec![0i16; 480]).unwrap();
+
+    let outcome = drive_engine(
+        provider.clone(),
+        params,
+        control_rx,
+        rec,
+        RecordingMode::Continuous,
+    )
+    .await;
+    assert!(
+        outcome.is_none(),
+        "first-audio watchdog must return None on silent input"
+    );
+    assert_eq!(provider.opens(), 1);
 }
 
 /// 多 session 历史落账：累计 audio_samples 等于各 session.audio_samples 之和。

@@ -1201,6 +1201,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn vad_pause_resume_propagates_provider_open_error() {
+        struct FailingProvider;
+        #[async_trait]
+        impl AsrProvider for FailingProvider {
+            fn name(&self) -> &str {
+                "failing"
+            }
+            fn caps(&self) -> crate::asr::types::Caps {
+                crate::asr::types::Caps {
+                    hotwords: false,
+                    max_session_secs: None,
+                    multilingual: true,
+                }
+            }
+            async fn open(&self, _ctx: SessionCtx) -> Result<OpenedSession, AsrError> {
+                Err(AsrError::Network("resume open denied".to_string()))
+            }
+        }
+
+        let provider = FailingProvider;
+        let opener = SessionOpener::new(&provider, test_session_ctx());
+        match opener.open_resume(RecordingMode::VadPause).await {
+            Err(AsrError::Network(_)) => {}
+            Err(other) => panic!("expected AsrError::Network, got {other:?}"),
+            Ok(_) => panic!("VadPause resume must surface provider open errors"),
+        }
+    }
+
+    #[tokio::test]
     async fn continuous_pcm_delivery_preserves_every_chunk() {
         let sent = Arc::new(Mutex::new(Vec::new()));
         let mut session: Box<dyn AsrSession> = Box::new(CollectingSession { sent: sent.clone() });

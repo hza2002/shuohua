@@ -75,6 +75,9 @@ history JSONL 是**唯一的持久化数据源**（统计、TUI、未来 GUI/脚
 ${XDG_STATE_HOME:-~/.local/state}/shuohua/history/YYYY-MM.jsonl
 ```
 
+每条记录先完整序列化，再以单个带换行的 buffer 追加。读取时只容忍进程异常退出留下的、
+没有结尾换行且无法解析的最后一行；文件中间或已完整换行的损坏记录仍视为读取错误。
+
 文件名使用本地月份；每条 record 内部 `started_at` / `ended_at` 仍使用 UTC RFC3339。
 **一次 recording = 一条 JSON 行**，pipeline 跑完 dispatch 完成那一刻 append 一次。无
 pretty print、UTF-8 无 BOM、`\n` 结尾。record JSON schema 不因分片变化升 version。

@@ -143,6 +143,10 @@ pub fn monthly_history_files_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 pub fn append_record(path: &Path, record: &HistoryRecord) -> Result<()> {
+    let mut line = serde_json::to_vec(record)
+        .with_context(|| format!("serialize history record {}", record.id))?;
+    line.push(b'\n');
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("create history dir {}", parent.display()))?;
@@ -152,9 +156,7 @@ pub fn append_record(path: &Path, record: &HistoryRecord) -> Result<()> {
         .append(true)
         .open(path)
         .with_context(|| format!("open history {}", path.display()))?;
-    serde_json::to_writer(&mut file, record)
-        .with_context(|| format!("serialize history record {}", record.id))?;
-    file.write_all(b"\n")
+    file.write_all(&line)
         .with_context(|| format!("write history {}", path.display()))?;
     Ok(())
 }

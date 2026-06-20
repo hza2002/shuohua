@@ -447,9 +447,27 @@ fn read_history_from_dir(
     for path in history::monthly_history_files_in_dir(dir)? {
         let body = fs::read_to_string(&path)
             .with_context(|| format!("read history {}", path.display()))?;
-        for line in body.lines().filter(|line| !line.trim().is_empty()) {
-            let record: HistoryRecord = serde_json::from_str(line)
-                .with_context(|| format!("parse history line in {}", path.display()))?;
+        let has_complete_final_line = body.ends_with('\n');
+        let mut lines = body.split('\n').peekable();
+        while let Some(line) = lines.next() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record: HistoryRecord = match serde_json::from_str(line) {
+                Ok(record) => record,
+                Err(error) if lines.peek().is_none() && !has_complete_final_line => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %error,
+                        "ignoring truncated final history line"
+                    );
+                    break;
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("parse history line in {}", path.display()));
+                }
+            };
             if before.is_some_and(|before| record.started_at >= before) {
                 continue;
             }
@@ -730,6 +748,46 @@ trigger = "f16"
 
         assert_eq!(records.len(), 500);
 
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn read_history_ignores_only_truncated_final_line() {
+        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("2026-06.jsonl");
+        write_history_record(
+            &path,
+            history_record("valid", datetime!(2026-06-20 12:00:00 UTC), "保留"),
+        );
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(br#"{"version":1,"id":"truncated""#)
+            .unwrap();
+
+        let records = read_history_from_dir(&dir, 10, None, None).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, "valid");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn read_history_rejects_corrupt_complete_line() {
+        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("2026-06.jsonl");
+        fs::write(&path, "not-json\n").unwrap();
+
+        let error = read_history_from_dir(&dir, 10, None, None).unwrap_err();
+
+        assert!(
+            error.to_string().contains("parse history line"),
+            "{error:#}"
+        );
         let _ = fs::remove_dir_all(dir);
     }
 

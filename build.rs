@@ -1,3 +1,5 @@
+#[path = "build_support/apple_helper.rs"]
+mod apple_helper;
 #[path = "build_support/themes.rs"]
 mod themes;
 
@@ -22,16 +24,25 @@ fn main() {
     .expect("write embedded theme registry");
     generate_zh_variants(std::path::Path::new(&out_dir));
 
-    if !should_build_macos_helper(&target_os()) {
+    if !apple_helper::should_build_macos_helper(&target_os()) {
         return;
     }
 
     let helper_out = std::path::Path::new(&out_dir).join("apple_helper");
+    let deployment_target = std::env::var("MACOSX_DEPLOYMENT_TARGET")
+        .unwrap_or_else(|_| apple_helper::DEFAULT_MACOS_DEPLOYMENT_TARGET.to_string());
+    let swift_target = apple_helper::swift_target_triple(
+        &std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default(),
+        &deployment_target,
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     let status = std::process::Command::new("xcrun")
         .args([
             "swiftc",
             "-O",
             "-parse-as-library",
+            "-target",
+            &swift_target,
             "-o",
             helper_out.to_str().expect("helper path is utf-8"),
             "src/asr/providers/apple_helper.swift",
@@ -45,19 +56,6 @@ fn main() {
 
 fn target_os() -> String {
     std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default()
-}
-
-fn should_build_macos_helper(target_os: &str) -> bool {
-    target_os == "macos"
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn non_macos_targets_skip_swift_helper() {
-        assert!(!super::should_build_macos_helper("linux"));
-        assert!(super::should_build_macos_helper("macos"));
-    }
 }
 
 fn generate_zh_variants(out_dir: &std::path::Path) {

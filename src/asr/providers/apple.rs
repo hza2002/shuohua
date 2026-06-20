@@ -26,6 +26,7 @@ pub struct AppleProvider {
 
 impl AppleProvider {
     pub fn new_with_overrides(overrides: Option<&toml::value::Table>) -> anyhow::Result<Self> {
+        ensure_supported_macos_version(current_macos_major_version())?;
         Ok(Self {
             config: load_config_with_overrides(overrides)?,
         })
@@ -71,6 +72,32 @@ impl AppleProvider {
         done??;
         close_result
     }
+}
+
+fn current_macos_major_version() -> u64 {
+    let output = std::process::Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout);
+            parse_macos_major_version(&version).unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
+fn ensure_supported_macos_version(major: u64) -> anyhow::Result<()> {
+    if major >= 26 {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "Apple ASR provider requires macOS 26 or newer; use a cloud ASR provider such as doubao on older macOS versions"
+    )
+}
+
+fn parse_macos_major_version(version: &str) -> Option<u64> {
+    version.trim().split('.').next()?.parse().ok()
 }
 
 #[async_trait]
@@ -225,7 +252,7 @@ async fn read_helper_events(stdout: tokio::process::ChildStdout, evt_tx: mpsc::S
                 let _ = evt_tx.send(AsrEvent::Done).await;
                 return;
             }
-            Ok(HelperEvent::Error { message }) => {
+            Ok(HelperEvent::Error { message, .. }) => {
                 let _ = evt_tx
                     .send(AsrEvent::Error {
                         err: AsrError::Server(message),
@@ -388,7 +415,11 @@ enum HelperEvent {
     #[serde(rename = "done")]
     Done,
     #[serde(rename = "error")]
-    Error { message: String },
+    Error {
+        message: String,
+        #[serde(default)]
+        code: Option<String>,
+    },
 }
 
 fn parse_helper_event(line: &str) -> Result<HelperEvent, serde_json::Error> {
@@ -436,6 +467,22 @@ finalize_timeout_ms = 3000
             }
             other => panic!("expected partial, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn macos_version_gate_rejects_before_26_with_cloud_hint() {
+        let error = ensure_supported_macos_version(15).unwrap_err();
+
+        assert!(error.to_string().contains("macOS 26"), "{error:#}");
+        assert!(error.to_string().contains("cloud ASR"), "{error:#}");
+        assert!(ensure_supported_macos_version(26).is_ok());
+    }
+
+    #[test]
+    fn parses_macos_major_version() {
+        assert_eq!(parse_macos_major_version("26.0"), Some(26));
+        assert_eq!(parse_macos_major_version("15.7.1\n"), Some(15));
+        assert_eq!(parse_macos_major_version(""), None);
     }
 
     #[test]

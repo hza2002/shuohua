@@ -10,10 +10,17 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Select Xcode 26 SDK
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
+          xcodebuild -version
+          sdk_major="$(xcrun --sdk macosx --show-sdk-version | cut -d. -f1)"
+          test "$sdk_major" -ge 26
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -41,7 +48,16 @@ jobs:
         run: cargo test
 
       - name: Build release binary
-        run: cargo build --release
+        run: |
+          cargo clean -p shuohua
+          cargo build --release
+
+      - name: Verify macOS deployment target
+        run: |
+          vtool -show-build target/release/shuo | grep 'minos 15.0'
+          helper="$(find target/release/build -path '*/out/apple_helper' -type f | head -1)"
+          test -n "$helper"
+          vtool -show-build "$helper" | grep 'minos 15.0'
 
       - name: Package tarball + sha256
         run: |

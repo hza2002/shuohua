@@ -342,7 +342,7 @@ pub enum AsrError {
 
 | Provider | Partial | Segment | Final | 备注 |
 |---|---|---|---|---|
-| Apple SpeechAnalyzer (macOS 26) | `isFinal=false` → `AsrEvent::Partial` | `isFinal=true` → `AsrEvent::Segment` | 不发；voice fallback 到 segments concat | 本地优先；Swift helper 桥接 Swift-only API；provider 内部把 canonical i16 PCM 转 AVAudioPCMBuffer |
+| Apple SpeechAnalyzer (macOS 26+) | `isFinal=false` → `AsrEvent::Partial` | `isFinal=true` → `AsrEvent::Segment` | 不发；voice fallback 到 segments concat | 本地优先；Swift helper 桥接 Swift-only API；provider 内部把 canonical i16 PCM 转 AVAudioPCMBuffer；macOS 15–25 可运行应用但此 provider fail-fast，推荐使用云 ASR |
 | Doubao SAUC | `definite=false` → `AsrEvent::Partial` | `definite=true` → `AsrEvent::Segment` | last response 的 `result.text` → `AsrEvent::Final` | 可用云端 provider；codec 写死 raw PCM |
 | 纯 batch ASR API | 无 | 无 | 无 | **不入选** |
 
@@ -961,7 +961,7 @@ trace sidecar 是 dev-only 诊断文件，不属于正式 daemon log；它在 `-
 | State 序列化 | `serde_json` | UDS 协议 + history JSONL |
 | 时间戳 | `time` | history/log 用 RFC3339；比 chrono 轻 |
 | UDS | `tokio::net::UnixListener` / `UnixStream` | 标准库即可，无额外 crate |
-| Apple SpeechAnalyzer | Swift helper + `build.rs` 编译嵌入 | macOS 26 本地流式识别；隐私优先默认候选 |
+| Apple SpeechAnalyzer | Swift helper + `build.rs` 编译嵌入 | macOS 26+ 本地流式识别；应用 deployment target 是 macOS 15，但 Apple provider 在 26 以下 fail-fast |
 | LLM 后处理 | `reqwest` + 手写 client | 简单 OpenAI 兼容 schema，不引 sdk |
 | launchd plist 生成 | 模板字符串即可，不引依赖 | 简单 |
 

@@ -11,7 +11,7 @@ struct AppleHelper {
             if #available(macOS 26.0, *) {
                 try await run(options)
             } else {
-                emitError("SpeechAnalyzer requires macOS 26 or newer")
+                emitError("SpeechAnalyzer requires macOS 26 or newer", code: "unsupported_os")
                 exit(1)
             }
         } catch {
@@ -304,6 +304,10 @@ private func emit(_ object: [String: Any]) {
     FileHandle.standardOutput.write(Data([0x0a]))
 }
 
-private func emitError(_ message: String) {
-    emit(["event": "error", "message": message])
+private func emitError(_ message: String, code: String? = "helper_error") {
+    var payload = ["event": "error", "message": message]
+    if let code {
+        payload["code"] = code
+    }
+    emit(payload)
 }

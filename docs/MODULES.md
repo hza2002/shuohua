@@ -51,7 +51,7 @@ src/
 │       ├── mod.rs                       # macOS shared adapters
 │       ├── clipboard.rs                 # NSPasteboard 写文本
 │       ├── autotype.rs                  # CGEventPost Cmd+V
-│       ├── window.rs                    # CGWindow + AX 拿 focused window 几何，给 overlay 定位
+│       ├── window.rs                    # AX 拿 focused window 几何并转换到 AppKit 坐标，给 overlay 定位
 │       └── app_context.rs               # frontmost app bundle id / 名字
 ├── hotkey/
 │   ├── mod.rs                           # 4 字节 RawEvent 线协议 + 公共类型 re-export

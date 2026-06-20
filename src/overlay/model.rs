@@ -164,6 +164,7 @@ impl OverlayModel {
             OverlayCmd::Relabel => {
                 self.state_label = crate::t!(self.state.label_key());
             }
+            OverlayCmd::Quit => {}
         }
     }
 

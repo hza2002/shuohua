@@ -43,6 +43,13 @@ async fn run_daemon_with_platform(
         crate::ipc::server::ServerControl {
             reload: reload_handle,
             started_at: Instant::now(),
+            shutdown: {
+                let overlay = overlay.clone();
+                std::sync::Arc::new(move || {
+                    tracing::info!("shutdown requested over IPC");
+                    overlay.send(OverlayCmd::Quit);
+                })
+            },
         },
     ));
 

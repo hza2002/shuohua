@@ -232,6 +232,10 @@ impl OverlayView {
     }
 
     fn apply(&mut self, cmd: OverlayCmd) {
+        if matches!(cmd, OverlayCmd::Quit) {
+            NSApplication::sharedApplication(self.mtm).terminate(None);
+            return;
+        }
         if let OverlayCmd::ReloadConfig { cfg } = cmd {
             self.rebuild_chrome(cfg);
             return;

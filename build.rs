@@ -6,9 +6,11 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/themes");
     println!("cargo:rerun-if-changed=assets/i18n/zh-CN.toml");
     println!("cargo:rerun-if-changed=assets/i18n/en-US.toml");
-    println!("cargo:rustc-link-lib=framework=AppKit");
-    println!("cargo:rustc-link-lib=framework=ApplicationServices");
-    println!("cargo:rustc-link-lib=framework=QuartzCore");
+    if target_os() == "macos" {
+        println!("cargo:rustc-link-lib=framework=AppKit");
+        println!("cargo:rustc-link-lib=framework=ApplicationServices");
+        println!("cargo:rustc-link-lib=framework=QuartzCore");
+    }
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR set by cargo");
     let themes = themes::scan_theme_dir(std::path::Path::new("assets/themes"))
@@ -19,6 +21,10 @@ fn main() {
     )
     .expect("write embedded theme registry");
     generate_zh_variants(std::path::Path::new(&out_dir));
+
+    if !should_build_macos_helper(&target_os()) {
+        return;
+    }
 
     let helper_out = std::path::Path::new(&out_dir).join("apple_helper");
     let status = std::process::Command::new("xcrun")
@@ -34,6 +40,23 @@ fn main() {
         .expect("run xcrun swiftc for apple_helper");
     if !status.success() {
         panic!("swiftc failed building apple_helper");
+    }
+}
+
+fn target_os() -> String {
+    std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default()
+}
+
+fn should_build_macos_helper(target_os: &str) -> bool {
+    target_os == "macos"
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn non_macos_targets_skip_swift_helper() {
+        assert!(!super::should_build_macos_helper("linux"));
+        assert!(super::should_build_macos_helper("macos"));
     }
 }
 

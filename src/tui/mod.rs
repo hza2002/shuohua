@@ -93,6 +93,7 @@ impl App {
                 self.configure.apply_event(&event, true);
                 self.theme = crate::config::load_from(&crate::config::default_path())
                     .map(|cfg| {
+                        crate::i18n::init(&cfg.ui.language);
                         crate::config::theme::load_effective(&cfg, &crate::config::default_path())
                             .tui
                     })
@@ -289,6 +290,41 @@ language = "zh-CN"
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
 
         super::init_i18n_from_config();
+
+        assert_eq!(crate::i18n::tr("tui.tab_settings", &[]), "3 配置");
+        match old {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn config_reloaded_updates_running_tui_language() {
+        let home =
+            std::env::temp_dir().join(format!("shuohua-tui-reload-i18n-{}", ulid::Ulid::new()));
+        let config_home = home.join("config");
+        let root = config_home.join("shuohua");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("config.toml"),
+            r#"
+[hotkey]
+trigger = "f16"
+
+[ui]
+language = "zh-CN"
+"#,
+        )
+        .unwrap();
+        let old = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+        crate::i18n::init("en-US");
+        let mut app = super::App::new();
+
+        app.apply_event(crate::ipc::protocol::Event::ConfigReloaded {
+            path: root.join("config.toml").display().to_string(),
+        });
 
         assert_eq!(crate::i18n::tr("tui.tab_settings", &[]), "3 配置");
         match old {

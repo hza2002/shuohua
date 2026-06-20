@@ -31,6 +31,7 @@ pub enum Command {
         query: Option<String>,
     },
     DaemonStatus,
+    Shutdown,
 }
 
 fn default_history_limit() -> usize {
@@ -153,6 +154,14 @@ mod tests {
 
         assert!(line.ends_with('\n'));
         assert_eq!(decode_command(&line).unwrap(), command);
+    }
+
+    #[test]
+    fn shutdown_command_round_trips() {
+        let line = encode_command(&Command::Shutdown).unwrap();
+
+        assert!(line.contains(r#""op":"shutdown""#));
+        assert_eq!(decode_command(&line).unwrap(), Command::Shutdown);
     }
 
     #[test]

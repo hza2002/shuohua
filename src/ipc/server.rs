@@ -3,7 +3,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -43,6 +43,7 @@ pub async fn bind(path: impl AsRef<Path>) -> Result<UnixListener> {
 pub struct ServerControl {
     pub reload: crate::reload::Handle,
     pub started_at: Instant,
+    pub shutdown: Arc<dyn Fn() + Send + Sync>,
 }
 
 pub async fn run(listener: UnixListener, state: StateStore, control: ServerControl) -> Result<()> {
@@ -94,6 +95,7 @@ async fn handle_client(
 
     let mut subscribed = false;
     let mut state_forwarder = None;
+    let mut graceful_close = false;
     loop {
         let line = tokio::select! {
             _ = cancel.cancelled() => break,
@@ -159,6 +161,24 @@ async fn handle_client(
                     break;
                 }
             }
+            Command::Shutdown => {
+                let snapshot = state.snapshot();
+                if !send_or_drop(
+                    &tx,
+                    Event::DaemonStatus {
+                        pid: std::process::id(),
+                        uptime_ms: control.started_at.elapsed().as_millis() as u64,
+                        state: snapshot.state.into(),
+                        recording_id: snapshot.recording_id,
+                    },
+                ) {
+                    cancel.cancel();
+                    break;
+                }
+                (control.shutdown)();
+                graceful_close = true;
+                break;
+            }
             Command::ReloadConfig => match control.reload.reload_now() {
                 Ok(()) => {
                     if !send_or_drop(
@@ -201,7 +221,9 @@ async fn handle_client(
         }
     }
 
-    cancel.cancel();
+    if !graceful_close {
+        cancel.cancel();
+    }
     if let Some(task) = state_forwarder {
         let _ = task.await;
     }
@@ -471,6 +493,23 @@ mod tests {
     use crate::ipc::protocol::{decode_event, encode_command};
     use crate::state::history::{AsrHistory, HistoryStatus, PipelineStepStatus};
 
+    fn test_reload_handle() -> crate::reload::Handle {
+        let dir = std::env::temp_dir().join(format!("shuohua-reload-handle-{}", ulid::Ulid::new()));
+        let root = dir.join("shuohua");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("config.toml"),
+            r#"
+[hotkey]
+trigger = "f16"
+"#,
+        )
+        .unwrap();
+        let (_rx, handle) =
+            crate::reload::watch_with_handle(root.join("config.toml"), None).unwrap();
+        handle
+    }
+
     #[tokio::test]
     async fn subscribe_fans_out_snapshot_and_live_events() {
         let path =
@@ -487,6 +526,7 @@ mod tests {
             ServerControl {
                 reload,
                 started_at: Instant::now(),
+                shutdown: Arc::new(|| {}),
             },
         ));
 
@@ -589,6 +629,37 @@ mod tests {
             .unwrap();
 
         assert!(cancel.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn shutdown_command_acknowledges_and_requests_shutdown() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+
+        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-{}.sock", ulid::Ulid::new()));
+        let _ = fs::remove_file(&sock);
+        let listener = bind(&sock).await.unwrap();
+        let requested = Arc::new(AtomicBool::new(false));
+        let requested_for_control = requested.clone();
+        let control = ServerControl {
+            reload: test_reload_handle(),
+            started_at: Instant::now(),
+            shutdown: Arc::new(move || {
+                requested_for_control.store(true, Ordering::SeqCst);
+            }),
+        };
+        let server = tokio::spawn(run(listener, StateStore::new(), control));
+        let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
+
+        client.send(&Command::Shutdown).await.unwrap();
+        let event = client.recv().await.unwrap().unwrap();
+
+        assert!(matches!(event, Event::DaemonStatus { .. }));
+        assert!(requested.load(Ordering::SeqCst));
+        server.abort();
+        let _ = fs::remove_file(sock);
     }
 
     #[test]

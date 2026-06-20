@@ -11,10 +11,10 @@
 
 经实物对比（24 种私有材质变体全跑过），**首选**：
 
-- **变体 19 = `control`**：跟 macOS 系统控件/工具栏一致的玻璃感，透明度高
-- **变体 11 = `bubbles`**：透明度更高、更"水珠"质感，作备选
+- **变体 11 = `bubbles`**：透明度更高、更"水珠"质感，当前默认
+- **变体 19 = `control`**：跟 macOS 系统控件/工具栏一致的玻璃感，透明度高，保留为可调备选
 
-选定方式：默认 19，配置项 `overlay.glass_variant` 允许覆写为 11 或其它（手动调试用）。
+选定方式：内置主题默认 11，主题配置 `[overlay.macos].glass_variant` 允许覆写为 19 或其它（手动调试用）。
 
 > 私有方法 `set_variant:` 在 macOS 26.5 上仍存在；selector 名稳定。出现破坏性变化时回退到 `NSVisualEffectMaterialHUDWindow`。
 >
@@ -38,7 +38,7 @@
 │ ● Recording · 3.2s · 84字          Xcode  ·  zh_filter→llm│  ← 第 1 排 状态条
 │ 今天我想写一篇关于分布式系统的一致性算法的文章｜             │  ← 第 2 排 ASR 实时文字
 ╰───────────────────────────────────────────────────────────╯
-   ↑ Liquid Glass variant=19
+   ↑ Liquid Glass variant=11
    ↑ ~540×86 起，ASR 文本最多 5 行自适应增高
 ```
 
@@ -76,15 +76,17 @@ view model 字段如下（用 `tokio::sync::mpsc` 把变化推到主线程，App
 ```rust
 enum OverlayCmd {
     SetState  { state: OverlayState },                            // 状态字 + icon + 颜色
-    SetStats  { dur_ms: u64, chars: u32 },
+    SetStats  { dur_ms: u64, words: u32 },
     SetApp    { bundle_id, app_name, chain_summary },
     SetText   { text: String, kind: TextKind },                   // Partial / Final / Error
     AppendSegment { text: String },
+    ReplaceRecentSegments { segments: usize, text: String },
     Notice    { text: String, ttl_ms: u32 },                      // meta 行临时黄字
     Hide,                                                          // notice 活着时延期到 ttl 到期再隐藏
     Dismiss,                                                       // ESC 专用：跳过延期立即关
-    ReloadConfig { cfg: OverlayCfg },
+    ReloadConfig { cfg: EffectiveOverlayCfg },
     Relabel,                                                       // i18n 热切语言后让 view 重新翻译当前 label
+    Quit,                                                          // daemon graceful shutdown：让 AppKit 主循环退出
 }
 ```
 
@@ -817,7 +819,7 @@ i18n 质量门禁：
 
 #### 热重载
 
-`ui.language` 改完保存即时生效（字典换 + overlay 当前 state label 重译）。机制走 [§2.12 reload 模块](#212-配置热重载reload-模块)，subscriber 是 `reload::spawn_i18n`。
+`ui.language` 改完保存即时生效（字典换 + overlay 当前 state label 重译；运行中的 TUI 在收到 `config_reloaded` 后也重新初始化语言）。机制走 [§2.12 reload 模块](#212-配置热重载reload-模块)，daemon 侧 subscriber 是 `reload::spawn_i18n`。
 
 ---
 
@@ -831,13 +833,13 @@ i18n 质量门禁：
 
 ```
 reload.rs
-├── pub fn watch(path) -> Result<Rx>           ── notify watcher（专用 std::thread）
+├── pub fn watch_with_handle(path, overlay) -> Result<(Rx, Handle)> ── notify watcher（专用 std::thread）+ 手动 reload handle
 ├── pub fn spawn_overlay(rx, OverlayHandle)    ── [overlay] 段 diff → OverlayCmd::ReloadConfig
 ├── pub fn spawn_i18n(rx, OverlayHandle)       ── ui.language diff → i18n::init + OverlayCmd::Relabel
 └── pub fn spawn_hotkey(rx, mpsc::Sender<Combo>) ── [hotkey].trigger diff → 主循环 swap Tracker + Suppressor
 ```
 
-`Rx = tokio::sync::watch::Receiver<Arc<Config>>`，跟 [§2.5](#25-去掉-plugin-抽象) 里"配置变化通过 watch 广播"对上。
+`Rx = tokio::sync::watch::Receiver<Arc<RuntimeConfig>>`，其中 `RuntimeConfig` 包含主配置、effective theme 和 theme fallback warning，跟 [§2.5](#25-去掉-plugin-抽象) 里"配置变化通过 watch 广播"对上。
 
 #### 实现要点
 

@@ -26,11 +26,7 @@ extern "C" {
 
 pub fn focused_window_frame_for_screens(screens: &[NSRect]) -> Option<(NSRect, NSRect)> {
     let (point, size) = focused_window_cg_frame()?;
-    let cg_frame = NSRect::new(
-        NSPoint::new(point.x, point.y),
-        NSSize::new(size.width, size.height),
-    );
-    let screen = screen_containing_window(cg_frame, screens)?;
+    let screen = screen_containing_ax_frame(point, size, screens)?;
     Some((ax_frame_to_appkit(point, size, screen), screen))
 }
 
@@ -89,10 +85,16 @@ fn focused_window_cg_frame() -> Option<(CGPoint, CGSize)> {
     Some((point, cg_size))
 }
 
-pub fn screen_containing_window(window: NSRect, screens: &[NSRect]) -> Option<NSRect> {
+pub fn screen_containing_ax_frame(
+    point: CGPoint,
+    size: CGSize,
+    screens: &[NSRect],
+) -> Option<NSRect> {
     screens.iter().copied().max_by(|a, b| {
-        overlap_area(window, *a)
-            .partial_cmp(&overlap_area(window, *b))
+        let frame_a = ax_frame_to_appkit(point, size, *a);
+        let frame_b = ax_frame_to_appkit(point, size, *b);
+        overlap_area(frame_a, *a)
+            .partial_cmp(&overlap_area(frame_b, *b))
             .unwrap_or(std::cmp::Ordering::Equal)
     })
 }
@@ -136,19 +138,6 @@ mod tests {
     }
 
     #[test]
-    fn chooses_screen_with_largest_overlap_for_focused_window() {
-        let screens = [
-            rect(0.0, 0.0, 1440.0, 900.0),
-            rect(1440.0, 0.0, 1440.0, 900.0),
-        ];
-        let window = rect(1500.0, 100.0, 800.0, 600.0);
-
-        let chosen = screen_containing_window(window, &screens).unwrap();
-
-        assert_eq!(chosen.origin.x, 1440.0);
-    }
-
-    #[test]
     fn converts_ax_y_using_target_screen_frame() {
         let screen = rect(0.0, 900.0, 1440.0, 900.0);
         let frame = ax_frame_to_appkit(
@@ -159,5 +148,22 @@ mod tests {
 
         assert_eq!(frame.origin.x, 120.0);
         assert_eq!(frame.origin.y, 1100.0);
+    }
+
+    #[test]
+    fn chooses_vertical_screen_after_converting_ax_coordinates() {
+        let screens = [
+            rect(0.0, 0.0, 1440.0, 900.0),
+            rect(0.0, 900.0, 1440.0, 900.0),
+        ];
+
+        let chosen = screen_containing_ax_frame(
+            CGPoint::new(120.0, -100.0),
+            CGSize::new(800.0, 600.0),
+            &screens,
+        )
+        .unwrap();
+
+        assert_eq!(chosen.origin.y, 900.0);
     }
 }

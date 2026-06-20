@@ -51,6 +51,8 @@ pub enum OverlayCmd {
     /// 语言切换后让 view 重新翻译当前 state label 并刷新。i18n 字典已经被
     /// `reload::spawn_i18n` 在到达 view 之前换好。
     Relabel,
+    /// Daemon graceful shutdown: ask the AppKit main loop to terminate.
+    Quit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,10 +198,10 @@ impl OverlayMailbox {
     }
 
     fn pop(&mut self) -> Option<OverlayCmd> {
-        self.latest_stats
-            .take()
+        self.queue
+            .pop_front()
+            .or_else(|| self.latest_stats.take())
             .or_else(|| self.latest_partial.take())
-            .or_else(|| self.queue.pop_front())
     }
 }
 
@@ -262,6 +264,32 @@ mod tests {
             }
         ));
         assert!(matches!(rx.try_recv().unwrap(), OverlayCmd::Hide));
+    }
+
+    #[test]
+    fn structural_commands_are_not_reordered_behind_transient_updates() {
+        let (handle, mut rx) = OverlayHandle::channel();
+        handle.send(OverlayCmd::SetState {
+            state: OverlayState::Connecting,
+        });
+        handle.send(OverlayCmd::SetText {
+            text: "first words".into(),
+            kind: TextKind::Partial,
+        });
+
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            OverlayCmd::SetState {
+                state: OverlayState::Connecting
+            }
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            OverlayCmd::SetText {
+                text,
+                kind: TextKind::Partial
+            } if text == "first words"
+        ));
     }
 
     #[test]

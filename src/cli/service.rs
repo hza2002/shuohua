@@ -87,15 +87,28 @@ pub fn start() -> Result<()> {
 }
 
 pub fn stop() -> Result<()> {
-    run_launchctl(
-        &["kill", "TERM", &format!("{}/{}", gui_domain(), LABEL)],
-        "cli.service.action_stop",
-    )?;
+    request_daemon_shutdown()?;
     println!(
         "{}",
         crate::i18n::tr("cli.service.stopped", &[("label", LABEL.to_string())])
     );
     Ok(())
+}
+
+fn request_daemon_shutdown() -> Result<()> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("create stop runtime")?;
+    rt.block_on(tokio::time::timeout(DAEMON_STATUS_TIMEOUT, async {
+        let mut client =
+            crate::ipc::client::IpcClient::connect(crate::ipc::server::default_socket_path())
+                .await?;
+        client.send(&Command::Shutdown).await?;
+        let _ = client.recv().await?;
+        Ok::<(), anyhow::Error>(())
+    }))
+    .context("shutdown IPC timed out")?
 }
 
 pub fn restart() -> Result<()> {

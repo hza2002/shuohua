@@ -134,6 +134,7 @@ async fn complete_recording(
         match status {
             HistoryStatus::Submitted => "submitted",
             HistoryStatus::Canceled => "canceled",
+            HistoryStatus::Empty => "empty",
             HistoryStatus::Error => "error",
             HistoryStatus::Timeout => "timeout",
         }

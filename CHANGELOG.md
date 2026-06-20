@@ -99,14 +99,17 @@
   refresh/validate, and daemon `reload_config` from Configure.
 - Repaired Configure diagnostics after review: nested TOML path validation,
   full-tree local config diagnostics, manual-only TUI doctor trigger, safer
-  editor/Finder actions, and explicit `doctor --network` separation.
+  editor/Finder actions, and explicit `doctor --runtime` separation.
 - Added generated config templates via `shuo config-template` and a first LLM
   post component wizard that writes `post/llm/<file_id>.toml` without
   auto-attaching it to profile chains.
 
 ## 2026-06-17 - First TUI status/history audio pass
 
-- Added the first usable TUI retained-audio workflow: History derives audio paths from `state_dir()/audio/<recording_id>.wav`, shows cached audio status, opens audio files, reveals them in Finder, and deletes one `.wav` with confirmation without touching history JSONL.
+- Added the first usable TUI retained-audio workflow. This initially used
+  `state_dir()/audio/<recording_id>.wav`; the release format was later changed
+  to one retained `.flac` or `.m4a` file per recording, with `.tmp.wav` kept
+  only as a conversion intermediate.
 - Reworked History presentation with colored stats/list/details, page-specific footer shortcuts, inline audio metadata in `History details`, and minimal zh-CN/en-US i18n coverage with key-alignment tests.
 - Made Status meter width responsive and aligned TUI rendering to the 50ms audio meter cadence while draining IPC/key events between frames, fixing the previous audio-meter backlog that could fill the IPC client queue.
 - Added 1s throttling for `IPC client queue full` warnings so abnormal client backpressure stays diagnosable without flooding logs.

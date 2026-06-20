@@ -1,7 +1,7 @@
 //! Post chain 执行 + 剪贴板 / Cmd+V dispatch。
 //!
 //! Post chain 的 `Error/Timeout` 步推 overlay notice 黄字；dispatch 失败 →
-//! `HistoryStatus::Error` + 红字 error；空文本 → `Canceled`，跳过整条链。
+//! `HistoryStatus::Error` + 红字 error；空文本 → `Empty`，跳过整条链。
 
 use std::time::Duration;
 
@@ -32,7 +32,12 @@ pub(crate) async fn dispatch_with_post_chain(
 ) -> DispatchOutcome {
     let raw_text: String = segment_texts.concat();
     if raw_text.is_empty() {
-        return canceled_outcome(String::new());
+        return DispatchOutcome {
+            final_text: String::new(),
+            pipeline: Vec::new(),
+            status: HistoryStatus::Empty,
+            error: None,
+        };
     }
     let initial = PipelineText::new(raw_text.clone(), segment_texts.to_vec());
     if let Some(o) = overlay {
@@ -232,6 +237,31 @@ mod tests {
 
         assert_eq!(outcome.status, HistoryStatus::Canceled);
         assert_eq!(outcome.final_text, "hello");
+        assert!(outcome.pipeline.is_empty());
+        assert!(outcome.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn empty_asr_text_is_not_user_cancel() {
+        let (_control_tx, mut control_rx) = watch::channel(SessionControl::Idle);
+        let post_chain = PostChain {
+            name: "test".into(),
+            processors: Vec::new(),
+        };
+
+        let outcome = dispatch_with_post_chain(
+            &[],
+            false,
+            &post::AppContext::default(),
+            &post_chain,
+            1_000,
+            None,
+            &mut control_rx,
+        )
+        .await;
+
+        assert_eq!(outcome.status, HistoryStatus::Empty);
+        assert_eq!(outcome.final_text, "");
         assert!(outcome.pipeline.is_empty());
         assert!(outcome.error.is_none());
     }

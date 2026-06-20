@@ -38,6 +38,7 @@ impl HistoryRecord {
 pub enum HistoryStatus {
     Submitted,
     Canceled,
+    Empty,
     Error,
     Timeout,
 }
@@ -327,6 +328,22 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&s).unwrap();
 
         assert_eq!(json["status"], "canceled");
+        assert!(json.get("error").is_none());
+    }
+
+    #[test]
+    fn empty_status_serializes_as_empty_without_error() {
+        let mut record = sample_record();
+        record.status = HistoryStatus::Empty;
+        record.text.clear();
+        record.asr.text.clear();
+        record.error = None;
+
+        let s = serde_json::to_string(&record).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&s).unwrap();
+
+        assert_eq!(json["status"], "empty");
+        assert_eq!(json["text"], "");
         assert!(json.get("error").is_none());
     }
 

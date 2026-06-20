@@ -1,4 +1,3 @@
-use crossterm::event::KeyEvent;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -6,195 +5,12 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::config::theme::TuiTheme;
-use crate::ipc::protocol::{Event, WireState};
-use crate::state::{AudioMeter, SessionMeta, SessionPhase};
-use crate::tui::page::{KeyOutcome, Page};
+use crate::ipc::protocol::WireState;
+use crate::state::{AudioMeter, SessionPhase};
+use crate::tui::status::StatusPage;
 use crate::tui::ui;
 
-pub const MAX_METER_HISTORY: usize = 1024;
-
-#[derive(Debug)]
-pub struct StatusPage {
-    pub state: WireState,
-    pub recording_id: Option<String>,
-    pub started_at: Option<time::OffsetDateTime>,
-    pub app: Option<String>,
-    pub app_name: Option<String>,
-    pub dur_ms: u64,
-    pub words: u32,
-    pub segments: Vec<String>,
-    pub partial: String,
-    pub pipeline: Vec<String>,
-    pub session_meta: Option<SessionMeta>,
-    pub session_phase: Option<SessionPhase>,
-    pub meters: Vec<AudioMeter>,
-    pub meter_width: usize,
-}
-
-impl StatusPage {
-    pub fn new() -> Self {
-        Self {
-            state: WireState::Idle,
-            recording_id: None,
-            started_at: None,
-            app: None,
-            app_name: None,
-            dur_ms: 0,
-            words: 0,
-            segments: Vec::new(),
-            partial: String::new(),
-            pipeline: Vec::new(),
-            session_meta: None,
-            session_phase: None,
-            meters: Vec::new(),
-            meter_width: 160,
-        }
-    }
-
-    pub fn current_elapsed_ms(&self) -> u64 {
-        if matches!(self.state, WireState::Recording | WireState::Stopping) {
-            if let Some(started_at) = self.started_at {
-                if let Ok(duration) = (time::OffsetDateTime::now_utc() - started_at).try_into() {
-                    let duration: std::time::Duration = duration;
-                    return duration.as_millis() as u64;
-                }
-            }
-        }
-        self.dur_ms
-    }
-
-    pub fn meter_capacity_for_terminal_width(width: u16) -> usize {
-        (width.saturating_sub(11).max(16) as usize).min(MAX_METER_HISTORY)
-    }
-
-    fn trim_meters_to_capacity(&mut self) {
-        if self.meters.len() > MAX_METER_HISTORY {
-            self.meters.drain(..self.meters.len() - MAX_METER_HISTORY);
-        }
-    }
-}
-
-impl Page for StatusPage {
-    fn apply_event(&mut self, event: &Event, active: bool) {
-        match event {
-            Event::Snapshot {
-                state,
-                recording,
-                started_at,
-                app,
-                app_name,
-                dur_ms,
-                words,
-                segments,
-                partial,
-                ..
-            } => {
-                self.state = *state;
-                self.recording_id = recording.clone();
-                self.started_at = parse_time(started_at.as_deref());
-                self.app = app.clone();
-                self.app_name = app_name.clone();
-                self.dur_ms = *dur_ms;
-                self.words = *words;
-                self.segments = segments.clone();
-                self.partial = partial.clone();
-            }
-            Event::StateChanged {
-                state,
-                recording_id,
-                started_at,
-            } => {
-                self.state = *state;
-                self.recording_id = recording_id.clone();
-                self.started_at = parse_time(started_at.as_deref());
-                if *state == WireState::Idle {
-                    self.segments.clear();
-                    self.partial.clear();
-                    self.pipeline.clear();
-                    self.session_meta = None;
-                    self.session_phase = None;
-                    self.meters.clear();
-                    self.app = None;
-                    self.app_name = None;
-                    self.dur_ms = 0;
-                    self.words = 0;
-                }
-            }
-            Event::AppChanged { app, app_name } => {
-                self.app = app.clone();
-                self.app_name = app_name.clone();
-            }
-            Event::StatsChanged { dur_ms, words } => {
-                self.dur_ms = *dur_ms;
-                self.words = *words;
-            }
-            Event::Partial { recording_id, text } if self.matches_recording(recording_id) => {
-                self.partial = text.clone()
-            }
-            Event::Segment { recording_id, text } if self.matches_recording(recording_id) => {
-                self.segments.push(text.clone());
-                self.partial.clear();
-            }
-            Event::PipelineStep {
-                name,
-                status,
-                duration_ms,
-                text,
-                error,
-                recording_id,
-            } if self.matches_recording(recording_id) => {
-                let detail = text.clone().or_else(|| error.clone()).unwrap_or_default();
-                self.pipeline
-                    .push(format!("{name} {status} {duration_ms:.1}ms  {detail}"));
-            }
-            Event::AudioMeter {
-                recording_id,
-                meter,
-            } if self.matches_recording(recording_id) => {
-                if active {
-                    self.meters.push(*meter);
-                    self.trim_meters_to_capacity();
-                }
-            }
-            Event::SessionMeta { recording_id, meta } if self.matches_recording(recording_id) => {
-                self.session_meta = Some(meta.clone());
-            }
-            Event::SessionPhase {
-                recording_id,
-                phase,
-            } if self.matches_recording(recording_id) => {
-                self.session_phase = Some(*phase);
-            }
-            _ => {}
-        }
-    }
-
-    fn on_key(&mut self, _key: KeyEvent) -> KeyOutcome {
-        KeyOutcome::none()
-    }
-
-    fn on_enter(&mut self) {
-        self.meters.clear();
-    }
-
-    fn render(&self, frame: &mut Frame, area: Rect, theme: &TuiTheme, _footer_status: &str) {
-        render_status(frame, self, area, theme);
-    }
-}
-
-impl StatusPage {
-    fn matches_recording(&self, recording_id: &str) -> bool {
-        self.recording_id.as_deref() == Some(recording_id)
-    }
-}
-
-fn parse_time(value: Option<&str>) -> Option<time::OffsetDateTime> {
-    value.and_then(|value| {
-        time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
-    })
-}
-
-fn render_status(frame: &mut Frame, page: &StatusPage, area: Rect, theme: &TuiTheme) {
+pub(super) fn render_status(frame: &mut Frame, page: &StatusPage, area: Rect, theme: &TuiTheme) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -270,7 +86,7 @@ fn render_status(frame: &mut Frame, page: &StatusPage, area: Rect, theme: &TuiTh
     );
 }
 
-fn status_header_lines(
+pub(super) fn status_header_lines(
     page: &StatusPage,
     theme: &TuiTheme,
     app_label: &str,
@@ -315,7 +131,7 @@ fn recording_id_label(page: &StatusPage) -> String {
         .unwrap_or_else(|| crate::t!("tui.no_active_recording"))
 }
 
-fn meter_lines(page: &StatusPage, theme: &TuiTheme, width: usize) -> Vec<Line<'static>> {
+pub(super) fn meter_lines(page: &StatusPage, theme: &TuiTheme, width: usize) -> Vec<Line<'static>> {
     if !matches!(page.state, WireState::Recording | WireState::Stopping) && page.meters.is_empty() {
         return vec![
             Line::from(vec![
@@ -351,7 +167,7 @@ fn meter_lines(page: &StatusPage, theme: &TuiTheme, width: usize) -> Vec<Line<'s
     ]
 }
 
-fn live_speech_lines(
+pub(super) fn live_speech_lines(
     page: &StatusPage,
     theme: &TuiTheme,
     width: usize,
@@ -469,7 +285,7 @@ fn wrap_spans_with_widths(
     lines.into_iter().map(Line::from).collect()
 }
 
-fn display_width(value: &str) -> usize {
+pub(super) fn display_width(value: &str) -> usize {
     value.chars().map(char_display_width).sum()
 }
 
@@ -485,11 +301,11 @@ fn meter_span(text: String, color: Color) -> Span<'static> {
     Span::styled(text, Style::default().fg(color))
 }
 
-fn audio_upper(meters: &[AudioMeter]) -> String {
+pub(super) fn audio_upper(meters: &[AudioMeter]) -> String {
     meters.iter().map(|meter| upper_level(meter.peak)).collect()
 }
 
-fn audio_lower(meters: &[AudioMeter]) -> String {
+pub(super) fn audio_lower(meters: &[AudioMeter]) -> String {
     meters.iter().map(|meter| lower_level(meter.rms)).collect()
 }
 
@@ -515,12 +331,12 @@ fn vad_spans(meters: &[AudioMeter], theme: &TuiTheme) -> Span<'static> {
     Span::styled(text, Style::default().fg(color))
 }
 
-fn upper_level(value: f32) -> char {
+pub(super) fn upper_level(value: f32) -> char {
     const LEVELS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     level_char(value, LEVELS)
 }
 
-fn lower_level(value: f32) -> char {
+pub(super) fn lower_level(value: f32) -> char {
     const LEVELS: &[char] = &['▔', '▇', '▆', '▅', '▄', '▃', '▂', '▁'];
     level_char(value, LEVELS)
 }
@@ -556,170 +372,5 @@ fn format_duration(ms: u64) -> String {
         format!("{hours}:{:02}:{:02}", minutes % 60, seconds % 60)
     } else {
         format!("{:02}:{:02}", minutes, seconds % 60)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn meter(peak: f32) -> AudioMeter {
-        AudioMeter {
-            rms: peak,
-            peak,
-            clipped: false,
-            vad_probability: None,
-            vad_speech: None,
-        }
-    }
-
-    #[test]
-    fn trim_meters_to_capacity_keeps_large_tail() {
-        let mut page = StatusPage::new();
-        page.meters = (0..1100).map(|idx| meter(idx as f32)).collect::<Vec<_>>();
-
-        page.trim_meters_to_capacity();
-
-        assert_eq!(page.meters.len(), MAX_METER_HISTORY);
-        assert_eq!(page.meters.first().unwrap().peak, 76.0);
-        assert_eq!(page.meters.last().unwrap().peak, 1099.0);
-    }
-
-    #[test]
-    fn meter_capacity_tracks_terminal_width_with_minimum_and_4k_cap() {
-        assert_eq!(StatusPage::meter_capacity_for_terminal_width(200), 189);
-        assert_eq!(StatusPage::meter_capacity_for_terminal_width(20), 16);
-        assert_eq!(
-            StatusPage::meter_capacity_for_terminal_width(3840),
-            MAX_METER_HISTORY
-        );
-    }
-
-    #[test]
-    fn waveform_levels_use_low_and_high_blocks() {
-        assert_eq!(upper_level(0.0), '▁');
-        assert_eq!(upper_level(1.0), '█');
-        assert_eq!(lower_level(0.0), '▔');
-        assert_eq!(lower_level(1.0), '▁');
-    }
-
-    #[test]
-    fn audio_lines_render_one_char_per_meter() {
-        let meters = vec![
-            AudioMeter {
-                rms: 0.0,
-                peak: 0.0,
-                clipped: false,
-                vad_probability: Some(0.0),
-                vad_speech: Some(false),
-            },
-            AudioMeter {
-                rms: 1.0,
-                peak: 1.0,
-                clipped: true,
-                vad_probability: Some(1.0),
-                vad_speech: Some(true),
-            },
-        ];
-
-        assert_eq!(audio_upper(&meters).chars().count(), 2);
-        assert_eq!(audio_lower(&meters).chars().count(), 2);
-    }
-
-    #[test]
-    fn status_header_includes_colored_asr_metadata() {
-        crate::i18n::init("en-US");
-        let page = StatusPage::new();
-        let theme = TuiTheme::default();
-
-        let lines = status_header_lines(
-            &page,
-            &theme,
-            "Ghostty",
-            "com.mitchellh.ghostty",
-            "apple",
-            "-",
-            0,
-        );
-        let text = lines
-            .iter()
-            .flat_map(|line| line.spans.iter())
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-
-        assert!(text.contains("Ghostty"));
-        assert!(text.contains("asr apple"));
-        assert!(text.contains("chain -"));
-        assert_eq!(lines.len(), 3);
-    }
-
-    #[test]
-    fn ignores_events_for_stale_recordings() {
-        let mut page = StatusPage::new();
-        page.recording_id = Some("current".to_string());
-
-        page.apply_event(
-            &Event::Partial {
-                recording_id: "old".to_string(),
-                text: "stale".to_string(),
-            },
-            true,
-        );
-        page.apply_event(
-            &Event::Segment {
-                recording_id: "old".to_string(),
-                text: "stale segment".to_string(),
-            },
-            true,
-        );
-        page.apply_event(
-            &Event::AudioMeter {
-                recording_id: "old".to_string(),
-                meter: meter(0.5),
-            },
-            true,
-        );
-
-        assert!(page.partial.is_empty());
-        assert!(page.segments.is_empty());
-        assert!(page.meters.is_empty());
-    }
-
-    #[test]
-    fn live_speech_keeps_tail_when_space_is_limited() {
-        let mut page = StatusPage::new();
-        page.segments = vec!["abcdefghijklmnopqrstuvwxyz".to_string()];
-        page.partial = "0123456789".to_string();
-        let theme = TuiTheme::default();
-
-        let line = live_speech_lines(&page, &theme, 10, 1);
-        let text = line[0]
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-
-        assert!(text.starts_with("... "));
-        assert!(text.ends_with("456789"));
-        assert!(display_width(&text) <= 16);
-    }
-
-    #[test]
-    fn live_speech_keeps_tail_for_wide_cjk_text() {
-        let mut page = StatusPage::new();
-        page.segments = vec!["这是很长很长的一段已经定型的语音识别文本".to_string()];
-        page.partial = "最新的部分".to_string();
-        let theme = TuiTheme::default();
-
-        let line = live_speech_lines(&page, &theme, 16, 1);
-        let text = line[0]
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-
-        assert!(text.starts_with("... "));
-        assert!(text.ends_with("最新的部分"));
-        assert!(display_width(&text) <= 16);
     }
 }

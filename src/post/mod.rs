@@ -80,10 +80,8 @@ fn build_processor(config: ProcessorConfig) -> Result<Box<dyn PostProcessor>> {
 #[derive(Debug, Clone)]
 pub struct PipelineText {
     /// 原始 ASR 全文，整条链不变。
-    #[allow(dead_code)]
     pub raw: String,
     /// 本次 recording 的 ASR session 文本列表。
-    #[allow(dead_code)]
     pub segments: Vec<String>,
     /// 当前 in-flight 版本。run_chain 跑完即最终上屏文本。
     pub text: String,

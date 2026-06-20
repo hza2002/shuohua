@@ -967,98 +967,11 @@ trace sidecar 是 dev-only 诊断文件，不属于正式 daemon log；它在 `-
 
 ---
 
-## 4. 目录结构（初稿）
+## 4. 目录结构
 
-```
-shuohua/
-├── Cargo.toml
-├── README.md
-├── CHANGELOG.md
-├── docs/
-│   ├── DESIGN.md
-│   ├── SCHEMA.md
-│   └── CLI.md
-├── src/
-│   ├── main.rs                 # smart fallback；--daemon 跑 AppKit + tokio daemon
-│   ├── config/
-│   │   ├── mod.rs              # module root；top-level config API re-export + submodules
-│   │   ├── main.rs             # top-level config.toml schema/parse/path helpers
-│   │   ├── paths.rs            # XDG config path helpers shared by config loaders
-│   │   ├── spec.rs             # shared config spec metadata + diagnostics
-│   │   ├── schema.rs           # shared config schema registry + description i18n keys
-│   │   ├── inventory.rs        # structured Configure inventory
-│   │   ├── diagnostics/        # full-tree local config diagnostics
-│   │   │   ├── report.rs       # report types and helpers
-│   │   │   ├── runtime_plan.rs # ASR/LLM runtime check target planning
-│   │   │   └── scan.rs         # filesystem scan, TOML validation, reference checks
-│   │   ├── template/           # official templates + theme presets + LLM component creation
-│   │   │   ├── registry.rs     # static templates and embedded theme presets
-│   │   │   ├── render.rs       # schema/comment-driven TOML rendering
-│   │   │   └── llm_wizard.rs   # LLM component draft/render/create helpers
-│   │   ├── profile.rs          # profile/*.toml schema/routes
-│   │   ├── post/               # post component config namespace
-│   │   ├── asr/                # ASR provider config loaders
-│   │   └── theme.rs            # theme TOML parse/merge + builtin fallback + effective TUI/overlay theme
-│   ├── log.rs                  # tracing 初始化：daily file appender、本地时间格式、TTY mirror
-│   ├── reload.rs               # notify watcher + overlay/i18n/hotkey subscribers
-│   ├── hotkey/
-│   │   ├── mod.rs              # Combo / Modifier / KeyCode 类型
-│   │   ├── tracker.rs          # 纯函数式状态机 + proptest
-│   │   ├── registry.rs         # combo→handler 映射
-│   │   └── provider_darwin.rs  # CGEventTap + pipe 桥
-│   ├── voice/
-│   │   ├── mod.rs              # 子模块声明
-│   │   ├── recorder.rs         # cpal 16kHz s16le mono → mpsc
-│   │   ├── finish.rs           # 录音生命周期 + filler pipeline + dispatch
-│   │   └── dispatch.rs         # 剪贴板 + Cmd+V
-│   ├── asr/
-│   │   ├── mod.rs              # AsrProvider / AsrSession trait
-│   │   ├── types.rs            # Caps / SessionCtx / LanguageMode / AsrEvent / Boost
-│   │   └── providers/
-│   │       ├── apple.rs              # Apple SpeechAnalyzer provider
-│   │       ├── apple_helper.swift    # Swift-only SpeechAnalyzer bridge；build.rs 编译嵌入
-│   │       └── doubao.rs             # Doubao SAUC provider
-│   ├── post/
-│   │   ├── mod.rs              # PostProcessor trait + PipelineText + run_chain
-│   │   ├── zh_filter.rs        # ZhFilter
-│   │   ├── llm.rs              # LLM 清洗
-│   │   └── app_context.rs      # NSWorkspace.frontmostApplication
-│   ├── state/
-│   │   ├── mod.rs              # 内存状态机 + tokio::sync::broadcast 给订阅者
-│   │   └── history.rs          # append-only monthly history JSONL + 派生统计
-│   ├── ipc/
-│   │   ├── mod.rs              # 子模块声明 + 公共类型 re-export
-│   │   ├── protocol.rs         # 命令/事件 serde 类型（schema 见 SCHEMA.md §1）
-│   │   ├── server.rs           # daemon 侧 UnixListener + 每 client 一个 tokio task；订阅 StateEvent broadcast
-│   │   └── client.rs           # TUI / 外部脚本侧连接 + 帧解析
-│   ├── overlay/
-│   │   ├── mod.rs              # 后台线程一侧：构造 OverlayCmd 推到主线程 channel
-│   │   ├── view.rs             # AppKit 视图层（NSPanel + NSGlassEffectView + 子视图）
-│   ├── platform/
-│   │   ├── clipboard.rs        # 平台无关 facade；非 macOS 返回 unsupported
-│   │   ├── autotype.rs         # 平台无关 facade；非 macOS 返回 unsupported
-│   │   ├── permissions.rs      # doctor 权限检查 facade
-│   │   └── macos/              # shared macOS adapters: clipboard / autotype / permissions / app context / window geometry
-│   ├── cli/
-│   │   ├── mod.rs              # clap derive，子命令分发
-│   │   ├── doctor.rs           # shuo doctor（包含配置 validate + 打印 effective config）
-│   │   ├── config_template.rs  # shuo config-template（导出带注释的参考模板）
-│   │   └── service.rs          # install / uninstall / start / stop / restart / status
-│   ├── i18n/
-│   │   └── mod.rs              # t!() 宏 + 字典加载，~100 行
-│   └── tui/
-│       ├── mod.rs              # ratatui 主循环；Status / History / Configure 三页
-│       ├── audio.rs            # retained audio path/status/open/reveal/delete helpers
-│       ├── config_actions.rs   # Configure editor/Finder launcher helpers
-│       ├── panes.rs            # 状态 / 历史 / Configure 渲染
-│       ├── settings.rs         # Configure inventory row adapter
-│       └── keybindings.rs      # Tab/Shift-Tab + 1/2/3 翻页；page-specific actions
-├── assets/
-│   └── i18n/
-│       ├── zh-CN.toml
-│       └── en-US.toml
-└── build.rs                    # 链接 AppKit / AudioToolbox / ApplicationServices；嵌入 i18n toml
-```
+当前 `src/` 只保留真实编译/运行的模块。模块树、职责边界和当前实现状态以
+[MODULES.md](./MODULES.md) 为准；本文件只记录架构决策和不变量，避免目录树在两个
+文档里重复维护后漂移。
 
 ---
 
@@ -1117,9 +1030,10 @@ shuohua/
 
 ## 7. 安全与隐私
 
-- **配置文件权限**：首次写入 `~/.config/shuohua/config.toml` 时强制 `chmod 0600`。其他 toml 不强制（用户自己负责）。
+- **配置文件权限**：v1 不自动创建真实生效配置；用户通过编辑器或 `shuo config-template` 生成模板后自行放置到 `~/.config/shuohua/`。除 daemon lock / UDS socket 等运行时私有文件外，TOML 配置文件权限沿用用户环境默认 umask。其他 toml 不强制（用户自己负责）。
 - **API key 存储**：明文 TOML 是 v1 选择（仓库放模板，用户填）。未来可选 `keychain://` 前缀走 macOS Keychain，但 v1 不做。LLM post 配置用 `api_key = "..."`，不写入 history。
 - **日志**：见 §2.13。正式 daemon log 是诊断日志，不记录识别正文、clipboard 内容、prompt、hotwords 明细、post 输入输出正文或可能含正文的 provider 原始响应。launchd stdout/stderr 只做极早期兜底。
 - **history JSONL 明文**：是设计选择（用户唯一数据源），按本地月份写入 `~/.local/state/shuohua/history/YYYY-MM.jsonl`。用户应当知道并定期清理；v1 不自动清理。
 - **音频留存可选**：`voice.record_audio = "off"` 是默认；`lossless` 写 `~/.local/state/shuohua/audio/<recording_id>.flac`，`compact` 写 AAC-LC 32 kbps 的 `<recording_id>.m4a`，实测约比 FLAC 再省 75% 空间。实时 callback 只写临时 canonical WAV，recorder worker 在停止后用系统 `/usr/bin/afconvert` 转换并删除临时文件。一次 recording 最多保留一个最终音频文件；转换失败不留 WAV fallback，通过 UDS error + overlay Notice 提醒，但不回滚文本输出。文件名主体 = history ULID，history 不存格式字段。
 - **PostProcessor 隔离**：LLM processor 把识别文本发给第三方 API。doctor 启动时 warn 一次"启用 LLM 后处理意味着文本会发给 {provider}"。
+- **LLM 错误记录**：LLM provider 的 HTTP 错误 `message` / `type` / `code` 进入 history 与 daemon log，用于排查 key、额度、rate limit、模型名和请求参数问题。OpenAI、Anthropic、Gemini、DeepSeek 等主流 API 都把错误 message 定义为开发者诊断信息，通常不回显用户 prompt 或识别正文；v1 按这个约定记录。使用非主流 OpenAI-compatible 网关时，远端错误响应内容属于该网关的信任边界。

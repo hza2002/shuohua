@@ -266,6 +266,8 @@ async fn handle_client(
 
     if !graceful_close {
         cancel.cancel();
+    } else if state_forwarder.is_some() {
+        cancel.cancel();
     }
     if let Some(task) = state_forwarder {
         let _ = task.await;
@@ -717,6 +719,42 @@ trigger = "f16"
         assert!(matches!(event, Event::DaemonStatus { .. }));
         shutdown_rx.changed().await.unwrap();
         assert!(*shutdown_rx.borrow_and_update());
+        server.abort();
+        let _ = fs::remove_file(sock);
+    }
+
+    #[tokio::test]
+    async fn shutdown_after_subscribe_closes_client_handler() {
+        let sock = PathBuf::from(format!(
+            "/tmp/shuohua-ipc-sub-shutdown-{}.sock",
+            ulid::Ulid::new()
+        ));
+        let _ = fs::remove_file(&sock);
+        let listener = bind(&sock).await.unwrap();
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let control = ServerControl {
+            reload: test_reload_handle(),
+            started_at: Instant::now(),
+            shutdown: shutdown_tx,
+        };
+        let server = tokio::spawn(run(listener, StateStore::new(), control));
+        let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
+
+        client.send(&Command::Subscribe).await.unwrap();
+        assert!(matches!(
+            client.recv().await.unwrap().unwrap(),
+            Event::Snapshot { .. }
+        ));
+        client.send(&Command::Shutdown).await.unwrap();
+        assert!(matches!(
+            client.recv().await.unwrap().unwrap(),
+            Event::DaemonStatus { .. }
+        ));
+
+        tokio::time::timeout(std::time::Duration::from_millis(200), client.recv())
+            .await
+            .expect("subscribed shutdown connection should close")
+            .unwrap();
         server.abort();
         let _ = fs::remove_file(sock);
     }

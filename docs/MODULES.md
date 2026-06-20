@@ -47,10 +47,14 @@ src/
 ├── platform/
 │   ├── mod.rs                           # shared OS capability namespace
 │   ├── daemon.rs                        # DaemonPlatform adapter：frontmost app + hotkey event tap 平台边界
+│   ├── clipboard.rs                     # clipboard facade；非 macOS 返回 unsupported
+│   ├── autotype.rs                      # autotype facade；非 macOS 返回 unsupported
+│   ├── permissions.rs                   # doctor 权限检查 facade
 │   └── macos/
 │       ├── mod.rs                       # macOS shared adapters
 │       ├── clipboard.rs                 # NSPasteboard 写文本
 │       ├── autotype.rs                  # CGEventPost Cmd+V
+│       ├── permissions.rs               # AX / Microphone 授权状态
 │       ├── window.rs                    # AX 拿 focused window 几何并转换到 AppKit 坐标，给 overlay 定位
 │       └── app_context.rs               # frontmost app bundle id / 名字
 ├── hotkey/
@@ -190,10 +194,11 @@ event、stop drain、provider finalize、错误/取消、retained audio 都在
 `engine::run_with_recorder` 内部。`#[cfg(test)] RecordingStream::for_test` 让
 `voice/engine_lifecycle_tests.rs` 不依赖 cpal 即可驱动整个录音生命周期。
 
-daemon 当前的跨平台边界是轻量 adapter，不是完整平台抽象：`platform::daemon`
-只封装 daemon runtime 立刻需要的 `frontmost_app` 和 hotkey event tap 启动。
-后续真正做 Linux / Windows 时，再把 hotkey input、overlay runner、single-instance
-lock、dispatch/autotype 等 OS 能力逐步纳入平台层；在此之前不提前扩 trait，避免
-为未知平台假设过度抽象。
+当前跨平台边界按"平台能力 facade + target-specific dependency"推进：业务层调用
+`platform::clipboard` / `platform::autotype` / `platform::permissions` /
+`platform::daemon`，macOS 具体实现放在 `platform::macos`；非 macOS 先返回明确
+unsupported。`Cargo.toml` 中 AppKit / ApplicationServices / core-graphics / objc2
+依赖只挂在 macOS target 下。后续真正做 Linux / Windows 时，再补各平台 sibling
+实现；在此之前不提前扩大 trait 面，避免为未知平台假设过度抽象。
 
 每条路径的详细职责见 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)；关键设计决策见 [DESIGN.md §2](DESIGN.md#2-关键设计决策)。

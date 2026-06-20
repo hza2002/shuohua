@@ -1,13 +1,15 @@
 use anyhow::Result;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use crate::daemon::active_session::ActiveSession;
+use crate::daemon::active_session::{ActiveSession, ShutdownStopResult};
 use crate::daemon::hotkey_input::HotkeyInput;
 use crate::daemon::session_start;
 use crate::hotkey::{Bindings, HotkeyAction, TrackerSet};
 use crate::overlay::{OverlayCmd, OverlayHandle};
 use crate::platform::daemon::{DaemonPlatform, SystemDaemonPlatform};
 use crate::state::StateStore;
+
+const SHUTDOWN_ACTIVE_SESSION_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(super) async fn run_daemon(
     cfg_rx: crate::reload::Rx,
@@ -37,19 +39,14 @@ async fn run_daemon_with_platform(
 ) -> Result<()> {
     let listener = crate::ipc::server::bind_default().await?;
     let socket_path = crate::ipc::server::default_socket_path();
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     tokio::spawn(crate::ipc::server::run(
         listener,
         state_store.clone(),
         crate::ipc::server::ServerControl {
             reload: reload_handle,
             started_at: Instant::now(),
-            shutdown: {
-                let overlay = overlay.clone();
-                std::sync::Arc::new(move || {
-                    tracing::info!("shutdown requested over IPC");
-                    overlay.send(OverlayCmd::Quit);
-                })
-            },
+            shutdown: shutdown_tx,
         },
     ));
 
@@ -71,6 +68,18 @@ async fn run_daemon_with_platform(
 
     loop {
         tokio::select! {
+            changed = shutdown_rx.changed() => {
+                if changed.is_ok() && *shutdown_rx.borrow_and_update() {
+                    tracing::info!("shutdown requested over IPC");
+                    let _ = shutdown_active_session(
+                        &mut active,
+                        SHUTDOWN_ACTIVE_SESSION_TIMEOUT,
+                    ).await;
+                    hotkey_input.set_cancel_active(false);
+                    overlay.send(OverlayCmd::Quit);
+                    return Ok(());
+                }
+            }
             Some(new_hotkeys) = hotkey_rx.recv() => {
                 hotkey_trackers.set_bindings(&new_hotkeys);
                 hotkey_input.update_bindings(&new_hotkeys)?;
@@ -139,5 +148,48 @@ fn clear_finished_session(active: &mut Option<ActiveSession>, hotkey_input: &Hot
     if active.as_ref().is_some_and(ActiveSession::is_finished) {
         *active = None;
         hotkey_input.set_cancel_active(false);
+    }
+}
+
+async fn shutdown_active_session(active: &mut Option<ActiveSession>, timeout: Duration) -> bool {
+    let Some(session) = active.take() else {
+        return true;
+    };
+    let mut session = session;
+    match session.stop_and_join(timeout).await {
+        ShutdownStopResult::Stopped => true,
+        ShutdownStopResult::JoinError(error) => {
+            tracing::warn!(error = ?error, "active recording task failed during shutdown");
+            true
+        }
+        ShutdownStopResult::TimedOut => {
+            tracing::warn!(
+                timeout_ms = timeout.as_millis(),
+                "active recording did not stop before shutdown timeout"
+            );
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::voice::SessionControl;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn shutdown_active_session_sends_stop_and_waits_for_completion() {
+        let (control_tx, mut control_rx) = tokio::sync::watch::channel(SessionControl::Idle);
+        let join = tokio::spawn(async move {
+            control_rx.changed().await.unwrap();
+            assert_eq!(*control_rx.borrow_and_update(), SessionControl::Stop);
+        });
+        let mut active = Some(ActiveSession::new(control_tx, join));
+
+        let stopped = shutdown_active_session(&mut active, Duration::from_millis(100)).await;
+
+        assert!(stopped);
+        assert!(active.is_none());
     }
 }

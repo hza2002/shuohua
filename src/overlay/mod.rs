@@ -10,3 +10,11 @@ mod macos;
 
 #[cfg(target_os = "macos")]
 pub use macos::run;
+
+#[cfg(not(target_os = "macos"))]
+pub fn run(
+    _rx: OverlayReceiver,
+    _cfg: crate::config::theme::EffectiveOverlayCfg,
+) -> anyhow::Result<()> {
+    anyhow::bail!("overlay is not implemented on this platform")
+}

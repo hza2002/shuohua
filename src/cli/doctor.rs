@@ -1,8 +1,5 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use objc2::msg_send;
-use objc2::runtime::AnyClass;
-use objc2_foundation::ns_string;
 use std::ops::ControlFlow;
 use std::time::Duration;
 
@@ -10,6 +7,9 @@ use crate::asr::types::{LanguageMode, SessionCtx};
 use crate::asr::AsrProvider;
 use crate::config::diagnostics::{AsrRuntimeTarget, LlmRuntimeTarget};
 use crate::ipc::protocol::{Command, Event};
+use crate::platform::permissions::{
+    accessibility_trusted, microphone_authorization, MicrophoneAuthorization,
+};
 use crate::post::llm::LlmCleanup;
 
 const DAEMON_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
@@ -343,64 +343,7 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) -> CheckStatus {
         hotwords: target.hotwords.clone(),
     };
     match target.provider.as_str() {
-        "apple" => match crate::asr::providers::apple::AppleProvider::new_with_overrides(Some(
-            &target.overrides,
-        )) {
-            Ok(provider) => {
-                let caps = provider.caps();
-                println!("{}", asr_runtime_probe_line("apple", &target.profiles));
-                if let Some(notice) = provider.runtime_check_notice() {
-                    println!("{}", notice.line);
-                }
-                match provider.check_runtime(ctx).await {
-                    Ok(()) => println!(
-                        "asr.apple.runtime: OK profiles=[{}] hotwords={} multilingual={}",
-                        target.profiles.join(", "),
-                        caps.hotwords,
-                        caps.multilingual
-                    ),
-                    Err(e) => {
-                        println!(
-                            "asr.apple.runtime: ERROR profiles=[{}] {e}",
-                            target.profiles.join(", ")
-                        );
-                        println!(
-                            "hint: {}",
-                            tr(
-                                "cli.doctor.hint_apple_runtime",
-                                &[(
-                                    "path",
-                                    crate::asr::providers::apple::config_path()
-                                        .display()
-                                        .to_string()
-                                )]
-                            )
-                        );
-                        return CheckStatus::Error;
-                    }
-                }
-                CheckStatus::Ok
-            }
-            Err(e) => {
-                println!(
-                    "asr.apple.runtime: ERROR profiles=[{}] {e:#}",
-                    target.profiles.join(", ")
-                );
-                println!(
-                    "hint: {}",
-                    tr(
-                        "cli.doctor.hint_edit_path",
-                        &[(
-                            "path",
-                            crate::asr::providers::apple::config_path()
-                                .display()
-                                .to_string()
-                        )]
-                    )
-                );
-                CheckStatus::Error
-            }
-        },
+        "apple" => check_apple_runtime(target, ctx).await,
         "doubao" => match crate::asr::providers::doubao::DoubaoProvider::new_with_overrides(Some(
             &target.overrides,
         )) {
@@ -467,6 +410,75 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) -> CheckStatus {
             CheckStatus::Error
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+async fn check_apple_runtime(target: AsrRuntimeTarget, ctx: SessionCtx) -> CheckStatus {
+    match crate::asr::providers::apple::AppleProvider::new_with_overrides(Some(&target.overrides)) {
+        Ok(provider) => {
+            let caps = provider.caps();
+            println!("{}", asr_runtime_probe_line("apple", &target.profiles));
+            if let Some(notice) = provider.runtime_check_notice() {
+                println!("{}", notice.line);
+            }
+            match provider.check_runtime(ctx).await {
+                Ok(()) => println!(
+                    "asr.apple.runtime: OK profiles=[{}] hotwords={} multilingual={}",
+                    target.profiles.join(", "),
+                    caps.hotwords,
+                    caps.multilingual
+                ),
+                Err(e) => {
+                    println!(
+                        "asr.apple.runtime: ERROR profiles=[{}] {e}",
+                        target.profiles.join(", ")
+                    );
+                    println!(
+                        "hint: {}",
+                        tr(
+                            "cli.doctor.hint_apple_runtime",
+                            &[(
+                                "path",
+                                crate::asr::providers::apple::config_path()
+                                    .display()
+                                    .to_string()
+                            )]
+                        )
+                    );
+                    return CheckStatus::Error;
+                }
+            }
+            CheckStatus::Ok
+        }
+        Err(e) => {
+            println!(
+                "asr.apple.runtime: ERROR profiles=[{}] {e:#}",
+                target.profiles.join(", ")
+            );
+            println!(
+                "hint: {}",
+                tr(
+                    "cli.doctor.hint_edit_path",
+                    &[(
+                        "path",
+                        crate::asr::providers::apple::config_path()
+                            .display()
+                            .to_string()
+                    )]
+                )
+            );
+            CheckStatus::Error
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn check_apple_runtime(target: AsrRuntimeTarget, _ctx: SessionCtx) -> CheckStatus {
+    println!(
+        "asr.apple.runtime: ERROR profiles=[{}] Apple ASR provider is only implemented on macOS",
+        target.profiles.join(", ")
+    );
+    CheckStatus::Error
 }
 
 fn asr_runtime_probe_line(provider: &str, profiles: &[String]) -> String {
@@ -717,39 +729,6 @@ fn check_permissions() -> CheckStatus {
         }
     }
     status
-}
-
-#[link(name = "ApplicationServices", kind = "framework")]
-extern "C" {
-    fn AXIsProcessTrusted() -> bool;
-}
-
-fn accessibility_trusted() -> bool {
-    unsafe { AXIsProcessTrusted() }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MicrophoneAuthorization {
-    NotDetermined,
-    Restricted,
-    Denied,
-    Authorized,
-}
-
-#[link(name = "AVFoundation", kind = "framework")]
-extern "C" {}
-
-fn microphone_authorization() -> Option<MicrophoneAuthorization> {
-    let class = AnyClass::get(c"AVCaptureDevice")?;
-    let status: isize =
-        unsafe { msg_send![class, authorizationStatusForMediaType: ns_string!("soun")] };
-    match status {
-        0 => Some(MicrophoneAuthorization::NotDetermined),
-        1 => Some(MicrophoneAuthorization::Restricted),
-        2 => Some(MicrophoneAuthorization::Denied),
-        3 => Some(MicrophoneAuthorization::Authorized),
-        _ => None,
-    }
 }
 
 fn format_duration(ms: u64) -> String {

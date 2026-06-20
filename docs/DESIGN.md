@@ -86,7 +86,7 @@ enum OverlayCmd {
     Dismiss,                                                       // ESC 专用：跳过延期立即关
     ReloadConfig { cfg: EffectiveOverlayCfg },
     Relabel,                                                       // i18n 热切语言后让 view 重新翻译当前 label
-    Quit,                                                          // daemon graceful shutdown：让 AppKit 主循环退出
+    Quit,                                                          // daemon runtime 已收尾，通知 AppKit 主循环退出
 }
 ```
 
@@ -1035,7 +1035,10 @@ shuohua/
 │   │   ├── mod.rs              # 后台线程一侧：构造 OverlayCmd 推到主线程 channel
 │   │   ├── view.rs             # AppKit 视图层（NSPanel + NSGlassEffectView + 子视图）
 │   ├── platform/
-│   │   └── macos/              # shared macOS adapters: clipboard / autotype / app context / window geometry
+│   │   ├── clipboard.rs        # 平台无关 facade；非 macOS 返回 unsupported
+│   │   ├── autotype.rs         # 平台无关 facade；非 macOS 返回 unsupported
+│   │   ├── permissions.rs      # doctor 权限检查 facade
+│   │   └── macos/              # shared macOS adapters: clipboard / autotype / permissions / app context / window geometry
 │   ├── cli/
 │   │   ├── mod.rs              # clap derive，子命令分发
 │   │   ├── doctor.rs           # shuo doctor（包含配置 validate + 打印 effective config）

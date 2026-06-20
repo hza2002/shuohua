@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-20 - Release blocker hardening
+
+- Routed UDS `shutdown` through the daemon runtime instead of directly quitting
+  AppKit. Active recordings now receive `Stop` and get a bounded shutdown window
+  before the overlay main loop is asked to exit.
+- Added platform facades for clipboard, autotype, and permission checks, and
+  moved macOS-only dependencies into target-specific Cargo dependencies.
+- Gated Apple ASR and Darwin hotkey provider compilation to macOS while keeping
+  explicit unsupported errors for other platforms.
+
 ## 2026-06-19 - Overlay platform boundary refactor
 
 - Split `src/overlay/` into platform-agnostic `command.rs` / `model.rs` /

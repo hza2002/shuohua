@@ -1,4 +1,5 @@
 use crate::voice::SessionControl;
+use std::time::Duration;
 
 pub(super) struct ActiveSession {
     control: tokio::sync::watch::Sender<SessionControl>,
@@ -24,4 +25,22 @@ impl ActiveSession {
     pub(super) fn stop(&self) {
         let _ = self.control.send(SessionControl::Stop);
     }
+
+    pub(super) async fn stop_and_join(&mut self, timeout: Duration) -> ShutdownStopResult {
+        self.stop();
+        match tokio::time::timeout(timeout, &mut self.join).await {
+            Ok(Ok(())) => ShutdownStopResult::Stopped,
+            Ok(Err(error)) => ShutdownStopResult::JoinError(error),
+            Err(_) => {
+                self.join.abort();
+                ShutdownStopResult::TimedOut
+            }
+        }
+    }
+}
+
+pub(super) enum ShutdownStopResult {
+    Stopped,
+    JoinError(tokio::task::JoinError),
+    TimedOut,
 }

@@ -3,13 +3,16 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::mpsc::{self, error::TrySendError};
+use tokio::sync::{
+    mpsc::{self, error::TrySendError},
+    watch,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::ipc::protocol::{Command, Event, WireState, PROTO_VERSION};
@@ -43,7 +46,7 @@ pub async fn bind(path: impl AsRef<Path>) -> Result<UnixListener> {
 pub struct ServerControl {
     pub reload: crate::reload::Handle,
     pub started_at: Instant,
-    pub shutdown: Arc<dyn Fn() + Send + Sync>,
+    pub shutdown: watch::Sender<bool>,
 }
 
 pub async fn run(listener: UnixListener, state: StateStore, control: ServerControl) -> Result<()> {
@@ -175,7 +178,7 @@ async fn handle_client(
                     cancel.cancel();
                     break;
                 }
-                (control.shutdown)();
+                let _ = control.shutdown.send(true);
                 graceful_close = true;
                 break;
             }
@@ -510,6 +513,11 @@ trigger = "f16"
         handle
     }
 
+    fn test_shutdown_sender() -> tokio::sync::watch::Sender<bool> {
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        tx
+    }
+
     #[tokio::test]
     async fn subscribe_fans_out_snapshot_and_live_events() {
         let path =
@@ -526,7 +534,7 @@ trigger = "f16"
             ServerControl {
                 reload,
                 started_at: Instant::now(),
-                shutdown: Arc::new(|| {}),
+                shutdown: test_shutdown_sender(),
             },
         ));
 
@@ -633,22 +641,14 @@ trigger = "f16"
 
     #[tokio::test]
     async fn shutdown_command_acknowledges_and_requests_shutdown() {
-        use std::sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc,
-        };
-
         let sock = PathBuf::from(format!("/tmp/shuohua-ipc-{}.sock", ulid::Ulid::new()));
         let _ = fs::remove_file(&sock);
         let listener = bind(&sock).await.unwrap();
-        let requested = Arc::new(AtomicBool::new(false));
-        let requested_for_control = requested.clone();
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
         let control = ServerControl {
             reload: test_reload_handle(),
             started_at: Instant::now(),
-            shutdown: Arc::new(move || {
-                requested_for_control.store(true, Ordering::SeqCst);
-            }),
+            shutdown: shutdown_tx,
         };
         let server = tokio::spawn(run(listener, StateStore::new(), control));
         let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
@@ -657,7 +657,8 @@ trigger = "f16"
         let event = client.recv().await.unwrap().unwrap();
 
         assert!(matches!(event, Event::DaemonStatus { .. }));
-        assert!(requested.load(Ordering::SeqCst));
+        shutdown_rx.changed().await.unwrap();
+        assert!(*shutdown_rx.borrow_and_update());
         server.abort();
         let _ = fs::remove_file(sock);
     }

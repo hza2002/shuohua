@@ -7,7 +7,7 @@
 //!
 //! 各步骤的日志由本模块自己负责，调用方只看 Result 决定是否记 history.
 
-use crate::platform::macos::{autotype, clipboard};
+use crate::platform::{autotype, clipboard};
 use anyhow::{Context, Result};
 
 pub fn dispatch(text: &str, auto_paste: bool) -> Result<()> {

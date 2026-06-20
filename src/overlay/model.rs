@@ -118,6 +118,13 @@ impl OverlayModel {
                     self.partial.clear();
                 }
                 TextKind::Error => {
+                    self.notice = None;
+                    self.notice_until = None;
+                    self.pending_hide = false;
+                    self.visible = true;
+                    self.state = OverlayState::Error;
+                    self.state_label = crate::t!(OverlayState::Error.label_key());
+                    self.state_color = OverlayState::Error.color_rgb(theme);
                     self.error_text = text;
                     self.partial.clear();
                     self.error_until = Some(Instant::now() + Duration::from_millis(ERROR_TTL_MS));
@@ -526,6 +533,60 @@ mod tests {
     }
 
     #[test]
+    fn error_text_from_hidden_state_shows_overlay() {
+        i18n::init("en-US");
+        let mut model = OverlayModel::default();
+
+        apply(
+            &mut model,
+            OverlayCmd::SetText {
+                text: "Profile could not be loaded".into(),
+                kind: TextKind::Error,
+            },
+        );
+
+        assert!(model.visible);
+        assert_eq!(model.state, OverlayState::Error);
+        assert_eq!(model.state_label, "Error");
+        assert_eq!(model.display_text(), "Profile could not be loaded");
+        assert!(model.error_until.is_some());
+    }
+
+    #[test]
+    fn error_text_clears_pending_notice_hide() {
+        i18n::init("en-US");
+        let mut model = OverlayModel::default();
+        apply(
+            &mut model,
+            OverlayCmd::SetState {
+                state: OverlayState::Connecting,
+            },
+        );
+        apply(
+            &mut model,
+            OverlayCmd::Notice {
+                text: "old warning".into(),
+                ttl_ms: 1000,
+            },
+        );
+        apply(&mut model, OverlayCmd::Hide);
+
+        apply(
+            &mut model,
+            OverlayCmd::SetText {
+                text: "Profile could not be loaded".into(),
+                kind: TextKind::Error,
+            },
+        );
+
+        assert!(model.visible);
+        assert!(model.notice.is_none());
+        assert!(model.notice_until.is_none());
+        assert!(!model.pending_hide);
+        assert_eq!(model.display_text(), "Profile could not be loaded");
+    }
+
+    #[test]
     fn final_text_updates_model_word_count() {
         i18n::init("en-US");
         let mut model = OverlayModel::default();
@@ -576,16 +637,15 @@ mod tests {
         let mut model = OverlayModel::default();
         apply(
             &mut model,
-            OverlayCmd::Notice {
-                text: "old".into(),
-                ttl_ms: 5000,
+            OverlayCmd::SetState {
+                state: OverlayState::Connecting,
             },
         );
         apply(
             &mut model,
-            OverlayCmd::SetText {
-                text: "old err".into(),
-                kind: TextKind::Error,
+            OverlayCmd::Notice {
+                text: "old".into(),
+                ttl_ms: 5000,
             },
         );
         apply(&mut model, OverlayCmd::Hide);

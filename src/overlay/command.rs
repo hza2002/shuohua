@@ -93,7 +93,7 @@ impl OverlayState {
 pub enum TextKind {
     Partial,
     Final,
-    /// 终态错误文本，覆盖 partial/final，红字显示，3s 后随 overlay 自动 hide。
+    /// 终态错误文本，覆盖 partial/final，红字显示，5s 后随 overlay 自动 hide。
     Error,
 }
 

@@ -124,20 +124,13 @@ async fn complete_recording(
         params.state.set_idle();
     }
 
-    let history_status = terminal_error
-        .as_ref()
-        .map(|_| HistoryStatus::Error)
-        .unwrap_or(status);
-    let trace_status = if terminal_error.is_some() || dispatch_error.is_some() {
-        "error"
-    } else {
-        match status {
-            HistoryStatus::Submitted => "submitted",
-            HistoryStatus::Canceled => "canceled",
-            HistoryStatus::Empty => "empty",
-            HistoryStatus::Error => "error",
-            HistoryStatus::Timeout => "timeout",
-        }
+    let history_status = history_status_for_completion(terminal_error.as_ref(), status);
+    let trace_status = match history_status {
+        HistoryStatus::Submitted => "submitted",
+        HistoryStatus::Canceled => "canceled",
+        HistoryStatus::Empty => "empty",
+        HistoryStatus::Error => "error",
+        HistoryStatus::Timeout => "timeout",
     };
     let should_hide = terminal_error.is_none() && dispatch_error.is_none();
     let history_result = append_history(HistoryInput {
@@ -191,9 +184,59 @@ fn publish_history_result(
     }
 }
 
+fn history_status_for_completion(
+    terminal_error: Option<&crate::state::history::HistoryError>,
+    status: HistoryStatus,
+) -> HistoryStatus {
+    match terminal_error {
+        Some(error) if error.kind == "asr_timeout" => HistoryStatus::Timeout,
+        Some(_) => HistoryStatus::Error,
+        None => status,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::history::HistoryError;
+
+    #[test]
+    fn asr_finalize_timeout_is_recording_timeout() {
+        let error = HistoryError {
+            kind: "asr_timeout".to_string(),
+            msg: "timeout waiting final".to_string(),
+        };
+
+        assert_eq!(
+            history_status_for_completion(Some(&error), HistoryStatus::Submitted),
+            HistoryStatus::Timeout
+        );
+    }
+
+    #[test]
+    fn non_timeout_terminal_error_is_recording_error() {
+        let error = HistoryError {
+            kind: "asr_runtime".to_string(),
+            msg: "stream closed".to_string(),
+        };
+
+        assert_eq!(
+            history_status_for_completion(Some(&error), HistoryStatus::Submitted),
+            HistoryStatus::Error
+        );
+    }
+
+    #[test]
+    fn completion_without_terminal_error_preserves_status() {
+        assert_eq!(
+            history_status_for_completion(None, HistoryStatus::Submitted),
+            HistoryStatus::Submitted
+        );
+        assert_eq!(
+            history_status_for_completion(None, HistoryStatus::Error),
+            HistoryStatus::Error
+        );
+    }
 
     #[test]
     fn history_append_failure_emits_error_and_notice() {

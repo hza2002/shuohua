@@ -69,7 +69,7 @@ shuo version          # 同 --version；shuo help / --help / -h 同。clap 默�
 ## 3. 用户旅程
 
 ```
-1. cargo install shuohua          # 或 brew install
+1. brew install shuohua           # 或从源码 cargo install --path .
 2. shuo doctor                    # 看权限缺哪个，按指示授权
 3. shuo install                   # 装 launchd plist + 启动
 4. 按 F16 录音                    # 直接用

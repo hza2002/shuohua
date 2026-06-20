@@ -1,7 +1,7 @@
 //! UDS daemon server.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -34,12 +34,52 @@ pub async fn bind_default() -> Result<UnixListener> {
 
 pub async fn bind(path: impl AsRef<Path>) -> Result<UnixListener> {
     let path = path.as_ref();
-    fs::remove_file(path).ok();
+    prepare_socket_path(path).await?;
     let listener =
         UnixListener::bind(path).with_context(|| format!("bind UDS {}", path.display()))?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
         .with_context(|| format!("chmod 0600 {}", path.display()))?;
     Ok(listener)
+}
+
+async fn prepare_socket_path(path: &Path) -> Result<()> {
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if !meta.file_type().is_socket() {
+            anyhow::bail!("refusing to use UDS path {}: not a socket", path.display());
+        }
+    }
+    match UnixStream::connect(path).await {
+        Ok(_) => anyhow::bail!(
+            "another shuo daemon is already running at {}",
+            path.display()
+        ),
+        Err(error) => match error.raw_os_error() {
+            Some(libc::ENOENT) => Ok(()),
+            Some(libc::ECONNREFUSED) => remove_stale_socket(path),
+            _ => Err(error).with_context(|| format!("probe UDS {}", path.display())),
+        },
+    }
+}
+
+fn remove_stale_socket(path: &Path) -> Result<()> {
+    let meta = fs::symlink_metadata(path)
+        .with_context(|| format!("inspect stale UDS {}", path.display()))?;
+    if !meta.file_type().is_socket() {
+        anyhow::bail!(
+            "refusing to remove non-stale UDS path {}: not a socket",
+            path.display()
+        );
+    }
+    let uid = unsafe { libc::geteuid() };
+    if meta.uid() != uid {
+        anyhow::bail!(
+            "refusing to remove stale UDS {} owned by uid {}, expected {}",
+            path.display(),
+            meta.uid(),
+            uid
+        );
+    }
+    fs::remove_file(path).with_context(|| format!("remove stale UDS {}", path.display()))
 }
 
 #[derive(Clone)]
@@ -678,6 +718,50 @@ trigger = "f16"
         shutdown_rx.changed().await.unwrap();
         assert!(*shutdown_rx.borrow_and_update());
         server.abort();
+        let _ = fs::remove_file(sock);
+    }
+
+    #[tokio::test]
+    async fn bind_rejects_live_socket_without_unlinking_it() {
+        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-live-{}.sock", ulid::Ulid::new()));
+        let _ = fs::remove_file(&sock);
+        let _listener = bind(&sock).await.unwrap();
+
+        let error = bind(&sock).await.unwrap_err();
+
+        assert!(error.to_string().contains("already running"), "{error:#}");
+        UnixStream::connect(&sock)
+            .await
+            .expect("original live socket must remain reachable");
+        let _ = fs::remove_file(sock);
+    }
+
+    #[tokio::test]
+    async fn bind_recovers_stale_user_socket() {
+        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-stale-{}.sock", ulid::Ulid::new()));
+        let _ = fs::remove_file(&sock);
+        {
+            let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        }
+
+        let _listener = bind(&sock).await.unwrap();
+
+        UnixStream::connect(&sock)
+            .await
+            .expect("replacement socket should accept connections");
+        let _ = fs::remove_file(sock);
+    }
+
+    #[tokio::test]
+    async fn bind_rejects_regular_file_without_unlinking_it() {
+        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-file-{}.sock", ulid::Ulid::new()));
+        let _ = fs::remove_file(&sock);
+        fs::write(&sock, "not a socket").unwrap();
+
+        let error = bind(&sock).await.unwrap_err();
+
+        assert!(error.to_string().contains("not a socket"), "{error:#}");
+        assert_eq!(fs::read_to_string(&sock).unwrap(), "not a socket");
         let _ = fs::remove_file(sock);
     }
 

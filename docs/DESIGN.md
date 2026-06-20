@@ -1076,9 +1076,13 @@ shuohua/
 8. **热键 down/up 配对吞**：suppress 模式下，若 keydown 被吞，对应的 keyup 必须也吞，否则前台 App 看到孤立 keyup → modifier 状态泄漏。CGEventTap 回调里维护"已吞的物理键集合"，keyup 来时查表
 9. AppKit 主线程与 tokio runtime 通过 `tokio::sync::mpsc` 通信。绝不能在 AppKit callback 里 block tokio future（用 `try_recv` 或 `dispatch_async` 到主线程）
 10. `NSWorkspace.frontmostApplication` 必须在 toggle OFF 瞬间取一次缓存，**不**在 PostProcessor 内反复取——pipeline 跑期间用户可能切走，会拿到错的 app
-11. **Stale UDS socket 清理**：daemon 崩了 socket 文件不自动删。两条路径必须处理：
-    - daemon 启动 bind：bind 失败时尝试 `connect()`；连得通 = 已有 daemon 在跑，本进程退出；连不通 = stale socket → `unlink()` 后重新 bind
-    - `shuo` 智能 fallback connect：`ECONNREFUSED` / `ENOENT` 都视作 daemon 不在，进入 fork 路径前 `unlink()` 一次
+11. **Stale UDS socket 清理**：daemon 崩了 socket 文件不自动删。只有持有固定
+    `/tmp/shuohua-${UID}.lock` 的 daemon 启动路径可以清理 stale socket：
+    bind 前先 `connect()`；连得通 = 已有 daemon 在跑，本进程退出；`ENOENT` = 直接
+    bind；`ECONNREFUSED` = stale 候选，必须确认 path 是当前 UID 拥有的 socket 后才
+    `unlink()` 并重新 bind。普通文件、symlink、目录、非本 UID 节点或其他 connect
+    错误一律保守失败，不删除。`shuo` 智能 fallback 只把 `ENOENT` /
+    `ECONNREFUSED` 视作 daemon 不在并 fork daemon；fallback 自身不清理 socket。
 12. **Voice::Idle 时不持 cpal stream**：满足 <0.5% 空闲 CPU + 避免 always-recording 隐私问题。F9 触发时 ~50ms 启动延迟可接受（用户反应时间 200ms+ 覆盖）
 13. **麦克风可用性靠运行时 watchdog，不靠预检**：macOS 没有可靠的事前探测（`AppleClamshellState` + 设备名特判是过度脆弱的 workaround，合盖时 cpal 仍 callback 全 0 帧）。`recorder::start()` 同步段只校验 cpal build/play 失败；可用性的真相 = 主 select 里的 1s 首帧 watchdog：cpal stream play 成功后 `FIRST_AUDIO_TIMEOUT_MS = 1000ms` 内若所有 PCM 样本都 ≤ `MIN_NONZERO_AMPLITUDE = 8`（约 -72 dBFS，严格高于精确 0 silence，严格低于消费级 ADC 本底噪声），判定设备不可用并走 error overlay。阈值不进配置——超过这个时间几乎是设备问题，不是用户该调的旋钮
 14. **Error 路径不上屏不写剪贴板**：录音 / ASR 中途崩溃（`terminal_error` 任意 setter）→ 跳过 post chain → 跳过 `dispatch::dispatch` → history 写 status=Error 含累积 segments。理由：半成品上屏会误导（用户以为成功），auto_paste 还可能粘到用户已切走的应用，silent 覆盖剪贴板更糟。需要回捞的用户从 TUI history 翻一行（j/k + Enter copy）。`auto_paste` 永远只在成功路径生效

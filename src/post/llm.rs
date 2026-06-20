@@ -91,6 +91,7 @@ impl LlmCleanup {
             return Err(PostError::Failed(http_error_message(
                 &self.cfg.name,
                 &self.cfg.provider_name,
+                "openai",
                 status,
                 &body,
             )));
@@ -125,6 +126,7 @@ impl LlmCleanup {
             return Err(PostError::Failed(http_error_message(
                 &self.cfg.name,
                 &self.cfg.provider_name,
+                "anthropic",
                 status,
                 &body,
             )));
@@ -227,20 +229,81 @@ fn join_url(base: &str, path: &str) -> String {
 fn http_error_message(
     component: &str,
     provider: &str,
+    protocol: &str,
     status: impl fmt::Display,
     body: &str,
 ) -> String {
-    let body = truncate_response_body(body, 2048);
-    if body.is_empty() {
-        format!("{component} ({provider}) http error {status}")
-    } else {
-        format!("{component} ({provider}) http error {status}; body: {body}")
+    let prefix = format!("{component} ({provider}, {protocol}) http error {status}");
+    match http_error_details(body) {
+        Some(details) => format!("{prefix}; {details}"),
+        None => prefix,
     }
 }
 
-fn truncate_response_body(body: &str, max_chars: usize) -> String {
+fn http_error_details(body: &str) -> Option<String> {
     let trimmed = body.trim();
-    let mut chars = trimmed.chars();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(details) = structured_error_details(&value) {
+            return Some(details);
+        }
+    }
+
+    let excerpt = sanitize_remote_string(trimmed, 512);
+    (!excerpt.is_empty()).then(|| format!("body excerpt: {excerpt}"))
+}
+
+fn structured_error_details(body: &Value) -> Option<String> {
+    let error = body.get("error").and_then(Value::as_object)?;
+    let mut fields = Vec::new();
+    push_error_field(&mut fields, "type", error.get("type"));
+    push_error_field(&mut fields, "code", error.get("code"));
+    push_error_field(&mut fields, "message", error.get("message"));
+    (!fields.is_empty()).then(|| format!("error {}", fields.join(" ")))
+}
+
+fn push_error_field(fields: &mut Vec<String>, name: &str, value: Option<&Value>) {
+    let Some(value) = value else {
+        return;
+    };
+    let text = match value {
+        Value::String(s) => sanitize_remote_string(s, 512),
+        Value::Number(_) | Value::Bool(_) => sanitize_remote_string(&value.to_string(), 512),
+        _ => return,
+    };
+    if !text.is_empty() {
+        fields.push(format!("{name}={text}"));
+    }
+}
+
+fn sanitize_remote_string(text: &str, max_chars: usize) -> String {
+    let normalized = normalize_control_chars(text);
+    truncate_sanitized(&normalized, max_chars)
+}
+
+fn normalize_control_chars(text: &str) -> String {
+    let mut out = String::new();
+    let mut last_was_space = false;
+    for ch in text.trim().chars() {
+        let mapped = if ch.is_control() { ' ' } else { ch };
+        if mapped.is_whitespace() {
+            if !last_was_space {
+                out.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            out.push(mapped);
+            last_was_space = false;
+        }
+    }
+    out.trim().to_string()
+}
+
+fn truncate_sanitized(body: &str, max_chars: usize) -> String {
+    let mut chars = body.chars();
     let mut out = chars.by_ref().take(max_chars).collect::<String>();
     if chars.next().is_some() {
         out.push_str("... [truncated]");
@@ -368,14 +431,56 @@ mod tests {
     }
 
     #[test]
-    fn http_error_message_includes_status_and_truncated_body() {
-        let body = format!("{}tail", "x".repeat(3000));
+    fn http_error_message_preserves_structured_openai_error_and_sanitizes_strings() {
+        let body = json!({
+            "error": {
+                "type": "invalid_request_error\nforged",
+                "code": "bad\tcode",
+                "message": "first line\r\nsecond line",
+            }
+        })
+        .to_string();
 
-        let message = http_error_message("clean", "anthropic", 400, &body);
+        let message = http_error_message("clean", "openai", "openai", 400, &body);
 
-        assert!(message.contains("clean (anthropic) http error 400"));
-        assert!(message.contains("body: "));
+        assert_eq!(
+            message,
+            "clean (openai, openai) http error 400; error type=invalid_request_error forged code=bad code message=first line second line"
+        );
+        assert!(!message.contains('\n'));
+        assert!(!message.contains('\r'));
+        assert!(!message.contains('\t'));
+    }
+
+    #[test]
+    fn http_error_message_preserves_structured_anthropic_error() {
+        let body = json!({
+            "type": "error",
+            "error": {
+                "type": "rate_limit_error",
+                "message": "too many requests",
+            }
+        })
+        .to_string();
+
+        let message = http_error_message("clean", "anthropic", "anthropic", 429, &body);
+
+        assert_eq!(
+            message,
+            "clean (anthropic, anthropic) http error 429; error type=rate_limit_error message=too many requests"
+        );
+    }
+
+    #[test]
+    fn http_error_message_uses_short_sanitized_excerpt_for_unknown_body() {
+        let body = format!("{}\nPROMPT: secret tail", "x".repeat(3000));
+
+        let message = http_error_message("clean", "custom", "openai", 500, &body);
+
+        assert!(message.contains("clean (custom, openai) http error 500"));
+        assert!(message.contains("body excerpt: "));
         assert!(message.contains("truncated"));
-        assert!(!message.contains("tail"));
+        assert!(!message.contains("PROMPT"));
+        assert!(!message.contains('\n'));
     }
 }

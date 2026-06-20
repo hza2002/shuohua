@@ -20,13 +20,17 @@ pub async fn run_recording(
     params: SessionParams,
     control_rx: watch::Receiver<SessionControl>,
 ) {
+    let mut completion_control_rx = control_rx.clone();
     let Some(outcome) = engine::run(provider, params, control_rx).await else {
         return;
     };
-    complete_recording(outcome).await;
+    complete_recording(outcome, &mut completion_control_rx).await;
 }
 
-async fn complete_recording(outcome: EngineOutcome) {
+async fn complete_recording(
+    outcome: EngineOutcome,
+    control_rx: &mut watch::Receiver<SessionControl>,
+) {
     let EngineOutcome {
         params,
         recording_id,
@@ -81,6 +85,7 @@ async fn complete_recording(outcome: EngineOutcome) {
             &params.post_chain,
             params.post_timeout_ms,
             params.overlay.as_ref(),
+            control_rx,
         )
         .await;
         (

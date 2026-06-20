@@ -163,11 +163,12 @@ session 收到 Stop；cancel hotkey = active session 收到 Cancel，同时 over
 cpal stream → provider session → post chain → dispatch → history → StateStore /
 Overlay / UDS fanout。
 
-配置热重载：notify watcher 监听 `~/.config/shuohua/` → 通过 `watch::Sender`
-广播给 overlay / i18n / hotkey 三个 subscriber；hotkey subscriber 收到新
+配置热重载：notify watcher 监听 `~/.config/shuohua/`，当前只对 `config.toml`
+和 `theme/*.toml` 触发 parse + `watch::Sender` 广播给 overlay / i18n / hotkey
+三个 subscriber；hotkey subscriber 收到新
 trigger/cancel binding 后发给 runtime，runtime 同步替换 `TrackerSet`，并通过
 `daemon::hotkey_input` 更新 `Suppressor`。UDS `reload_config` 复用同一个 parse +
-broadcast 入口；profile / ASR provider / post components 在下一次录音开始时生效。
+broadcast 入口；profile / ASR provider / post components 不靠 watcher 广播，在下一次录音开始时同步读最新文件并生效。
 
 ## 当前实现状态
 

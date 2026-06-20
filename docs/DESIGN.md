@@ -335,7 +335,7 @@ pub enum AsrError {
 **错误处理策略**：
 - **不自动重试**。用户操作可见可重复（再按一次 F16），自动重试反而隐藏失败、增加调试难度
 - **dispatch 只在 `Final`/`Segment` 拼完才写剪贴板**，没收到末段就不上屏（部分识别上屏是 bug）
-- **finalize 等待时间是 provider 私有参数**（`asr/<provider>.toml.finalize_timeout_ms`），默认 12s；正常 final 应在 send last 后 < 1s，12s 只是给罕见 server 长尾留 budget
+- **finalize 等待时间是 provider 私有参数**（`asr/<provider>.toml.finalize_timeout_ms`），默认值由各 provider 自己定：Doubao 默认 12s，Apple 默认 5s；正常 final 应在 send last 后 < 1s，长 timeout 只是给罕见 provider 长尾留 budget
 - **`AsrError::Canceled` 静默处理**，voice 模块不报 stderr、不发 error overlay
 
 #### 各 provider 怎么映射
@@ -843,7 +843,7 @@ reload.rs
 
 #### 实现要点
 
-- **监听目录而非文件**（[§5 不变量 #4](#5-不变量与历史教训必读)）：编辑器保存常做 atomic rename（inode 替换），监听文件本身会丢事件
+- **监听目录而非文件**（[§5 不变量 #4](#5-不变量与历史教训必读)）：编辑器保存常做 atomic rename（inode 替换），监听文件本身会丢事件。当前自动 reload 只把 `config.toml` 和 `theme/*.toml` 视为触发源；`profile/*.toml`、`asr/*.toml` 和 `post/**/*.toml` 不触发 broadcast，但下一次录音开始会同步读最新文件
 - **150ms debounce**：编辑器一次保存常触发 2-3 条事件，合并掉
 - **parse 失败保留旧值**：只打日志 `[reload] parse failed, keeping previous: ...`，不让 watch::Sender 发空值
 - **subscriber 自带 diff**：每个 subscriber 缓存 `prev`，只在自己关心的字段变化时才动作，避免无关字段保存导致的视觉抖动

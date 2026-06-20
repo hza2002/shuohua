@@ -110,9 +110,11 @@ async fn handle_client(
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     let (tx, mut rx) = mpsc::channel::<Event>(CLIENT_QUEUE);
-    let cancel = CancellationToken::new();
+    let client_cancel = CancellationToken::new();
+    let forwarder_cancel = CancellationToken::new();
 
-    let writer_cancel = cancel.clone();
+    let writer_cancel = client_cancel.clone();
+    let writer_forwarder_cancel = forwarder_cancel.clone();
     let writer = tokio::spawn(async move {
         loop {
             let event = tokio::select! {
@@ -131,6 +133,7 @@ async fn handle_client(
             };
             if writer.write_all(line.as_bytes()).await.is_err() {
                 writer_cancel.cancel();
+                writer_forwarder_cancel.cancel();
                 break;
             }
         }
@@ -141,7 +144,7 @@ async fn handle_client(
     let mut graceful_close = false;
     loop {
         let line = tokio::select! {
-            _ = cancel.cancelled() => break,
+            _ = client_cancel.cancelled() => break,
             line = lines.next_line() => {
                 let Some(line) = line? else { break };
                 line
@@ -158,7 +161,8 @@ async fn handle_client(
                         msg: e.to_string(),
                     },
                 ) {
-                    cancel.cancel();
+                    client_cancel.cancel();
+                    forwarder_cancel.cancel();
                     break;
                 }
                 continue;
@@ -170,10 +174,16 @@ async fn handle_client(
                 subscribed = true;
                 let (snapshot, rx) = state.subscribe_with_snapshot();
                 if !send_or_drop(&tx, snapshot_event(snapshot)) {
-                    cancel.cancel();
+                    client_cancel.cancel();
+                    forwarder_cancel.cancel();
                     break;
                 }
-                state_forwarder = Some(spawn_state_forwarder(rx, tx.clone(), cancel.clone()));
+                state_forwarder = Some(spawn_state_forwarder(
+                    rx,
+                    tx.clone(),
+                    forwarder_cancel.clone(),
+                    client_cancel.clone(),
+                ));
             }
             Command::Subscribe => {}
             Command::GetHistory {
@@ -185,7 +195,8 @@ async fn handle_client(
                     read_history(limit, before.as_deref(), query.as_deref()).await,
                 );
                 if !send_or_drop(&tx, event) {
-                    cancel.cancel();
+                    client_cancel.cancel();
+                    forwarder_cancel.cancel();
                     break;
                 }
             }
@@ -200,7 +211,8 @@ async fn handle_client(
                         recording_id: snapshot.recording_id,
                     },
                 ) {
-                    cancel.cancel();
+                    client_cancel.cancel();
+                    forwarder_cancel.cancel();
                     break;
                 }
             }
@@ -215,7 +227,8 @@ async fn handle_client(
                         recording_id: snapshot.recording_id,
                     },
                 ) {
-                    cancel.cancel();
+                    client_cancel.cancel();
+                    forwarder_cancel.cancel();
                     break;
                 }
                 let _ = control.shutdown.send(true);
@@ -230,7 +243,8 @@ async fn handle_client(
                             path: crate::config::default_path().display().to_string(),
                         },
                     ) {
-                        cancel.cancel();
+                        client_cancel.cancel();
+                        forwarder_cancel.cancel();
                         break;
                     }
                 }
@@ -243,7 +257,8 @@ async fn handle_client(
                             msg: e.to_string(),
                         },
                     ) {
-                        cancel.cancel();
+                        client_cancel.cancel();
+                        forwarder_cancel.cancel();
                         break;
                     }
                 }
@@ -257,7 +272,8 @@ async fn handle_client(
                         msg: "recording control over IPC is not supported".to_string(),
                     },
                 ) {
-                    cancel.cancel();
+                    client_cancel.cancel();
+                    forwarder_cancel.cancel();
                     break;
                 }
             }
@@ -265,9 +281,10 @@ async fn handle_client(
     }
 
     if !graceful_close {
-        cancel.cancel();
+        client_cancel.cancel();
+        forwarder_cancel.cancel();
     } else if state_forwarder.is_some() {
-        cancel.cancel();
+        forwarder_cancel.cancel();
     }
     if let Some(task) = state_forwarder {
         let _ = task.await;
@@ -280,18 +297,20 @@ async fn handle_client(
 fn spawn_state_forwarder(
     mut rx: tokio::sync::broadcast::Receiver<StateEvent>,
     tx: mpsc::Sender<Event>,
-    cancel: CancellationToken,
+    forwarder_cancel: CancellationToken,
+    client_cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             let event = tokio::select! {
-                _ = cancel.cancelled() => break,
+                _ = forwarder_cancel.cancelled() => break,
                 event = rx.recv() => event,
             };
             match event {
                 Ok(event) => {
                     if !send_or_drop(&tx, event.into()) {
-                        cancel.cancel();
+                        client_cancel.cancel();
+                        forwarder_cancel.cancel();
                         break;
                     }
                 }
@@ -305,7 +324,8 @@ fn spawn_state_forwarder(
                             msg: format!("client lagged by {n} events"),
                         },
                     ) {
-                        cancel.cancel();
+                        client_cancel.cancel();
+                        forwarder_cancel.cancel();
                         break;
                     }
                 }
@@ -657,8 +677,14 @@ trigger = "f16"
     async fn state_forwarder_stops_when_client_disconnects() {
         let (tx, rx) = mpsc::channel::<Event>(1);
         let (state_tx, state_rx) = tokio::sync::broadcast::channel::<StateEvent>(1);
-        let cancel = CancellationToken::new();
-        let task = spawn_state_forwarder(state_rx, tx.clone(), cancel.clone());
+        let forwarder_cancel = CancellationToken::new();
+        let client_cancel = CancellationToken::new();
+        let task = spawn_state_forwarder(
+            state_rx,
+            tx.clone(),
+            forwarder_cancel.clone(),
+            client_cancel.clone(),
+        );
 
         drop(rx);
         let _ = state_tx.send(StateEvent::StatsChanged {
@@ -671,7 +697,8 @@ trigger = "f16"
             .unwrap()
             .unwrap();
 
-        assert!(cancel.is_cancelled());
+        assert!(forwarder_cancel.is_cancelled());
+        assert!(client_cancel.is_cancelled());
     }
 
     #[tokio::test]
@@ -683,8 +710,14 @@ trigger = "f16"
         })
         .unwrap();
         let (state_tx, state_rx) = tokio::sync::broadcast::channel::<StateEvent>(1);
-        let cancel = CancellationToken::new();
-        let task = spawn_state_forwarder(state_rx, tx.clone(), cancel.clone());
+        let forwarder_cancel = CancellationToken::new();
+        let client_cancel = CancellationToken::new();
+        let task = spawn_state_forwarder(
+            state_rx,
+            tx.clone(),
+            forwarder_cancel.clone(),
+            client_cancel.clone(),
+        );
 
         let _ = state_tx.send(StateEvent::StatsChanged {
             dur_ms: 1,
@@ -696,7 +729,8 @@ trigger = "f16"
             .unwrap()
             .unwrap();
 
-        assert!(cancel.is_cancelled());
+        assert!(forwarder_cancel.is_cancelled());
+        assert!(client_cancel.is_cancelled());
     }
 
     #[tokio::test]

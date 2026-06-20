@@ -6,7 +6,16 @@
 
 ```
 src/
-├── main.rs                              # clap 入口；smart fallback；--daemon 跑 AppKit + tokio daemon；组装 hotkey/voice/reload
+├── main.rs                              # clap 入口；--daemon / 子命令 / smart fallback 分发
+├── daemon/
+│   ├── mod.rs                           # daemon 对 main 的公开入口 re-export
+│   ├── fallback.rs                      # shuo 无 daemon 时智能启动 --daemon，再进入 TUI
+│   ├── lock.rs                          # daemon single-instance flock
+│   ├── process.rs                       # daemon 进程 bootstrap：log/config/i18n/overlay/tokio thread
+│   ├── runtime.rs                       # tokio daemon 主循环：IPC/reload/hotkey/session lifecycle 编排
+│   ├── hotkey_input.rs                  # RawEvent pipe bridge + Suppressor binding/cancel-active 更新
+│   ├── active_session.rs                # active recording task 的 Stop/Cancel/finished 小封装
+│   └── session_start.rs                 # profile/post/asr → SessionParams；startup error → i18n overlay error
 ├── cli/
 │   ├── mod.rs                           # clap 子命令分发
 │   ├── doctor.rs                        # shuo doctor：本地配置诊断；--runtime 显式跑 ASR/LLM 可运行性检查入口
@@ -37,6 +46,7 @@ src/
 ├── reload.rs                             # notify watcher + watch::Sender 广播；overlay/i18n/hotkey subscriber；UDS 手动 reload 复用同一路径
 ├── platform/
 │   ├── mod.rs                           # shared OS capability namespace
+│   ├── daemon.rs                        # DaemonPlatform adapter：frontmost app + hotkey event tap 平台边界
 │   └── macos/
 │       ├── mod.rs                       # macOS shared adapters
 │       ├── clipboard.rs                 # NSPasteboard 写文本
@@ -123,7 +133,37 @@ src/
 文件名、显示名、TOML 结构和 palette 引用，然后生成嵌入 binary 的稳定排序 registry；
 新增内置主题只需增加一个合法 TOML 文件。
 
-数据流：键盘事件 → CGEventTap 回调（Default 模式，可吞）→ 解码成 4 字节 `RawEvent`（含 `EventKind` + `keycode` + 8-bit `ModMask`）→ pipe → mpsc → `trigger_tracker` / `cancel_tracker` 分别 `on_event(ev, Instant::now())` → tokio main loop。回调里同步问 `Mutex<Suppressor>` 决定 `CallbackResult::Drop` / `Keep`，suppress `[hotkey].trigger`，并在 recording task 存活期间 suppress `[hotkey].cancel`；纯键 / combo 采用 reserved 语义，吞 key 部分的 down + 配对 up（`:double` 的第一次候选也吞，§5 不变量 8 保证 reload 中途换 binding 也安全），modifier-only 不吞任何事件（modifier 太常用，吞了破坏太多）。`Tracker` 内部分三个 sub-machine：纯键 / combo 走"KeyDown 时 mods 精确匹配 + auto-repeat 去抖"；modifier-only 走"FlagsChanged 检测 clean tap"（500ms hold 阈值 + 中间无普通键 + 中间无额外 modifier）；`:double` 后缀在 `register_tap` 用 400ms 窗口判定。`trigger` 第一次命中 = toggle ON 瞬间取一次 `frontmost_app`，按 `config.toml` 的 `[profile]` 路由选定 profile；profile 的 `[asr]` 决定 ASR provider、hotwords 和 provider 字段覆盖，`[post].chain` 再引用 `post/rule/*.toml` / `post/llm/*.toml` 组件并应用 `[post.llm.<name>]` 浅覆盖；spawn `finish::run_recording` 任务：cpal stream → `DoubaoSession.send_pcm` 流式推、`AsrEvent::Segment` 累积、`StateStore` 同步状态、`OverlayHandle` 推 UI 命令、UDS server fanout 给 TUI。`trigger` 第二次命中 = oneshot 通知 task 收尾：toggle OFF 瞬间再取一次 `frontmost_app` 只作为 prompt 变量，不重新选择 profile；drain `stop_delay_ms` 尾音 → send `is_last` → 等 Done（provider 私有 `finalize_timeout_ms`，Doubao 默认 12s）→ segments 直接 concat（provider 自带分隔） → 已选定的 post chain（执行时 overlay 显示 Thinking；单步失败/超时跳过 + meta 行 notice 黄字 3s + pipeline trace；致命错误经 text 区 error 红字反馈并跳过 dispatch）→ 剪贴板 + Cmd+V → monthly history JSONL 落一行 → `history_appended` 推给 TUI。provider 未发 `Done` 就关闭事件流，或正常录音/收尾阶段 `send_pcm` 失败时，voice 保留已确认 segment 到 error history 并跳过 dispatch；history append 自身失败时改发 UDS `error(kind=history_append)` + overlay Notice，不改变已经完成的输出。TUI 主循环按 `voice::meter::METER_INTERVAL_MS`（50ms）绘制，并在帧间 drain IPC/key event，避免 audio meter 事件堆满 per-client queue；IPC queue full warn 做 1s 节流，只作为异常诊断信号。配置热重载：notify watcher 监听 `~/.config/shuohua/` → 通过 `watch::Sender` 广播给 overlay / i18n / hotkey 三个 subscriber；hotkey subscriber 收到新 trigger/cancel binding 时同步更新两个 `Tracker`，并把 trigger/cancel 写入 `Suppressor`；UDS `reload_config` 复用同一个 parse + broadcast 入口；profile / ASR provider / post components 在下一次录音开始时生效。
+数据流：`daemon::process` 初始化 log/config/i18n/overlay 后，在 tokio 线程运行
+`daemon::runtime`。键盘事件由 `platform::daemon::DaemonPlatform` 当前的 macOS
+实现启动 CGEventTap（Default 模式，可吞）→ 解码成 4 字节 `RawEvent`（含
+`EventKind` + `keycode` + 8-bit `ModMask`）→ pipe →
+`daemon::hotkey_input` bridge → mpsc → runtime 内的 `TrackerSet`。
+CGEventTap 回调里同步问 `Mutex<Suppressor>` 决定 `CallbackResult::Drop` /
+`Keep`，suppress `[hotkey].trigger`，并在 recording task 存活期间 suppress
+`[hotkey].cancel`；纯键 / combo 采用 reserved 语义，吞 key 部分的 down + 配对
+up（`:double` 的第一次候选也吞，§5 不变量 8 保证 reload 中途换 binding 也安全），
+modifier-only 不吞任何事件（modifier 太常用）。`Tracker` 内部分三个
+sub-machine：纯键 / combo 走"KeyDown 时 mods 精确匹配 + auto-repeat 去抖"；
+modifier-only 走"FlagsChanged 检测 clean tap"（500ms hold 阈值 + 中间无普通键
++ 中间无额外 modifier）；`:double` 后缀在 `register_tap` 用 400ms 窗口判定。
+
+`trigger` 第一次命中 = toggle ON：runtime 通过 `DaemonPlatform::frontmost_app`
+取当前 App，上交 `daemon::session_start` 按 `config.toml` 的 `[profile]` 路由选定
+profile；profile 的 `[asr]` 决定 ASR provider、hotwords 和 provider 字段覆盖，
+`[post].chain` 再引用 `post/rule/*.toml` / `post/llm/*.toml` 组件并应用
+`[post.llm.<name>]` 浅覆盖。`session_start` 构造 `SessionParams` 后，runtime
+spawn `finish::run_recording` task；若 profile/post/asr 初始化失败，直接通过
+i18n 文案发 overlay error，不进入录音 task。`trigger` 第二次命中 = active
+session 收到 Stop；cancel hotkey = active session 收到 Cancel，同时 overlay
+`Dismiss` 用于清掉 lingering error/notice。录音 task 内部仍由 voice 层完成：
+cpal stream → provider session → post chain → dispatch → history → StateStore /
+Overlay / UDS fanout。
+
+配置热重载：notify watcher 监听 `~/.config/shuohua/` → 通过 `watch::Sender`
+广播给 overlay / i18n / hotkey 三个 subscriber；hotkey subscriber 收到新
+trigger/cancel binding 后发给 runtime，runtime 同步替换 `TrackerSet`，并通过
+`daemon::hotkey_input` 更新 `Suppressor`。UDS `reload_config` 复用同一个 parse +
+broadcast 入口；profile / ASR provider / post components 在下一次录音开始时生效。
 
 ## 当前实现状态
 
@@ -149,5 +189,11 @@ engine 对 `post` 的全部接触面是：用 `post::AppContext` 作为前台 Ap
 event、stop drain、provider finalize、错误/取消、retained audio 都在
 `engine::run_with_recorder` 内部。`#[cfg(test)] RecordingStream::for_test` 让
 `voice/engine_lifecycle_tests.rs` 不依赖 cpal 即可驱动整个录音生命周期。
+
+daemon 当前的跨平台边界是轻量 adapter，不是完整平台抽象：`platform::daemon`
+只封装 daemon runtime 立刻需要的 `frontmost_app` 和 hotkey event tap 启动。
+后续真正做 Linux / Windows 时，再把 hotkey input、overlay runner、single-instance
+lock、dispatch/autotype 等 OS 能力逐步纳入平台层；在此之前不提前扩 trait，避免
+为未知平台假设过度抽象。
 
 每条路径的详细职责见 [DESIGN.md §4](DESIGN.md#4-目录结构初稿)；关键设计决策见 [DESIGN.md §2](DESIGN.md#2-关键设计决策)。

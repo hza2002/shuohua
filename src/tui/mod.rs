@@ -8,6 +8,7 @@
 //      `Action::Forward` match.
 //   5. Add a footer hint key under `tui.footer_<name>` in i18n strings.
 
+pub mod audio;
 pub mod config_actions;
 pub mod configure;
 pub mod history;
@@ -16,6 +17,7 @@ pub mod page;
 pub mod panes;
 pub mod settings;
 pub mod status;
+pub mod ui;
 
 use std::time::Duration;
 
@@ -114,7 +116,7 @@ pub async fn run() -> Result<()> {
     client.send(&Command::Subscribe).await?;
     client
         .send(&Command::GetHistory {
-            limit: 50,
+            limit: history::HISTORY_PAGE_SIZE,
             before: None,
             query: None,
         })

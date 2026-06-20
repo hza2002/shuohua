@@ -5,28 +5,8 @@ use ratatui::Frame;
 
 use crate::config::theme::TuiTheme;
 use crate::tui::page::Page as _;
+use crate::tui::ui;
 use crate::tui::{App, Page};
-
-mod ui {
-    use ratatui::style::Color;
-
-    use crate::config::theme::TuiTheme;
-
-    fn rgb(value: u32) -> Color {
-        Color::Rgb(
-            ((value >> 16) & 0xff) as u8,
-            ((value >> 8) & 0xff) as u8,
-            (value & 0xff) as u8,
-        )
-    }
-
-    pub fn muted(theme: &TuiTheme) -> Color {
-        rgb(theme.muted)
-    }
-    pub fn highlight(theme: &TuiTheme) -> Color {
-        rgb(theme.highlight)
-    }
-}
 
 pub fn render(frame: &mut Frame, app: &App) {
     let root = Layout::default()

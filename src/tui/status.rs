@@ -9,6 +9,7 @@ use crate::config::theme::TuiTheme;
 use crate::ipc::protocol::{Event, WireState};
 use crate::state::{AudioMeter, SessionMeta, SessionPhase};
 use crate::tui::page::{KeyOutcome, Page};
+use crate::tui::ui;
 
 pub const MAX_METER_HISTORY: usize = 1024;
 
@@ -127,8 +128,10 @@ impl Page for StatusPage {
                 self.dur_ms = *dur_ms;
                 self.words = *words;
             }
-            Event::Partial { text, .. } => self.partial = text.clone(),
-            Event::Segment { text, .. } => {
+            Event::Partial { recording_id, text } if self.matches_recording(recording_id) => {
+                self.partial = text.clone()
+            }
+            Event::Segment { recording_id, text } if self.matches_recording(recording_id) => {
                 self.segments.push(text.clone());
                 self.partial.clear();
             }
@@ -138,22 +141,28 @@ impl Page for StatusPage {
                 duration_ms,
                 text,
                 error,
-                ..
-            } => {
+                recording_id,
+            } if self.matches_recording(recording_id) => {
                 let detail = text.clone().or_else(|| error.clone()).unwrap_or_default();
                 self.pipeline
                     .push(format!("{name} {status} {duration_ms:.1}ms  {detail}"));
             }
-            Event::AudioMeter { meter, .. } => {
+            Event::AudioMeter {
+                recording_id,
+                meter,
+            } if self.matches_recording(recording_id) => {
                 if active {
                     self.meters.push(*meter);
                     self.trim_meters_to_capacity();
                 }
             }
-            Event::SessionMeta { meta, .. } => {
+            Event::SessionMeta { recording_id, meta } if self.matches_recording(recording_id) => {
                 self.session_meta = Some(meta.clone());
             }
-            Event::SessionPhase { phase, .. } => {
+            Event::SessionPhase {
+                recording_id,
+                phase,
+            } if self.matches_recording(recording_id) => {
                 self.session_phase = Some(*phase);
             }
             _ => {}
@@ -173,49 +182,16 @@ impl Page for StatusPage {
     }
 }
 
+impl StatusPage {
+    fn matches_recording(&self, recording_id: &str) -> bool {
+        self.recording_id.as_deref() == Some(recording_id)
+    }
+}
+
 fn parse_time(value: Option<&str>) -> Option<time::OffsetDateTime> {
     value.and_then(|value| {
         time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
     })
-}
-
-mod ui {
-    use ratatui::style::Color;
-
-    use crate::config::theme::TuiTheme;
-
-    fn rgb(value: u32) -> Color {
-        Color::Rgb(
-            ((value >> 16) & 0xff) as u8,
-            ((value >> 8) & 0xff) as u8,
-            (value & 0xff) as u8,
-        )
-    }
-
-    pub fn muted(theme: &TuiTheme) -> Color {
-        rgb(theme.muted)
-    }
-    pub fn accent(theme: &TuiTheme) -> Color {
-        rgb(theme.accent)
-    }
-    pub fn success(theme: &TuiTheme) -> Color {
-        rgb(theme.success)
-    }
-    pub fn warning(theme: &TuiTheme) -> Color {
-        rgb(theme.warning)
-    }
-    pub fn error(theme: &TuiTheme) -> Color {
-        rgb(theme.error)
-    }
-    pub fn info(theme: &TuiTheme) -> Color {
-        rgb(theme.info)
-    }
-    pub fn highlight(theme: &TuiTheme) -> Color {
-        rgb(theme.highlight)
-    }
-    pub fn segment(theme: &TuiTheme) -> Color {
-        rgb(theme.segment)
-    }
 }
 
 fn render_status(frame: &mut Frame, page: &StatusPage, area: Rect, theme: &TuiTheme) {
@@ -675,6 +651,38 @@ mod tests {
         assert!(text.contains("asr apple"));
         assert!(text.contains("chain -"));
         assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn ignores_events_for_stale_recordings() {
+        let mut page = StatusPage::new();
+        page.recording_id = Some("current".to_string());
+
+        page.apply_event(
+            &Event::Partial {
+                recording_id: "old".to_string(),
+                text: "stale".to_string(),
+            },
+            true,
+        );
+        page.apply_event(
+            &Event::Segment {
+                recording_id: "old".to_string(),
+                text: "stale segment".to_string(),
+            },
+            true,
+        );
+        page.apply_event(
+            &Event::AudioMeter {
+                recording_id: "old".to_string(),
+                meter: meter(0.5),
+            },
+            true,
+        );
+
+        assert!(page.partial.is_empty());
+        assert!(page.segments.is_empty());
+        assert!(page.meters.is_empty());
     }
 
     #[test]

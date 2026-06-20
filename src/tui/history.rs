@@ -1,10 +1,8 @@
 use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
+use std::path::Path;
 use std::time::SystemTime;
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -13,9 +11,16 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::config::theme::TuiTheme;
-use crate::ipc::protocol::Event;
-use crate::state::history::{state_dir, HistoryRecord};
+use crate::ipc::protocol::{Command, Event};
+use crate::state::history::HistoryRecord;
+use crate::tui::audio::{
+    audio_info_for_record, delete_audio_path, missing_audio_info_for_record, open_audio_path,
+    reveal_audio_path, AudioInfo, DeleteAudioResult,
+};
 use crate::tui::page::{KeyOutcome, Page};
+use crate::tui::ui;
+
+pub const HISTORY_PAGE_SIZE: usize = 50;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryDetail {
@@ -56,25 +61,6 @@ pub enum Confirm {
     DeleteAudio { record_id: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AudioInfo {
-    pub path: PathBuf,
-    pub size_bytes: Option<u64>,
-    pub modified: Option<SystemTime>,
-}
-
-impl AudioInfo {
-    pub fn exists(&self) -> bool {
-        self.size_bytes.is_some()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeleteAudioResult {
-    Deleted,
-    Missing,
-}
-
 #[derive(Debug)]
 pub struct HistoryPage {
     pub records: Vec<HistoryRecord>,
@@ -84,6 +70,8 @@ pub struct HistoryPage {
     pub searching: bool,
     pub audio_cache: HashMap<String, AudioInfo>,
     pub confirm: Option<Confirm>,
+    pub loading_more: bool,
+    pub has_more: bool,
 }
 
 impl HistoryPage {
@@ -96,6 +84,8 @@ impl HistoryPage {
             searching: false,
             audio_cache: HashMap::new(),
             confirm: None,
+            loading_more: false,
+            has_more: true,
         }
     }
 
@@ -305,20 +295,95 @@ impl HistoryPage {
         self.audio_cache
             .insert(record.id.clone(), audio_info_for_record(record));
     }
+
+    pub fn load_more_outcome(&mut self) -> KeyOutcome {
+        if self.loading_more {
+            return KeyOutcome::status(crate::t!("tui.history.loading_more"));
+        }
+        if !self.has_more {
+            return KeyOutcome::status(crate::t!("tui.history.no_more"));
+        }
+        let Some(oldest) = self.records.last() else {
+            self.loading_more = true;
+            return KeyOutcome::command_and_status(
+                Command::GetHistory {
+                    limit: HISTORY_PAGE_SIZE,
+                    before: None,
+                    query: None,
+                },
+                crate::t!("tui.history.loading_more"),
+            );
+        };
+        self.loading_more = true;
+        KeyOutcome::command_and_status(
+            Command::GetHistory {
+                limit: HISTORY_PAGE_SIZE,
+                before: Some(format_rfc3339(oldest.started_at)),
+                query: None,
+            },
+            crate::t!("tui.history.loading_more"),
+        )
+    }
+
+    fn merge_newest(&mut self, records: Vec<HistoryRecord>) {
+        self.records.clear();
+        for record in records {
+            self.insert_unique(record, true);
+        }
+        self.selected = 0;
+        self.has_more = self.records.len() >= HISTORY_PAGE_SIZE;
+    }
+
+    fn merge_older(&mut self, records: Vec<HistoryRecord>) {
+        self.loading_more = false;
+        self.has_more = records.len() >= HISTORY_PAGE_SIZE;
+        for record in records {
+            self.insert_unique(record, true);
+        }
+        self.selected = self.selected.min(self.records.len().saturating_sub(1));
+    }
+
+    fn insert_unique(&mut self, record: HistoryRecord, append: bool) {
+        if self.records.iter().any(|existing| existing.id == record.id) {
+            return;
+        }
+        self.refresh_audio_cache_for_record(&record);
+        if append {
+            self.records.push(record);
+        } else {
+            self.records.insert(0, record);
+        }
+    }
 }
 
 impl Page for HistoryPage {
     fn apply_event(&mut self, event: &Event, _active: bool) {
         match event {
             Event::HistoryAppended { record } => {
-                self.refresh_audio_cache_for_record(record);
-                self.records.insert(0, (**record).clone());
+                let selected_id = self.selected_record().map(|record| record.id.clone());
+                let was_empty = self.records.is_empty();
+                let inserted = !self.records.iter().any(|existing| existing.id == record.id);
+                self.insert_unique((**record).clone(), false);
+                if let Some(selected_id) = selected_id {
+                    if let Some(position) = self
+                        .filtered()
+                        .iter()
+                        .position(|record| record.id == selected_id)
+                    {
+                        self.selected = position;
+                    }
+                } else if inserted && !was_empty {
+                    self.selected += 1;
+                }
                 self.selected = self.selected.min(self.records.len().saturating_sub(1));
             }
             Event::History { records } => {
-                self.records = records.clone();
-                self.refresh_audio_cache();
-                self.selected = 0;
+                if self.loading_more {
+                    self.merge_older(records.clone());
+                } else {
+                    self.merge_newest(records.clone());
+                    self.refresh_audio_cache();
+                }
             }
             _ => {}
         }
@@ -353,6 +418,7 @@ impl Page for HistoryPage {
             KeyCode::Char('o') => return KeyOutcome::status(self.open_selected_audio()),
             KeyCode::Char('r') => return KeyOutcome::status(self.reveal_selected_audio()),
             KeyCode::Char('d') => return KeyOutcome::status(self.request_delete_audio()),
+            KeyCode::Char('m') => return self.load_more_outcome(),
             _ => {}
         }
         KeyOutcome::none()
@@ -360,39 +426,6 @@ impl Page for HistoryPage {
 
     fn render(&self, frame: &mut Frame, area: Rect, theme: &TuiTheme, _footer_status: &str) {
         render_history(frame, self, area, theme);
-    }
-}
-
-mod ui {
-    use ratatui::style::Color;
-
-    use crate::config::theme::TuiTheme;
-
-    fn rgb(value: u32) -> Color {
-        Color::Rgb(
-            ((value >> 16) & 0xff) as u8,
-            ((value >> 8) & 0xff) as u8,
-            (value & 0xff) as u8,
-        )
-    }
-
-    pub fn fg(theme: &TuiTheme) -> Color {
-        rgb(theme.foreground)
-    }
-    pub fn muted(theme: &TuiTheme) -> Color {
-        rgb(theme.muted)
-    }
-    pub fn accent(theme: &TuiTheme) -> Color {
-        rgb(theme.accent)
-    }
-    pub fn success(theme: &TuiTheme) -> Color {
-        rgb(theme.success)
-    }
-    pub fn warning(theme: &TuiTheme) -> Color {
-        rgb(theme.warning)
-    }
-    pub fn info(theme: &TuiTheme) -> Color {
-        rgb(theme.info)
     }
 }
 
@@ -427,11 +460,22 @@ fn render_history(frame: &mut Frame, page: &HistoryPage, area: Rect, theme: &Tui
         .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
         .split(chunks[1]);
     let records = page.filtered();
-    let items: Vec<ListItem> = records
+    let visible = visible_range_for_selection(
+        page.selected,
+        records.len(),
+        body[0].height.saturating_sub(2) as usize,
+    );
+    let items: Vec<ListItem> = records[visible.clone()]
         .iter()
         .enumerate()
         .map(|(idx, record)| {
-            ListItem::new(history_list_line(page, theme, record, idx == page.selected))
+            let absolute_idx = visible.start + idx;
+            ListItem::new(history_list_line(
+                page,
+                theme,
+                record,
+                absolute_idx == page.selected,
+            ))
         })
         .collect();
     frame.render_widget(
@@ -763,6 +807,21 @@ fn format_system_time(value: SystemTime) -> String {
     format_local_time(datetime)
 }
 
+fn visible_range_for_selection(
+    selected: usize,
+    total: usize,
+    visible_len: usize,
+) -> std::ops::Range<usize> {
+    if total == 0 || visible_len == 0 {
+        return 0..0;
+    }
+    let visible_len = visible_len.min(total);
+    let half = visible_len / 2;
+    let mut start = selected.saturating_sub(half);
+    start = start.min(total - visible_len);
+    start..start + visible_len
+}
+
 fn pipeline_summary(record: &HistoryRecord) -> String {
     if record.pipeline.is_empty() {
         return "-".to_string();
@@ -783,23 +842,11 @@ fn short_app_label(app: Option<&str>) -> String {
 }
 
 fn truncate_display(value: &str, max_chars: usize) -> String {
-    let mut out = value.chars().take(max_chars).collect::<String>();
-    if value.chars().count() > max_chars && max_chars > 0 {
-        out.pop();
-        out.push('…');
-    }
-    out
+    ui::truncate_display(value, max_chars)
 }
 
 fn format_duration(ms: u64) -> String {
-    let seconds = ms / 1000;
-    let minutes = seconds / 60;
-    let hours = minutes / 60;
-    if hours > 0 {
-        format!("{hours}:{:02}:{:02}", minutes % 60, seconds % 60)
-    } else {
-        format!("{:02}:{:02}", minutes, seconds % 60)
-    }
+    ui::format_duration(ms)
 }
 
 fn format_local_time(value: time::OffsetDateTime) -> String {
@@ -812,6 +859,12 @@ fn format_local_time(value: time::OffsetDateTime) -> String {
             &time::format_description::parse("[year]-[month]-[day] [hour]:[minute]:[second]")
                 .expect("valid static time format"),
         )
+        .unwrap_or_else(|_| value.to_string())
+}
+
+fn format_rfc3339(value: time::OffsetDateTime) -> String {
+    value
+        .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| value.to_string())
 }
 
@@ -851,219 +904,50 @@ impl HistorySummary {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Audio helpers (formerly tui/audio.rs). Only HistoryPage needs them.
-// ---------------------------------------------------------------------------
-
-pub fn audio_path_for_record_in_state_dir(state_dir: &Path, recording_id: &str) -> PathBuf {
-    state_dir.join("audio").join(format!("{recording_id}.flac"))
-}
-
-pub fn audio_info_for_record(record: &HistoryRecord) -> AudioInfo {
-    audio_info_for_recording_id_in_state_dir(&state_dir(), &record.id)
-}
-
-pub fn audio_info_for_recording_id_in_state_dir(state_dir: &Path, recording_id: &str) -> AudioInfo {
-    let audio_dir = state_dir.join("audio");
-    let flac = audio_dir.join(format!("{recording_id}.flac"));
-    let m4a = audio_dir.join(format!("{recording_id}.m4a"));
-    let flac_exists = flac.is_file();
-    let m4a_exists = m4a.is_file();
-    match (flac_exists, m4a_exists) {
-        (true, false) => audio_info_for_path(flac),
-        (false, true) => audio_info_for_path(m4a),
-        (true, true) => {
-            tracing::warn!(
-                recording_id,
-                flac = %flac.display(),
-                m4a = %m4a.display(),
-                "multiple retained audio files found"
-            );
-            missing_audio_info(flac)
-        }
-        (false, false) => missing_audio_info(flac),
-    }
-}
-
-pub fn missing_audio_info_for_record(record: &HistoryRecord) -> AudioInfo {
-    missing_audio_info(audio_path_for_record_in_state_dir(&state_dir(), &record.id))
-}
-
-fn missing_audio_info(path: PathBuf) -> AudioInfo {
-    AudioInfo {
-        path,
-        size_bytes: None,
-        modified: None,
-    }
-}
-
-pub fn audio_info_for_path(path: PathBuf) -> AudioInfo {
-    match fs::metadata(&path) {
-        Ok(metadata) if metadata.is_file() => AudioInfo {
-            path,
-            size_bytes: Some(metadata.len()),
-            modified: metadata.modified().ok(),
-        },
-        _ => AudioInfo {
-            path,
-            size_bytes: None,
-            modified: None,
-        },
-    }
-}
-
-pub fn delete_audio_path(path: &Path) -> Result<DeleteAudioResult> {
-    ensure_audio_path(path)?;
-    match fs::remove_file(path) {
-        Ok(()) => Ok(DeleteAudioResult::Deleted),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(DeleteAudioResult::Missing),
-        Err(e) => Err(e).with_context(|| format!("delete audio {}", path.display())),
-    }
-}
-
-fn open_audio_path(path: &Path) -> Result<()> {
-    ensure_existing_audio(path)?;
-    open_with_args(&[path.as_os_str()])
-}
-
-fn reveal_audio_path(path: &Path) -> Result<()> {
-    ensure_existing_audio(path)?;
-    open_with_args(&[std::ffi::OsStr::new("-R"), path.as_os_str()])
-}
-
-fn open_with_args(args: &[&std::ffi::OsStr]) -> Result<()> {
-    ProcessCommand::new("/usr/bin/open")
-        .args(args)
-        .spawn()
-        .context("launch open")?;
-    Ok(())
-}
-
-fn ensure_existing_audio(path: &Path) -> Result<()> {
-    ensure_audio_path(path)?;
-    if !path.is_file() {
-        bail!("audio file is missing: {}", path.display());
-    }
-    Ok(())
-}
-
-fn ensure_audio_path(path: &Path) -> Result<()> {
-    if !matches!(
-        path.extension().and_then(|ext| ext.to_str()),
-        Some("flac" | "m4a")
-    ) {
-        bail!(
-            "refusing to operate on unsupported audio path: {}",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::history::{
+        AsrHistory, AsrSessionHistory, HistoryStatus, PipelineStepHistory, PipelineStepStatus,
+    };
 
-    #[test]
-    fn resolves_lossless_audio_by_recording_id() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::new()));
-        let audio_dir = dir.join("audio");
-        fs::create_dir_all(&audio_dir).unwrap();
-        let path = audio_dir.join("01HXYZ.flac");
-        fs::write(&path, [0u8; 12]).unwrap();
-
-        let info = audio_info_for_recording_id_in_state_dir(&dir, "01HXYZ");
-
-        assert_eq!(info.path, path);
-        assert!(info.exists());
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn resolves_compact_audio_by_recording_id() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::new()));
-        let audio_dir = dir.join("audio");
-        fs::create_dir_all(&audio_dir).unwrap();
-        let path = audio_dir.join("01HXYZ.m4a");
-        fs::write(&path, [0u8; 12]).unwrap();
-
-        let info = audio_info_for_recording_id_in_state_dir(&dir, "01HXYZ");
-
-        assert_eq!(info.path, path);
-        assert!(info.exists());
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn duplicate_formats_are_reported_as_unavailable() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::new()));
-        let audio_dir = dir.join("audio");
-        fs::create_dir_all(&audio_dir).unwrap();
-        fs::write(audio_dir.join("01HXYZ.flac"), [0u8; 12]).unwrap();
-        fs::write(audio_dir.join("01HXYZ.m4a"), [0u8; 12]).unwrap();
-
-        let info = audio_info_for_recording_id_in_state_dir(&dir, "01HXYZ");
-
-        assert!(!info.exists());
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn audio_info_reports_existing_file_size() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::new()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("01HXYZ.wav");
-        fs::write(&path, [0u8; 12]).unwrap();
-
-        let info = audio_info_for_path(path.clone());
-
-        assert_eq!(info.path, path);
-        assert_eq!(info.size_bytes, Some(12));
-        assert!(info.modified.is_some());
-
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn audio_info_reports_missing_file() {
-        let path =
-            std::env::temp_dir().join(format!("shuohua-audio-missing-{}.wav", ulid::Ulid::new()));
-
-        let info = audio_info_for_path(path.clone());
-
-        assert_eq!(info.path, path);
-        assert!(!info.exists());
-        assert_eq!(info.size_bytes, None);
-        assert_eq!(info.modified, None);
-    }
-
-    #[test]
-    fn delete_audio_path_removes_supported_audio_file() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-delete-{}", ulid::Ulid::new()));
-        fs::create_dir_all(&dir).unwrap();
-        let audio = dir.join("01HXYZ.flac");
-        let jsonl = dir.join("2026-06.jsonl");
-        fs::write(&audio, [0u8; 4]).unwrap();
-        fs::write(&jsonl, "{}\n").unwrap();
-
-        assert_eq!(
-            delete_audio_path(&audio).unwrap(),
-            DeleteAudioResult::Deleted
-        );
-
-        assert!(!audio.exists());
-        assert!(jsonl.exists());
-
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn delete_audio_path_refuses_unsupported_extension() {
-        let path = std::env::temp_dir().join(format!("shuohua-audio-{}.wav", ulid::Ulid::new()));
-
-        let err = delete_audio_path(&path).unwrap_err();
-
-        assert!(err.to_string().contains("unsupported audio"));
+    fn sample_record(id: &str, day: u8) -> HistoryRecord {
+        let started_at = time::Date::from_calendar_date(2026, time::Month::June, day)
+            .unwrap()
+            .with_hms(12, 0, 0)
+            .unwrap()
+            .assume_utc();
+        HistoryRecord {
+            version: 1,
+            id: id.to_string(),
+            started_at,
+            ended_at: started_at + time::Duration::seconds(3),
+            duration_ms: 3000,
+            status: HistoryStatus::Submitted,
+            app: Some("com.example.App".to_string()),
+            text: format!("text {id}"),
+            text_stats: crate::text_stats::compute(&format!("text {id}")),
+            asr: AsrHistory {
+                provider: "apple".to_string(),
+                text: format!("asr {id}"),
+                duration_ms: 3000,
+                audio_ms: 3000,
+                sessions: vec![AsrSessionHistory {
+                    text: format!("asr {id}"),
+                    started_at,
+                    ended_at: started_at + time::Duration::seconds(3),
+                    audio_ms: 3000,
+                }],
+            },
+            pipeline: vec![PipelineStepHistory {
+                name: "filler".to_string(),
+                status: PipelineStepStatus::Ok,
+                duration_ms: 1.0,
+                text: Some(format!("text {id}")),
+                error: None,
+            }],
+            error: None,
+        }
     }
 
     #[test]
@@ -1087,5 +971,146 @@ mod tests {
         assert_eq!(truncate_display("Ghostty", 9), "Ghostty");
         assert_eq!(truncate_display("Ghostty", 10), "Ghostty");
         assert_eq!(truncate_display("VeryLongApp", 9), "VeryLong…");
+    }
+
+    #[test]
+    fn visible_range_keeps_selected_near_middle() {
+        assert_eq!(visible_range_for_selection(0, 100, 9), 0..9);
+        assert_eq!(visible_range_for_selection(4, 100, 9), 0..9);
+        assert_eq!(visible_range_for_selection(20, 100, 9), 16..25);
+        assert_eq!(visible_range_for_selection(98, 100, 9), 91..100);
+    }
+
+    #[test]
+    fn page_requests_older_history_from_oldest_loaded_record() {
+        let mut page = HistoryPage::new();
+        page.records = vec![
+            sample_record("01HXYZABCDEF0123456789AAA1", 3),
+            sample_record("01HXYZABCDEF0123456789AAA0", 2),
+        ];
+
+        let outcome = page.load_more_outcome();
+
+        assert_eq!(
+            outcome.command,
+            Some(crate::ipc::protocol::Command::GetHistory {
+                limit: HISTORY_PAGE_SIZE,
+                before: Some("2026-06-02T12:00:00Z".to_string()),
+                query: None,
+            })
+        );
+    }
+
+    #[test]
+    fn appending_history_deduplicates_existing_records() {
+        let mut page = HistoryPage::new();
+        let record = sample_record("01HXYZABCDEF0123456789AAA1", 3);
+        page.apply_event(
+            &Event::History {
+                records: vec![record.clone()],
+            },
+            true,
+        );
+
+        page.apply_event(
+            &Event::HistoryAppended {
+                record: Box::new(record),
+            },
+            true,
+        );
+
+        assert_eq!(page.records.len(), 1);
+    }
+
+    #[test]
+    fn appending_history_keeps_existing_selection_on_same_record() {
+        let mut page = HistoryPage::new();
+        page.records = vec![
+            sample_record("01HXYZABCDEF0123456789AAA2", 4),
+            sample_record("01HXYZABCDEF0123456789AAA1", 3),
+        ];
+        page.selected = 1;
+
+        page.apply_event(
+            &Event::HistoryAppended {
+                record: Box::new(sample_record("01HXYZABCDEF0123456789AAA3", 5)),
+            },
+            true,
+        );
+
+        assert_eq!(page.records[page.selected].id, "01HXYZABCDEF0123456789AAA1");
+    }
+
+    #[test]
+    fn appending_history_preserves_filtered_selection_when_new_record_does_not_match() {
+        let mut page = HistoryPage::new();
+        page.records = vec![
+            sample_record("01HXYZABCDEF0123456789AAA2", 4),
+            sample_record("01HXYZABCDEF0123456789AAA1", 3),
+        ];
+        page.search = "AAA1".to_string();
+        page.selected = 0;
+
+        page.apply_event(
+            &Event::HistoryAppended {
+                record: Box::new(sample_record("01HXYZABCDEF0123456789AAA3", 5)),
+            },
+            true,
+        );
+
+        assert_eq!(
+            page.selected_record().unwrap().id,
+            "01HXYZABCDEF0123456789AAA1"
+        );
+    }
+
+    #[test]
+    fn initial_history_preserves_server_order() {
+        let mut page = HistoryPage::new();
+        page.apply_event(
+            &Event::History {
+                records: vec![
+                    sample_record("01HXYZABCDEF0123456789AAA2", 4),
+                    sample_record("01HXYZABCDEF0123456789AAA1", 3),
+                    sample_record("01HXYZABCDEF0123456789AAA0", 2),
+                ],
+            },
+            true,
+        );
+
+        assert_eq!(page.records[0].id, "01HXYZABCDEF0123456789AAA2");
+        assert_eq!(page.records[2].id, "01HXYZABCDEF0123456789AAA0");
+    }
+
+    #[test]
+    fn load_more_from_empty_history_marks_request_in_flight() {
+        let mut page = HistoryPage::new();
+
+        let outcome = page.load_more_outcome();
+
+        assert!(page.loading_more);
+        assert!(matches!(
+            outcome.command,
+            Some(crate::ipc::protocol::Command::GetHistory { before: None, .. })
+        ));
+    }
+
+    #[test]
+    fn loading_more_appends_and_deduplicates_older_records() {
+        let mut page = HistoryPage::new();
+        let newest = sample_record("01HXYZABCDEF0123456789AAA2", 4);
+        let duplicate = sample_record("01HXYZABCDEF0123456789AAA1", 3);
+        page.records = vec![newest, duplicate.clone()];
+        page.loading_more = true;
+
+        page.apply_event(
+            &Event::History {
+                records: vec![duplicate, sample_record("01HXYZABCDEF0123456789AAA0", 2)],
+            },
+            true,
+        );
+
+        assert_eq!(page.records.len(), 3);
+        assert_eq!(page.records[2].id, "01HXYZABCDEF0123456789AAA0");
     }
 }

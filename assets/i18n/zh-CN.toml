@@ -125,7 +125,7 @@ tab_history = "2 历史"
 tab_settings = "3 配置"
 footer = "Tab/Shift-Tab 翻页  1/2/3 跳转  j/k 移动  q 退出    {page_keys}    {status}"
 footer_status = ""
-footer_history = "/ 搜索  Enter/y 复制  Y 复制 ASR  o 打开音频  r Finder  d 删除音频"
+footer_history = "/ 搜索  m 更多  Enter/y 复制  Y 复制 ASR  o 打开音频  r Finder  d 删除音频"
 footer_settings = "h/l 焦点  j/k 移动  n 新建 LLM  o 编辑  r Finder  v 校验  R 重载"
 current = "当前"
 state_idle = "空闲"
@@ -211,6 +211,10 @@ error_message = "{kind}：{error}"
 [tui.history.copy]
 final_ok = "已复制选中历史文本"
 asr_ok = "已复制选中 ASR 文本"
+
+[tui.history]
+loading_more = "正在加载更早历史..."
+no_more = "没有更早历史"
 
 [tui.history.pipeline]
 empty = "没有流水线步骤"

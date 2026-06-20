@@ -125,7 +125,7 @@ tab_history = "2 History"
 tab_settings = "3 Configure"
 footer = "Tab/Shift-Tab pages  1/2/3 jump  j/k move  q quit    {page_keys}    {status}"
 footer_status = ""
-footer_history = "/ search  Enter/y copy  Y copy ASR  o open audio  r reveal  d delete audio"
+footer_history = "/ search  m more  Enter/y copy  Y copy ASR  o open audio  r reveal  d delete audio"
 footer_settings = "h/l focus  j/k move  n new LLM  o edit  r reveal  v validate  R reload"
 current = "Current"
 state_idle = "Idle"
@@ -211,6 +211,10 @@ error_message = "{kind}: {error}"
 [tui.history.copy]
 final_ok = "copied selected history text"
 asr_ok = "copied selected ASR text"
+
+[tui.history]
+loading_more = "loading older history..."
+no_more = "no older history loaded"
 
 [tui.history.pipeline]
 empty = "no pipeline steps"

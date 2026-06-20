@@ -15,6 +15,7 @@ use crate::ipc::protocol::{Command, Event};
 use crate::tui::config_actions;
 use crate::tui::page::{KeyOutcome, Page};
 use crate::tui::settings::{self, SettingsRow};
+use crate::tui::ui;
 
 // ---- types ----
 
@@ -1162,43 +1163,7 @@ fn run_doctor() -> DoctorState {
     }
 }
 
-// ---- shared UI helpers (mirrored from panes.rs; will dedupe after all pages split) ----
-
-mod ui {
-    use ratatui::style::Color;
-
-    use crate::config::theme::TuiTheme;
-
-    fn rgb(value: u32) -> Color {
-        Color::Rgb(
-            ((value >> 16) & 0xff) as u8,
-            ((value >> 8) & 0xff) as u8,
-            (value & 0xff) as u8,
-        )
-    }
-
-    pub fn fg(theme: &TuiTheme) -> Color {
-        rgb(theme.foreground)
-    }
-    pub fn muted(theme: &TuiTheme) -> Color {
-        rgb(theme.muted)
-    }
-    pub fn accent(theme: &TuiTheme) -> Color {
-        rgb(theme.accent)
-    }
-    pub fn success(theme: &TuiTheme) -> Color {
-        rgb(theme.success)
-    }
-    pub fn warning(theme: &TuiTheme) -> Color {
-        rgb(theme.warning)
-    }
-    pub fn error(theme: &TuiTheme) -> Color {
-        rgb(theme.error)
-    }
-    pub fn segment(theme: &TuiTheme) -> Color {
-        rgb(theme.segment)
-    }
-}
+// ---- shared UI helpers ----
 
 fn char_display_width(ch: char) -> usize {
     if ch.is_ascii() {

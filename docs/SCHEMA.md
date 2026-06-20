@@ -15,10 +15,14 @@
 {"op":"reload_config"}
 {"op":"get_history","limit":50,"before":"2026-06-12T22:00:00Z","query":"Rust"}
 {"op":"daemon_status"}          // 返回 PID / 启动时间 / 在录音否（shuo status 用）
+{"op":"start_recording"}        // 预留：当前 daemon 返回 unsupported
+{"op":"stop_recording"}         // 预留：当前 daemon 返回 unsupported
+{"op":"cancel_recording"}       // 预留：当前 daemon 返回 unsupported
 ```
 
-当前 UDS 不提供 start/stop/cancel 录音控制。录音控制只走全局 hotkey；TUI/GUI
-当前定位是状态、历史、配置查看与维护工具。
+当前 UDS 协议类型预留 start/stop/cancel 录音控制，但 daemon 仍返回
+`error(kind="unsupported")`。录音控制当前只走全局 hotkey；TUI/GUI 当前定位是状态、
+历史、配置查看与维护工具。
 
 ### 1.2 daemon → TUI（事件）
 

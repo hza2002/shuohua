@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use std::time::{Duration, Instant};
 
 use crate::daemon::active_session::{ActiveSession, ShutdownStopResult};
@@ -40,7 +40,7 @@ async fn run_daemon_with_platform(
     let listener = crate::ipc::server::bind_default().await?;
     let socket_path = crate::ipc::server::default_socket_path();
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
-    tokio::spawn(crate::ipc::server::run(
+    let mut ipc_task = tokio::spawn(crate::ipc::server::run(
         listener,
         state_store.clone(),
         crate::ipc::server::ServerControl {
@@ -68,6 +68,10 @@ async fn run_daemon_with_platform(
 
     loop {
         tokio::select! {
+            biased;
+            ipc_result = &mut ipc_task => {
+                return Err(classify_ipc_exit(ipc_result));
+            }
             changed = shutdown_rx.changed() => {
                 if changed.is_ok() && *shutdown_rx.borrow_and_update() {
                     tracing::info!("shutdown requested over IPC");
@@ -144,6 +148,17 @@ async fn run_daemon_with_platform(
     }
 }
 
+fn classify_ipc_exit(
+    result: std::result::Result<Result<()>, tokio::task::JoinError>,
+) -> anyhow::Error {
+    match result {
+        Ok(Ok(())) => anyhow!("IPC server exited unexpectedly"),
+        Ok(Err(error)) => error.context("IPC server failed"),
+        Err(error) if error.is_panic() => anyhow!("IPC server task panicked: {error}"),
+        Err(error) => anyhow!("IPC server task failed: {error}"),
+    }
+}
+
 fn clear_finished_session(active: &mut Option<ActiveSession>, hotkey_input: &HotkeyInput) {
     if active.as_ref().is_some_and(ActiveSession::is_finished) {
         *active = None;
@@ -177,6 +192,51 @@ mod tests {
     use super::*;
     use crate::voice::SessionControl;
     use std::time::Duration;
+
+    #[test]
+    fn ipc_server_unexpected_ok_is_fatal() {
+        let error = classify_ipc_exit(Ok(Ok(())));
+
+        assert!(
+            error.to_string().contains("IPC server exited unexpectedly"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn ipc_server_error_keeps_context() {
+        let error = classify_ipc_exit(Ok(Err(anyhow::anyhow!("accept failed"))));
+
+        assert!(error.to_string().contains("IPC server failed"), "{error:#}");
+        assert!(format!("{error:#}").contains("accept failed"), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn ipc_server_panic_is_fatal() {
+        let join = tokio::spawn(async {
+            panic!("boom");
+            #[allow(unreachable_code)]
+            Ok(())
+        });
+
+        let error = classify_ipc_exit(join.await);
+
+        assert!(error.to_string().contains("panicked"), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn ipc_ready_wins_over_shutdown_ready() {
+        let mut shutdown = std::future::ready(());
+        let mut ipc = std::future::ready(());
+
+        let winner = tokio::select! {
+            biased;
+            _ = &mut ipc => "ipc",
+            _ = &mut shutdown => "shutdown",
+        };
+
+        assert_eq!(winner, "ipc");
+    }
 
     #[tokio::test]
     async fn shutdown_active_session_sends_stop_and_waits_for_completion() {

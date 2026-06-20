@@ -4,8 +4,9 @@ use crate::asr::types::*;
 use crate::config::asr::apple::{load_config_with_overrides, AppleConfig};
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
@@ -261,14 +262,53 @@ fn choose_language(cfg: &AppleConfig, ctx: &SessionCtx) -> String {
 
 fn ensure_helper_binary() -> Result<PathBuf, AsrError> {
     let path = helper_cache_path()?;
+    let lock_path = path.with_extension("lock");
+    ensure_helper_binary_at(&path, &lock_path, HELPER_BYTES)
+}
+
+fn ensure_helper_binary_at(
+    path: &Path,
+    lock_path: &Path,
+    helper_bytes: &[u8],
+) -> Result<PathBuf, AsrError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| AsrError::Server(format!("create helper dir: {e}")))?;
     }
-    let mut file =
-        std::fs::File::create(&path).map_err(|e| AsrError::Server(format!("write helper: {e}")))?;
-    file.write_all(HELPER_BYTES)
+
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .truncate(false)
+        .write(true)
+        .open(lock_path)
+        .map_err(|e| AsrError::Server(format!("open helper lock: {e}")))?;
+    lock_exclusive(&lock).map_err(|e| AsrError::Server(format!("lock helper: {e}")))?;
+    let result = publish_helper_locked(path, helper_bytes);
+    let _ = unlock(&lock);
+    result
+}
+
+fn publish_helper_locked(path: &Path, helper_bytes: &[u8]) -> Result<PathBuf, AsrError> {
+    if file_contents_equal(path, helper_bytes)
+        .map_err(|e| AsrError::Server(format!("read helper: {e}")))?
+    {
+        return Ok(path.to_path_buf());
+    }
+
+    let tmp_path = path.with_file_name(format!(
+        "{}.tmp.{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("apple_helper"),
+        std::process::id()
+    ));
+    let mut file = std::fs::File::create(&tmp_path)
         .map_err(|e| AsrError::Server(format!("write helper: {e}")))?;
+    file.write_all(helper_bytes)
+        .map_err(|e| AsrError::Server(format!("write helper: {e}")))?;
+    file.sync_all()
+        .map_err(|e| AsrError::Server(format!("sync helper: {e}")))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -277,10 +317,50 @@ fn ensure_helper_binary() -> Result<PathBuf, AsrError> {
             .map_err(|e| AsrError::Server(format!("stat helper: {e}")))?
             .permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(&path, perms)
+        std::fs::set_permissions(&tmp_path, perms)
             .map_err(|e| AsrError::Server(format!("chmod helper: {e}")))?;
     }
-    Ok(path)
+    drop(file);
+    match std::fs::rename(&tmp_path, path) {
+        Ok(()) => Ok(path.to_path_buf()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            Err(AsrError::Server(format!("publish helper: {error}")))
+        }
+    }
+}
+
+fn file_contents_equal(path: &Path, expected: &[u8]) -> std::io::Result<bool> {
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let metadata = file.metadata()?;
+    if metadata.len() != expected.len() as u64 {
+        return Ok(false);
+    }
+    let mut body = Vec::with_capacity(expected.len());
+    file.read_to_end(&mut body)?;
+    Ok(body == expected)
+}
+
+fn lock_exclusive(file: &std::fs::File) -> std::io::Result<()> {
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+fn unlock(file: &std::fs::File) -> std::io::Result<()> {
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 fn helper_cache_path() -> Result<PathBuf, AsrError> {
@@ -431,5 +511,23 @@ finalize_timeout_ms = 3000
         };
 
         assert!(provider.runtime_check_notice().is_none());
+    }
+
+    #[test]
+    fn helper_publish_skips_rewrite_when_existing_bytes_match() {
+        let dir = std::env::temp_dir().join(format!("shuohua-helper-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let helper = dir.join("apple_helper");
+        let lock = dir.join("apple_helper.lock");
+        std::fs::write(&helper, HELPER_BYTES).unwrap();
+        let before = std::fs::metadata(&helper).unwrap().modified().unwrap();
+
+        std::thread::sleep(Duration::from_millis(5));
+        let path = ensure_helper_binary_at(&helper, &lock, HELPER_BYTES).unwrap();
+
+        let after = std::fs::metadata(&helper).unwrap().modified().unwrap();
+        assert_eq!(path, helper);
+        assert_eq!(before, after, "matching helper should not be rewritten");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

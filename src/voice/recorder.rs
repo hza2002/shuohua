@@ -14,7 +14,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, SupportedStreamConfig};
+use cpal::{SampleFormat, SizedSample, SupportedStreamConfig};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
@@ -242,30 +242,21 @@ fn build_recorder_stream(
     let wav = Arc::new(Mutex::new(open_wav(audio_wav_path.as_deref())?));
     let wav_cb = wav.clone();
 
+    let sample_format = supported.sample_format();
     let config = supported.into();
-    let stream = device
-        .build_input_stream(
-            config,
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let pcm = resample_to_16k_mono_i16(data, channels, src_rate);
-                if pcm.is_empty() {
-                    return;
-                }
-                if let Ok(mut guard) = wav_cb.lock() {
-                    if let Some(w) = guard.as_mut() {
-                        for &s in &pcm {
-                            let _ = w.write_sample(s);
-                        }
-                    }
-                }
-                // unbounded send 不会阻塞 cpal callback。voice 消费滞后只是
-                // 增加内存占用，不会丢帧。
-                let _ = pcm_tx.send(pcm);
-            },
-            |err| tracing::warn!(error = %err, "recorder stream error"),
-            None,
-        )
-        .context("build input stream")?;
+    let stream = match sample_format {
+        SampleFormat::F32 => {
+            build_input_stream::<f32>(&device, config, channels, src_rate, pcm_tx, wav_cb)
+        }
+        SampleFormat::I16 => {
+            build_input_stream::<i16>(&device, config, channels, src_rate, pcm_tx, wav_cb)
+        }
+        SampleFormat::U16 => {
+            build_input_stream::<u16>(&device, config, channels, src_rate, pcm_tx, wav_cb)
+        }
+        other => bail!("recorder requires F32/I16/U16 input, got {other:?}"),
+    }
+    .context("build input stream")?;
 
     stream.play().context("start input stream")?;
     Ok((stream, wav))
@@ -273,13 +264,20 @@ fn build_recorder_stream(
 
 fn validate_supported_config(supported: &SupportedStreamConfig) -> Result<()> {
     let sample_format = supported.sample_format();
-    if sample_format != SampleFormat::F32 {
-        bail!("recorder requires F32 input, got {sample_format:?}");
+    if !is_supported_input_format(sample_format) {
+        bail!("recorder requires F32/I16/U16 input, got {sample_format:?}");
     }
     if supported.channels() == 0 {
         bail!("default input device reports 0 channels");
     }
     Ok(())
+}
+
+fn is_supported_input_format(format: SampleFormat) -> bool {
+    matches!(
+        format,
+        SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
+    )
 }
 
 fn open_wav(path: Option<&Path>) -> Result<Option<WavWriter>> {
@@ -293,6 +291,82 @@ fn open_wav(path: Option<&Path>) -> Result<Option<WavWriter>> {
     let writer = hound::WavWriter::create(path, spec)
         .with_context(|| format!("create wav {}", path.display()))?;
     Ok(Some(writer))
+}
+
+fn build_input_stream<T>(
+    device: &cpal::Device,
+    config: cpal::StreamConfig,
+    channels: usize,
+    src_rate: u32,
+    pcm_tx: mpsc::UnboundedSender<Vec<i16>>,
+    wav_cb: SharedWav,
+) -> Result<cpal::Stream>
+where
+    T: InputSample + SizedSample,
+{
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[T], _: &cpal::InputCallbackInfo| {
+            let pcm = resample_input_to_16k_mono_i16(data, channels, src_rate);
+            if pcm.is_empty() {
+                return;
+            }
+            if let Ok(mut guard) = wav_cb.lock() {
+                if let Some(w) = guard.as_mut() {
+                    for &s in &pcm {
+                        let _ = w.write_sample(s);
+                    }
+                }
+            }
+            // unbounded send 不会阻塞 cpal callback。voice 消费滞后只是
+            // 增加内存占用，不会丢帧。
+            let _ = pcm_tx.send(pcm);
+        },
+        |err| tracing::warn!(error = %err, "recorder stream error"),
+        None,
+    )?;
+    Ok(stream)
+}
+
+trait InputSample: Copy + Send + 'static {
+    fn to_f32(self) -> f32;
+}
+
+impl InputSample for f32 {
+    fn to_f32(self) -> f32 {
+        self
+    }
+}
+
+impl InputSample for i16 {
+    fn to_f32(self) -> f32 {
+        if self == i16::MIN {
+            -1.0
+        } else {
+            self as f32 / i16::MAX as f32
+        }
+    }
+}
+
+impl InputSample for u16 {
+    fn to_f32(self) -> f32 {
+        (self as f32 - 32768.0) / 32767.0
+    }
+}
+
+fn resample_input_to_16k_mono_i16<T: InputSample>(
+    data: &[T],
+    channels: usize,
+    src_rate: u32,
+) -> Vec<i16> {
+    if channels == 0 || data.is_empty() {
+        return Vec::new();
+    }
+    let mono: Vec<f32> = data
+        .chunks_exact(channels)
+        .map(|frame| frame[0].to_f32())
+        .collect();
+    resample_to_16k_mono_i16(&mono, 1, src_rate)
 }
 
 fn resample_to_16k_mono_i16(data: &[f32], channels: usize, src_rate: u32) -> Vec<i16> {
@@ -358,6 +432,30 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0], out[1]);
         assert!(out[0] > 0); // 左声道是正值
+    }
+
+    #[test]
+    fn i16_input_passthrough_preserves_existing_pipeline_format() {
+        let data = vec![100i16, -100, 300, -300];
+        let out = resample_input_to_16k_mono_i16(&data, 1, 16_000);
+
+        assert_eq!(out, data);
+    }
+
+    #[test]
+    fn u16_input_is_centered_before_pipeline_conversion() {
+        let data = vec![0u16, 32768, 65535];
+        let out = resample_input_to_16k_mono_i16(&data, 1, 16_000);
+
+        assert_eq!(out, vec![-32767, 0, 32767]);
+    }
+
+    #[test]
+    fn supported_input_formats_match_recorder_stream_dispatch() {
+        assert!(is_supported_input_format(SampleFormat::F32));
+        assert!(is_supported_input_format(SampleFormat::I16));
+        assert!(is_supported_input_format(SampleFormat::U16));
+        assert!(!is_supported_input_format(SampleFormat::F64));
     }
 
     #[test]

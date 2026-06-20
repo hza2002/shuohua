@@ -169,7 +169,7 @@ Agent 提醒用户在本地至少手动跑过：
 - `cargo build --release` 成功
 - `./target/release/shuo doctor` 输出正常
 - 至少 1 次 voice 输入端到端（按下热键 → 说话 → 上屏）
-- TUI 启动正常（`./target/release/shuo tui`）
+- TUI 启动正常（`./target/release/shuo`）
 
 **Agent 不能替用户完成这步**（涉及录音权限、麦克风、上屏，必须真人验证）。
 

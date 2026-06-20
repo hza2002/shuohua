@@ -912,8 +912,8 @@ async fn drain_stop_audio(
         }
     }
 
-    rec.stop();
-    while let Some(samples) = rec.try_recv() {
+    let drained = rec.drain_after_stop().await;
+    for samples in drained {
         observe_pcm(trace, &samples);
         emit_meters(state, recording_id, meter, &samples);
         send_pcm_chunk(session, &samples, total_audio_samples).await?;

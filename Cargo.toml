@@ -38,6 +38,8 @@ voice_activity_detector = "0.2.1"
 tracing         = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "time", "registry"] }
 tracing-appender = "0.2"
+audioadapter-buffers = "3.0.0"
+rubato = "3.0.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics   = "0.25"

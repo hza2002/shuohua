@@ -83,7 +83,7 @@ src/
 │   └── llm.rs                           # LlmCleanup；OpenAI-compatible / Anthropic native 一次性调用
 ├── voice/
 │   ├── mod.rs
-│   ├── recorder.rs                      # cpal 流式：F32 → 16k mono s16le → mpsc + 临时 WAV writer
+│   ├── recorder.rs                      # cpal 流式：输入 callback 转 mono；recorder 线程用 rubato → 16k mono s16le + 临时 WAV
 │   ├── audio.rs                         # retained audio：临时 WAV → FLAC/AAC，路径与失败清理
 │   ├── finish.rs                        # 公开录音入口 + post/dispatch/history/UI completion
 │   ├── engine.rs                        # Continuous / VadPause Active/Idle 引擎 + session 切换

@@ -31,9 +31,7 @@ pub(crate) enum FinalizeOutcome {
 ///   - `Err(asr_send_last)`：`send_pcm(&[], true)` 失败。
 ///   - `Err(asr_timeout)`：`finalize_timeout_ms` 内未收到 `Done`。
 ///   - `Err(asr_stream_closed)`：provider 未发 `Done` 就关闭事件通道。
-///
-/// 期间出现的 `AsrEvent::Error` 不中断等待，但写入 `terminal_error`，
-/// 调用方据此决定 history status。
+///   - `Err(asr_error)`：provider 在 finalize 阶段报告 terminal error。
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn finalize_provider_session(
     session: &mut Box<dyn AsrSession>,
@@ -133,10 +131,12 @@ pub(crate) async fn finalize_provider_session(
                             recording_started_instant,
                             &AsrEvent::Error { err: err.clone() },
                         );
-                        *terminal_error = Some(HistoryError {
+                        let error = HistoryError {
                             kind: "asr_error".to_string(),
                             msg: err.to_string(),
-                        });
+                        };
+                        *terminal_error = Some(error.clone());
+                        return Err(error);
                     }
                 }
             }
@@ -226,6 +226,53 @@ mod tests {
         .expect_err("channel close without Done must fail");
 
         assert_eq!(error.kind, "asr_stream_closed");
+    }
+
+    #[tokio::test]
+    async fn asr_error_during_finalize_is_returned_even_if_channel_closes() {
+        let mut session: Box<dyn AsrSession> = Box::new(NoopSession);
+        let (event_tx, mut events) = mpsc::channel(1);
+        event_tx
+            .send(AsrEvent::Error {
+                err: AsrError::Server("provider failed".to_string()),
+            })
+            .await
+            .unwrap();
+        drop(event_tx);
+        let mut pending_segments = Vec::new();
+        let mut session_final_text = None;
+        let mut pending_overlay_segments = 0;
+        let (_control_tx, mut control_rx) = watch::channel(SessionControl::Idle);
+        let mut terminal_error = None;
+        let started = Instant::now();
+        let mut trace = RecordingObserver::start(TraceStart {
+            enabled: false,
+            recording_id: "test-recording".to_string(),
+            provider: "test".to_string(),
+            started_at: "2026-06-19T00:00:00Z".to_string(),
+            started_instant: started,
+        });
+
+        let error = finalize_provider_session(
+            &mut session,
+            &mut events,
+            &mut pending_segments,
+            &mut session_final_text,
+            &mut pending_overlay_segments,
+            100,
+            &mut control_rx,
+            &mut terminal_error,
+            &mut trace,
+            started,
+            &StateStore::new(),
+            "test-recording",
+            None,
+        )
+        .await
+        .expect_err("ASR error during finalize must fail with original error");
+
+        assert_eq!(error.kind, "asr_error");
+        assert_eq!(error.msg, "server: provider failed");
     }
 
     #[tokio::test]

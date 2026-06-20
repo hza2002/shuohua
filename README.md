@@ -1,10 +1,11 @@
 # shuohua
 
-macOS 26+ 的 Rust 语音输入工具。按下全局热键说话，自动转写并上屏（Cmd+V 粘贴）。Binary 名 `shuo`。
+macOS 语音输入工具。按下全局热键说话，自动转写并上屏（Cmd+V 粘贴）。Binary 名 `shuo`。
 
 ## 平台
 
-- macOS 26+（Apple Silicon）
+- macOS 15+（当前发布 artifact 为 Apple Silicon）
+- Apple 本地 ASR provider 需要 macOS 26+；低版本 macOS 请使用云端 ASR provider
 - 未签名分发：首次安装与每次升级需要重新授权 Microphone 与 Accessibility 两项权限
 
 ## 安装

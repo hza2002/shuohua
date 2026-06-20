@@ -996,7 +996,10 @@ trace sidecar 是 dev-only 诊断文件，不属于正式 daemon log；它在 `-
     `unlink()` 并重新 bind。普通文件、symlink、目录、非本 UID 节点或其他 connect
     错误一律保守失败，不删除。`shuo` 智能 fallback 只把 `ENOENT` /
     `ECONNREFUSED` 视作 daemon 不在并 fork daemon；fallback 自身不清理 socket。
-12. **Voice::Idle 时不持 cpal stream**：满足 <0.5% 空闲 CPU + 避免 always-recording 隐私问题。F9 触发时 ~50ms 启动延迟可接受（用户反应时间 200ms+ 覆盖）
+12. **Voice::Idle 的录音资源语义按模式区分**：Continuous/Voice 在未激活录音时不持
+    cpal stream，满足 <0.5% 空闲 CPU + 避免 always-recording 隐私问题。VadPause
+    的 Idle 是段间暂停 ASR，不是停止录音：它继续持有并读取 cpal stream，用于 VAD
+    判断和 pre-roll，但 Idle PCM 不发送给 provider。
 13. **麦克风可用性靠运行时 watchdog，不靠预检**：macOS 没有可靠的事前探测（`AppleClamshellState` + 设备名特判是过度脆弱的 workaround，合盖时 cpal 仍 callback 全 0 帧）。`recorder::start()` 同步段只校验 cpal build/play 失败；可用性的真相 = 主 select 里的 1s 首帧 watchdog：cpal stream play 成功后 `FIRST_AUDIO_TIMEOUT_MS = 1000ms` 内若所有 PCM 样本都 ≤ `MIN_NONZERO_AMPLITUDE = 8`（约 -72 dBFS，严格高于精确 0 silence，严格低于消费级 ADC 本底噪声），判定设备不可用并走 error overlay。阈值不进配置——超过这个时间几乎是设备问题，不是用户该调的旋钮
 14. **Error / Timeout 路径不上屏不写剪贴板**：录音 / ASR 中途崩溃（`terminal_error` 任意 setter）→ 跳过 post chain → 跳过 `dispatch::dispatch` → history 写失败状态并保留累积 segments。一般 terminal error 写 `status=Error`；ASR finalize 超时写 `status=Timeout` + `error.kind=asr_timeout`。启动录音前失败、ASR 初始连接失败、麦克风 watchdog 判定无有效音频等没有用户语音内容的早期失败，只走 overlay / UDS error / daemon log，不写 history。post processor（包括 LLM processor）单步超时只写 `pipeline[].status=timeout` 并跳过该 step；只要后续 dispatch 成功，顶层仍是 `submitted`。理由：半成品上屏会误导（用户以为成功），auto_paste 还可能粘到用户已切走的应用，silent 覆盖剪贴板更糟。需要回捞的用户从 TUI history 翻一行（j/k + Enter copy）。`auto_paste` 永远只在成功路径生效
 

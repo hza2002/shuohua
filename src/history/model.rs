@@ -3,6 +3,29 @@ use time::OffsetDateTime;
 
 use crate::text_stats::TextStats;
 
+pub const DEFAULT_HISTORY_PAGE_LIMIT: usize = 50;
+pub const MAX_HISTORY_PAGE_LIMIT: usize = 500;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryQuery {
+    pub limit: usize,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub before: Option<OffsetDateTime>,
+    pub before_id: Option<String>,
+    pub query: Option<String>,
+}
+
+impl Default for HistoryQuery {
+    fn default() -> Self {
+        Self {
+            limit: DEFAULT_HISTORY_PAGE_LIMIT,
+            before: None,
+            before_id: None,
+            query: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HistoryRecord {
     pub version: u8,

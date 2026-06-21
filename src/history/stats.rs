@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -8,7 +9,11 @@ use serde::{Deserialize, Serialize};
 use time::{Date, Month, OffsetDateTime, UtcOffset};
 use tokio::sync::broadcast;
 
-use crate::history::{store, HistoryRecord};
+use crate::history::{
+    store, HistoryQuery, HistoryRecord, DEFAULT_HISTORY_PAGE_LIMIT, MAX_HISTORY_PAGE_LIMIT,
+};
+
+const REVERSE_READ_CHUNK_SIZE: usize = 1024;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AggregateStats {
@@ -273,6 +278,19 @@ impl HistoryService {
         }
     }
 
+    pub fn page(&self, query: HistoryQuery) -> Result<Vec<HistoryRecord>> {
+        let mut events = Vec::new();
+        let records = {
+            let mut inner = self.inner.lock().expect("history service lock poisoned");
+            reconcile_if_ready(&mut inner, &mut events)?;
+            page_stable(&inner.dir, query, &inner.hooks)?
+        };
+        for event in events {
+            let _ = self.events.send(event);
+        }
+        Ok(records)
+    }
+
     pub fn append(&self, record: HistoryRecord) -> Result<()> {
         let mut events = Vec::new();
         {
@@ -527,6 +545,329 @@ fn validate_record(record: &HistoryRecord, path: &Path, line_no: usize) -> Resul
         );
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct PreparedHistoryQuery {
+    limit: usize,
+    before: Option<OffsetDateTime>,
+    before_id: Option<String>,
+    query: Option<String>,
+}
+
+impl PreparedHistoryQuery {
+    fn new(query: HistoryQuery) -> Result<Self> {
+        if query.before_id.is_some() && query.before.is_none() {
+            bail!("bad_command: before_id requires before");
+        }
+        Ok(Self {
+            limit: normalize_history_limit(query.limit),
+            before: query.before,
+            before_id: query.before_id,
+            query: query.query.map(|value| value.to_lowercase()),
+        })
+    }
+
+    fn includes(&self, record: &HistoryRecord) -> bool {
+        if let Some(before) = self.before {
+            if let Some(before_id) = self.before_id.as_deref() {
+                if record.started_at > before
+                    || (record.started_at == before && record.id.as_str() >= before_id)
+                {
+                    return false;
+                }
+            } else if record.started_at >= before {
+                return false;
+            }
+        }
+        self.query
+            .as_deref()
+            .is_none_or(|query| history_record_matches(record, query))
+    }
+}
+
+fn normalize_history_limit(limit: usize) -> usize {
+    if limit == 0 {
+        DEFAULT_HISTORY_PAGE_LIMIT
+    } else {
+        limit.min(MAX_HISTORY_PAGE_LIMIT)
+    }
+}
+
+fn page_stable(dir: &Path, query: HistoryQuery, hooks: &Hooks) -> Result<Vec<HistoryRecord>> {
+    let query = PreparedHistoryQuery::new(query)?;
+    let mut last_error = None;
+    for attempt in 0..2 {
+        hooks.before_scan_attempt();
+        let before = fingerprint_file_set(dir, hooks)?;
+        match page_once(dir, &before, &query, hooks) {
+            Ok(read) => {
+                if fingerprint_file_set(dir, hooks)? == before {
+                    return Ok(read.records);
+                }
+                last_error = Some("unstable history source during page read".to_string());
+            }
+            Err(error) => {
+                last_error = Some(error.to_string());
+                if attempt == 1 {
+                    break;
+                }
+            }
+        }
+    }
+    bail!(
+        "{}",
+        last_error.unwrap_or_else(|| "unstable history source during page read".to_string())
+    )
+}
+
+struct PageRead {
+    records: Vec<HistoryRecord>,
+}
+
+fn page_once(
+    dir: &Path,
+    fingerprint: &FileSetFingerprint,
+    query: &PreparedHistoryQuery,
+    hooks: &Hooks,
+) -> Result<PageRead> {
+    let mut cursors = Vec::new();
+    let mut heap = std::collections::BinaryHeap::new();
+
+    for entry in &fingerprint.0 {
+        let mut cursor = ShardCursor::new(dir.join(&entry.name), hooks.clone())?;
+        if let Some(record) = cursor.next_matching(query)? {
+            heap.push(HeapEntry {
+                key: RecordKey::from(&record),
+                cursor_index: cursors.len(),
+                record,
+            });
+        }
+        cursors.push(cursor);
+    }
+
+    let mut records = Vec::with_capacity(query.limit);
+    while records.len() < query.limit {
+        let Some(entry) = heap.pop() else {
+            break;
+        };
+        let cursor_index = entry.cursor_index;
+        records.push(entry.record);
+        if let Some(record) = cursors[cursor_index].next_matching(query)? {
+            heap.push(HeapEntry {
+                key: RecordKey::from(&record),
+                cursor_index,
+                record,
+            });
+        }
+    }
+
+    Ok(PageRead { records })
+}
+
+struct ShardCursor {
+    path: PathBuf,
+    reader: ReverseLineReader,
+    hooks: Hooks,
+    last_key: Option<RecordKey>,
+}
+
+impl ShardCursor {
+    fn new(path: PathBuf, hooks: Hooks) -> Result<Self> {
+        Ok(Self {
+            reader: ReverseLineReader::open(&path)?,
+            path,
+            hooks,
+            last_key: None,
+        })
+    }
+
+    fn next_matching(&mut self, query: &PreparedHistoryQuery) -> Result<Option<HistoryRecord>> {
+        while let Some(line) = self.reader.next_line()? {
+            self.hooks.after_read_file();
+            if line.bytes.iter().all(u8::is_ascii_whitespace) {
+                continue;
+            }
+            let line_str = match std::str::from_utf8(&line.bytes) {
+                Ok(value) => value,
+                Err(error) if line.is_final_unterminated => {
+                    tracing::warn!(
+                        path = %self.path.display(),
+                        error = %error,
+                        "ignoring truncated final history line"
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("parse history line in {}", self.path.display()));
+                }
+            };
+            let record: HistoryRecord = match serde_json::from_str(line_str) {
+                Ok(record) => record,
+                Err(error) if line.is_final_unterminated => {
+                    tracing::warn!(
+                        path = %self.path.display(),
+                        error = %error,
+                        "ignoring truncated final history line"
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("parse history line in {}", self.path.display()));
+                }
+            };
+            validate_record(&record, &self.path, 0)?;
+            let key = RecordKey::from(&record);
+            if self.last_key.as_ref().is_some_and(|last| &key > last) {
+                bail!(
+                    "history records are not monotonic by (started_at,id) in {}",
+                    self.path.display()
+                );
+            }
+            self.last_key = Some(key);
+            if query.includes(&record) {
+                return Ok(Some(record));
+            }
+        }
+        Ok(None)
+    }
+}
+
+struct ReverseLine {
+    bytes: Vec<u8>,
+    is_final_unterminated: bool,
+}
+
+struct ReverseLineReader {
+    file: fs::File,
+    position: u64,
+    buffer: Vec<u8>,
+    yielded_tail: bool,
+    file_ends_with_newline: bool,
+}
+
+impl ReverseLineReader {
+    fn open(path: &Path) -> Result<Self> {
+        let mut file =
+            fs::File::open(path).with_context(|| format!("read history {}", path.display()))?;
+        let len = file
+            .metadata()
+            .with_context(|| format!("stat history {}", path.display()))?
+            .len();
+        let file_ends_with_newline = if len == 0 {
+            true
+        } else {
+            file.seek(SeekFrom::Start(len - 1))
+                .with_context(|| format!("seek history {}", path.display()))?;
+            let mut byte = [0u8; 1];
+            file.read_exact(&mut byte)
+                .with_context(|| format!("read history {}", path.display()))?;
+            byte[0] == b'\n'
+        };
+        Ok(Self {
+            file,
+            position: len,
+            buffer: Vec::new(),
+            yielded_tail: false,
+            file_ends_with_newline,
+        })
+    }
+
+    fn next_line(&mut self) -> Result<Option<ReverseLine>> {
+        loop {
+            if let Some(index) = self.buffer.iter().rposition(|byte| *byte == b'\n') {
+                let bytes = self.buffer[index + 1..].to_vec();
+                self.buffer.truncate(index);
+                let is_final_unterminated = !self.yielded_tail && !self.file_ends_with_newline;
+                self.yielded_tail = true;
+                return Ok(Some(ReverseLine {
+                    bytes,
+                    is_final_unterminated,
+                }));
+            }
+            if self.position == 0 {
+                if self.buffer.is_empty() {
+                    return Ok(None);
+                }
+                let bytes = std::mem::take(&mut self.buffer);
+                let is_final_unterminated = !self.yielded_tail && !self.file_ends_with_newline;
+                self.yielded_tail = true;
+                return Ok(Some(ReverseLine {
+                    bytes,
+                    is_final_unterminated,
+                }));
+            }
+
+            let read_len = self.position.min(REVERSE_READ_CHUNK_SIZE as u64) as usize;
+            self.position -= read_len as u64;
+            self.file
+                .seek(SeekFrom::Start(self.position))
+                .context("seek history chunk")?;
+            let mut chunk = vec![0; read_len];
+            self.file
+                .read_exact(&mut chunk)
+                .context("read history chunk")?;
+            chunk.extend_from_slice(&self.buffer);
+            self.buffer = chunk;
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct RecordKey {
+    started_at: OffsetDateTime,
+    id: String,
+}
+
+impl From<&HistoryRecord> for RecordKey {
+    fn from(record: &HistoryRecord) -> Self {
+        Self {
+            started_at: record.started_at,
+            id: record.id.clone(),
+        }
+    }
+}
+
+struct HeapEntry {
+    key: RecordKey,
+    cursor_index: usize,
+    record: HistoryRecord,
+}
+
+impl PartialEq for HeapEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.cursor_index == other.cursor_index
+    }
+}
+
+impl Eq for HeapEntry {}
+
+impl PartialOrd for HeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key
+            .cmp(&other.key)
+            .then_with(|| self.cursor_index.cmp(&other.cursor_index))
+    }
+}
+
+fn history_record_matches(record: &HistoryRecord, query: &str) -> bool {
+    let haystack = [
+        record.id.as_str(),
+        record.app.as_deref().unwrap_or_default(),
+        record.asr.text.as_str(),
+        &record.text,
+    ]
+    .join("\n")
+    .to_lowercase();
+    haystack.contains(query)
 }
 
 fn add_record_to_index(index: &mut Index, record: &HistoryRecord) {
@@ -891,6 +1232,7 @@ pub(crate) mod tests_support {
 mod tests {
     use std::fs;
     use std::io::Write;
+    use std::path::Path;
     use std::sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
@@ -899,8 +1241,8 @@ mod tests {
     use time::macros::{datetime, offset};
 
     use crate::history::{
-        store::path_for_month_in_dir, AnalyticsPeriod, AnalyticsQuery, HistoryService,
-        HistoryStatsStatus,
+        store::path_for_month_in_dir, AnalyticsPeriod, AnalyticsQuery, HistoryQuery,
+        HistoryService, HistoryStatsStatus,
     };
 
     use super::tests_support::{record, TestHooks};
@@ -1106,6 +1448,423 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn latest_page_reads_newest_records_across_months() {
+        let dir = temp_dir("page-across-months");
+        write_line(
+            &dir,
+            record("may", datetime!(2026-05-31 23:59:00 UTC), "may"),
+        );
+        write_line(
+            &dir,
+            record("jun", datetime!(2026-06-30 23:59:00 UTC), "jun"),
+        );
+        write_line(
+            &dir,
+            record("jul", datetime!(2026-07-01 00:00:00 UTC), "jul"),
+        );
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+
+        let records = service
+            .page(HistoryQuery {
+                limit: 2,
+                ..HistoryQuery::default()
+            })
+            .unwrap();
+
+        assert_ids(&records, &["jul", "jun"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn overlapping_shards_are_k_way_merged_by_record_order() {
+        let dir = temp_dir("page-k-way");
+        write_line(
+            &dir,
+            record("a-old", datetime!(2026-06-30 23:00:00 UTC), "old"),
+        );
+        write_raw_record(
+            &dir.join("2026-05.jsonl"),
+            record("z-new", datetime!(2026-07-01 00:00:00 UTC), "new"),
+        );
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+
+        let records = service
+            .page(HistoryQuery {
+                limit: 2,
+                ..HistoryQuery::default()
+            })
+            .unwrap();
+
+        assert_ids(&records, &["z-new", "a-old"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn before_id_keeps_equal_timestamp_records_pageable() {
+        let dir = temp_dir("page-before-id");
+        let ts = datetime!(2026-06-01 00:00:00 UTC);
+        write_line(&dir, record("a", ts, "same"));
+        write_line(&dir, record("b", ts, "same"));
+        write_line(&dir, record("c", ts, "same"));
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+
+        let timestamp_only = service
+            .page(HistoryQuery {
+                limit: 10,
+                before: Some(ts),
+                ..HistoryQuery::default()
+            })
+            .unwrap();
+        let tuple = service
+            .page(HistoryQuery {
+                limit: 10,
+                before: Some(ts),
+                before_id: Some("c".to_string()),
+                ..HistoryQuery::default()
+            })
+            .unwrap();
+
+        assert_ids(&timestamp_only, &[]);
+        assert_ids(&tuple, &["b", "a"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn before_id_without_before_is_rejected() {
+        let service = HistoryService::with_test_hooks(
+            temp_dir("page-bad-before-id"),
+            offset!(+0),
+            TestHooks::default(),
+        );
+
+        let error = service
+            .page(HistoryQuery {
+                before_id: Some("a".to_string()),
+                ..HistoryQuery::default()
+            })
+            .unwrap_err();
+
+        assert!(error.to_string().contains("bad_command"), "{error:#}");
+    }
+
+    #[test]
+    fn query_scans_until_it_collects_the_limit() {
+        let dir = temp_dir("page-query-limit");
+        write_line(
+            &dir,
+            record("old-hit", datetime!(2026-05-01 00:00:00 UTC), "needle"),
+        );
+        write_line(
+            &dir,
+            record("miss", datetime!(2026-06-01 00:00:00 UTC), "plain"),
+        );
+        write_line(
+            &dir,
+            record("new-hit", datetime!(2026-07-01 00:00:00 UTC), "needle"),
+        );
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+
+        let records = service
+            .page(HistoryQuery {
+                limit: 2,
+                query: Some("needle".to_string()),
+                ..HistoryQuery::default()
+            })
+            .unwrap();
+
+        assert_ids(&records, &["new-hit", "old-hit"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn search_query_is_filtered_by_daemon_not_tui_loaded_records() {
+        let dir = temp_dir("page-query-fields");
+        let mut app_match = record("app-match", datetime!(2026-06-01 00:00:00 UTC), "plain");
+        app_match.app = Some("Com.Example.Special".to_string());
+        let mut asr_match = record("asr-match", datetime!(2026-06-01 01:00:00 UTC), "plain");
+        asr_match.asr.text = "provider Needle text".to_string();
+        write_line(&dir, app_match);
+        write_line(&dir, asr_match);
+        write_line(
+            &dir,
+            record(
+                "id-Needle-match",
+                datetime!(2026-06-01 02:00:00 UTC),
+                "plain",
+            ),
+        );
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+
+        let records = service
+            .page(HistoryQuery {
+                limit: 10,
+                query: Some("needle".to_string()),
+                ..HistoryQuery::default()
+            })
+            .unwrap();
+
+        assert_ids(&records, &["id-Needle-match", "asr-match"]);
+        let app_records = service
+            .page(HistoryQuery {
+                limit: 10,
+                query: Some("special".to_string()),
+                ..HistoryQuery::default()
+            })
+            .unwrap();
+        assert_ids(&app_records, &["app-match"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reverse_reader_handles_utf8_and_lines_across_chunks() {
+        let dir = temp_dir("page-utf8-chunks");
+        let path = dir.join("2026-06.jsonl");
+        for n in 0..40 {
+            write_raw_record(
+                &path,
+                record(
+                    &format!("r{n:02}"),
+                    datetime!(2026-06-01 00:00:00 UTC) + time::Duration::seconds(n),
+                    &format!("跨块 UTF-8 文本 {n} 😀"),
+                ),
+            );
+        }
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+
+        let records = service
+            .page(HistoryQuery {
+                limit: 3,
+                ..HistoryQuery::default()
+            })
+            .unwrap();
+
+        assert_ids(&records, &["r39", "r38", "r37"]);
+        assert_eq!(records[0].text, "跨块 UTF-8 文本 39 😀");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn newline_exactly_on_chunk_boundary_is_handled() {
+        let dir = temp_dir("page-newline-boundary");
+        let path = dir.join("2026-06.jsonl");
+        write_chunk_sized_line(
+            &path,
+            "boundary-old",
+            datetime!(2026-06-01 00:00:00 UTC),
+            2048,
+        );
+        write_raw_record(
+            &path,
+            record("boundary-new", datetime!(2026-06-01 00:00:01 UTC), "new"),
+        );
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+
+        let records = service
+            .page(HistoryQuery {
+                limit: 2,
+                ..HistoryQuery::default()
+            })
+            .unwrap();
+
+        assert_ids(&records, &["boundary-new", "boundary-old"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn truncated_tail_spanning_chunks_is_ignored() {
+        let dir = temp_dir("page-truncated-tail");
+        let path = dir.join("2026-06.jsonl");
+        write_raw_record(
+            &path,
+            record("valid", datetime!(2026-06-01 00:00:00 UTC), "valid"),
+        );
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(br#"{"version":1,"id":"truncated","text":""#)
+            .unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&vec![b'x'; 2048])
+            .unwrap();
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+
+        let records = service.page(HistoryQuery::default()).unwrap();
+
+        assert_ids(&records, &["valid"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn corrupt_complete_line_is_rejected() {
+        let dir = temp_dir("page-corrupt-line");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("2026-06.jsonl"), "not-json\n").unwrap();
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+
+        let error = service.page(HistoryQuery::default()).unwrap_err();
+
+        assert!(
+            error.to_string().contains("parse history line"),
+            "{error:#}"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn page_rejects_month_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_dir("page-symlink");
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("target.jsonl");
+        fs::write(&target, "").unwrap();
+        symlink(&target, dir.join("2026-06.jsonl")).unwrap();
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+
+        let error = service.page(HistoryQuery::default()).unwrap_err();
+
+        assert!(error.to_string().contains("symlink"), "{error:#}");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn page_retries_when_participating_file_changes_during_read() {
+        let dir = temp_dir("page-retry");
+        write_line(&dir, record("a", datetime!(2026-06-01 00:00:00 UTC), "one"));
+        let mutated = Arc::new(AtomicBool::new(false));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let hooks = TestHooks::default()
+            .with_before_scan_attempt({
+                let attempts = Arc::clone(&attempts);
+                move || {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+            .with_after_read_file({
+                let dir = dir.clone();
+                let mutated = Arc::clone(&mutated);
+                move || {
+                    if !mutated.swap(true, Ordering::SeqCst) {
+                        write_line(&dir, record("b", datetime!(2026-06-01 01:00:00 UTC), "two"));
+                    }
+                }
+            });
+        let service = HistoryService::with_test_hooks(dir.clone(), offset!(+0), hooks);
+
+        let records = service.page(HistoryQuery::default()).unwrap();
+
+        assert_ids(&records, &["b", "a"]);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn page_retries_when_file_set_changes_during_read() {
+        let dir = temp_dir("page-file-set-retry");
+        write_line(&dir, record("a", datetime!(2026-06-01 00:00:00 UTC), "one"));
+        let mutated = Arc::new(AtomicBool::new(false));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let hooks = TestHooks::default()
+            .with_before_scan_attempt({
+                let attempts = Arc::clone(&attempts);
+                move || {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+            .with_after_read_file({
+                let dir = dir.clone();
+                let mutated = Arc::clone(&mutated);
+                move || {
+                    if !mutated.swap(true, Ordering::SeqCst) {
+                        write_raw_record(
+                            &dir.join("2026-07.jsonl"),
+                            record("b", datetime!(2026-07-01 00:00:00 UTC), "two"),
+                        );
+                    }
+                }
+            });
+        let service = HistoryService::with_test_hooks(dir.clone(), offset!(+0), hooks);
+
+        let records = service.page(HistoryQuery::default()).unwrap();
+
+        assert_ids(&records, &["b", "a"]);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn page_rejects_non_monotonic_complete_shard() {
+        let dir = temp_dir("page-non-monotonic");
+        let path = dir.join("2026-06.jsonl");
+        write_raw_record(
+            &path,
+            record("new-first", datetime!(2026-06-01 00:00:10 UTC), "new"),
+        );
+        write_raw_record(
+            &path,
+            record("old-second", datetime!(2026-06-01 00:00:00 UTC), "old"),
+        );
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+
+        let error = service.page(HistoryQuery::default()).unwrap_err();
+
+        assert!(error.to_string().contains("monotonic"), "{error:#}");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn page_reports_unstable_source_after_second_read_change() {
+        let dir = temp_dir("page-unstable");
+        write_line(&dir, record("a", datetime!(2026-06-01 00:00:00 UTC), "one"));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let hooks = TestHooks::default()
+            .with_before_scan_attempt({
+                let attempts = Arc::clone(&attempts);
+                move || {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+            .with_after_read_file({
+                let dir = dir.clone();
+                let next = Arc::new(AtomicUsize::new(0));
+                move || {
+                    let id = next.fetch_add(1, Ordering::SeqCst);
+                    write_line(
+                        &dir,
+                        record(
+                            &format!("changed-{id}"),
+                            datetime!(2026-06-01 01:00:00 UTC) + time::Duration::seconds(id as i64),
+                            "two",
+                        ),
+                    );
+                }
+            });
+        let service = HistoryService::with_test_hooks(dir.clone(), offset!(+0), hooks);
+
+        let error = service.page(HistoryQuery::default()).unwrap_err();
+
+        assert!(error.to_string().contains("unstable"), "{error:#}");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let _ = fs::remove_dir_all(dir);
+    }
+
     fn temp_dir(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("shuohua-history-{name}-{}", ulid::Ulid::new()))
     }
@@ -1113,6 +1872,41 @@ mod tests {
     fn write_line(dir: &std::path::Path, record: crate::history::HistoryRecord) {
         let path = path_for_month_in_dir(dir, record.started_at);
         crate::history::store::append_record(&path, &record).unwrap();
+    }
+
+    fn write_raw_record(path: &Path, record: crate::history::HistoryRecord) {
+        crate::history::store::append_record(path, &record).unwrap();
+    }
+
+    fn assert_ids(records: &[crate::history::HistoryRecord], expected: &[&str]) {
+        let ids: Vec<_> = records.iter().map(|record| record.id.as_str()).collect();
+        assert_eq!(ids, expected);
+    }
+
+    fn write_chunk_sized_line(
+        path: &Path,
+        id: &str,
+        started_at: time::OffsetDateTime,
+        target_len: usize,
+    ) {
+        let record = record(id, started_at, "");
+        let mut line = serde_json::to_vec(&record).unwrap();
+        assert!(
+            line.len() < target_len,
+            "record line exceeded target length {target_len}"
+        );
+        line.resize(target_len - 1, b' ');
+        line.push(b'\n');
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap()
+            .write_all(&line)
+            .unwrap();
     }
 
     #[cfg(unix)]

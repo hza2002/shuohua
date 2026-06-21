@@ -3,8 +3,8 @@ pub mod stats;
 pub mod store;
 
 pub use model::{
-    AsrHistory, AsrSessionHistory, HistoryError, HistoryRecord, HistoryStatus, PipelineStepHistory,
-    PipelineStepStatus,
+    AsrHistory, AsrSessionHistory, HistoryError, HistoryQuery, HistoryRecord, HistoryStatus,
+    PipelineStepHistory, PipelineStepStatus, DEFAULT_HISTORY_PAGE_LIMIT, MAX_HISTORY_PAGE_LIMIT,
 };
 pub use stats::{
     AggregateStats, AnalyticsPeriod, AnalyticsPoint, AnalyticsQuery, AnalyticsSnapshot,

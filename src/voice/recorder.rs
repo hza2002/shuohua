@@ -28,7 +28,7 @@ pub struct RecordingStream {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FinishMode {
+pub(crate) enum FinishMode {
     Publish,
     Discard,
 }
@@ -137,6 +137,28 @@ impl RecordingStream {
             stop: None,
             audio_result: Some(audio_rx),
         }
+    }
+
+    /// 测试用构造：与 [`for_test`] 相同，但暴露 stop 信号通道，便于断言收尾
+    /// 走 Publish 还是 Discard（retained audio 留存 vs 丢弃）。
+    ///
+    /// 注意：本构造持有真实 stop sender，`drain_after_stop` 会阻塞 `recv` 直到
+    /// PCM 通道关闭（与真实 recorder 一致）。stop 路径的测试需在发出 stop 后
+    /// drop PCM 发送端，模拟 cpal stream 关闭，否则 drain 不会返回。
+    pub(crate) fn for_test_observe(
+        pcm_rx: mpsc::UnboundedReceiver<Vec<i16>>,
+    ) -> (Self, std::sync::mpsc::Receiver<FinishMode>) {
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        let (audio_tx, audio_rx) = oneshot::channel();
+        let _ = audio_tx.send(Ok(None));
+        (
+            Self {
+                pcm_rx,
+                stop: Some(stop_tx),
+                audio_result: Some(audio_rx),
+            },
+            stop_rx,
+        )
     }
 }
 
@@ -251,14 +273,16 @@ fn complete_audio(
 
 type WavWriter = hound::WavWriter<std::io::BufWriter<std::fs::File>>;
 
-fn build_recorder_stream(
-    audio_wav_path: Option<PathBuf>,
-) -> Result<(
+/// build_recorder_stream 的返回组件：cpal stream、原始 f32 帧通道、可选 WAV
+/// writer、输入采样率。
+type RecorderStreamSetup = (
     cpal::Stream,
     std::sync::mpsc::Receiver<Vec<f32>>,
     Option<WavWriter>,
     u32,
-)> {
+);
+
+fn build_recorder_stream(audio_wav_path: Option<PathBuf>) -> Result<RecorderStreamSetup> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -454,7 +478,7 @@ impl PcmProcessor {
 
 enum Resampler16k {
     Passthrough,
-    Rubato(RubatoResampler16k),
+    Rubato(Box<RubatoResampler16k>),
 }
 
 impl Resampler16k {
@@ -462,7 +486,7 @@ impl Resampler16k {
         if src_rate == DST_RATE_HZ {
             Self::Passthrough
         } else {
-            Self::Rubato(RubatoResampler16k::new(src_rate))
+            Self::Rubato(Box::new(RubatoResampler16k::new(src_rate)))
         }
     }
 

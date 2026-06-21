@@ -26,6 +26,9 @@ pub(crate) struct SessionCapture {
 }
 
 pub(crate) fn samples_to_ms(samples: u64) -> u64 {
+    // History stores integer milliseconds. Converting a sample count separately
+    // from its start/end timestamps can differ by at most 1ms due to flooring;
+    // docs/SCHEMA.md explicitly treats that as harmless quantization.
     samples.saturating_mul(1000) / 16_000
 }
 
@@ -60,6 +63,15 @@ pub(crate) fn session_texts(sessions: &[SessionCapture]) -> Vec<String> {
         .collect()
 }
 
+/// 这次录音是否有值得留存的内容（识别文本，或喂过音频的 session）。
+///
+/// 取消时用它统一决定：有内容则保留 history + retained audio（可能是误触，
+/// 让用户从 TUI 找回文本和音频）；无内容（toggle 后立即取消、啥也没说）则
+/// 两者都不留，避免产生 TUI 无法关联的孤儿音频文件。
+pub(crate) fn has_archivable_content(sessions: &[SessionCapture]) -> bool {
+    !session_texts(sessions).is_empty() || sessions.iter().any(|s| s.audio_samples > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +96,32 @@ mod tests {
             final_text: Some("ab.".to_string()),
         };
         assert_eq!(session_text(&session), "ab.");
+    }
+
+    #[test]
+    fn has_archivable_content_distinguishes_content_from_noise() {
+        let base = Instant::now();
+        // 无 session：toggle 后立即取消 → 无内容
+        assert!(!has_archivable_content(&[]));
+
+        // 喂过音频但没识别出文本（可能误触，音频可找回）→ 有内容
+        let audio_only = SessionCapture {
+            started_at: base,
+            ended_at: base,
+            audio_samples: 16_000,
+            segments: vec![],
+            final_text: None,
+        };
+        assert!(has_archivable_content(std::slice::from_ref(&audio_only)));
+
+        // 有识别文本 → 有内容
+        let with_text = SessionCapture {
+            started_at: base,
+            ended_at: base,
+            audio_samples: 0,
+            segments: vec![segment(base, "hi", 0, 100)],
+            final_text: None,
+        };
+        assert!(has_archivable_content(std::slice::from_ref(&with_text)));
     }
 }

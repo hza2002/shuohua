@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-21 - Release audit: cancel semantics
+
+- Cancel now keeps or drops retained audio and history together based on whether
+  the recording had archivable content. A cancel that fed audio or produced text
+  (possibly a mis-tap) keeps both the `canceled` history record and the retained
+  audio so the user can recover them from the TUI. A cancel with no content
+  (immediate toggle-then-cancel, nothing said) writes no history and discards the
+  temp WAV, avoiding an orphan audio file the TUI cannot reference.
+- Centralized the "has archivable content" predicate in `voice::capture` so the
+  engine (audio) and completion path (history) stay consistent.
+- Aligned dev VAD trace event docs with the observer output and pointed CLI.md
+  at SCHEMA §4 as the single source; documented the cancel audio/history
+  behavior in SCHEMA §2 and §3.
+
 ## 2026-06-20 - Release blocker hardening
 
 - Routed UDS `shutdown` through the daemon runtime instead of directly quitting

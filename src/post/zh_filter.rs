@@ -45,9 +45,9 @@ impl PostProcessor for ZhFilter {
 }
 
 fn filter_zh_speech(input: &PipelineText, fillers: &[String]) -> String {
-    let segment_source = if input.segments.is_empty() {
-        vec![input.text.clone()]
-    } else if input.text != input.raw {
+    // 无 segment，或上游 processor 已改过 text（text != raw）时，用单条 text；
+    // 否则按原始 segment 列表分段处理。
+    let segment_source = if input.segments.is_empty() || input.text != input.raw {
         vec![input.text.clone()]
     } else {
         input.segments.clone()

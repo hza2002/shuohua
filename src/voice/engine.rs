@@ -736,13 +736,16 @@ pub(crate) async fn run_with_recorder(
             sessions.push(capture);
         }
     }
-    if cancel_requested {
-        rec.stop();
-    }
     if let Some(active_session) = session.take() {
         let _ = active_session.close().await;
     }
-    finish_retained_audio(&params, &recording_id, &mut rec).await;
+    // 取消时音频留存跟随「是否有内容」：有内容（可能误触）保留以便用户从 TUI
+    // 找回，无内容则丢弃避免孤儿音频文件。正常完成 / terminal error 照常 finalize。
+    if cancel_requested && !crate::voice::capture::has_archivable_content(&sessions) {
+        discard_retained_audio(&recording_id, &mut rec).await;
+    } else {
+        finish_retained_audio(&params, &recording_id, &mut rec).await;
+    }
 
     Some(EngineOutcome {
         provider_name: provider.name().to_string(),

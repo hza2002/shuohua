@@ -15,7 +15,7 @@ impl DaemonLock {
             .read(true)
             .truncate(false)
             .write(true)
-            .open(&path)
+            .open(path)
             .with_context(|| format!("open daemon lock {}", path.display()))?;
         let meta = file
             .metadata()

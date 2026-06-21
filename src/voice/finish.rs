@@ -50,26 +50,33 @@ async fn complete_recording(
     if cancel_requested {
         tracing::info!(recording_id, "recording canceled");
         params.state.set_idle();
-        let history_result = append_history(HistoryInput {
-            id: recording_id.clone(),
-            provider: provider_name,
-            started_at: recording_started_at,
-            ended_at: time::OffsetDateTime::now_utc(),
-            started_instant: recording_started_instant,
-            asr_text: raw_text.clone(),
-            final_text: raw_text,
-            sessions,
-            pipeline: Vec::new(),
-            app: app_context.bundle_id,
-            status: HistoryStatus::Canceled,
-            error: None,
-        });
-        publish_history_result(
-            &params.state,
-            params.overlay.as_ref(),
-            &recording_id,
-            history_result,
-        );
+        if crate::voice::capture::has_archivable_content(&sessions) {
+            let history_result = append_history(HistoryInput {
+                id: recording_id.clone(),
+                provider: provider_name,
+                started_at: recording_started_at,
+                ended_at: time::OffsetDateTime::now_utc(),
+                started_instant: recording_started_instant,
+                asr_text: raw_text.clone(),
+                final_text: raw_text,
+                sessions,
+                pipeline: Vec::new(),
+                app: app_context.bundle_id,
+                status: HistoryStatus::Canceled,
+                error: None,
+            });
+            publish_history_result(
+                &params.state,
+                params.overlay.as_ref(),
+                &recording_id,
+                history_result,
+            );
+        } else {
+            tracing::info!(
+                recording_id,
+                "canceled recording had no content; skipping history"
+            );
+        }
         engine::overlay_send(&params, OverlayCmd::Hide);
         observe_finish(&mut trace, "canceled", total_audio_samples);
         return;
@@ -199,6 +206,93 @@ fn history_status_for_completion(
 mod tests {
     use super::*;
     use crate::state::history::HistoryError;
+    use crate::voice::capture::SessionCapture;
+    use crate::voice::observer::{RecordingObserver, TraceStart};
+    use std::time::Instant;
+
+    fn cancel_outcome(
+        sessions: Vec<SessionCapture>,
+        state: StateStore,
+        overlay: OverlayHandle,
+    ) -> EngineOutcome {
+        let started_instant = Instant::now();
+        let started_at = time::OffsetDateTime::now_utc();
+        EngineOutcome {
+            params: SessionParams {
+                auto_paste: false,
+                record_audio: crate::config::RecordAudioMode::Off,
+                vad_trace: false,
+                idle_pause: false,
+                finalize_timeout_ms: 100,
+                vad: crate::config::VoiceVadCfg::default(),
+                stop_delay_ms: 0,
+                hotwords: vec![],
+                start_app_context: crate::post::AppContext::default(),
+                post_chain: crate::post::PostChain {
+                    name: "test".into(),
+                    processors: vec![],
+                },
+                post_timeout_ms: 100,
+                overlay: Some(overlay),
+                state,
+            },
+            recording_id: "01TESTCANCEL".into(),
+            recording_started_at: started_at,
+            recording_started_instant: started_instant,
+            app_context: crate::post::AppContext::default(),
+            sessions,
+            cancel_requested: true,
+            terminal_error: None,
+            total_audio_samples: 0,
+            trace: RecordingObserver::start(TraceStart {
+                enabled: false,
+                recording_id: "01TESTCANCEL".into(),
+                provider: "test".into(),
+                started_at: started_at.to_string(),
+                started_instant,
+            }),
+            provider_name: "test".into(),
+        }
+    }
+
+    /// Contentless cancel：complete_recording 必须跳过 history append（不发
+    /// history_appended 事件），但仍回 Idle 并 Hide overlay。无 FS 触碰。
+    #[tokio::test]
+    async fn contentless_cancel_skips_history_append_and_event() {
+        let state = StateStore::new();
+        let (_snapshot, mut state_rx) = state.subscribe_with_snapshot();
+        let (overlay, mut overlay_rx) = OverlayHandle::channel();
+        let outcome = cancel_outcome(Vec::new(), state.clone(), overlay);
+        let (_control_tx, mut control_rx) = watch::channel(SessionControl::Idle);
+
+        complete_recording(outcome, &mut control_rx).await;
+
+        let mut events = Vec::new();
+        while let Ok(event) = state_rx.try_recv() {
+            events.push(event);
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, crate::state::StateEvent::HistoryAppended { .. })),
+            "contentless cancel must not append history: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, crate::state::StateEvent::StateChanged { .. })),
+            "cancel must still return daemon to idle"
+        );
+
+        let mut overlay_cmds = Vec::new();
+        while let Ok(cmd) = overlay_rx.try_recv() {
+            overlay_cmds.push(cmd);
+        }
+        assert!(
+            overlay_cmds.iter().any(|c| matches!(c, OverlayCmd::Hide)),
+            "cancel must hide the overlay: {overlay_cmds:?}"
+        );
+    }
 
     #[test]
     fn asr_finalize_timeout_is_recording_timeout() {

@@ -207,6 +207,7 @@ See the [troubleshooting guide](docs/debug.md) for more steps. If the problem is
 - [Protocols and data formats](docs/schema.md)
 - [Troubleshooting](docs/debug.md)
 - [Changelog](CHANGELOG.md)
+- [Release process](RELEASE.md)
 
 ## Development
 

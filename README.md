@@ -210,6 +210,7 @@ shuo status
 - [协议与数据格式](docs/schema.md)
 - [排障](docs/debug.md)
 - [变更历史](CHANGELOG.md)
+- [发版](RELEASE.md)
 
 ## 开发
 

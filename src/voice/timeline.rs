@@ -161,7 +161,7 @@ mod tests {
         // clamp 到 oldest_sample，不丢已被保留的样本
         assert_eq!(slice.start_sample, 400);
         assert_eq!(slice.samples.len(), 1600);
-        assert_eq!(slice.samples[0], frame1[400] as i16);
+        assert_eq!(slice.samples[0], frame1[400]);
     }
 
     #[test]

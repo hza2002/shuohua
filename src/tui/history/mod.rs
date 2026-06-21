@@ -784,10 +784,8 @@ impl Page for HistoryPage {
                 }
             }
             Event::HistoryDeleted { .. } => {}
-            Event::HistoryChanged => {
-                if !self.refresh_needed {
-                    self.refresh_needed = true;
-                }
+            Event::HistoryChanged if !self.refresh_needed => {
+                self.refresh_needed = true;
             }
             _ => {}
         }

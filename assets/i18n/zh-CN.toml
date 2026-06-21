@@ -217,7 +217,7 @@ loading_more = "正在加载更早历史..."
 no_more = "没有更早历史"
 searching = "正在搜索历史..."
 delete_requested = "已请求删除历史"
-summary = "匹配 {matched} / 已加载 {loaded} | 总计 {total} · {words} 字 · 时长 {duration}"
+summary = "共 {records} 条 · {words} 字 | 总 {total_duration} · 语音 {speech_duration} · 有效 {effective_duration}"
 
 [tui.history.analytics]
 loading = "正在加载历史分析..."

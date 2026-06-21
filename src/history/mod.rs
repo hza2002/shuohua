@@ -12,7 +12,7 @@ pub use model::{
 };
 pub use stats::{
     AggregateStats, AnalyticsPeriod, AnalyticsPoint, AnalyticsQuery, AnalyticsSnapshot,
-    HistoryEvent, HistoryService, HistoryStatsSnapshot, HistoryStatsStatus,
+    HistoryEvent, HistoryPageResult, HistoryService, HistoryStatsSnapshot, HistoryStatsStatus,
 };
 pub use watcher::HistoryWatcher;
 

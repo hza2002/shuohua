@@ -15,8 +15,10 @@ use tokio::sync::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[cfg(test)]
+use crate::history::HistoryRecord;
 use crate::history::{
-    AnalyticsQuery, AudioDeleteResult, DeleteResult, HistoryEvent, HistoryQuery, HistoryRecord,
+    AnalyticsQuery, AudioDeleteResult, DeleteResult, HistoryEvent, HistoryPageResult, HistoryQuery,
     HistoryService, PipelineStepHistory, PipelineStepStatus,
 };
 use crate::ipc::protocol::{Command, Event, WireState, PROTO_VERSION};
@@ -470,9 +472,13 @@ fn snapshot_event(snapshot: StateSnapshot) -> Event {
     }
 }
 
-fn history_response_event(result: Result<Vec<HistoryRecord>>) -> Event {
+fn history_response_event(result: Result<HistoryPageResult>) -> Event {
     match result {
-        Ok(records) => Event::History { records },
+        Ok(page) => Event::History {
+            records: page.records,
+            matched: page.matched,
+            stats: page.stats,
+        },
         Err(e) => {
             tracing::warn!(error = ?e, "history read failed");
             Event::Error {
@@ -652,7 +658,7 @@ fn history_query(
     })
 }
 
-async fn history_page(history: HistoryService, query: HistoryQuery) -> Result<Vec<HistoryRecord>> {
+async fn history_page(history: HistoryService, query: HistoryQuery) -> Result<HistoryPageResult> {
     tokio::task::spawn_blocking(move || history.page(query))
         .await
         .context("join history page task")?

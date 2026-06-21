@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::history::{AnalyticsPeriod, AnalyticsSnapshot, HistoryRecord, HistoryStatsSnapshot};
+use crate::history::{
+    AggregateStats, AnalyticsPeriod, AnalyticsSnapshot, HistoryRecord, HistoryStatsSnapshot,
+};
 use crate::state::{AudioMeter, SessionMeta, SessionPhase};
 
 pub const PROTO_VERSION: u8 = 2;
@@ -112,6 +114,10 @@ pub enum Event {
     },
     History {
         records: Vec<HistoryRecord>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        matched: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stats: Option<AggregateStats>,
     },
     HistoryStats {
         snapshot: HistoryStatsSnapshot,
@@ -226,7 +232,8 @@ mod tests {
                 records: 1,
                 words: 2,
                 duration_ms: 3,
-                asr_audio_ms: 4,
+                asr_duration_ms: 4,
+                asr_audio_ms: 5,
             },
             current_month: crate::history::AggregateStats::default(),
             today: crate::history::AggregateStats::default(),
@@ -240,6 +247,17 @@ mod tests {
             error: None,
         };
         let events = vec![
+            Event::History {
+                records: Vec::new(),
+                matched: Some(23),
+                stats: Some(crate::history::AggregateStats {
+                    records: 23,
+                    words: 45,
+                    duration_ms: 67,
+                    asr_duration_ms: 60,
+                    asr_audio_ms: 50,
+                }),
+            },
             Event::HistoryAppended {
                 record: Box::new(HistoryRecord {
                     version: 1,

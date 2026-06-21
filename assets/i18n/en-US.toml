@@ -217,7 +217,7 @@ loading_more = "loading older history..."
 no_more = "no older history loaded"
 searching = "searching history..."
 delete_requested = "delete history requested"
-summary = "matched {matched} / loaded {loaded} | all time {total} · {words} words · duration {duration}"
+summary = "{records} records · {words} words | Total {total_duration} · Speech {speech_duration} · Effective {effective_duration}"
 
 [tui.history.analytics]
 loading = "loading history analytics..."

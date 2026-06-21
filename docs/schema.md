@@ -42,8 +42,8 @@
 {"event":"segment","recording_id":"01HXYZ...","text":"今天天气真好。"}    // 已定型文本段
 {"event":"audio_meter","recording_id":"01HXYZ...","meter":{"rms":0.12,"peak":0.44,"clipped":false,"vad_probability":0.82,"vad_speech":true}} // 录音中输入电平 + VAD 观测
 {"event":"pipeline_step","recording_id":"01HXYZ...","name":"filler","status":"ok","duration_ms":0.3,"text":"..."}
-{"event":"history","records":[...]}                         // get_history 回包，从新到旧
-{"event":"history_stats","snapshot":{"status":"ready","total":{"records":12,"words":345,"duration_ms":60000,"asr_audio_ms":42000},"current_month":{...},"today":{...},"error":null}}
+{"event":"history","records":[...],"matched":23,"stats":{"records":23,"words":1234,"duration_ms":300000,"asr_duration_ms":260000,"asr_audio_ms":210000}} // get_history 回包，从新到旧；query 存在时带全量命中 metadata
+{"event":"history_stats","snapshot":{"status":"ready","total":{"records":12,"words":345,"duration_ms":60000,"asr_duration_ms":56000,"asr_audio_ms":42000},"current_month":{...},"today":{...},"error":null}}
 {"event":"history_analytics","snapshot":{"status":"ready","period":"month","anchor":"2026-06","points":[{"key":"2026-06-01","stats":{...}}],"error":null}}
 {"event":"history_changed"}                                  // history JSONL 可能已变化，client 应 coalesce refresh
 {"event":"audio_deleted","id":"01HXYZ...","deleted":true}
@@ -62,7 +62,7 @@
 - **`audio_meter` 事件**：只在已有录音 PCM/VAD 流上派生轻量监控数据，供 TUI 画 waveform / VAD activity。daemon 不为 TUI 单独打开麦克风流；UDS 不传原始 PCM。`rms` / `peak` / `vad_probability` 取值范围为 `0.0..=1.0`；`vad_probability` / `vad_speech` 在当前录音路径没有 VAD 时可省略。
 - **`session_meta` 事件**：录音开始后推一次本次 session 的静态元数据，供 TUI 在 pipeline 尚未执行时显示完整 ASR provider、post chain、VAD backend 和 hotwords 数量。它不是持久化状态；最终事实仍以 `history_appended.record` 为准。
 - **`session_phase` 事件**：TUI 专用的录音内部阶段，不改变顶层 `state_changed.state` 语义。`active` 表示正在把音频送 ASR，`idle` 表示 VAD pause 后麦克风仍在听但 ASR 暂停，`stopping` 表示用户停止后的收尾阶段。
-- **`get_history` 分页**：默认 `limit=50`，最大 500，返回从新到旧。`before` 用 `started_at` RFC3339 时间戳，语义为分页游标；`before_id` 用来在同一 timestamp 下继续翻页，必须和 `before` 同时出现，单独传 `before_id` 返回 `error(kind="bad_command")`。服务端返回 `(started_at, id)` 严格早于 cursor 的记录。`query` 是可选关键词过滤，由 daemon 对 persisted JSONL records 做大小写不敏感 substring；TUI 不维护 full-history search index/fuzzy matcher。
+- **`get_history` 分页**：默认 `limit=50`，最大 500，返回从新到旧。`before` 用 `started_at` RFC3339 时间戳，语义为分页游标；`before_id` 用来在同一 timestamp 下继续翻页，必须和 `before` 同时出现，单独传 `before_id` 返回 `error(kind="bad_command")`。服务端返回 `(started_at, id)` 严格早于 cursor 的记录。`query` 是可选关键词过滤，由 daemon 对 persisted JSONL records 做大小写不敏感 substring；TUI 不维护 full-history search index/fuzzy matcher。query 存在时，`history` 回包同时带 `matched` 和 `stats`，分别表示该 query 在全量 history 中的命中条数和命中集合聚合统计；分页 records 仍只返回当前页。
 - **summary / analytics**：`get_history_stats` 返回全量、当前月、今天的 additive totals。`get_history_analytics` 的 `period` 为 `year|month|day`，`anchor` 分别为 `YYYY`、`YYYY-MM`、`YYYY-MM-DD`；返回固定零填充 buckets：year=12 months，month=该月每天，day=24 hours。可视化平均值由 client 从 additive stats 派生。
 - **stale / unavailable**：stats 和 analytics snapshot 的 `status` 为 `ready|stale|unavailable`。`stale` 表示保留 last valid index 但发现当前 JSONL 无法完全 reconcile；`unavailable` 表示没有可用 index。`error` 是给 TUI/doctor 的简短诊断，不写入 JSONL。
 - **history direct response 与 broadcasts**：同一 UDS 连接上 direct command response 按该连接命令顺序返回；`history_changed` / `history_appended` 是 broadcast，和 direct response 的相对顺序不指定，client 必须 coalesce refresh。

@@ -101,7 +101,6 @@ pub(super) fn render_history(frame: &mut Frame, page: &HistoryPage, area: Rect, 
 
 pub(super) fn history_summary_text(page: &HistoryPage) -> String {
     let loaded = page.records.len();
-    let matched = page.filtered().len();
     let total = page
         .stats
         .as_ref()
@@ -115,19 +114,51 @@ pub(super) fn history_summary_text(page: &HistoryPage) -> String {
                 |mut stats, record| {
                     stats.words += record.text_stats().words as u64;
                     stats.duration_ms += record.duration_ms;
+                    stats.asr_duration_ms += record.asr.duration_ms;
                     stats.asr_audio_ms += record.asr.audio_ms;
                     stats
                 },
             )
         });
+    let query = page.search.trim();
+    let (record_count, words, total_duration, speech_duration, effective_duration) =
+        if query.is_empty() {
+            (
+                total.records.to_string(),
+                total.words.to_string(),
+                format_duration(total.duration_ms),
+                format_duration(total.asr_duration_ms),
+                format_duration(total.asr_audio_ms),
+            )
+        } else if let Some(search_stats) = page
+            .search_stats
+            .as_ref()
+            .filter(|search_stats| search_stats.query == query)
+        {
+            (
+                format!("{}/{}", search_stats.matched, total.records),
+                search_stats.stats.words.to_string(),
+                format_duration(search_stats.stats.duration_ms),
+                format_duration(search_stats.stats.asr_duration_ms),
+                format_duration(search_stats.stats.asr_audio_ms),
+            )
+        } else {
+            (
+                format!("?/{}", total.records),
+                "-".to_string(),
+                "-".to_string(),
+                "-".to_string(),
+                "-".to_string(),
+            )
+        };
     crate::i18n::tr(
         "tui.history.summary",
         &[
-            ("matched", matched.to_string()),
-            ("loaded", loaded.to_string()),
-            ("total", total.records.to_string()),
-            ("words", total.words.to_string()),
-            ("duration", format_duration(total.duration_ms)),
+            ("records", record_count),
+            ("words", words),
+            ("total_duration", total_duration),
+            ("speech_duration", speech_duration),
+            ("effective_duration", effective_duration),
         ],
     )
 }
@@ -306,7 +337,7 @@ fn history_detail_title(detail: HistoryDetail) -> String {
     }
 }
 
-fn history_detail_text(
+pub(super) fn history_detail_text(
     page: &HistoryPage,
     theme: &TuiTheme,
     record: &HistoryRecord,
@@ -315,8 +346,9 @@ fn history_detail_text(
     match detail {
         HistoryDetail::Details => history_details_lines(page, theme, record),
         HistoryDetail::Asr => text_lines(format!(
-            "provider: {}\naudio: {}\nstarted: {}\n\n{}",
+            "provider: {}\nspeech: {}\neffective: {}\nstarted: {}\n\n{}",
             record.asr.provider,
+            format_duration(record.asr.duration_ms),
             format_duration(record.asr.audio_ms),
             format_local_time(record.started_at),
             record.asr.text
@@ -427,8 +459,18 @@ fn history_details_lines(
             ui::fg(theme),
         ),
         kv_line(
-            "duration",
+            "total",
             format_duration(record.duration_ms),
+            ui::warning(theme),
+        ),
+        kv_line(
+            "speech",
+            format_duration(record.asr.duration_ms),
+            ui::warning(theme),
+        ),
+        kv_line(
+            "effective",
+            format_duration(record.asr.audio_ms),
             ui::warning(theme),
         ),
         kv_line(

@@ -38,6 +38,7 @@ pub struct HistoryRecord {
     pub status: HistoryStatus,
     pub app: Option<String>,
     pub text: String,
+    #[serde(default)]
     pub text_stats: TextStats,
     pub asr: AsrHistory,
     pub pipeline: Vec<PipelineStepHistory>,
@@ -47,7 +48,11 @@ pub struct HistoryRecord {
 
 impl HistoryRecord {
     pub fn text_stats(&self) -> TextStats {
-        self.text_stats
+        if self.text_stats.words == 0 && !self.text.is_empty() {
+            crate::text_stats::compute(&self.text)
+        } else {
+            self.text_stats
+        }
     }
 }
 

@@ -21,6 +21,7 @@ pub struct AggregateStats {
     pub records: u64,
     pub words: u64,
     pub duration_ms: u64,
+    pub asr_duration_ms: u64,
     pub asr_audio_ms: u64,
 }
 
@@ -29,8 +30,9 @@ impl AggregateStats {
         self.records = self.records.saturating_add(1);
         self.words = self
             .words
-            .saturating_add(u64::try_from(record.text_stats.words).unwrap_or(u64::MAX));
+            .saturating_add(u64::try_from(record.text_stats().words).unwrap_or(u64::MAX));
         self.duration_ms = self.duration_ms.saturating_add(record.duration_ms);
+        self.asr_duration_ms = self.asr_duration_ms.saturating_add(record.asr.duration_ms);
         self.asr_audio_ms = self.asr_audio_ms.saturating_add(record.asr.audio_ms);
     }
 
@@ -38,6 +40,7 @@ impl AggregateStats {
         self.records = self.records.saturating_add(other.records);
         self.words = self.words.saturating_add(other.words);
         self.duration_ms = self.duration_ms.saturating_add(other.duration_ms);
+        self.asr_duration_ms = self.asr_duration_ms.saturating_add(other.asr_duration_ms);
         self.asr_audio_ms = self.asr_audio_ms.saturating_add(other.asr_audio_ms);
     }
 }
@@ -95,6 +98,21 @@ pub struct AnalyticsSnapshot {
     pub anchor: String,
     pub points: Vec<AnalyticsPoint>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistoryPageResult {
+    pub records: Vec<HistoryRecord>,
+    pub matched: Option<u64>,
+    pub stats: Option<AggregateStats>,
+}
+
+impl std::ops::Deref for HistoryPageResult {
+    type Target = [HistoryRecord];
+
+    fn deref(&self) -> &Self::Target {
+        &self.records
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -345,15 +363,15 @@ impl HistoryService {
         snapshot
     }
 
-    pub fn page(&self, query: HistoryQuery) -> Result<Vec<HistoryRecord>> {
+    pub fn page(&self, query: HistoryQuery) -> Result<HistoryPageResult> {
         let mut events = Vec::new();
-        let records = {
+        let page = {
             let mut inner = self.inner.lock().expect("history service lock poisoned");
             reconcile_if_initialized(&mut inner, &mut events)?;
             page_stable(&inner.dir, query, &inner.hooks)?
         };
         self.publish(events);
-        Ok(records)
+        Ok(page)
     }
 
     pub fn audio(&self, id: &str) -> Result<AudioAssetInfo> {
@@ -756,7 +774,7 @@ fn scan_once(
 }
 
 fn validate_record(record: &HistoryRecord, path: &Path, line_no: usize) -> Result<()> {
-    if record.version != 1 {
+    if !matches!(record.version, 1 | 2) {
         bail!(
             "unsupported history schema version {} at {}:{}",
             record.version,
@@ -814,7 +832,7 @@ fn normalize_history_limit(limit: usize) -> usize {
     }
 }
 
-fn page_stable(dir: &Path, query: HistoryQuery, hooks: &Hooks) -> Result<Vec<HistoryRecord>> {
+fn page_stable(dir: &Path, query: HistoryQuery, hooks: &Hooks) -> Result<HistoryPageResult> {
     let query = PreparedHistoryQuery::new(query)?;
     let mut last_error = None;
     for attempt in 0..2 {
@@ -823,7 +841,11 @@ fn page_stable(dir: &Path, query: HistoryQuery, hooks: &Hooks) -> Result<Vec<His
         match page_once(dir, &before, &query, hooks) {
             Ok(read) => {
                 if fingerprint_file_set(dir, hooks)? == before {
-                    return Ok(read.records);
+                    return Ok(HistoryPageResult {
+                        records: read.records,
+                        matched: read.matched,
+                        stats: read.stats,
+                    });
                 }
                 last_error = Some("unstable history source during page read".to_string());
             }
@@ -843,6 +865,8 @@ fn page_stable(dir: &Path, query: HistoryQuery, hooks: &Hooks) -> Result<Vec<His
 
 struct PageRead {
     records: Vec<HistoryRecord>,
+    matched: Option<u64>,
+    stats: Option<AggregateStats>,
 }
 
 fn page_once(
@@ -867,12 +891,22 @@ fn page_once(
     }
 
     let mut records = Vec::with_capacity(query.limit);
-    while records.len() < query.limit {
+    let mut matched = query.query.as_ref().map(|_| 0u64);
+    let mut stats = query.query.as_ref().map(|_| AggregateStats::default());
+    while query.query.is_some() || records.len() < query.limit {
         let Some(entry) = heap.pop() else {
             break;
         };
         let cursor_index = entry.cursor_index;
-        records.push(entry.record);
+        if let Some(matched) = &mut matched {
+            *matched = matched.saturating_add(1);
+        }
+        if let Some(stats) = &mut stats {
+            stats.add_record(&entry.record);
+        }
+        if records.len() < query.limit {
+            records.push(entry.record);
+        }
         if let Some(record) = cursors[cursor_index].next_matching(query)? {
             heap.push(HeapEntry {
                 key: RecordKey::from(&record),
@@ -882,7 +916,11 @@ fn page_once(
         }
     }
 
-    Ok(PageRead { records })
+    Ok(PageRead {
+        records,
+        matched,
+        stats,
+    })
 }
 
 struct ShardCursor {
@@ -1558,6 +1596,56 @@ mod tests {
     }
 
     #[test]
+    fn legacy_records_without_text_stats_are_counted_from_text() {
+        let dir = temp_dir("legacy-text-stats");
+        let path = path_for_month_in_dir(&dir, datetime!(2026-06-01 00:00:00 UTC));
+        fs::create_dir_all(&dir).unwrap();
+        let mut value = serde_json::to_value(record(
+            "legacy",
+            datetime!(2026-06-01 00:00:00 UTC),
+            "hello world",
+        ))
+        .unwrap();
+        value.as_object_mut().unwrap().remove("text_stats");
+        fs::write(&path, format!("{value}\n")).unwrap();
+
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+        let snapshot = service.stats();
+        let page = service.page(HistoryQuery::default()).unwrap();
+
+        assert_eq!(snapshot.status, HistoryStatsStatus::Ready);
+        assert_eq!(snapshot.total.records, 1);
+        assert_eq!(snapshot.total.words, 2);
+        assert_eq!(page[0].text_stats().words, 2);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn version_two_records_with_v1_shape_are_indexed() {
+        let dir = temp_dir("version-two");
+        let path = path_for_month_in_dir(&dir, datetime!(2026-06-01 00:00:00 UTC));
+        fs::create_dir_all(&dir).unwrap();
+        let mut value = serde_json::to_value(record(
+            "v2",
+            datetime!(2026-06-01 00:00:00 UTC),
+            "hello world",
+        ))
+        .unwrap();
+        value["version"] = serde_json::json!(2);
+        fs::write(&path, format!("{value}\n")).unwrap();
+
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+        let snapshot = service.stats();
+
+        assert_eq!(snapshot.status, HistoryStatsStatus::Ready);
+        assert_eq!(snapshot.total.records, 1);
+        assert_eq!(snapshot.total.words, 2);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn year_month_day_fixed_buckets() {
         let dir = temp_dir("fixed-buckets");
         write_line(
@@ -1914,7 +2002,50 @@ mod tests {
             })
             .unwrap();
 
-        assert_ids(&records, &["new-hit", "old-hit"]);
+        assert_ids(&records.records, &["new-hit", "old-hit"]);
+        assert_eq!(records.matched, Some(2));
+        assert_eq!(records.stats.unwrap().records, 2);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn query_metadata_counts_matches_beyond_page_limit() {
+        let dir = temp_dir("page-query-metadata");
+        write_line(
+            &dir,
+            record("old-hit", datetime!(2026-05-01 00:00:00 UTC), "needle one"),
+        );
+        write_line(
+            &dir,
+            record("mid-hit", datetime!(2026-06-01 00:00:00 UTC), "needle two"),
+        );
+        write_line(
+            &dir,
+            record(
+                "new-hit",
+                datetime!(2026-07-01 00:00:00 UTC),
+                "needle three",
+            ),
+        );
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+
+        let page = service
+            .page(HistoryQuery {
+                limit: 1,
+                query: Some("needle".to_string()),
+                ..HistoryQuery::default()
+            })
+            .unwrap();
+
+        assert_ids(&page.records, &["new-hit"]);
+        assert_eq!(page.matched, Some(3));
+        let stats = page.stats.unwrap();
+        assert_eq!(stats.records, 3);
+        assert_eq!(stats.words, 6);
+        assert_eq!(stats.duration_ms, 3000);
+        assert_eq!(stats.asr_duration_ms, 3000);
+        assert_eq!(stats.asr_audio_ms, 3000);
         let _ = fs::remove_dir_all(dir);
     }
 

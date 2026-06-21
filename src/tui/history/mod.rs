@@ -7,7 +7,8 @@ use std::path::Path;
 
 use crate::config::theme::TuiTheme;
 use crate::history::{
-    AnalyticsPeriod, AnalyticsSnapshot, HistoryRecord, HistoryStatsSnapshot, HistoryStatsStatus,
+    AggregateStats, AnalyticsPeriod, AnalyticsSnapshot, HistoryRecord, HistoryStatsSnapshot,
+    HistoryStatsStatus,
 };
 use crate::ipc::protocol::{Command, Event};
 use crate::tui::audio::{
@@ -23,6 +24,7 @@ mod render;
 mod tests;
 
 pub const HISTORY_PAGE_SIZE: usize = 50;
+const AUTO_LOAD_MORE_REMAINING: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryDetail {
@@ -71,6 +73,13 @@ enum HistoryRequestKind {
     LoadMore,
     Discard,
     DiscardRefresh,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchStats {
+    pub query: String,
+    pub matched: u64,
+    pub stats: AggregateStats,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +166,7 @@ pub struct HistoryPage {
     pub loading_more: bool,
     pub has_more: bool,
     pub stats: Option<HistoryStatsSnapshot>,
+    pub search_stats: Option<SearchStats>,
     pub view: HistoryView,
     pub analytics: HistoryAnalyticsState,
     pub initial_loaded: bool,
@@ -180,6 +190,7 @@ impl HistoryPage {
             loading_more: false,
             has_more: true,
             stats: None,
+            search_stats: None,
             view: HistoryView::Records,
             analytics: HistoryAnalyticsState::default(),
             initial_loaded: false,
@@ -282,6 +293,7 @@ impl HistoryPage {
     fn reset_search_paging(&mut self) {
         self.loading_more = false;
         self.has_more = true;
+        self.search_stats = None;
         let query = self.query();
         for request in &mut self.pending_history_requests {
             if matches!(
@@ -528,6 +540,21 @@ impl HistoryPage {
         )
     }
 
+    fn auto_load_more_outcome(&mut self) -> KeyOutcome {
+        if self.view != HistoryView::Records {
+            return KeyOutcome::none();
+        }
+        let len = self.filtered().len();
+        if len == 0 || self.selected + AUTO_LOAD_MORE_REMAINING < len {
+            return KeyOutcome::none();
+        }
+        let mut outcome = self.load_more_outcome();
+        if outcome.command.is_some() {
+            outcome.status = None;
+        }
+        outcome
+    }
+
     fn merge_newest(&mut self, records: Vec<HistoryRecord>) {
         self.records.clear();
         for record in records {
@@ -603,15 +630,27 @@ impl HistoryPage {
         self.refresh_in_flight = self.refresh_responses_pending > 0;
     }
 
-    fn finish_history_request_with_records(&mut self, records: Vec<HistoryRecord>) {
+    fn finish_history_request_with_records(
+        &mut self,
+        records: Vec<HistoryRecord>,
+        matched: Option<u64>,
+        stats: Option<AggregateStats>,
+    ) {
         match self.pending_history_requests.pop_front() {
-            Some(HistoryRequestKind::LoadMore) => self.merge_older(records),
-            Some(HistoryRequestKind::Search) => self.merge_newest(records),
+            Some(HistoryRequestKind::LoadMore) => {
+                self.update_search_stats(matched, stats);
+                self.merge_older(records);
+            }
+            Some(HistoryRequestKind::Search) => {
+                self.update_search_stats(matched, stats);
+                self.merge_newest(records);
+            }
             Some(HistoryRequestKind::RefreshPage { query }) => {
                 if query != self.query() {
                     self.mark_refresh_response();
                     return;
                 }
+                self.update_search_stats(matched, stats);
                 self.merge_newest(records);
                 self.refresh_audio_cache();
                 self.mark_refresh_response();
@@ -619,6 +658,20 @@ impl HistoryPage {
             Some(HistoryRequestKind::DiscardRefresh) => self.mark_refresh_response(),
             Some(HistoryRequestKind::Discard) => {}
             None => {}
+        }
+    }
+
+    fn update_search_stats(&mut self, matched: Option<u64>, stats: Option<AggregateStats>) {
+        let Some(query) = self.query() else {
+            self.search_stats = None;
+            return;
+        };
+        if let (Some(matched), Some(stats)) = (matched, stats) {
+            self.search_stats = Some(SearchStats {
+                query,
+                matched,
+                stats,
+            });
         }
     }
 
@@ -709,8 +762,12 @@ impl Page for HistoryPage {
                 }
                 self.selected = self.selected.min(self.records.len().saturating_sub(1));
             }
-            Event::History { records } => {
-                self.finish_history_request_with_records(records.clone());
+            Event::History {
+                records,
+                matched,
+                stats,
+            } => {
+                self.finish_history_request_with_records(records.clone(), *matched, *stats);
             }
             Event::HistoryStats { snapshot } => {
                 self.stats = Some(snapshot.clone());
@@ -782,10 +839,16 @@ impl Page for HistoryPage {
             }
             KeyCode::Char('v') if self.view == HistoryView::Analytics => self.next_metric(),
             KeyCode::Char('c') if self.view == HistoryView::Analytics => self.toggle_chart(),
-            KeyCode::Char('j') | KeyCode::Down => self.move_down(),
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.move_down();
+                return self.auto_load_more_outcome();
+            }
             KeyCode::Char('k') | KeyCode::Up => self.move_up(),
             KeyCode::Char('g') => self.move_top(),
-            KeyCode::Char('G') => self.move_bottom(),
+            KeyCode::Char('G') => {
+                self.move_bottom();
+                return self.auto_load_more_outcome();
+            }
             KeyCode::Char('l') | KeyCode::Right => self.next_detail(),
             KeyCode::Char('h') | KeyCode::Left => self.prev_detail(),
             KeyCode::Esc => {
@@ -801,7 +864,6 @@ impl Page for HistoryPage {
             KeyCode::Char('r') => return KeyOutcome::status(self.reveal_selected_audio()),
             KeyCode::Char('d') => return KeyOutcome::status(self.request_delete_audio()),
             KeyCode::Char('x') => return KeyOutcome::status(self.request_delete_history()),
-            KeyCode::Char('m') => return self.load_more_outcome(),
             _ => {}
         }
         KeyOutcome::none()

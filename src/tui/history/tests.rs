@@ -53,6 +53,7 @@ fn stats(total_records: u64, total_words: u64, total_duration_ms: u64) -> Histor
             records: total_records,
             words: total_words,
             duration_ms: total_duration_ms,
+            asr_duration_ms: total_duration_ms.saturating_sub(10_000),
             asr_audio_ms: total_duration_ms / 2,
         },
         current_month: AggregateStats::default(),
@@ -78,6 +79,7 @@ fn analytics(period: AnalyticsPeriod, status: HistoryStatsStatus) -> AnalyticsSn
                     records: 1,
                     words: 2,
                     duration_ms: 3_000,
+                    asr_duration_ms: 3_500,
                     asr_audio_ms: 4_000,
                 },
             },
@@ -87,6 +89,7 @@ fn analytics(period: AnalyticsPeriod, status: HistoryStatsStatus) -> AnalyticsSn
                     records: 3,
                     words: 4,
                     duration_ms: 5_000,
+                    asr_duration_ms: 5_500,
                     asr_audio_ms: 6_000,
                 },
             },
@@ -115,6 +118,14 @@ fn error(kind: &str) -> Event {
         recording_id: None,
         kind: kind.to_string(),
         msg: "boom".to_string(),
+    }
+}
+
+fn history_event(records: Vec<HistoryRecord>) -> Event {
+    Event::History {
+        records,
+        matched: None,
+        stats: None,
     }
 }
 
@@ -205,12 +216,69 @@ fn history_append_before_initial_load_only_marks_refresh_needed() {
 }
 
 #[test]
-fn records_summary_distinguishes_loaded_matched_and_total() {
+fn records_summary_shows_compact_totals_without_loaded_count() {
     let mut page = HistoryPage::new();
     page.records = vec![
         sample_record("01HXYZABCDEF0123456789AAA1", 3),
         sample_record("01HXYZABCDEF0123456789AAA2", 4),
     ];
+    page.apply_event(
+        &Event::HistoryStats {
+            snapshot: stats(10, 500, 3_723_000),
+        },
+        true,
+    );
+
+    let summary = history_summary_text(&page);
+
+    assert!(summary.contains("10 records"));
+    assert!(summary.contains("500 words"));
+    assert!(summary.contains("Total 1:02:03"));
+    assert!(summary.contains("Speech 1:01:53"));
+    assert!(summary.contains("Effective 31:01"));
+    assert!(!summary.contains("loaded"));
+    assert!(!summary.contains("matched"));
+}
+
+#[test]
+fn search_summary_uses_hit_ratio_and_total_stats() {
+    let mut page = HistoryPage::new();
+    page.records = vec![
+        sample_record("01HXYZABCDEF0123456789AAA1", 3),
+        sample_record("01HXYZABCDEF0123456789AAA2", 4),
+    ];
+    page.search = "AAA1".to_string();
+    page.search_stats = Some(SearchStats {
+        query: "AAA1".to_string(),
+        matched: 23,
+        stats: AggregateStats {
+            records: 23,
+            words: 900,
+            duration_ms: 456_000,
+            asr_duration_ms: 400_000,
+            asr_audio_ms: 300_000,
+        },
+    });
+    page.apply_event(
+        &Event::HistoryStats {
+            snapshot: stats(555, 500, 123_000),
+        },
+        true,
+    );
+
+    let summary = history_summary_text(&page);
+
+    assert!(summary.contains("23/555 records"));
+    assert!(summary.contains("900 words"));
+    assert!(summary.contains("Total 07:36"));
+    assert!(!summary.contains("loaded"));
+    assert!(!summary.contains("matched"));
+}
+
+#[test]
+fn search_summary_waits_for_daemon_match_count() {
+    let mut page = HistoryPage::new();
+    page.records = vec![sample_record("01HXYZABCDEF0123456789AAA1", 3)];
     page.search = "AAA1".to_string();
     page.apply_event(
         &Event::HistoryStats {
@@ -221,10 +289,91 @@ fn records_summary_distinguishes_loaded_matched_and_total() {
 
     let summary = history_summary_text(&page);
 
-    assert!(summary.contains("matched 1 / loaded 2"));
-    assert!(summary.contains("all time 10"));
-    assert!(summary.contains("500 words"));
-    assert!(summary.contains("duration 02:03"));
+    assert!(summary.contains("?/10 records"));
+    assert!(summary.contains("- words"));
+}
+
+#[test]
+fn near_tail_navigation_auto_loads_more_history() {
+    let mut page = HistoryPage::new();
+    page.records = (0..HISTORY_PAGE_SIZE)
+        .map(|idx| {
+            sample_record(
+                &format!("01HXYZABCDEF0123456789A{idx:03}"),
+                (idx % 28 + 1) as u8,
+            )
+        })
+        .collect();
+    page.selected = HISTORY_PAGE_SIZE - 21;
+
+    let outcome = page.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+    assert!(page.loading_more);
+    assert!(outcome.status.is_none());
+    assert!(matches!(
+        outcome.command,
+        Some(crate::ipc::protocol::Command::GetHistory {
+            before: Some(_),
+            ..
+        })
+    ));
+}
+
+#[test]
+fn manual_load_more_key_is_ignored() {
+    let mut page = HistoryPage::new();
+    page.records = vec![sample_record("01HXYZABCDEF0123456789AAA1", 3)];
+
+    let outcome = page.on_key(press('m'));
+
+    assert!(outcome.command.is_none());
+    assert!(!page.loading_more);
+}
+
+#[test]
+fn details_show_total_speech_and_effective_audio_durations() {
+    let page = HistoryPage::new();
+    let mut record = sample_record("01HXYZABCDEF0123456789AAA1", 3);
+    record.duration_ms = 390_000;
+    record.asr.duration_ms = 320_000;
+    record.asr.audio_ms = 250_000;
+
+    let text = history_detail_text(
+        &page,
+        &crate::config::theme::TuiTheme::default(),
+        &record,
+        HistoryDetail::Details,
+    )
+    .into_iter()
+    .map(|line| line.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+
+    assert!(text.contains("total: 06:30"));
+    assert!(text.contains("speech: 05:20"));
+    assert!(text.contains("effective: 04:10"));
+}
+
+#[test]
+fn asr_detail_shows_speech_and_effective_audio_durations() {
+    let page = HistoryPage::new();
+    let mut record = sample_record("01HXYZABCDEF0123456789AAA1", 3);
+    record.asr.duration_ms = 320_000;
+    record.asr.audio_ms = 250_000;
+
+    let text = history_detail_text(
+        &page,
+        &crate::config::theme::TuiTheme::default(),
+        &record,
+        HistoryDetail::Asr,
+    )
+    .into_iter()
+    .map(|line| line.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+
+    assert!(text.contains("speech: 05:20"));
+    assert!(text.contains("effective: 04:10"));
 }
 
 #[test]
@@ -384,7 +533,7 @@ fn history_changed_coalesces_one_refresh_batch() {
 
     page.apply_event(&Event::HistoryChanged, true);
     page.apply_event(&Event::HistoryChanged, true);
-    page.apply_event(&Event::History { records: vec![] }, true);
+    page.apply_event(&history_event(vec![]), true);
     page.apply_event(
         &Event::HistoryStats {
             snapshot: stats(0, 0, 0),
@@ -548,12 +697,7 @@ fn history_changed_keeps_existing_records() {
     let mut page = HistoryPage::new();
     let record = sample_record("01HXYZABCDEF0123456789AAA1", 3);
     page.enter_commands();
-    page.apply_event(
-        &Event::History {
-            records: vec![record.clone()],
-        },
-        true,
-    );
+    page.apply_event(&history_event(vec![record.clone()]), true);
 
     page.apply_event(&Event::HistoryChanged, true);
 
@@ -565,12 +709,7 @@ fn legacy_history_appended_deduplicates_existing_records() {
     let mut page = HistoryPage::new();
     let record = sample_record("01HXYZABCDEF0123456789AAA1", 3);
     page.enter_commands();
-    page.apply_event(
-        &Event::History {
-            records: vec![record.clone()],
-        },
-        true,
-    );
+    page.apply_event(&history_event(vec![record.clone()]), true);
 
     page.apply_event(
         &Event::HistoryAppended {
@@ -619,13 +758,11 @@ fn initial_history_preserves_server_order() {
     let mut page = HistoryPage::new();
     page.enter_commands();
     page.apply_event(
-        &Event::History {
-            records: vec![
-                sample_record("01HXYZABCDEF0123456789AAA2", 4),
-                sample_record("01HXYZABCDEF0123456789AAA1", 3),
-                sample_record("01HXYZABCDEF0123456789AAA0", 2),
-            ],
-        },
+        &history_event(vec![
+            sample_record("01HXYZABCDEF0123456789AAA2", 4),
+            sample_record("01HXYZABCDEF0123456789AAA1", 3),
+            sample_record("01HXYZABCDEF0123456789AAA0", 2),
+        ]),
         true,
     );
 
@@ -655,9 +792,10 @@ fn loading_more_appends_and_deduplicates_older_records() {
     page.load_more_outcome();
 
     page.apply_event(
-        &Event::History {
-            records: vec![duplicate, sample_record("01HXYZABCDEF0123456789AAA0", 2)],
-        },
+        &history_event(vec![
+            duplicate,
+            sample_record("01HXYZABCDEF0123456789AAA0", 2),
+        ]),
         true,
     );
 
@@ -677,9 +815,7 @@ fn search_response_uses_search_request_even_if_loading_more_is_true() {
     page.on_key(press('a'));
 
     page.apply_event(
-        &Event::History {
-            records: vec![sample_record("01HXYZABCDEF0123456789AAA0", 2)],
-        },
+        &history_event(vec![sample_record("01HXYZABCDEF0123456789AAA0", 2)]),
         true,
     );
 
@@ -696,15 +832,11 @@ fn history_responses_follow_pending_request_order() {
     page.start_search();
     page.on_key(press('a'));
     page.apply_event(
-        &Event::History {
-            records: vec![sample_record("01HXYZABCDEF0123456789AAA1", 3)],
-        },
+        &history_event(vec![sample_record("01HXYZABCDEF0123456789AAA1", 3)]),
         true,
     );
     page.apply_event(
-        &Event::History {
-            records: vec![sample_record("01HXYZABCDEF0123456789AAA0", 2)],
-        },
+        &history_event(vec![sample_record("01HXYZABCDEF0123456789AAA0", 2)]),
         true,
     );
 
@@ -721,9 +853,7 @@ fn search_change_discards_stale_load_more_response() {
     page.start_search();
     page.on_key(press('a'));
     page.apply_event(
-        &Event::History {
-            records: vec![sample_record("01HXYZABCDEF0123456789AAA1", 3)],
-        },
+        &history_event(vec![sample_record("01HXYZABCDEF0123456789AAA1", 3)]),
         true,
     );
 
@@ -753,9 +883,7 @@ fn search_change_discards_stale_refresh_page() {
     page.start_search();
     page.on_key(press('a'));
     page.apply_event(
-        &Event::History {
-            records: vec![sample_record("01HXYZABCDEF0123456789AAA1", 3)],
-        },
+        &history_event(vec![sample_record("01HXYZABCDEF0123456789AAA1", 3)]),
         true,
     );
 
@@ -772,15 +900,11 @@ fn rapid_search_discards_stale_search_response() {
     page.on_key(press('a'));
     page.on_key(press('b'));
     page.apply_event(
-        &Event::History {
-            records: vec![sample_record("01HXYZABCDEF0123456789AAA1", 3)],
-        },
+        &history_event(vec![sample_record("01HXYZABCDEF0123456789AAA1", 3)]),
         true,
     );
     page.apply_event(
-        &Event::History {
-            records: vec![sample_record("01HXYZABCDEF0123456789AAA2", 4)],
-        },
+        &history_event(vec![sample_record("01HXYZABCDEF0123456789AAA2", 4)]),
         true,
     );
 

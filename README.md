@@ -38,12 +38,13 @@ shuohua 需要授权两项 macOS 系统权限：
 
 ## 文档
 
-- [docs/DESIGN.md](docs/DESIGN.md) — 技术设计与架构不变量
-- [docs/CLI.md](docs/CLI.md) — CLI 与 launchd 配置
-- [docs/SCHEMA.md](docs/SCHEMA.md) — UDS 协议与 history.jsonl
-- [docs/MODULES.md](docs/MODULES.md) — 模块边界
+- [docs/architecture.md](docs/architecture.md) — 进程模型、数据流、选型与全局约定
+- [docs/modules/](docs/modules/) — 各模块的不变量与边界（voice / hotkey / asr / post / overlay / config）
+- [docs/schema.md](docs/schema.md) — UDS 协议与 history.jsonl
+- [docs/cli.md](docs/cli.md) — CLI 与 launchd 配置
+- [docs/debug.md](docs/debug.md) — 排障流程
 - [CHANGELOG.md](CHANGELOG.md) — 变更历史
-- [docs/RELEASE.md](docs/RELEASE.md) — 发版手册
+- [docs/ops/release.md](docs/ops/release.md) — 发版手册
 
 ## License
 

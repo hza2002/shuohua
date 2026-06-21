@@ -350,7 +350,7 @@ enum ResponseAction {
 /// 2. session 末尾 `snapshots.concat()` 与豆包 cumulative `result.text` 不一致（[`Self::check_final`]）
 ///
 /// 任何一条 `⚠` 出现就该回头看豆包协议是不是变了 / 我们的 segment-concat 假设是不是破了。
-/// 日志门禁原则见 `docs/DESIGN.md` §2.13。
+/// 日志门禁原则见 `docs/architecture.md`（日志节）。
 ///
 /// 用两份 `cfg` impl 分支，避免在表达式 / 语句位置写 `#[cfg]`（仍是 nightly）。
 #[cfg(debug_assertions)]

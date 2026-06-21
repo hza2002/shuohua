@@ -1,3 +1,5 @@
+//! Overlay 浮层。材质、视图层级不变量与平台边界见 docs/modules/overlay.md。
+
 mod command;
 pub mod layout;
 mod model;

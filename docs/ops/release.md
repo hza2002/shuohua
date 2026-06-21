@@ -121,11 +121,11 @@ git log <last-tag>..HEAD --oneline
 
 | 改动 | 必须同步的文档 |
 |---|---|
-| 配置 TOML 字段 | `docs/CLI.md`、`docs/DESIGN.md` |
-| history schema | `docs/SCHEMA.md`（删字段或破坏兼容必须升 schema version） |
-| UDS 协议 | `docs/SCHEMA.md` |
-| CLI 子命令 | `docs/CLI.md` |
-| 模块边界 | `docs/MODULES.md` |
+| 配置 TOML 字段 | `docs/cli.md`、对应 `docs/modules/*.md` |
+| history schema | `docs/schema.md`（删字段或破坏兼容必须升 schema version） |
+| UDS 协议 | `docs/schema.md` |
+| CLI 子命令 | `docs/cli.md` |
+| 模块边界 | `docs/architecture.md`、对应 `docs/modules/*.md` |
 
 如果文档与代码不一致，**先停下补文档**，再回到 Step 1（commit 历史变了，bump 判断可能要重做）。
 
@@ -362,12 +362,12 @@ Agent 报告本次发版摘要：
 - `release.toml`（cargo-release 配置：限制 main 分支、强制 pre-release-hook、禁止 publish）
 - `.github/workflows/release.yml`（tag-driven macOS release workflow）
 - `.github/release-body.md`（Release notes 模板含权限提醒）
-- `docs/RELEASE.md`（本文档）
+- `docs/ops/release.md`（本文档）
 - 本地 `cargo install cargo-release` 已装
 
 ### 5.2 还需要做的加固（首次公开发版前）
 
-[docs/RELEASE_HARDENING.md](RELEASE_HARDENING.md) 列出 7 个必须按顺序走完的步骤：
+[docs/ops/release-hardening.md](release-hardening.md) 列出 7 个必须按顺序走完的步骤：
 
 1. 配置 git remote 并首次 push 到 GitHub
 2. 撤销本仓库 `commit.gpgsign` override

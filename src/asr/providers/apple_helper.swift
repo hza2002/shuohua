@@ -1,3 +1,17 @@
+// Apple Speech framework bridge（SpeechAnalyzer，macOS 26+）。真正的 Apple API 调用都在本文件。
+//
+// 官方文档：
+//   集成指南: https://developer.apple.com/documentation/speech/bringing-advanced-speech-to-text-capabilities-to-your-app
+//   SpeechAnalyzer:   https://developer.apple.com/documentation/speech/speechanalyzer
+//   SpeechTranscriber: https://developer.apple.com/documentation/speech/speechtranscriber
+//   AnalyzerInput:    https://developer.apple.com/documentation/speech/analyzerinput
+//   AnalysisContext:  https://developer.apple.com/documentation/speech/analysiscontext
+//   AssetInventory:   https://developer.apple.com/documentation/speech/assetinventory
+//   WWDC25:           https://developer.apple.com/videos/play/wwdc2025/277/
+//
+// 网页不可用时，本机权威接口（已确认含上述类型）：
+//   $(xcrun --show-sdk-path)/System/Library/Frameworks/Speech.framework/Modules/Speech.swiftmodule/arm64e-apple-macos.swiftinterface
+
 import AVFoundation
 import CoreMedia
 import Foundation

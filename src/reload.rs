@@ -1,5 +1,7 @@
 //! 配置热重载。
 //!
+//! 字段覆盖矩阵与 subscriber 边界见 docs/modules/config.md。
+//!
 //! 流程：
 //!   notify 监听 config 目录（不监听文件本身，避免编辑器 inode 替换）
 //!     → 150 ms 合并连发 → parse → broadcast Arc<Config>

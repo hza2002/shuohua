@@ -83,7 +83,7 @@ pub fn parse(s: &str) -> Result<Combo> {
             }
             key = Some(code);
         } else {
-            bail!("unknown hotkey token {token:?} in {body:?}; see docs/DESIGN.md for grammar");
+            bail!("unknown hotkey token {token:?} in {body:?}; see docs/modules/hotkey.md for grammar");
         }
     }
 

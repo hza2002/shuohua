@@ -28,7 +28,7 @@ pub(crate) struct SessionCapture {
 pub(crate) fn samples_to_ms(samples: u64) -> u64 {
     // History stores integer milliseconds. Converting a sample count separately
     // from its start/end timestamps can differ by at most 1ms due to flooring;
-    // docs/SCHEMA.md explicitly treats that as harmless quantization.
+    // docs/schema.md explicitly treats that as harmless quantization.
     samples.saturating_mul(1000) / 16_000
 }
 

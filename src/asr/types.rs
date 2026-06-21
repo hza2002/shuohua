@@ -1,6 +1,6 @@
 //! ASR trait + 数据类型。
 //!
-//! 设计依据见 docs/DESIGN.md §2.8。
+//! 设计依据见 docs/modules/asr.md。
 
 use async_trait::async_trait;
 use std::time::Instant;
@@ -63,7 +63,7 @@ pub enum LanguageMode {
 /// 单事件流。voice 模块 select 这根 channel 就够了。
 ///
 /// `started_at`/`ended_at` 用 [`Instant`]：在 daemon 进程内部做时长换算够用；
-/// history 写入时转 RFC3339（SCHEMA.md §2）由 history 模块自己映射。
+/// history 写入时转 RFC3339（schema.md §2）由 history 模块自己映射。
 #[derive(Debug, Clone)]
 pub enum AsrEvent {
     /// 当前 utterance **尾巴**（不含已经 emit 过的 Segment）。

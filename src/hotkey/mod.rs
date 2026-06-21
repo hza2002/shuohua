@@ -1,5 +1,7 @@
 //! Hotkey subsystem: CGEventTap → pipe → Tracker → `HotkeyEvent`.
 //!
+//! 不变量、语法与扩展见 docs/modules/hotkey.md。
+//!
 //! Module layout:
 //!
 //! - [`combo`] — `Combo` / `ModMatcher` / `ModMask` / `Side` / `ModType`.

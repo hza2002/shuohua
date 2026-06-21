@@ -1,4 +1,4 @@
-//! 文本后处理流水线（DESIGN §2.10）。
+//! 文本后处理流水线。设计、链规则与 profile 路由见 docs/modules/post.md。
 //!
 //! 数据契约：
 //! - [`PipelineText`] 流过整条链。`raw` 永远是原始 ASR 文本；`text` 是当前

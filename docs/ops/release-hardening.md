@@ -1,20 +1,20 @@
 # 首次公开发版前的加固清单
 
-> **谁读这份文档**：当 shuohua 准备做首次面向外部用户的正式发版时，主控（人 + agent）按本清单**一次性**走完 7 个步骤，再回到 [docs/RELEASE.md](RELEASE.md) 执行真正的发版流程。
+> **谁读这份文档**：当 shuohua 准备做首次面向外部用户的正式发版时，主控（人 + agent）按本清单**一次性**走完 7 个步骤，再回到 [docs/ops/release.md](release.md) 执行真正的发版流程。
 >
 > **Agent 读法**：本文档是顺序执行的清单。每个步骤含【依赖】【动作】【验证】【失败回退】。**每个步骤都标【需用户确认】**——agent 必须把当前掌握的信息呈现给用户，等用户拍板再执行。本文档涉及的所有动作均**不可在 agent 自动模式下静默完成**。
 
 ## 为什么需要本文档
 
-[docs/RELEASE.md](RELEASE.md) 描述的是**每次发版**的操作流程。本文档描述的是**第一次正式发版前**需要做的**一次性**加固，包括：
+[docs/ops/release.md](release.md) 描述的是**每次发版**的操作流程。本文档描述的是**第一次正式发版前**需要做的**一次性**加固，包括：
 
 - 把仓库推到 GitHub（当前还是纯本地仓库）
 - 启用提交签名 + 给 main 分支自动开 GPG 签名
 - 让 release commit 和 v\* tag 强制签名
-- 把"agent 不许碰 main、不许触发发版"的硬规则写进 [CLAUDE.md](../CLAUDE.md)
+- 把"agent 不许碰 main、不许触发发版"的硬规则写进 [CLAUDE.md](../../CLAUDE.md)
 - 在 GitHub 远端开 branch / tag protection，做服务端兜底
 
-这些做完后，[docs/RELEASE.md](RELEASE.md) 的 10 步发版流程才真正安全。
+这些做完后，[docs/ops/release.md](release.md) 的 10 步发版流程才真正安全。
 
 ---
 
@@ -23,7 +23,7 @@
 | 项 | 状态 |
 |---|---|
 | `LICENSE` / `README.md` / `release.toml` / `.github/workflows/release.yml` / `.github/release-body.md` 已在 main | ✅ 已就绪 |
-| `docs/RELEASE.md` 已写好（含 10 步发版流程） | ✅ 已就绪 |
+| `docs/ops/release.md` 已写好（含 10 步发版流程） | ✅ 已就绪 |
 | `cargo-release` 工具本地已装 | ✅ 已就绪 |
 | 仓库 `commit.gpgsign = false` / `tag.gpgsign = false` 本地 override | ⚠️ 开发期临时关闭，加固时撤销 |
 | `release.toml` 中 `sign-commit = false` / `sign-tag = false` | ⚠️ 加固时改 true |
@@ -152,7 +152,7 @@ git config --local commit.gpgsign false
 git config --local tag.gpgsign false
 ```
 
-⚠️ **`.git/config` 和 `.git/config.signed` 不进 git**。每台开发机克隆后都要重新装一次。把"如何装"写进 [CLAUDE.md](../CLAUDE.md) onboarding（步骤 5 会做）。
+⚠️ **`.git/config` 和 `.git/config.signed` 不进 git**。每台开发机克隆后都要重新装一次。把"如何装"写进 [CLAUDE.md](../../CLAUDE.md) onboarding（步骤 5 会做）。
 
 **验证**：
 
@@ -227,7 +227,7 @@ git push origin main
 ````markdown
 ## Agent 工作流硬规则（不可违反）
 
-发版前加固已完成（见 [docs/RELEASE_HARDENING.md](docs/RELEASE_HARDENING.md)），以下规则强制生效：
+发版前加固已完成（见 [docs/ops/release-hardening.md](docs/ops/release-hardening.md)），以下规则强制生效：
 
 - agent 只在 `feat/*` 或 `agent/*` 分支 commit；**不准 `git checkout main`**
 - agent **不准** 做这些动作：
@@ -235,7 +235,7 @@ git push origin main
   - `git push`（任何分支，包括 feat）
   - `git tag`（特别是 `v*`）
   - `cargo release ... --execute`
-  - 修改 `release.toml`、`.github/workflows/release.yml`、`docs/RELEASE.md`、`docs/RELEASE_HARDENING.md`
+  - 修改 `release.toml`、`.github/workflows/release.yml`、`docs/ops/release.md`、`docs/ops/release-hardening.md`
 - agent 完成开发后报告"请 review feat/X"，由用户切 main → squash merge → push → 发版
 - `release.toml` 里 `allow-branch = ["main"]` 是技术锁，agent 在 feat 分支跑 cargo-release 会被工具拒绝。**不要试图绕过**
 - main 上的 commit 由 includeIf 自动 GPG 签名，需要用户输入 passphrase——agent 没有 passphrase
@@ -416,7 +416,7 @@ gh api "repos/HuZiang/shuohua/rulesets" \
   --jq '[.[] | select(.target == "tag")] | length'                   # ✅ ≥ 1
 ```
 
-七项全 ✅ → 加固完成，可以进入 [docs/RELEASE.md](RELEASE.md) 走真实发版流程。
+七项全 ✅ → 加固完成，可以进入 [docs/ops/release.md](release.md) 走真实发版流程。
 
 ---
 
@@ -424,9 +424,9 @@ gh api "repos/HuZiang/shuohua/rulesets" \
 
 下列项各自有更长的决策路径，**不要塞进本次加固**：
 
-- **Apple Developer ID 签名 / 公证**：付费决策，触发条件见 [docs/RELEASE.md §6.1](RELEASE.md)
-- **Homebrew tap 仓库**：触发条件见 [docs/RELEASE.md §6.2](RELEASE.md)
-- **跨平台扩展（Linux / Windows）**：触发条件见 [docs/RELEASE.md §6.3](RELEASE.md)
+- **Apple Developer ID 签名 / 公证**：付费决策，触发条件见 [docs/ops/release.md §6.1](release.md)
+- **Homebrew tap 仓库**：触发条件见 [docs/ops/release.md §6.2](release.md)
+- **跨平台扩展（Linux / Windows）**：触发条件见 [docs/ops/release.md §6.3](release.md)
 - **`shuo doctor` 增加 deep link 改进**：单独 issue / PR 跟，不阻塞发版
 - **CI 主干 PR 验证 workflow**：现在没有外部贡献者，暂不需要
 

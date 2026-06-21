@@ -1,3 +1,5 @@
+//! 配置加载。schema/profile 路由/theme/热重载见 docs/modules/config.md。
+
 mod main;
 
 pub(crate) use self::main::{

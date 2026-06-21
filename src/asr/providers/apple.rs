@@ -1,4 +1,7 @@
-//! Apple SpeechAnalyzer provider (macOS 26).
+//! Apple SpeechAnalyzer provider (macOS 26)。
+//!
+//! 本文件负责 Rust ↔ Swift helper 的 IPC；真正的 Apple Speech framework 调用和
+//! 官方文档链接在 `apple_helper.swift` 顶部。
 
 use crate::asr::types::*;
 use crate::config::asr::apple::{load_config_with_overrides, AppleConfig};

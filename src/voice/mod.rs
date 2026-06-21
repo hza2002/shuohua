@@ -1,5 +1,7 @@
 //! Voice 子系统：cpal 流式录音 + ASR session orchestration + dispatch。
 //!
+//! 不变量、边界与扩展见 docs/modules/voice.md。
+//!
 //! Canonical PCM = 16kHz s16le mono。
 //!
 //! 顶层入口：[`finish::run_recording`]，一次按 F16 起停的完整生命周期。

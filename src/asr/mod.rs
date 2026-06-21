@@ -1,6 +1,6 @@
 //! ASR Provider abstraction.
 //!
-//! 设计契约见 docs/DESIGN.md §2.8。要点：
+//! 设计契约见 docs/modules/asr.md。要点：
 //!   - 流式 partial 是硬要求；非流式 provider 不入选
 //!   - 单事件流 [`AsrEvent`]：partial / segment / final / error / done 走同一根 channel
 //!   - provider 私有配置由 provider impl 自己从 `asr/<provider>.toml` 加载，

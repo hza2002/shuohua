@@ -19,7 +19,7 @@ shuo doctor
 - **Microphone**（录音）
 - **Accessibility**（监听全局热键 + 合成 Cmd+V 上屏）
 
-升级后跑 `shuo doctor` 会检测并提示需要重新授权的项。这是 macOS TCC 对未签名程序的默认行为，详细原因见 [docs/RELEASE.md](https://github.com/HuZiang/shuohua/blob/main/docs/RELEASE.md)。
+升级后跑 `shuo doctor` 会检测并提示需要重新授权的项。这是 macOS TCC 对未签名程序的默认行为，详细原因见 [docs/ops/release.md](https://github.com/HuZiang/shuohua/blob/main/docs/ops/release.md)。
 
 ## 变更内容
 

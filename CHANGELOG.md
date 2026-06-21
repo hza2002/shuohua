@@ -1,5 +1,36 @@
 # Changelog
 
+本文件按**发布版本**记录用户可感知的变化，最新版本在最上面。
+
+- 单一来源：发版时把对应版本段落复制进 GitHub Release notes。
+- 全量 commit 列表见 GitHub Release 自动生成的 "What's Changed"；本文件只记策划后的亮点，不逐条镜像 commit。
+- 约定参考 [Keep a Changelog](https://keepachangelog.com/)；0.x 阶段所有 breaking change 走 minor 并标 ⚠️（见 [docs/ops/release.md](docs/ops/release.md)）。
+
+## v0.1.0 — 未发布
+
+首次公开发布基线。发版时按 [docs/ops/release.md](docs/ops/release.md) Step 3 在此补齐/精简最终亮点。
+
+### 功能
+
+- 全局热键 toggle 录音 → ASR 流式转写 → 自动上屏（剪贴板 + Cmd+V）。
+- 单进程 daemon（AppKit overlay + tokio）+ 按需 TUI（Status/History/Configure 三页）；UDS 实时状态 + 月分片 history JSONL。
+- ASR provider：Apple SpeechAnalyzer（macOS 26+ 本地）+ Doubao SAUC（云端），统一单事件流 trait。
+- 客户端 Silero VAD 多段 session（静音不喂音频）；可选 retained audio（FLAC / AAC）。
+- per-App profile 路由 + 后处理链（ZhFilter / LLM cleanup）+ overlay notice/error 反馈。
+- Liquid Glass overlay；i18n（zh-CN / en-US + 构建期派生繁中 + pseudo）；多内置主题。
+- CLI：doctor / config-template / launchd service（install / start / stop / restart / status）。
+
+### history schema
+
+- 首个公开 schema `version: 1`；开发期旧记录不迁移。
+
+---
+
+## Pre-release 开发记录（归档）
+
+> 以下是 v0.1.0 之前的按阶段开发日记，保留作历史。正式发版后不再在此新增——
+> 新变化按版本记在上方。
+
 ## 2026-06-21 - Release audit: cancel semantics
 
 - Cancel now keeps or drops retained audio and history together based on whether

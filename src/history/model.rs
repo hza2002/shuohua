@@ -51,6 +51,20 @@ impl HistoryRecord {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteResult {
+    pub id: String,
+    pub record_deleted: bool,
+    pub audio_deleted: bool,
+    pub audio_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioDeleteResult {
+    pub id: String,
+    pub deleted: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HistoryStatus {

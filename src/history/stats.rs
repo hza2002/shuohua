@@ -10,7 +10,8 @@ use time::{Date, Month, OffsetDateTime, UtcOffset};
 use tokio::sync::broadcast;
 
 use crate::history::{
-    store, HistoryQuery, HistoryRecord, DEFAULT_HISTORY_PAGE_LIMIT, MAX_HISTORY_PAGE_LIMIT,
+    assets, store, AudioAssetInfo, AudioDeleteResult, DeleteResult, HistoryQuery, HistoryRecord,
+    DEFAULT_HISTORY_PAGE_LIMIT, MAX_HISTORY_PAGE_LIMIT,
 };
 
 const REVERSE_READ_CHUNK_SIZE: usize = 1024;
@@ -215,6 +216,7 @@ struct Hooks {
     before_list: Option<Arc<dyn Fn() + Send + Sync>>,
     before_scan_attempt: Option<Arc<dyn Fn() + Send + Sync>>,
     after_read_file: Option<Arc<dyn Fn() + Send + Sync>>,
+    before_history_delete_rename: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Hooks {
@@ -232,6 +234,12 @@ impl Hooks {
 
     fn after_read_file(&self) {
         if let Some(hook) = &self.after_read_file {
+            hook();
+        }
+    }
+
+    fn before_history_delete_rename(&self) {
+        if let Some(hook) = &self.before_history_delete_rename {
             hook();
         }
     }
@@ -346,6 +354,56 @@ impl HistoryService {
         };
         self.publish(events);
         Ok(records)
+    }
+
+    pub fn audio(&self, id: &str) -> Result<AudioAssetInfo> {
+        let audio_dir = {
+            let inner = self.inner.lock().expect("history service lock poisoned");
+            assets::audio_dir_for_history_dir(&inner.dir)
+        };
+        assets::audio_info_in_dir(&audio_dir, id)
+    }
+
+    pub fn delete_audio(&self, id: &str) -> Result<AudioDeleteResult> {
+        let audio_dir = {
+            let inner = self.inner.lock().expect("history service lock poisoned");
+            assets::audio_dir_for_history_dir(&inner.dir)
+        };
+        assets::delete_audio_in_dir(&audio_dir, id)
+    }
+
+    pub fn delete(&self, id: &str) -> Result<DeleteResult> {
+        let mut events = Vec::new();
+        let (record_deleted, audio_dir) = {
+            let mut inner = self.inner.lock().expect("history service lock poisoned");
+            reconcile_if_initialized(&mut inner, &mut events)?;
+            let audio_dir = assets::audio_dir_for_history_dir(&inner.dir);
+            assets::preflight_history_delete_audio_in_dir(&audio_dir, id)?;
+            let hooks = inner.hooks.clone();
+            let outcome =
+                store::delete_record_in_dir(&inner.dir, id, inner.local_offset, move || {
+                    hooks.before_history_delete_rename();
+                })?;
+            if outcome.deleted {
+                let scan = scan_stable(&inner.dir, inner.local_offset, &inner.hooks)?;
+                apply_scan_outcome(&mut inner, scan);
+                events.push(HistoryEvent::Changed);
+            }
+            (outcome.deleted, audio_dir)
+        };
+
+        let audio_result = assets::delete_audio_in_dir(&audio_dir, id);
+        let (audio_deleted, audio_error) = match audio_result {
+            Ok(result) => (result.deleted, None),
+            Err(error) => (false, Some(error.to_string())),
+        };
+        self.publish(events);
+        Ok(DeleteResult {
+            id: id.to_string(),
+            record_deleted,
+            audio_deleted,
+            audio_error,
+        })
     }
 
     pub fn append(&self, record: HistoryRecord) -> Result<()> {
@@ -1398,6 +1456,14 @@ pub(crate) mod tests_support {
             self
         }
 
+        pub fn with_before_history_delete_rename(
+            mut self,
+            hook: impl Fn() + Send + Sync + 'static,
+        ) -> Self {
+            self.hooks.before_history_delete_rename = Some(Arc::new(hook));
+            self
+        }
+
         pub(super) fn into_hooks(self) -> Hooks {
             self.hooks
         }
@@ -1655,6 +1721,67 @@ mod tests {
         assert_eq!(service.stats().status, HistoryStatsStatus::Stale);
 
         assert_eq!(scan_calls.load(Ordering::SeqCst), 3);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn delete_after_stale_rescans_and_returns_ready_stats() {
+        let dir = temp_dir("delete-stale-rescan");
+        let delete_id = "01KB1KQ4GF8AFS76W7W7HZ5VSZ";
+        let keep_id = "01KB1KQ4GF8AFS76W7W7HZ5VT0";
+        let external_id = "01KB1KQ4GF8AFS76W7W7HZ5VT3";
+        let appended_id_1 = "01KB1KQ4GF8AFS76W7W7HZ5VT1";
+        let appended_id_2 = "01KB1KQ4GF8AFS76W7W7HZ5VT2";
+        write_line(
+            &dir,
+            record(delete_id, datetime!(2026-06-01 00:00:00 UTC), "one"),
+        );
+        write_line(
+            &dir,
+            record(keep_id, datetime!(2026-06-01 01:00:00 UTC), "two"),
+        );
+        let mutate = Arc::new(AtomicBool::new(false));
+        let mutation = Arc::new(AtomicUsize::new(0));
+        let hooks = TestHooks::default().with_after_read_file({
+            let dir = dir.clone();
+            let mutate = Arc::clone(&mutate);
+            let mutation = Arc::clone(&mutation);
+            move || {
+                if !mutate.load(Ordering::SeqCst) {
+                    return;
+                }
+                let id = match mutation.fetch_add(1, Ordering::SeqCst) {
+                    0 => appended_id_1,
+                    1 => appended_id_2,
+                    _ => return,
+                };
+                let timestamp = if id == appended_id_1 {
+                    datetime!(2026-06-01 03:00:00 UTC)
+                } else {
+                    datetime!(2026-06-01 04:00:00 UTC)
+                };
+                write_line(&dir, record(id, timestamp, "extra"));
+            }
+        });
+        let service = HistoryService::with_test_hooks(dir.clone(), offset!(+0), hooks);
+        assert_eq!(service.stats().status, HistoryStatsStatus::Ready);
+
+        write_line(
+            &dir,
+            record(external_id, datetime!(2026-06-01 02:00:00 UTC), "extra"),
+        );
+        mutate.store(true, Ordering::SeqCst);
+        let stale = service.stats();
+        mutate.store(false, Ordering::SeqCst);
+        assert_eq!(stale.status, HistoryStatsStatus::Stale);
+        assert_eq!(stale.total.records, 2);
+
+        let result = service.delete(delete_id).unwrap();
+        let snapshot = service.stats();
+
+        assert!(result.record_deleted);
+        assert_eq!(snapshot.status, HistoryStatsStatus::Ready);
+        assert_eq!(snapshot.total.records, 4);
         let _ = fs::remove_dir_all(dir);
     }
 

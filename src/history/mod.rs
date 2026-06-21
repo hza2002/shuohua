@@ -1,11 +1,14 @@
+pub mod assets;
 pub mod model;
 pub mod stats;
 pub mod store;
 pub mod watcher;
 
+pub use assets::{AudioAssetInfo, AudioAssetState};
 pub use model::{
-    AsrHistory, AsrSessionHistory, HistoryError, HistoryQuery, HistoryRecord, HistoryStatus,
-    PipelineStepHistory, PipelineStepStatus, DEFAULT_HISTORY_PAGE_LIMIT, MAX_HISTORY_PAGE_LIMIT,
+    AsrHistory, AsrSessionHistory, AudioDeleteResult, DeleteResult, HistoryError, HistoryQuery,
+    HistoryRecord, HistoryStatus, PipelineStepHistory, PipelineStepStatus,
+    DEFAULT_HISTORY_PAGE_LIMIT, MAX_HISTORY_PAGE_LIMIT,
 };
 pub use stats::{
     AggregateStats, AnalyticsPeriod, AnalyticsPoint, AnalyticsQuery, AnalyticsSnapshot,

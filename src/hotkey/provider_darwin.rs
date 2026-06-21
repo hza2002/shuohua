@@ -60,7 +60,10 @@ pub fn run(writer: PipeWriter, suppressor: Arc<Mutex<Suppressor>>) -> Result<()>
             let key = key_from_macos_keycode(
                 event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16,
             );
-            let mods = decode_mods(event.get_flags().bits());
+            // Keep the raw flags around so the diagnostic log below can show
+            // the exact device-specific NX bit (decode_mods discards them).
+            let flags = event.get_flags().bits();
+            let mods = decode_mods(flags);
             let raw = RawEvent { kind, key, mods };
 
             // Always forward — Tracker (tokio side) needs every event even
@@ -69,12 +72,27 @@ pub fn run(writer: PipeWriter, suppressor: Arc<Mutex<Suppressor>>) -> Result<()>
                 let _ = w.write_all(&raw.encode());
             }
 
-            let drop_event = match suppressor.lock() {
-                Ok(mut s) => s.on_raw(raw),
+            let (drop_event, log_it) = match suppressor.lock() {
+                Ok(mut s) => (s.on_raw(raw), s.binds_key(key)),
                 // Poisoned mutex: a Suppressor user panicked. Let events
                 // through rather than silently eating them.
-                Err(_) => false,
+                Err(_) => (false, false),
             };
+
+            // Diagnostic trail for the "trigger wedged, recording won't stop"
+            // bug: a stray modifier on the trigger key fails the exact match
+            // silently. Gated to the bound trigger/cancel key so we never log
+            // ordinary typed characters (this runs for every system keystroke).
+            if log_it {
+                tracing::debug!(
+                    ?kind,
+                    ?key,
+                    mods = raw.mods.0,
+                    raw_flags = format_args!("{flags:#018x}"),
+                    drop = drop_event,
+                    "hotkey bound-key event",
+                );
+            }
 
             if drop_event {
                 CallbackResult::Drop

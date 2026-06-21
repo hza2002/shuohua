@@ -100,6 +100,13 @@ impl Suppressor {
                     .is_some_and(|cancel| matches_keyed_binding(cancel, ev)))
     }
 
+    /// Whether `key` is the configured trigger or cancel key. Used only to
+    /// gate diagnostic logging to relevant events, so the per-keystroke log
+    /// never records ordinary typed characters.
+    pub fn binds_key(&self, key: Key) -> bool {
+        self.trigger.key == Some(key) || self.cancel.as_ref().and_then(|c| c.key) == Some(key)
+    }
+
     #[cfg(test)]
     pub fn held(&self) -> &[Key] {
         &self.held
@@ -273,6 +280,25 @@ mod tests {
         assert!(!s.on_raw(flag(L_CMD, ModMask::empty())));
         assert!(s.on_raw(up(R, ModMask::empty())));
         assert!(s.held().is_empty());
+    }
+
+    // ---------- diagnostic gate ----------
+
+    #[test]
+    fn binds_key_matches_trigger_and_cancel_only() {
+        let mut s = Suppressor::new(pure_key(F16));
+        s.set_cancel(pure_key_double(Key::Escape));
+        assert!(s.binds_key(F16));
+        assert!(s.binds_key(Key::Escape));
+        assert!(!s.binds_key(A));
+        assert!(!s.binds_key(F17));
+    }
+
+    #[test]
+    fn binds_key_false_for_modifier_only_trigger() {
+        // A modifier-only trigger has no key — nothing to gate on.
+        let s = Suppressor::new(right_shift_only());
+        assert!(!s.binds_key(F16));
     }
 
     // ---------- modifier-only ----------

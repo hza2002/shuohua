@@ -83,7 +83,13 @@ impl App {
 
     fn apply_event(&mut self, event: Event) {
         match event {
-            Event::HistoryAppended { .. } | Event::HistoryChanged | Event::History { .. } => {
+            Event::HistoryAppended { .. }
+            | Event::HistoryChanged
+            | Event::History { .. }
+            | Event::HistoryStats { .. }
+            | Event::HistoryAnalytics { .. }
+            | Event::AudioDeleted { .. }
+            | Event::HistoryDeleted { .. } => {
                 self.history.apply_event(&event, self.page == Page::History);
             }
             Event::DaemonStatus { .. } => {}
@@ -99,9 +105,19 @@ impl App {
                     })
                     .unwrap_or_default();
             }
-            Event::Error { kind, msg, .. } => {
-                self.status =
-                    crate::i18n::tr("tui.error.daemon_event", &[("kind", kind), ("error", msg)]);
+            Event::Error {
+                ref kind, ref msg, ..
+            } => {
+                if matches!(
+                    kind.as_str(),
+                    "history_read" | "history_stats" | "history_analytics"
+                ) {
+                    self.history.apply_event(&event, self.page == Page::History);
+                }
+                self.status = crate::i18n::tr(
+                    "tui.error.daemon_event",
+                    &[("kind", kind.clone()), ("error", msg.clone())],
+                );
             }
             _ => {
                 self.status_page
@@ -111,10 +127,16 @@ impl App {
     }
 }
 
+fn startup_commands() -> Vec<Command> {
+    vec![Command::Subscribe]
+}
+
 pub async fn run() -> Result<()> {
     init_i18n_from_config();
     let mut client = IpcClient::connect(crate::ipc::server::default_socket_path()).await?;
-    client.send(&Command::Subscribe).await?;
+    for command in startup_commands() {
+        client.send(&command).await?;
+    }
 
     let _terminal = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(std::io::stdout());
@@ -155,7 +177,10 @@ pub async fn run() -> Result<()> {
                 }
                 event = client.recv() => {
                     match event.context("read IPC event")? {
-                        Some(e) => app.apply_event(e),
+                        Some(e) => {
+                            app.apply_event(e);
+                            send_pending_history_refresh(&mut app, &mut client).await?;
+                        }
                         None => return Ok(()),
                     }
                 }
@@ -181,8 +206,11 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
         return Ok(false);
     }
     if app.page == Page::History {
-        if let Some(status) = app.history.feed_confirm_key(key) {
-            if !status.is_empty() {
+        if let Some(outcome) = app.history.feed_confirm_key(key) {
+            if let Some(cmd) = outcome.command {
+                client.send(&cmd).await?;
+            }
+            if let Some(status) = outcome.status {
                 app.status = status;
             }
             return Ok(false);
@@ -197,6 +225,10 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
                 Page::Settings => Page::Status,
             };
             on_page_changed(app);
+            if app.page == Page::History {
+                send_history_enter_commands(app, client).await?;
+                send_pending_history_refresh(app, client).await?;
+            }
         }
         Action::PrevPage => {
             app.page = match app.page {
@@ -205,16 +237,25 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
                 Page::Settings => Page::History,
             };
             on_page_changed(app);
+            if app.page == Page::History {
+                send_history_enter_commands(app, client).await?;
+                send_pending_history_refresh(app, client).await?;
+            }
         }
         Action::SetPage(page) => {
             if app.page != page {
                 app.page = page;
                 on_page_changed(app);
+                if app.page == Page::History {
+                    send_history_enter_commands(app, client).await?;
+                    send_pending_history_refresh(app, client).await?;
+                }
             }
         }
         Action::StartSearch => {
             app.page = Page::History;
             app.history.start_search();
+            send_history_enter_commands(app, client).await?;
         }
         Action::Forward(key) => {
             let outcome = match app.page {
@@ -232,6 +273,23 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
         Action::None => {}
     }
     Ok(false)
+}
+
+async fn send_pending_history_refresh(app: &mut App, client: &mut IpcClient) -> Result<()> {
+    if app.page != Page::History {
+        return Ok(());
+    }
+    for command in app.history.refresh_commands() {
+        client.send(&command).await?;
+    }
+    Ok(())
+}
+
+async fn send_history_enter_commands(app: &mut App, client: &mut IpcClient) -> Result<()> {
+    for command in app.history.enter_commands() {
+        client.send(&command).await?;
+    }
+    Ok(())
 }
 
 fn on_page_changed(app: &mut App) {
@@ -262,6 +320,36 @@ impl Drop for TerminalGuard {
 
 #[cfg(test)]
 mod tests {
+    use crate::ipc::protocol::{Command, Event};
+
+    fn error(kind: &str) -> Event {
+        Event::Error {
+            recording_id: None,
+            kind: kind.to_string(),
+            msg: "boom".to_string(),
+        }
+    }
+
+    #[test]
+    fn tui_startup_does_not_request_history() {
+        assert_eq!(super::startup_commands(), vec![Command::Subscribe]);
+    }
+
+    #[test]
+    fn history_errors_reach_history_page_and_unblock_refresh() {
+        let mut app = super::App::new();
+        app.page = super::Page::History;
+        app.history.enter_commands();
+        app.apply_event(Event::HistoryChanged);
+
+        app.apply_event(error("history_read"));
+        app.apply_event(error("history_stats"));
+        app.apply_event(error("history_analytics"));
+
+        assert!(!app.history.refresh_in_flight);
+        assert_eq!(app.history.refresh_commands().len(), 3);
+    }
+
     #[test]
     fn init_i18n_from_config_uses_configured_language() {
         let home = std::env::temp_dir().join(format!("shuohua-tui-i18n-{}", ulid::Ulid::new()));

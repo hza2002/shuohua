@@ -21,12 +21,6 @@ impl AudioInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeleteAudioResult {
-    Deleted,
-    Missing,
-}
-
 pub fn audio_path_for_record_in_state_dir(state_dir: &Path, recording_id: &str) -> PathBuf {
     if !is_valid_recording_id(recording_id) {
         return state_dir.join("audio");
@@ -95,16 +89,6 @@ pub fn audio_info_for_path(path: PathBuf) -> AudioInfo {
     }
 }
 
-pub fn delete_audio_path(path: &Path) -> Result<DeleteAudioResult> {
-    ensure_audio_path(path, &StateDirs::discover().audio())?;
-    ensure_regular_file_if_present(path)?;
-    match fs::remove_file(path) {
-        Ok(()) => Ok(DeleteAudioResult::Deleted),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(DeleteAudioResult::Missing),
-        Err(e) => Err(e).with_context(|| format!("delete audio {}", path.display())),
-    }
-}
-
 pub fn open_audio_path(path: &Path) -> Result<()> {
     ensure_existing_audio(path)?;
     open_with_args(&[path.as_os_str()])
@@ -129,18 +113,6 @@ fn ensure_existing_audio(path: &Path) -> Result<()> {
         bail!("audio file is missing: {}", path.display());
     }
     Ok(())
-}
-
-fn ensure_regular_file_if_present(path: &Path) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_file() => Ok(()),
-        Ok(_) => bail!(
-            "refusing to operate on unsupported audio path: {}",
-            path.display()
-        ),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e).with_context(|| format!("inspect audio {}", path.display())),
-    }
 }
 
 fn is_regular_file(path: &Path) -> Result<bool> {
@@ -320,7 +292,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn delete_audio_path_refuses_symlinks() {
+    fn ensure_existing_audio_refuses_symlinks() {
         let dir = std::env::temp_dir().join(format!("shuohua-audio-delete-{}", ulid::Ulid::new()));
         let audio_dir = dir.join("audio");
         fs::create_dir_all(&dir).unwrap();
@@ -330,7 +302,7 @@ mod tests {
         fs::write(&target, [0u8; 12]).unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
-        let err = ensure_regular_file_if_present(&link).unwrap_err();
+        let err = ensure_existing_audio(&link).unwrap_err();
 
         assert!(err.to_string().contains("unsupported audio"));
         let _ = fs::remove_dir_all(dir);
@@ -346,10 +318,10 @@ mod tests {
     }
 
     #[test]
-    fn delete_audio_path_refuses_unsupported_extension() {
+    fn ensure_existing_audio_refuses_unsupported_extension() {
         let path = std::env::temp_dir().join(format!("shuohua-audio-{}.wav", ulid::Ulid::new()));
 
-        let err = delete_audio_path(&path).unwrap_err();
+        let err = ensure_existing_audio(&path).unwrap_err();
 
         assert!(err.to_string().contains("unsupported audio"));
     }

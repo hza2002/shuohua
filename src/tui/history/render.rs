@@ -7,8 +7,10 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::config::theme::TuiTheme;
-use crate::history::HistoryRecord;
-use crate::tui::history::{Confirm, HistoryDetail, HistoryPage};
+use crate::history::{AggregateStats, AnalyticsPeriod, AnalyticsPoint, HistoryRecord};
+use crate::tui::history::{
+    AnalyticsChart, AnalyticsMetric, Confirm, HistoryDetail, HistoryPage, HistoryView,
+};
 use crate::tui::ui;
 
 pub(super) fn render_history(frame: &mut Frame, page: &HistoryPage, area: Rect, theme: &TuiTheme) {
@@ -16,7 +18,7 @@ pub(super) fn render_history(frame: &mut Frame, page: &HistoryPage, area: Rect, 
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Min(0)])
         .split(area);
-    let summary = HistorySummary::from(page);
+    let summary = history_summary_text(page);
     let search = if page.searching {
         format!("/{}_", page.search)
     } else if page.search.is_empty() {
@@ -25,17 +27,18 @@ pub(super) fn render_history(frame: &mut Frame, page: &HistoryPage, area: Rect, 
         format!("/{}", page.search)
     };
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(search),
-            history_stats_line(&summary, theme),
-        ])
-        .block(
+        Paragraph::new(vec![Line::from(search), Line::raw(summary)]).block(
             Block::default()
                 .title(crate::t!("tui.history_stats"))
                 .borders(Borders::ALL),
         ),
         chunks[0],
     );
+
+    if page.view == HistoryView::Analytics {
+        render_analytics(frame, page, chunks[1], theme);
+        return;
+    }
 
     let body = Layout::default()
         .direction(Direction::Horizontal)
@@ -96,22 +99,148 @@ pub(super) fn render_history(frame: &mut Frame, page: &HistoryPage, area: Rect, 
     );
 }
 
-fn history_stats_line(summary: &HistorySummary, theme: &TuiTheme) -> Line<'static> {
-    Line::from(vec![
-        label_span("records ", theme),
-        value_span(summary.shown.to_string(), ui::accent(theme)),
-        label_span(" shown / ", theme),
-        value_span(summary.total.to_string(), ui::accent(theme)),
-        label_span(" total    duration ", theme),
-        value_span(
-            format_duration(summary.total_duration_ms),
-            ui::warning(theme),
-        ),
-        label_span("    words ", theme),
-        value_span(summary.total_words.to_string(), ui::success(theme)),
-        label_span("    avg ", theme),
-        value_span(format_duration(summary.avg_duration_ms), ui::warning(theme)),
-    ])
+pub(super) fn history_summary_text(page: &HistoryPage) -> String {
+    let loaded = page.records.len();
+    let matched = page.filtered().len();
+    let total = page
+        .stats
+        .as_ref()
+        .map(|stats| stats.total)
+        .unwrap_or_else(|| {
+            page.records.iter().fold(
+                AggregateStats {
+                    records: loaded as u64,
+                    ..AggregateStats::default()
+                },
+                |mut stats, record| {
+                    stats.words += record.text_stats().words as u64;
+                    stats.duration_ms += record.duration_ms;
+                    stats.asr_audio_ms += record.asr.audio_ms;
+                    stats
+                },
+            )
+        });
+    crate::i18n::tr(
+        "tui.history.summary",
+        &[
+            ("matched", matched.to_string()),
+            ("loaded", loaded.to_string()),
+            ("total", total.records.to_string()),
+            ("words", total.words.to_string()),
+            ("duration", format_duration(total.duration_ms)),
+        ],
+    )
+}
+
+fn render_analytics(frame: &mut Frame, page: &HistoryPage, area: Rect, theme: &TuiTheme) {
+    let title = crate::i18n::tr(
+        "tui.history.analytics.title",
+        &[
+            (
+                "period",
+                analytics_period_label(page.analytics.selection.period),
+            ),
+            (
+                "metric",
+                analytics_metric_label(page.analytics.selection.metric),
+            ),
+            (
+                "chart",
+                analytics_chart_label(page.analytics.selection.chart),
+            ),
+            ("anchor", page.analytics.selection.anchor.clone()),
+        ],
+    );
+    let mut lines = Vec::new();
+    if let Some(warning) = &page.analytics.warning {
+        lines.push(Line::styled(
+            crate::i18n::tr(
+                "tui.history.analytics.warning",
+                &[("warning", warning.clone())],
+            ),
+            Style::default().fg(ui::warning(theme)),
+        ));
+    }
+    if let Some(snapshot) = &page.analytics.snapshot {
+        lines.extend(chart_lines(
+            &snapshot.points,
+            page.analytics.selection.metric,
+            page.analytics.selection.chart,
+            area.width.saturating_sub(4) as usize,
+        ));
+    } else {
+        lines.push(Line::from(crate::t!("tui.history.analytics.empty")));
+    }
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::default().title(title).borders(Borders::ALL)),
+        area,
+    );
+}
+
+fn analytics_period_label(period: AnalyticsPeriod) -> String {
+    match period {
+        AnalyticsPeriod::Year => crate::t!("tui.history.analytics.period_year"),
+        AnalyticsPeriod::Month => crate::t!("tui.history.analytics.period_month"),
+        AnalyticsPeriod::Day => crate::t!("tui.history.analytics.period_day"),
+    }
+}
+
+fn analytics_metric_label(metric: AnalyticsMetric) -> String {
+    match metric {
+        AnalyticsMetric::Records => crate::t!("tui.history.analytics.metric_records"),
+        AnalyticsMetric::Words => crate::t!("tui.history.analytics.metric_words"),
+        AnalyticsMetric::Duration => crate::t!("tui.history.analytics.metric_duration"),
+        AnalyticsMetric::AsrAudio => crate::t!("tui.history.analytics.metric_asr_audio"),
+    }
+}
+
+fn analytics_chart_label(chart: AnalyticsChart) -> String {
+    match chart {
+        AnalyticsChart::Bar => crate::t!("tui.history.analytics.chart_bar"),
+        AnalyticsChart::Line => crate::t!("tui.history.analytics.chart_line"),
+    }
+}
+
+fn chart_lines(
+    points: &[AnalyticsPoint],
+    metric: AnalyticsMetric,
+    chart: AnalyticsChart,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let label_width = 10usize.min(width);
+    let bar_width = width.saturating_sub(label_width + 3).max(1);
+    let values = points
+        .iter()
+        .map(|point| metric_value(&point.stats, metric))
+        .collect::<Vec<_>>();
+    let max = values.iter().copied().max().unwrap_or(0).max(1);
+    points
+        .iter()
+        .zip(values)
+        .map(|(point, value)| {
+            let filled = ((value as usize * bar_width) / max as usize).min(bar_width);
+            let glyph = match chart {
+                AnalyticsChart::Bar => "█",
+                AnalyticsChart::Line => "─",
+            };
+            let bar = glyph.repeat(filled.max((value > 0) as usize));
+            Line::raw(format!(
+                "{:<label_width$} {:>6} {}",
+                truncate_display(&point.key, label_width),
+                value,
+                bar
+            ))
+        })
+        .collect()
+}
+
+fn metric_value(stats: &AggregateStats, metric: AnalyticsMetric) -> u64 {
+    match metric {
+        AnalyticsMetric::Records => stats.records,
+        AnalyticsMetric::Words => stats.words,
+        AnalyticsMetric::Duration => stats.duration_ms / 1000,
+        AnalyticsMetric::AsrAudio => stats.asr_audio_ms / 1000,
+    }
 }
 
 fn history_list_line(
@@ -336,6 +465,9 @@ fn confirm_text(confirm: &Confirm) -> String {
         Confirm::DeleteAudio { record_id } => {
             crate::t!("tui.confirm.delete_audio_detail", id = record_id)
         }
+        Confirm::DeleteHistory { record_id } => {
+            crate::t!("tui.confirm.delete_history_detail", id = record_id)
+        }
     }
 }
 
@@ -347,10 +479,6 @@ fn kv_line(label: impl Into<String>, value: impl Into<String>, color: Color) -> 
         ),
         value_span(value.into(), color),
     ])
-}
-
-fn label_span(text: impl Into<String>, theme: &TuiTheme) -> Span<'static> {
-    Span::styled(text.into(), Style::default().fg(ui::muted(theme)))
 }
 
 fn value_span(text: impl Into<String>, color: Color) -> Span<'static> {
@@ -442,40 +570,4 @@ pub(super) fn format_local_time(value: time::OffsetDateTime) -> String {
                 .expect("valid static time format"),
         )
         .unwrap_or_else(|_| value.to_string())
-}
-
-pub(super) struct HistorySummary {
-    total: usize,
-    shown: usize,
-    total_duration_ms: u64,
-    avg_duration_ms: u64,
-    total_words: usize,
-}
-
-impl HistorySummary {
-    fn from(page: &HistoryPage) -> Self {
-        let filtered = page.filtered();
-        let total_duration_ms = page
-            .records
-            .iter()
-            .map(|record| record.duration_ms)
-            .sum::<u64>();
-        let total_words = page
-            .records
-            .iter()
-            .map(|record| record.text_stats().words)
-            .sum::<usize>();
-        let avg_duration_ms = if page.records.is_empty() {
-            0
-        } else {
-            total_duration_ms / page.records.len() as u64
-        };
-        Self {
-            total: page.records.len(),
-            shown: filtered.len(),
-            total_duration_ms,
-            avg_duration_ms,
-            total_words,
-        }
-    }
 }

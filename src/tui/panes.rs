@@ -69,10 +69,11 @@ mod tests {
         crate::i18n::init("en-US");
         let mut app = App::new();
         app.page = Page::Status;
-        assert!(!footer_text(&app).contains("open audio"));
+        assert!(!footer_text(&app).contains("delete history"));
 
         app.page = Page::History;
         let footer = footer_text(&app);
-        assert!(footer.contains("open audio") || footer.contains("打开音频"));
+        assert!(footer.contains("delete history") || footer.contains("删历史"));
+        assert!(footer.contains("analytics") || footer.contains("分析"));
     }
 }

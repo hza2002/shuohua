@@ -14,6 +14,11 @@ pub enum OverlayCmd {
         dur_ms: u64,
         words: u32,
     },
+    /// 录音电平（RMS 0–1），驱动 Recording 状态的音频电平条。高频（~20/s），
+    /// 在 mailbox 里按最新值覆盖，不进队列。
+    SetLevel {
+        rms: f32,
+    },
     SetApp {
         bundle_id: Option<String>,
         app_name: Option<String>,
@@ -114,6 +119,7 @@ struct OverlayMailbox {
     queue: VecDeque<OverlayCmd>,
     latest_stats: Option<OverlayCmd>,
     latest_partial: Option<OverlayCmd>,
+    latest_level: Option<OverlayCmd>,
     wake_pending: bool,
 }
 
@@ -183,6 +189,7 @@ impl OverlayMailbox {
                 kind: TextKind::Partial,
                 ..
             } => self.latest_partial = Some(cmd),
+            OverlayCmd::SetLevel { .. } => self.latest_level = Some(cmd),
             _ => {
                 if self.queue.len() >= QUEUE_CAPACITY {
                     let _ = self.queue.pop_front();
@@ -202,6 +209,7 @@ impl OverlayMailbox {
             .pop_front()
             .or_else(|| self.latest_stats.take())
             .or_else(|| self.latest_partial.take())
+            .or_else(|| self.latest_level.take())
     }
 }
 
@@ -242,6 +250,24 @@ mod tests {
                 text,
                 kind: TextKind::Partial
             } if text == "new"
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn high_frequency_level_coalesces_to_latest() {
+        let (handle, mut rx) = OverlayHandle::channel();
+        for i in 1..=5 {
+            handle.send(OverlayCmd::SetLevel {
+                rms: i as f32 / 10.0,
+            });
+        }
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            OverlayCmd::SetLevel { rms } if (rms - 0.5).abs() < 1e-6
         ));
         assert!(matches!(
             rx.try_recv(),

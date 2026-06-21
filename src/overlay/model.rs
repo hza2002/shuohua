@@ -28,6 +28,8 @@ pub struct OverlayModel {
     pub state_color: u32,
     pub dur_ms: u64,
     pub words: u32,
+    /// 最近一次录音电平（RMS 0–1）。Recording 电平条的目标值，view 侧做平滑。
+    pub level: f32,
     pub bundle_id: Option<String>,
     pub app_name: Option<String>,
     pub chain_summary: String,
@@ -58,6 +60,7 @@ impl OverlayModel {
             state_color: OverlayState::Idle.color_rgb(theme),
             dur_ms: 0,
             words: 0,
+            level: 0.0,
             bundle_id: None,
             app_name: None,
             chain_summary: String::new(),
@@ -100,6 +103,9 @@ impl OverlayModel {
             OverlayCmd::SetStats { dur_ms, words } => {
                 self.dur_ms = dur_ms;
                 self.words = words;
+            }
+            OverlayCmd::SetLevel { rms } => {
+                self.level = rms.clamp(0.0, 1.0);
             }
             OverlayCmd::SetApp {
                 bundle_id,
@@ -178,6 +184,7 @@ impl OverlayModel {
     fn clear_session(&mut self) {
         self.dur_ms = 0;
         self.words = 0;
+        self.level = 0.0;
         self.segments.clear();
         self.partial.clear();
         self.final_text.clear();

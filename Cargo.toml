@@ -69,6 +69,7 @@ objc2-app-kit   = { version = "0.3", features = [
     "NSWindow",
     "objc2-core-graphics",
 ] }
+objc2-core-graphics = { version = "0.3", features = ["CGPath"] }
 objc2-foundation = { version = "0.3", features = [
     "NSArray",
     "NSDate",
@@ -77,8 +78,9 @@ objc2-foundation = { version = "0.3", features = [
     "NSObject",
     "NSString",
     "NSTimer",
+    "NSValue",
 ] }
-objc2-quartz-core = { version = "0.3", features = ["CAAnimation", "CALayer", "CAMediaTiming", "objc2-core-graphics"] }
+objc2-quartz-core = { version = "0.3", features = ["CAAnimation", "CAGradientLayer", "CALayer", "CAMediaTiming", "CAShapeLayer", "objc2-core-graphics"] }
 
 [dev-dependencies]
 proptest = "1"

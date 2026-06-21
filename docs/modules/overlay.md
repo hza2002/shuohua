@@ -4,7 +4,7 @@
 
 > **何时读**：改浮层视觉/动画/材质、Notice/Error 反馈、平台 renderer。
 > **不在这里**：触发浮层的业务（voice/post/reload）在各自模块；i18n 文案见 [architecture](../architecture.md)。
-> **代码**：`src/overlay/`。`command.rs`(OverlayCmd+State+Handle) / `model.rs`(OverlayModel+tick) / `layout.rs`(LayoutFrame+纯几何/文本) 平台无关；`macos/`(view+chrome+debug) 是唯一 renderer。
+> **代码**：`src/overlay/`。`command.rs`(OverlayCmd+State+Handle) / `model.rs`(OverlayModel+tick) / `layout.rs`(LayoutFrame+纯几何/文本) 平台无关；`macos/`(view+chrome+icon_fx+debug) 是唯一 renderer。状态图标的自绘动效（光晕/雷达/跳点/彗星尾/电平条）都在 `macos/icon_fx.rs`，是纯视觉实现细节。
 
 ## 材质与视图层级（不变）
 
@@ -15,7 +15,7 @@
 
 ## OverlayCmd（契约 owner）
 
-上层只通过 `OverlayCmd` 驱动（`SetState`/`SetStats`/`SetApp`/`SetText`/`AppendSegment`/`ReplaceRecentSegments`/`Notice`/`Hide`/`Dismiss`/`ReloadConfig`/`Relabel`/`Quit`，定义见 `command.rs`）。`OverlayModel` 拥有所有时序状态（Notice/Error TTL、`pending_hide`、`recording_started→dur_ms`），`tick(now)->TickOutcome` 推进；`layout.rs` 返回纯几何 `LayoutFrame`，文本截断/行数/时长格式化也在这。
+上层只通过 `OverlayCmd` 驱动（`SetState`/`SetStats`/`SetLevel`/`SetApp`/`SetText`/`AppendSegment`/`ReplaceRecentSegments`/`Notice`/`Hide`/`Dismiss`/`ReloadConfig`/`Relabel`/`Quit`，定义见 `command.rs`）。`SetLevel{rms}` 是录音电平（高频 ~20/s，mailbox 按最新值覆盖、不进队列），驱动 Recording 电平条。`OverlayModel` 拥有所有时序状态（Notice/Error TTL、`pending_hide`、`recording_started→dur_ms`），`tick(now)->TickOutcome` 推进；`layout.rs` 返回纯几何 `LayoutFrame`，文本截断/行数/时长格式化也在这。
 
 ## 三条反馈通道（全复用主 panel，不开第二个）
 

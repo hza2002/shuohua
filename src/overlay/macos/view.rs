@@ -11,10 +11,10 @@ use objc2_app_kit::{
     NSLineBreakMode, NSPanel, NSScreen, NSTextAlignment, NSTextField, NSView,
 };
 use objc2_foundation::{
-    ns_string, MainThreadMarker, NSMutableAttributedString, NSNotification, NSObjectProtocol,
-    NSPoint, NSRange, NSRect, NSSize, NSString, NSTimer,
+    ns_string, MainThreadMarker, NSMutableAttributedString, NSNotification, NSNumber,
+    NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString, NSTimer,
 };
-use objc2_quartz_core::{kCATransitionFade, CAMediaTiming, CATransition};
+use objc2_quartz_core::{kCATransitionFade, CABasicAnimation, CAMediaTiming, CATransition};
 
 use crate::config::theme::EffectiveOverlayCfg;
 use crate::overlay::layout as L;
@@ -24,6 +24,7 @@ use super::chrome::{
     apply_background_settings, apply_glass_settings, apply_panel_background_blur, build_chrome,
     color_from_rgb_alpha, make_panel,
 };
+use super::icon_fx::IconFx;
 
 fn to_nsrect(f: L::LayoutFrame) -> NSRect {
     NSRect::new(NSPoint::new(f.x, f.y), NSSize::new(f.w, f.h))
@@ -38,6 +39,35 @@ mod typography {
     pub const STATE: f64 = 15.0;
     pub const META: f64 = 13.0;
     pub const BODY: f64 = 15.0;
+}
+
+/// 状态图标的动画曲线。只剩 Idle 符号的缓慢 alpha 呼吸；其余状态的动效都是 icon_fx
+/// 的自绘 CALayer，不走这里。
+mod anim {
+    use std::f64::consts::TAU;
+
+    /// Idle 待命：缓慢轻微的 alpha 呼吸（周期 ~3s，约 0.55–1.0），配合背后的呼吸光晕。
+    pub fn idle_breath(ms: f64) -> f64 {
+        0.775 + 0.225 * (TAU * ms / 3000.0).sin()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn idle_breath_is_gentle_and_in_range() {
+            let mut lo = f64::INFINITY;
+            let mut hi = f64::NEG_INFINITY;
+            for i in 0..=2000 {
+                let v = idle_breath(3000.0 * i as f64 / 2000.0);
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+            assert!((0.54..0.57).contains(&lo), "lo={lo}");
+            assert!((0.99..=1.0).contains(&hi), "hi={hi}");
+        }
+    }
 }
 
 #[derive(Default)]
@@ -130,6 +160,11 @@ struct OverlayView {
     stats: Retained<NSTextField>,
     meta: Retained<NSTextField>,
     text: Retained<NSTextField>,
+    /// 挂在 state_icon 背后的自绘动效宿主视图；FX layer 都是它的 sublayer。
+    icon_fx_view: Retained<NSView>,
+    icon_fx: IconFx,
+    /// 上一帧渲染的状态，用于检测"进入 Error"以触发一次性抖动。
+    last_icon_state: Option<OverlayState>,
     animation_started: Instant,
     last_text_update: Option<Instant>,
     last_panel_frame: Option<NSRect>,
@@ -155,6 +190,10 @@ impl OverlayView {
         }
 
         let row = L::first_row_frames(0.0);
+        let icon_fx_view = NSView::new(mtm);
+        icon_fx_view.setFrame(to_nsrect(row.icon));
+        icon_fx_view.setWantsLayer(true);
+        let icon_fx = IconFx::new(icon_fx_view.layer().expect("layer-backed fx view"));
         let state_icon = make_state_icon(mtm, cfg.core.text.primary);
         state_icon.setFrame(to_nsrect(row.icon));
         let status = label(
@@ -196,6 +235,8 @@ impl OverlayView {
 
         // labels 后 addSubview = z-order 在前。glass 在 build_chrome 里已经先进 container 当底色，
         // 这里追加 labels 自然叠在 glass 上面。
+        // icon_fx_view 先加 → z-order 在 state_icon 之后（背后），FX 画在符号后面。
+        container.addSubview(&icon_fx_view);
         container.addSubview(&state_icon);
         container.addSubview(&status);
         container.addSubview(&stats);
@@ -220,6 +261,9 @@ impl OverlayView {
             stats,
             meta,
             text,
+            icon_fx_view,
+            icon_fx,
+            last_icon_state: None,
             animation_started: Instant::now(),
             last_text_update: None,
             last_panel_frame: None,
@@ -408,38 +452,45 @@ impl OverlayView {
         )
     }
 
-    fn render_state_icon(&self, state: OverlayState, color_rgb: u32) {
+    fn render_state_icon(&mut self, state: OverlayState, color_rgb: u32) {
+        // 背后的自绘 FX（光晕/雷达/跳点/彗星尾/电平条）。返回 true 表示效果独占图标位、隐藏符号。
+        let bounds = self.state_icon.bounds();
+        let hide_symbol = self
+            .icon_fx
+            .render(bounds, state, color_rgb, self.model.level);
+
+        let entering = self.last_icon_state != Some(state);
+        self.last_icon_state = Some(state);
+        // 进入 Error 时抖一下符号（一次性）。
+        if state == OverlayState::Error && entering {
+            self.trigger_shake();
+        }
+
+        if hide_symbol {
+            self.state_icon.setImage(None);
+            return;
+        }
+
+        // 符号（重新）出现时淡入，和背后 FX 的淡入一起形成交叉淡入。
+        if entering {
+            fade_view(&self.state_icon, 0.18);
+        }
+
+        let ms = self.animation_started.elapsed().as_millis() as f64;
         let symbol = state_symbol(state);
-        let phase = if state == OverlayState::Recording {
-            self.model
-                .recording_started
-                .map(|started| ((started.elapsed().as_millis() / 160) % 6) as usize)
-                .unwrap_or(0)
-        } else {
-            0
+        // (variableValue, 是否变量渲染, alpha)。Idle 用 alpha 呼吸；Connecting/Error 静态符号
+        // （动感交给背后的 FX）。Recording/Thinking/Stopping 已被 FX 盖住、不画符号。
+        let (value, variable, alpha) = match state {
+            OverlayState::Idle => (1.0, false, anim::idle_breath(ms)),
+            OverlayState::Connecting | OverlayState::Error => (1.0, false, 1.0),
+            OverlayState::Recording | OverlayState::Thinking | OverlayState::Stopping => {
+                unreachable!("hidden by icon_fx above")
+            }
         };
-        let value = if state == OverlayState::Recording {
-            [0.25, 0.45, 0.75, 1.0, 0.65, 0.35][phase]
-        } else if matches!(
-            state,
-            OverlayState::Connecting | OverlayState::Thinking | OverlayState::Stopping
-        ) {
-            let ms = self.animation_started.elapsed().as_millis() as f64;
-            0.78 + ((ms / 360.0).sin() + 1.0) * 0.11
-        } else {
-            1.0
-        };
-        let variable = matches!(
-            state,
-            OverlayState::Recording
-                | OverlayState::Connecting
-                | OverlayState::Thinking
-                | OverlayState::Stopping
-        );
         if let Some(image) = symbol_image(symbol, value, variable) {
             self.state_icon.setImage(Some(&image));
         }
-        self.state_icon.setAlphaValue(value.clamp(0.78, 1.0));
+        self.state_icon.setAlphaValue(alpha);
         let bold = unsafe { NSFontWeightBold };
         let config = NSImageSymbolConfiguration::configurationWithPointSize_weight_scale(
             typography::ICON_SYMBOL,
@@ -454,6 +505,23 @@ impl OverlayView {
         self.state_icon.setImageFrameStyle(NSImageFrameStyle::None);
         self.state_icon
             .setContentTintColor(Some(&color_from_rgb_alpha(color_rgb, 1.0)));
+    }
+
+    /// 进入 Error 时让符号左右快速抖一下再定住（一次性，不循环；removedOnCompletion 默认 true）。
+    fn trigger_shake(&self) {
+        let Some(layer) = self.state_icon.layer() else {
+            return;
+        };
+        let shake =
+            CABasicAnimation::animationWithKeyPath(Some(ns_string!("transform.translation.x")));
+        unsafe {
+            shake.setFromValue(Some(&NSNumber::numberWithDouble(-4.0)));
+            shake.setToValue(Some(&NSNumber::numberWithDouble(4.0)));
+        }
+        shake.setDuration(0.05);
+        shake.setAutoreverses(true);
+        shake.setRepeatCount(3.0);
+        layer.addAnimation_forKey(&shake, Some(ns_string!("shake")));
     }
 
     fn render_body_text(&self, plan: &L::LiveTextPlan, fallback_color: u32) {
@@ -496,6 +564,8 @@ impl OverlayView {
         self.last_visible_text.clear();
         self.last_stats_text.clear();
         self.last_meta_text.clear();
+        // 隐藏后重置，下次重新进入 Error 能再触发抖动。
+        self.last_icon_state = None;
     }
 
     fn layout(&mut self, height: f64, lines: usize) {
@@ -508,6 +578,7 @@ impl OverlayView {
         self.container.setFrame(full);
         let row = L::first_row_frames(top_offset);
         self.state_icon.setFrame(to_nsrect(row.icon));
+        self.icon_fx_view.setFrame(to_nsrect(row.icon));
         self.status.setFrame(to_nsrect(row.status));
         self.stats.setFrame(to_nsrect(row.stats));
         self.meta.setFrame(to_nsrect(row.meta));
@@ -627,6 +698,8 @@ fn label(
 fn make_state_icon(mtm: MainThreadMarker, color_rgb: u32) -> Retained<NSImageView> {
     let image = symbol_image("circle.fill", 1.0, false).expect("system symbol should exist");
     let view = NSImageView::imageViewWithImage(&image, mtm);
+    // 旋转弧（Stopping）需要 state_icon 有 backing layer 才能挂 sublayer。
+    view.setWantsLayer(true);
     let bold = unsafe { NSFontWeightBold };
     let config = NSImageSymbolConfiguration::configurationWithPointSize_weight_scale(
         typography::ICON_SYMBOL,

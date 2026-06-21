@@ -367,7 +367,7 @@ pub(crate) async fn run_with_recorder(
                             }
                             Some(samples) => {
                                 observe_pcm(&mut trace, &samples);
-                                emit_meters(&params.state, &recording_id, &mut meter, &samples);
+                                emit_meters(&params, &recording_id, &mut meter, &samples);
                                 if !first_audio_seen && frame_has_signal(&samples) {
                                     first_audio_seen = true;
                                 }
@@ -480,7 +480,6 @@ pub(crate) async fn run_with_recorder(
                     &mut control_rx,
                     &mut cancel_requested,
                     &mut meter,
-                    &params.state,
                     &recording_id,
                     &mut trace,
                     &params,
@@ -608,7 +607,7 @@ pub(crate) async fn run_with_recorder(
                             }
                             Some(samples) => {
                                 observe_pcm(&mut trace, &samples);
-                                emit_meters(&params.state, &recording_id, &mut meter, &samples);
+                                emit_meters(&params, &recording_id, &mut meter, &samples);
                                 let Some(vad) = vad_pause.as_mut() else {
                                     terminal_error = Some(HistoryError {
                                         kind: "vad_state".to_string(),
@@ -856,7 +855,6 @@ async fn drain_stop_audio(
     control_rx: &mut watch::Receiver<SessionControl>,
     cancel_requested: &mut bool,
     meter: &mut MeterCollector,
-    state: &StateStore,
     recording_id: &str,
     trace: &mut RecordingObserver,
     params: &SessionParams,
@@ -880,7 +878,7 @@ async fn drain_stop_audio(
                     break;
                 };
                 observe_pcm(trace, &samples);
-                emit_meters(state, recording_id, meter, &samples);
+                emit_meters(params, recording_id, meter, &samples);
                 send_pcm_chunk(session, &samples, total_audio_samples).await?;
                 current.record_sent_samples(samples.len() as u64);
                 *last_sent_sample = if let Some(vad) = vad_pause.as_mut() {
@@ -918,7 +916,7 @@ async fn drain_stop_audio(
     let drained = rec.drain_after_stop().await;
     for samples in drained {
         observe_pcm(trace, &samples);
-        emit_meters(state, recording_id, meter, &samples);
+        emit_meters(params, recording_id, meter, &samples);
         send_pcm_chunk(session, &samples, total_audio_samples).await?;
         current.record_sent_samples(samples.len() as u64);
         *last_sent_sample = if let Some(vad) = vad_pause.as_mut() {
@@ -979,13 +977,14 @@ fn frame_has_signal(samples: &[i16]) -> bool {
 }
 
 fn emit_meters(
-    state: &StateStore,
+    params: &SessionParams,
     recording_id: &str,
     collector: &mut MeterCollector,
     samples: &[i16],
 ) {
     for meter in collector.accept(samples) {
-        state.audio_meter(recording_id.to_string(), meter);
+        overlay_send(params, OverlayCmd::SetLevel { rms: meter.rms });
+        params.state.audio_meter(recording_id.to_string(), meter);
     }
 }
 

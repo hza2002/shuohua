@@ -1,4 +1,5 @@
 mod chrome;
+mod icon_fx;
 mod view;
 
 #[cfg(debug_assertions)]

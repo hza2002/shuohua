@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use crate::history::{HistoryRecord, PipelineStepHistory};
+use crate::history::PipelineStepHistory;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio::sync::broadcast;
@@ -112,9 +112,6 @@ pub enum StateEvent {
         recording_id: Option<String>,
         kind: String,
         msg: String,
-    },
-    HistoryAppended {
-        record: Box<HistoryRecord>,
     },
 }
 
@@ -275,13 +272,6 @@ impl StateStore {
             recording_id,
             kind: kind.into(),
             msg: msg.into(),
-        });
-    }
-
-    pub fn history_appended(&self, record: HistoryRecord) {
-        let inner = self.inner.lock().expect("state lock poisoned");
-        let _ = inner.tx.send(StateEvent::HistoryAppended {
-            record: Box::new(record),
         });
     }
 

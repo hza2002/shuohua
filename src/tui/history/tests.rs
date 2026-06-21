@@ -89,13 +89,30 @@ fn page_requests_older_history_from_oldest_loaded_record() {
         Some(crate::ipc::protocol::Command::GetHistory {
             limit: HISTORY_PAGE_SIZE,
             before: Some("2026-06-02T12:00:00Z".to_string()),
+            before_id: Some("01HXYZABCDEF0123456789AAA0".to_string()),
             query: None,
         })
     );
 }
 
 #[test]
-fn appending_history_deduplicates_existing_records() {
+fn history_changed_keeps_existing_records() {
+    let mut page = HistoryPage::new();
+    let record = sample_record("01HXYZABCDEF0123456789AAA1", 3);
+    page.apply_event(
+        &Event::History {
+            records: vec![record.clone()],
+        },
+        true,
+    );
+
+    page.apply_event(&Event::HistoryChanged, true);
+
+    assert_eq!(page.records.len(), 1);
+}
+
+#[test]
+fn legacy_history_appended_deduplicates_existing_records() {
     let mut page = HistoryPage::new();
     let record = sample_record("01HXYZABCDEF0123456789AAA1", 3);
     page.apply_event(
@@ -116,7 +133,7 @@ fn appending_history_deduplicates_existing_records() {
 }
 
 #[test]
-fn appending_history_keeps_existing_selection_on_same_record() {
+fn history_changed_keeps_existing_selection_on_same_record() {
     let mut page = HistoryPage::new();
     page.records = vec![
         sample_record("01HXYZABCDEF0123456789AAA2", 4),
@@ -124,18 +141,13 @@ fn appending_history_keeps_existing_selection_on_same_record() {
     ];
     page.selected = 1;
 
-    page.apply_event(
-        &Event::HistoryAppended {
-            record: Box::new(sample_record("01HXYZABCDEF0123456789AAA3", 5)),
-        },
-        true,
-    );
+    page.apply_event(&Event::HistoryChanged, true);
 
     assert_eq!(page.records[page.selected].id, "01HXYZABCDEF0123456789AAA1");
 }
 
 #[test]
-fn appending_history_preserves_filtered_selection_when_new_record_does_not_match() {
+fn history_changed_preserves_filtered_selection() {
     let mut page = HistoryPage::new();
     page.records = vec![
         sample_record("01HXYZABCDEF0123456789AAA2", 4),
@@ -144,12 +156,7 @@ fn appending_history_preserves_filtered_selection_when_new_record_does_not_match
     page.search = "AAA1".to_string();
     page.selected = 0;
 
-    page.apply_event(
-        &Event::HistoryAppended {
-            record: Box::new(sample_record("01HXYZABCDEF0123456789AAA3", 5)),
-        },
-        true,
-    );
+    page.apply_event(&Event::HistoryChanged, true);
 
     assert_eq!(
         page.selected_record().unwrap().id,

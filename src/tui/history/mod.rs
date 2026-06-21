@@ -309,6 +309,7 @@ impl HistoryPage {
                 Command::GetHistory {
                     limit: HISTORY_PAGE_SIZE,
                     before: None,
+                    before_id: None,
                     query: None,
                 },
                 crate::t!("tui.history.loading_more"),
@@ -319,6 +320,7 @@ impl HistoryPage {
             Command::GetHistory {
                 limit: HISTORY_PAGE_SIZE,
                 before: Some(format_rfc3339(oldest.started_at)),
+                before_id: Some(oldest.id.clone()),
                 query: None,
             },
             crate::t!("tui.history.loading_more"),
@@ -377,6 +379,7 @@ impl Page for HistoryPage {
                 }
                 self.selected = self.selected.min(self.records.len().saturating_sub(1));
             }
+            Event::HistoryChanged => {}
             Event::History { records } => {
                 if self.loading_more {
                     self.merge_older(records.clone());

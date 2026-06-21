@@ -83,7 +83,7 @@ impl App {
 
     fn apply_event(&mut self, event: Event) {
         match event {
-            Event::HistoryAppended { .. } | Event::History { .. } => {
+            Event::HistoryAppended { .. } | Event::HistoryChanged | Event::History { .. } => {
                 self.history.apply_event(&event, self.page == Page::History);
             }
             Event::DaemonStatus { .. } => {}
@@ -115,13 +115,6 @@ pub async fn run() -> Result<()> {
     init_i18n_from_config();
     let mut client = IpcClient::connect(crate::ipc::server::default_socket_path()).await?;
     client.send(&Command::Subscribe).await?;
-    client
-        .send(&Command::GetHistory {
-            limit: history::HISTORY_PAGE_SIZE,
-            before: None,
-            query: None,
-        })
-        .await?;
 
     let _terminal = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(std::io::stdout());

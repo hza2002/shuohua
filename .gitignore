@@ -8,6 +8,14 @@
 docs/superpowers/
 docs/archive/
 
+# Project icon assets. Some machines have a global `Icon` ignore pattern for
+# macOS custom folder icons; keep the real asset directory visible to git.
+!assets/icon/
+!assets/icon/**
+assets/icon/**/.DS_Store
+assets/icon/**/.goutputstream-*
+assets/icon/macos/*.iconset/
+
 # macOS
 **/.DS_Store
 .AppleDouble

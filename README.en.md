@@ -1,5 +1,6 @@
-<!-- Future logo: place a centered project mark above the title. -->
 <div align="center">
+
+<img src="assets/icon/shuohua-icon.svg" width="168" alt="shuohua logo">
 
 # shuohua
 

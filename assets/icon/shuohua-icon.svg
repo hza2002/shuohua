@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="shuohua app icon">
+  <defs>
+    <linearGradient id="rim" x1="122" y1="104" x2="902" y2="920" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fabd2f" stop-opacity="0.62"/>
+      <stop offset="0.24" stop-color="#ebdbb2" stop-opacity="0.46"/>
+      <stop offset="0.6" stop-color="#665c54" stop-opacity="0.38"/>
+      <stop offset="0.84" stop-color="#83a598" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#458588" stop-opacity="0.48"/>
+    </linearGradient>
+
+    <linearGradient id="rim-inner" x1="150" y1="124" x2="870" y2="890" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff5d6" stop-opacity="0.48"/>
+      <stop offset="0.36" stop-color="#d5c4a1" stop-opacity="0.16"/>
+      <stop offset="0.72" stop-color="#3c3836" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#83a598" stop-opacity="0.42"/>
+    </linearGradient>
+
+    <linearGradient id="wave-left" x1="250" y1="506" x2="730" y2="506" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#d65d0e"/>
+      <stop offset="0.52" stop-color="#fe8019"/>
+      <stop offset="1" stop-color="#fabd2f"/>
+    </linearGradient>
+
+    <linearGradient id="wave-mid-left" x1="250" y1="506" x2="730" y2="506" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fe8019"/>
+      <stop offset="0.58" stop-color="#fabd2f"/>
+      <stop offset="1" stop-color="#ebdbb2"/>
+    </linearGradient>
+
+    <linearGradient id="wave-center" x1="250" y1="506" x2="730" y2="506" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fe8019"/>
+      <stop offset="0.46" stop-color="#fabd2f"/>
+      <stop offset="1" stop-color="#ebdbb2"/>
+    </linearGradient>
+
+    <linearGradient id="wave-mid-right" x1="250" y1="506" x2="730" y2="506" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fabd2f"/>
+      <stop offset="0.62" stop-color="#fabd2f"/>
+      <stop offset="1" stop-color="#ebdbb2"/>
+    </linearGradient>
+
+    <linearGradient id="wave-right" x1="250" y1="506" x2="730" y2="506" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fabd2f"/>
+      <stop offset="0.54" stop-color="#fabd2f"/>
+      <stop offset="1" stop-color="#ebdbb2"/>
+    </linearGradient>
+
+    <linearGradient id="cursor" x1="824" y1="362" x2="824" y2="684" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c9fff6"/>
+      <stop offset="0.42" stop-color="#8ff9ec"/>
+      <stop offset="1" stop-color="#4fd7d8"/>
+    </linearGradient>
+
+    <filter id="soft-shadow" x="-16%" y="-16%" width="132%" height="136%">
+      <feDropShadow dx="0" dy="24" stdDeviation="26" flood-color="#000000" flood-opacity="0.34"/>
+    </filter>
+
+    <filter id="wave-glow" x="-90%" y="-70%" width="280%" height="240%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="16" result="outerBlur"/>
+      <feFlood flood-color="#fabd2f" flood-opacity="0.36" result="outerGlow"/>
+      <feComposite in="outerGlow" in2="outerBlur" operator="in" result="coloredOuter"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="innerBlur"/>
+      <feFlood flood-color="#fe8019" flood-opacity="0.34" result="innerGlow"/>
+      <feComposite in="innerGlow" in2="innerBlur" operator="in" result="coloredInner"/>
+      <feMerge>
+        <feMergeNode in="coloredOuter"/>
+        <feMergeNode in="coloredInner"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="cursor-glow" x="-120%" y="-70%" width="340%" height="240%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="14" result="outerBlur"/>
+      <feFlood flood-color="#8ff9ec" flood-opacity="0.42" result="outerGlow"/>
+      <feComposite in="outerGlow" in2="outerBlur" operator="in" result="coloredOuter"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="innerBlur"/>
+      <feFlood flood-color="#8ff9ec" flood-opacity="0.46" result="innerGlow"/>
+      <feComposite in="innerGlow" in2="innerBlur" operator="in" result="coloredInner"/>
+      <feMerge>
+        <feMergeNode in="coloredOuter"/>
+        <feMergeNode in="coloredInner"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" fill="none"/>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="82" y="80" width="860" height="860" rx="188" fill="#202120"/>
+    <rect x="82" y="80" width="860" height="860" rx="188" fill="none" stroke="url(#rim)" stroke-width="3.6"/>
+    <rect x="92" y="90" width="840" height="840" rx="178" fill="none" stroke="url(#rim-inner)" stroke-width="1.8"/>
+  </g>
+
+  <g filter="url(#wave-glow)" stroke="#fff0bc" stroke-width="1.4" stroke-opacity="0.72">
+    <rect x="218" y="448" width="56" height="150" rx="28" fill="url(#wave-left)"/>
+    <rect x="318" y="360" width="64" height="332" rx="32" fill="url(#wave-mid-left)"/>
+    <rect x="430" y="258" width="72" height="530" rx="36" fill="url(#wave-center)"/>
+    <rect x="550" y="364" width="64" height="324" rx="32" fill="url(#wave-mid-right)"/>
+    <rect x="658" y="452" width="56" height="148" rx="28" fill="url(#wave-right)"/>
+  </g>
+
+  <g filter="url(#cursor-glow)" fill="url(#cursor)" stroke="#d8fffa" stroke-width="1.4" stroke-opacity="0.72">
+    <rect x="763" y="338" width="28" height="362" rx="14"/>
+    <rect x="744" y="328" width="66" height="22" rx="11"/>
+    <rect x="744" y="688" width="66" height="22" rx="11"/>
+  </g>
+</svg>

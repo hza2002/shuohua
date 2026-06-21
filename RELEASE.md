@@ -64,9 +64,34 @@ fi
 
 按版本规则推荐 `patch`、`minor` 或具体版本号，并向用户确认。首个公开版本通常是 `0.1.0`。
 
-## 5. 更新 CHANGELOG
+## 5. 起草 CHANGELOG
 
-在 `CHANGELOG.md` 顶部维护本次版本段落。首版发布前把 `Unreleased` 改成实际日期。
+发版时由 agent 根据自上个 tag 以来的 commit 起草本次版本段落，展示给用户确认后写入 `CHANGELOG.md` 顶部。不要在日常开发中维护 `Unreleased` 段。
+
+格式：
+
+```markdown
+## vX.Y.Z - YYYY-MM-DD
+
+### Breaking
+- ...
+
+### Added
+- ...
+
+### Changed
+- ...
+
+### Fixed
+- ...
+
+### Security
+- ...
+```
+
+只保留非空 section。`Breaking` 仅在有迁移成本时出现，并放在最前面；`Security` 仅用于安全相关修复。避免 `Notes` 这类宽泛 section，平台要求、安装限制、签名状态等长期说明应写在 README 或 `.github/release-body.md`，不要每版复制进 changelog。
+
+条目用用户视角写，避免内部过程描述，不逐条镜像 commit。GitHub Release 页面会额外生成 "What's Changed" 提交 / PR / contributor 列表。
 
 确认后只 stage changelog，不手动创建 release commit：
 
@@ -120,6 +145,11 @@ gh run watch <run-id>
 ```
 
 构建失败时只报告关键日志和失败阶段，不自动 rerun 或修复。
+
+Release body 由两部分组成：
+
+- `.github/release-body.md`：固定安装和权限提醒。
+- GitHub 自动生成 release notes：commit / PR / contributor 摘要。
 
 ## 10. 验证 Artifact
 

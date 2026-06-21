@@ -2,9 +2,9 @@
 
 本文件只记录公开发布版本的用户可感知变化，最新版本在最上面。
 
-## v0.1.0 - Unreleased
+## v0.1.0 - 2026-06-22
 
-Initial public release.
+First public release.
 
 ### Added
 
@@ -16,10 +16,3 @@ Initial public release.
 - Optional retained audio in FLAC or AAC, disabled by default.
 - launchd service management through `shuo install`, `start`, `stop`, `restart`, `status`, and `uninstall`.
 - zh-CN and en-US UI text, with built-in light and dark themes.
-
-### Notes
-
-- Release artifacts target Apple Silicon macOS.
-- Apple local ASR requires macOS 26+. macOS 15-25 users should configure a cloud ASR provider.
-- Releases are currently unsigned. Microphone and Accessibility permissions must be granted after first install and usually after each upgrade.
-- History schema starts at `version: 1`; pre-release development records are not migrated.

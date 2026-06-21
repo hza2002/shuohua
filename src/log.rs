@@ -65,7 +65,7 @@ pub fn init_daemon() -> Result<LogGuard> {
 }
 
 pub fn logs_dir() -> PathBuf {
-    crate::state::history::state_dir().join("logs")
+    crate::paths::StateDirs::discover().logs()
 }
 
 pub fn log_file_path(now: OffsetDateTime) -> Result<PathBuf> {

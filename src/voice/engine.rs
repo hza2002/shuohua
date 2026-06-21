@@ -7,9 +7,9 @@
 use std::time::{Duration, Instant};
 
 use crate::asr::types::{AsrEvent, AsrProvider, AsrSession, LanguageMode, SessionCtx};
+use crate::history::HistoryError;
 use crate::overlay::{OverlayCmd, OverlayHandle, OverlayState, TextKind};
 use crate::post;
-use crate::state::history::HistoryError;
 use crate::state::{SessionMeta, SessionPhase as UiSessionPhase, StateStore};
 use crate::voice::capture::{samples_to_ms, SegmentCapture, SessionCapture};
 use crate::voice::finalize::{finalize_provider_session, FinalizeOutcome};

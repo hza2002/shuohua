@@ -15,8 +15,8 @@ use tokio::sync::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::history::{store as history, HistoryRecord, PipelineStepHistory, PipelineStepStatus};
 use crate::ipc::protocol::{Command, Event, WireState, PROTO_VERSION};
-use crate::state::history::{self, HistoryRecord, PipelineStepHistory, PipelineStepStatus};
 use crate::state::{DaemonState, StateEvent, StateSnapshot, StateStore};
 
 const CLIENT_QUEUE: usize = 256;
@@ -573,8 +573,8 @@ mod tests {
     use tokio::net::UnixStream;
 
     use super::*;
+    use crate::history::{AsrHistory, HistoryStatus, PipelineStepStatus};
     use crate::ipc::protocol::{decode_event, encode_command};
-    use crate::state::history::{AsrHistory, HistoryStatus, PipelineStepStatus};
 
     fn test_reload_handle() -> crate::reload::Handle {
         let dir = std::env::temp_dir().join(format!("shuohua-reload-handle-{}", ulid::Ulid::new()));

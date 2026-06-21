@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::config::theme::TuiTheme;
-use crate::state::history::HistoryRecord;
+use crate::history::HistoryRecord;
 use crate::tui::history::{Confirm, HistoryDetail, HistoryPage};
 use crate::tui::ui;
 

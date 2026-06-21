@@ -1,8 +1,8 @@
 //! 一次录音的完整生命周期：运行录音引擎，再统一完成 post、dispatch 和 history。
 
 use crate::asr::types::AsrProvider;
+use crate::history::{HistoryRecord, HistoryStatus};
 use crate::overlay::{OverlayCmd, OverlayHandle, TextKind};
-use crate::state::history::{HistoryRecord, HistoryStatus};
 use crate::state::StateStore;
 use crate::voice::engine::{self, EngineOutcome};
 use crate::voice::history_build::{append_history, HistoryInput};
@@ -192,7 +192,7 @@ fn publish_history_result(
 }
 
 fn history_status_for_completion(
-    terminal_error: Option<&crate::state::history::HistoryError>,
+    terminal_error: Option<&crate::history::HistoryError>,
     status: HistoryStatus,
 ) -> HistoryStatus {
     match terminal_error {
@@ -205,7 +205,7 @@ fn history_status_for_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::history::HistoryError;
+    use crate::history::HistoryError;
     use crate::voice::capture::SessionCapture;
     use crate::voice::observer::{RecordingObserver, TraceStart};
     use std::time::Instant;

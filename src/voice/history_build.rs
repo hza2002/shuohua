@@ -8,11 +8,11 @@
 
 use std::time::Instant;
 
-use crate::post::{self, PipelineStepStatus};
-use crate::state::history::{
-    self, AsrHistory, AsrSessionHistory, HistoryError, HistoryRecord, HistoryStatus,
+use crate::history::{
+    store, AsrHistory, AsrSessionHistory, HistoryError, HistoryRecord, HistoryStatus,
     PipelineStepHistory, PipelineStepStatus as HistoryPipelineStepStatus,
 };
+use crate::post::{self, PipelineStepStatus};
 use crate::voice::capture::{instant_to_datetime, samples_to_ms, session_text, SessionCapture};
 
 pub(crate) struct HistoryInput {
@@ -80,7 +80,7 @@ pub(crate) fn build_record(input: HistoryInput) -> HistoryRecord {
 
 pub(crate) fn append_history(input: HistoryInput) -> anyhow::Result<HistoryRecord> {
     let record = build_record(input);
-    history::append_default(&record)?;
+    store::append_default(&record)?;
     tracing::info!(
         recording_id = %record.id,
         status = ?record.status,

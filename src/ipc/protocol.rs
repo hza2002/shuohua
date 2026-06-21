@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::state::history::HistoryRecord;
+use crate::history::HistoryRecord;
 use crate::state::{AudioMeter, SessionMeta, SessionPhase};
 
 pub const PROTO_VERSION: u8 = 2;

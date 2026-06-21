@@ -17,7 +17,7 @@ pub fn plist_path() -> PathBuf {
 }
 
 pub fn install() -> Result<()> {
-    let state_dir = crate::state::history::state_dir();
+    let state_dir = crate::paths::StateDirs::discover().root().to_path_buf();
     std::fs::create_dir_all(&state_dir)
         .with_context(|| tr_path("cli.service.create_state_dir_failed", &state_dir))?;
     let plist = plist_path();

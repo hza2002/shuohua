@@ -10,8 +10,8 @@ use std::time::Instant;
 use tokio::sync::{mpsc, watch};
 
 use crate::asr::types::{AsrEvent, AsrSession};
+use crate::history::HistoryError;
 use crate::overlay::{OverlayCmd, OverlayHandle};
-use crate::state::history::HistoryError;
 use crate::state::StateStore;
 use crate::voice::capture::SegmentCapture;
 use crate::voice::observer::{observe_asr_event, RecordingObserver};

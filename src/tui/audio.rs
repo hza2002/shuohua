@@ -5,7 +5,8 @@ use std::time::SystemTime;
 
 use anyhow::{bail, Context, Result};
 
-use crate::state::history::{state_dir, HistoryRecord};
+use crate::history::HistoryRecord;
+use crate::paths::StateDirs;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioInfo {
@@ -34,7 +35,7 @@ pub fn audio_path_for_record_in_state_dir(state_dir: &Path, recording_id: &str) 
 }
 
 pub fn audio_info_for_record(record: &HistoryRecord) -> AudioInfo {
-    audio_info_for_recording_id_in_state_dir(&state_dir(), &record.id)
+    audio_info_for_recording_id_in_state_dir(StateDirs::discover().root(), &record.id)
 }
 
 pub fn audio_info_for_recording_id_in_state_dir(state_dir: &Path, recording_id: &str) -> AudioInfo {
@@ -65,7 +66,10 @@ pub fn audio_info_for_recording_id_in_state_dir(state_dir: &Path, recording_id: 
 }
 
 pub fn missing_audio_info_for_record(record: &HistoryRecord) -> AudioInfo {
-    missing_audio_info(audio_path_for_record_in_state_dir(&state_dir(), &record.id))
+    missing_audio_info(audio_path_for_record_in_state_dir(
+        StateDirs::discover().root(),
+        &record.id,
+    ))
 }
 
 fn missing_audio_info(path: PathBuf) -> AudioInfo {
@@ -92,7 +96,7 @@ pub fn audio_info_for_path(path: PathBuf) -> AudioInfo {
 }
 
 pub fn delete_audio_path(path: &Path) -> Result<DeleteAudioResult> {
-    ensure_audio_path(path, &state_dir().join("audio"))?;
+    ensure_audio_path(path, &StateDirs::discover().audio())?;
     ensure_regular_file_if_present(path)?;
     match fs::remove_file(path) {
         Ok(()) => Ok(DeleteAudioResult::Deleted),
@@ -120,7 +124,7 @@ fn open_with_args(args: &[&std::ffi::OsStr]) -> Result<()> {
 }
 
 fn ensure_existing_audio(path: &Path) -> Result<()> {
-    ensure_audio_path(path, &state_dir().join("audio"))?;
+    ensure_audio_path(path, &StateDirs::discover().audio())?;
     if !is_regular_file(path)? {
         bail!("audio file is missing: {}", path.display());
     }

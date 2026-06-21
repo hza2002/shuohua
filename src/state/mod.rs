@@ -1,8 +1,6 @@
-pub mod history;
-
 use std::sync::{Arc, Mutex};
 
-use history::{HistoryRecord, PipelineStepHistory};
+use crate::history::{HistoryRecord, PipelineStepHistory};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio::sync::broadcast;

@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::config::theme::TuiTheme;
+use crate::history::HistoryRecord;
 use crate::ipc::protocol::{Command, Event};
-use crate::state::history::HistoryRecord;
 use crate::tui::audio::{
     audio_info_for_record, delete_audio_path, missing_audio_info_for_record, open_audio_path,
     reveal_audio_path, AudioInfo, DeleteAudioResult,

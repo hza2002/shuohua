@@ -33,7 +33,7 @@ pub fn run_smart_fallback() -> Result<()> {
 }
 
 fn smart_fallback_log(name: &str) -> Result<std::fs::File> {
-    let dir = crate::state::history::state_dir();
+    let dir = crate::paths::StateDirs::discover().root().to_path_buf();
     std::fs::create_dir_all(&dir).with_context(|| format!("create state dir {}", dir.display()))?;
     let path = dir.join(name);
     std::fs::OpenOptions::new()

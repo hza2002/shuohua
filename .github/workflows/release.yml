@@ -65,7 +65,7 @@ jobs:
           name="shuo-v${ver}-aarch64-apple-darwin"
           mkdir -p "dist/${name}"
           cp target/release/shuo "dist/${name}/"
-          cp LICENSE README.md "dist/${name}/"
+          cp LICENSE README.md README.en.md "dist/${name}/"
           tar -C dist -czf "dist/${name}.tar.gz" "${name}"
           shasum -a 256 "dist/${name}.tar.gz" | awk '{print $1}' > "dist/${name}.tar.gz.sha256"
           ls -lh dist/

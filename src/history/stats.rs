@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -112,7 +112,9 @@ struct ServiceInner {
     dir: PathBuf,
     local_offset: UtcOffset,
     state: IndexState,
+    dirty: DirtySet,
     failed: Option<FailedScan>,
+    observed: FileSetFingerprint,
     hooks: Hooks,
 }
 
@@ -125,6 +127,51 @@ enum IndexState {
 
 struct FailedScan {
     fingerprint: FileSetFingerprint,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum DirtySet {
+    #[default]
+    None,
+    All,
+    Months(BTreeSet<String>),
+}
+
+impl DirtySet {
+    fn is_empty(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    fn mark_all(&mut self) {
+        *self = Self::All;
+    }
+
+    fn mark_month(&mut self, month: String) {
+        match self {
+            Self::None => {
+                let mut months = BTreeSet::new();
+                months.insert(month);
+                *self = Self::Months(months);
+            }
+            Self::All => {}
+            Self::Months(months) => {
+                months.insert(month);
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        *self = Self::None;
+    }
+
+    #[cfg(test)]
+    fn count(&self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::All => usize::MAX,
+            Self::Months(months) => months.len(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -206,7 +253,9 @@ impl HistoryService {
                 dir,
                 local_offset,
                 state: IndexState::Uninitialized,
+                dirty: DirtySet::None,
                 failed: None,
+                observed: FileSetFingerprint(Vec::new()),
                 hooks,
             })),
             events,
@@ -227,67 +276,75 @@ impl HistoryService {
     }
 
     pub fn stats(&self) -> HistoryStatsSnapshot {
-        let mut inner = self.inner.lock().expect("history service lock poisoned");
-        let offset = inner.local_offset;
-        match ensure_index(&mut inner) {
-            Ok(IndexView::Ready(index)) => {
-                stats_snapshot(index, offset, HistoryStatsStatus::Ready, None)
+        let mut events = Vec::new();
+        let snapshot = {
+            let mut inner = self.inner.lock().expect("history service lock poisoned");
+            let offset = inner.local_offset;
+            match ensure_index(&mut inner, &mut events) {
+                Ok(IndexView::Ready(index)) => {
+                    stats_snapshot(index, offset, HistoryStatsStatus::Ready, None)
+                }
+                Ok(IndexView::Stale { index, error }) => {
+                    stats_snapshot(index, offset, HistoryStatsStatus::Stale, Some(error))
+                }
+                Ok(IndexView::Unavailable { error }) => HistoryStatsSnapshot {
+                    status: HistoryStatsStatus::Unavailable,
+                    total: AggregateStats::default(),
+                    current_month: AggregateStats::default(),
+                    today: AggregateStats::default(),
+                    error: Some(error),
+                },
+                Err(error) => HistoryStatsSnapshot {
+                    status: HistoryStatsStatus::Unavailable,
+                    total: AggregateStats::default(),
+                    current_month: AggregateStats::default(),
+                    today: AggregateStats::default(),
+                    error: Some(error.to_string()),
+                },
             }
-            Ok(IndexView::Stale { index, error }) => {
-                stats_snapshot(index, offset, HistoryStatsStatus::Stale, Some(error))
-            }
-            Ok(IndexView::Unavailable { error }) => HistoryStatsSnapshot {
-                status: HistoryStatsStatus::Unavailable,
-                total: AggregateStats::default(),
-                current_month: AggregateStats::default(),
-                today: AggregateStats::default(),
-                error: Some(error),
-            },
-            Err(error) => HistoryStatsSnapshot {
-                status: HistoryStatsStatus::Unavailable,
-                total: AggregateStats::default(),
-                current_month: AggregateStats::default(),
-                today: AggregateStats::default(),
-                error: Some(error.to_string()),
-            },
-        }
+        };
+        self.publish(events);
+        snapshot
     }
 
     pub fn analytics(&self, query: AnalyticsQuery) -> Result<AnalyticsSnapshot> {
-        let mut inner = self.inner.lock().expect("history service lock poisoned");
-        let offset = inner.local_offset;
-        let view = ensure_index(&mut inner)?;
-        match view {
-            IndexView::Ready(index) => {
-                analytics_snapshot(index, query, offset, HistoryStatsStatus::Ready, None)
+        let mut events = Vec::new();
+        let snapshot = {
+            let mut inner = self.inner.lock().expect("history service lock poisoned");
+            let offset = inner.local_offset;
+            let view = ensure_index(&mut inner, &mut events)?;
+            match view {
+                IndexView::Ready(index) => {
+                    analytics_snapshot(index, query, offset, HistoryStatsStatus::Ready, None)
+                }
+                IndexView::Stale { index, error } => {
+                    analytics_snapshot(index, query, offset, HistoryStatsStatus::Stale, Some(error))
+                }
+                IndexView::Unavailable { error } => {
+                    let period = query.period;
+                    let anchor = query.anchor.clone();
+                    Ok(AnalyticsSnapshot {
+                        status: HistoryStatsStatus::Unavailable,
+                        period,
+                        anchor,
+                        points: empty_points(query)?,
+                        error: Some(error),
+                    })
+                }
             }
-            IndexView::Stale { index, error } => {
-                analytics_snapshot(index, query, offset, HistoryStatsStatus::Stale, Some(error))
-            }
-            IndexView::Unavailable { error } => {
-                let period = query.period;
-                let anchor = query.anchor.clone();
-                Ok(AnalyticsSnapshot {
-                    status: HistoryStatsStatus::Unavailable,
-                    period,
-                    anchor,
-                    points: empty_points(query)?,
-                    error: Some(error),
-                })
-            }
-        }
+        };
+        self.publish(events);
+        snapshot
     }
 
     pub fn page(&self, query: HistoryQuery) -> Result<Vec<HistoryRecord>> {
         let mut events = Vec::new();
         let records = {
             let mut inner = self.inner.lock().expect("history service lock poisoned");
-            reconcile_if_ready(&mut inner, &mut events)?;
+            reconcile_if_initialized(&mut inner, &mut events)?;
             page_stable(&inner.dir, query, &inner.hooks)?
         };
-        for event in events {
-            let _ = self.events.send(event);
-        }
+        self.publish(events);
         Ok(records)
     }
 
@@ -295,7 +352,7 @@ impl HistoryService {
         let mut events = Vec::new();
         {
             let mut inner = self.inner.lock().expect("history service lock poisoned");
-            reconcile_if_ready(&mut inner, &mut events)?;
+            reconcile_if_initialized(&mut inner, &mut events)?;
             store::append_record(
                 &store::path_for_month_in_dir(&inner.dir, record.started_at),
                 &record,
@@ -309,14 +366,65 @@ impl HistoryService {
                 (&mut inner.state, new_fingerprints)
             {
                 add_record_to_index(index, &record);
-                index.fingerprints = new_fingerprints;
+                index.fingerprints = new_fingerprints.clone();
+                inner.observed = new_fingerprints;
+                inner.dirty.clear();
+                inner.failed = None;
+            } else {
+                let name = store::path_for_month_in_dir(&inner.dir, record.started_at)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string);
+                if let Some(name) = name {
+                    if let Ok(fingerprint) = fingerprint_optional_path(&inner.dir.join(&name)) {
+                        update_observed_entry(&mut inner.observed, name, fingerprint);
+                    }
+                }
             }
             events.push(HistoryEvent::Appended);
         }
+        self.publish(events);
+        Ok(())
+    }
+
+    pub fn watch(&self) -> Result<crate::history::HistoryWatcher> {
+        crate::history::watcher::start(self.clone())
+    }
+
+    pub(crate) fn history_dir_for_watcher(&self) -> PathBuf {
+        self.inner
+            .lock()
+            .expect("history service lock poisoned")
+            .dir
+            .clone()
+    }
+
+    pub(crate) fn mark_history_paths_changed(&self, paths: &[PathBuf]) {
+        let mut events = Vec::new();
+        {
+            let mut inner = self.inner.lock().expect("history service lock poisoned");
+            mark_paths_dirty(&mut inner, paths, &mut events);
+        }
+        self.publish(events);
+    }
+
+    pub(crate) fn mark_history_watcher_error(&self) {
+        let mut events = Vec::new();
+        {
+            let mut inner = self.inner.lock().expect("history service lock poisoned");
+            let was_clean = inner.dirty.is_empty();
+            inner.dirty.mark_all();
+            if was_clean && !matches!(inner.state, IndexState::Uninitialized) {
+                events.push(HistoryEvent::Changed);
+            }
+        }
+        self.publish(events);
+    }
+
+    fn publish(&self, events: Vec<HistoryEvent>) {
         for event in events {
             let _ = self.events.send(event);
         }
-        Ok(())
     }
 
     #[cfg(test)]
@@ -325,8 +433,19 @@ impl HistoryService {
         if inner.local_offset != offset {
             inner.local_offset = offset;
             inner.state = IndexState::Uninitialized;
+            inner.dirty.clear();
             inner.failed = None;
+            inner.observed = FileSetFingerprint(Vec::new());
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debug_dirty_month_count(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("history service lock poisoned")
+            .dirty
+            .count()
     }
 }
 
@@ -342,7 +461,10 @@ enum IndexView<'a> {
     Unavailable { error: String },
 }
 
-fn ensure_index(inner: &mut ServiceInner) -> Result<IndexView<'_>> {
+fn ensure_index<'a>(
+    inner: &'a mut ServiceInner,
+    events: &mut Vec<HistoryEvent>,
+) -> Result<IndexView<'a>> {
     if let IndexState::Ready(index)
     | IndexState::Stale {
         last_valid: index, ..
@@ -350,7 +472,9 @@ fn ensure_index(inner: &mut ServiceInner) -> Result<IndexView<'_>> {
     {
         if index.offset != inner.local_offset {
             inner.state = IndexState::Uninitialized;
+            inner.dirty.clear();
             inner.failed = None;
+            inner.observed = FileSetFingerprint(Vec::new());
         }
     }
 
@@ -359,26 +483,8 @@ fn ensure_index(inner: &mut ServiceInner) -> Result<IndexView<'_>> {
             inner,
             scan_stable(&inner.dir, inner.local_offset, &inner.hooks)?,
         );
-    } else if let Some(failed) = &inner.failed {
-        let current = fingerprint_file_set(&inner.dir, &inner.hooks)?;
-        if current != failed.fingerprint {
-            apply_scan_outcome(
-                inner,
-                scan_stable(&inner.dir, inner.local_offset, &inner.hooks)?,
-            );
-        }
-    } else if let IndexState::Ready(index)
-    | IndexState::Stale {
-        last_valid: index, ..
-    } = &inner.state
-    {
-        let current = fingerprint_file_set(&inner.dir, &inner.hooks)?;
-        if current != index.fingerprints {
-            apply_scan_outcome(
-                inner,
-                scan_stable(&inner.dir, inner.local_offset, &inner.hooks)?,
-            );
-        }
+    } else {
+        reconcile_if_initialized(inner, events)?;
     }
 
     Ok(match &inner.state {
@@ -400,6 +506,8 @@ fn apply_scan_outcome(inner: &mut ServiceInner, outcome: ScanOutcome) {
     match outcome {
         ScanOutcome::Ready(index) => {
             inner.failed = None;
+            inner.dirty.clear();
+            inner.observed = index.fingerprints.clone();
             inner.state = IndexState::Ready(index);
         }
         ScanOutcome::Failed { fingerprint, error } => {
@@ -421,20 +529,74 @@ fn apply_scan_outcome(inner: &mut ServiceInner, outcome: ScanOutcome) {
     }
 }
 
-fn reconcile_if_ready(inner: &mut ServiceInner, events: &mut Vec<HistoryEvent>) -> Result<()> {
-    let IndexState::Ready(index) = &inner.state else {
-        return Ok(());
-    };
-    let current = fingerprint_file_set(&inner.dir, &inner.hooks)?;
-    if current == index.fingerprints {
+fn reconcile_if_initialized(
+    inner: &mut ServiceInner,
+    events: &mut Vec<HistoryEvent>,
+) -> Result<()> {
+    if matches!(inner.state, IndexState::Uninitialized) {
         return Ok(());
     }
-    let outcome = scan_stable(&inner.dir, inner.local_offset, &inner.hooks)?;
-    if matches!(outcome, ScanOutcome::Ready(_)) {
+    let current = fingerprint_file_set(&inner.dir, &inner.hooks)?;
+    if inner
+        .failed
+        .as_ref()
+        .is_some_and(|failed| current == failed.fingerprint)
+    {
+        return Ok(());
+    }
+    let indexed = match &inner.state {
+        IndexState::Ready(index)
+        | IndexState::Stale {
+            last_valid: index, ..
+        } => Some(&index.fingerprints),
+        IndexState::Unavailable { .. } | IndexState::Uninitialized => None,
+    };
+    if inner.dirty.is_empty() && indexed.is_some_and(|fingerprint| *fingerprint == current) {
+        return Ok(());
+    }
+    let retrying_failed_fingerprint = inner.failed.is_some();
+    if inner.dirty.is_empty() {
+        inner.dirty.mark_all();
         events.push(HistoryEvent::Changed);
     }
+    let outcome = scan_stable(&inner.dir, inner.local_offset, &inner.hooks)?;
     apply_scan_outcome(inner, outcome);
+    if retrying_failed_fingerprint {
+        events.push(HistoryEvent::Changed);
+    }
     Ok(())
+}
+
+fn mark_paths_dirty(inner: &mut ServiceInner, paths: &[PathBuf], events: &mut Vec<HistoryEvent>) {
+    let was_clean = inner.dirty.is_empty();
+    let mut marked = false;
+    for path in paths {
+        let Some(name) = month_file_name(path) else {
+            continue;
+        };
+        let current = match fingerprint_optional_path(&inner.dir.join(&name)) {
+            Ok(current) => current,
+            Err(error) => {
+                tracing::warn!(
+                    path = %inner.dir.join(&name).display(),
+                    error = ?error,
+                    "history watcher could not fingerprint changed path"
+                );
+                inner.dirty.mark_month(name);
+                marked = true;
+                continue;
+            }
+        };
+        if observed_entry(&inner.observed, &name) == current.as_ref() {
+            continue;
+        }
+        update_observed_entry(&mut inner.observed, name.clone(), current);
+        inner.dirty.mark_month(name);
+        marked = true;
+    }
+    if marked && was_clean && !matches!(inner.state, IndexState::Uninitialized) {
+        events.push(HistoryEvent::Changed);
+    }
 }
 
 enum ScanOutcome {
@@ -1081,6 +1243,54 @@ fn fingerprint_file_set(dir: &Path, hooks: &Hooks) -> Result<FileSetFingerprint>
         });
     }
     Ok(FileSetFingerprint(entries))
+}
+
+fn month_file_name(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    store::is_monthly_history_file(name).then(|| name.to_string())
+}
+
+fn observed_entry<'a>(observed: &'a FileSetFingerprint, name: &str) -> Option<&'a FileFingerprint> {
+    observed
+        .0
+        .iter()
+        .find(|entry| entry.name == name)
+        .map(|entry| &entry.fingerprint)
+}
+
+fn update_observed_entry(
+    observed: &mut FileSetFingerprint,
+    name: String,
+    fingerprint: Option<FileFingerprint>,
+) {
+    match fingerprint {
+        Some(fingerprint) => match observed.0.binary_search_by(|entry| entry.name.cmp(&name)) {
+            Ok(index) => observed.0[index].fingerprint = fingerprint,
+            Err(index) => observed
+                .0
+                .insert(index, FileFingerprintEntry { name, fingerprint }),
+        },
+        None => {
+            if let Ok(index) = observed.0.binary_search_by(|entry| entry.name.cmp(&name)) {
+                observed.0.remove(index);
+            }
+        }
+    }
+}
+
+fn fingerprint_optional_path(path: &Path) -> Result<Option<FileFingerprint>> {
+    match fingerprint_path(path) {
+        Ok(fingerprint) => Ok(Some(fingerprint)),
+        Err(error) if is_not_found(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn is_not_found(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
 }
 
 #[cfg(unix)]

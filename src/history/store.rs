@@ -73,7 +73,7 @@ fn local_offset() -> UtcOffset {
     UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC)
 }
 
-fn is_monthly_history_file(name: &str) -> bool {
+pub(crate) fn is_monthly_history_file(name: &str) -> bool {
     let Some((stem, "jsonl")) = name.rsplit_once('.') else {
         return false;
     };

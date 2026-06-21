@@ -1,7 +1,7 @@
 pub mod assets;
 pub mod model;
 pub mod stats;
-pub mod store;
+pub(crate) mod store;
 pub mod watcher;
 
 pub use assets::{AudioAssetInfo, AudioAssetState};
@@ -426,7 +426,10 @@ pub mod tests {
             assert_eq!(snapshot.status, HistoryStatsStatus::Ready);
             assert_eq!(snapshot.total.records, 3);
             assert_eq!(rx.try_recv().unwrap(), HistoryEvent::Changed);
-            assert_eq!(rx.try_recv().unwrap(), HistoryEvent::Appended);
+            match rx.try_recv().unwrap() {
+                HistoryEvent::Appended(record) => assert_eq!(record.id, "c"),
+                event => panic!("expected appended event, got {event:?}"),
+            }
             let _ = fs::remove_dir_all(dir);
         }
 

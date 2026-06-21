@@ -401,7 +401,14 @@ fn spawn_history_forwarder(
                 event = rx.recv() => event,
             };
             match event {
-                Ok(HistoryEvent::Appended | HistoryEvent::Changed) => {
+                Ok(HistoryEvent::Appended(record)) => {
+                    if !send_or_drop(&tx, Event::HistoryAppended { record }) {
+                        client_cancel.cancel();
+                        forwarder_cancel.cancel();
+                        break;
+                    }
+                }
+                Ok(HistoryEvent::Changed) => {
                     if !send_or_drop(&tx, Event::HistoryChanged) {
                         client_cancel.cancel();
                         forwarder_cancel.cancel();
@@ -1259,6 +1266,44 @@ trigger = "f16"
         history.mark_history_paths_changed(&[changed_path]);
 
         assert_eq!(client.read_event().await, Event::HistoryChanged);
+        server.abort();
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn subscribed_clients_receive_history_appended_record() {
+        let path = PathBuf::from(format!("/tmp/sh-ipc-app-{}.sock", ulid::Ulid::new()));
+        let listener = bind(&path).await.unwrap();
+        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        let history = HistoryService::with_dir(dir.clone());
+        let server = tokio::spawn(run(
+            listener,
+            StateStore::new(),
+            history.clone(),
+            ServerControl {
+                reload: test_reload_handle(),
+                started_at: Instant::now(),
+                shutdown: test_shutdown_sender(),
+            },
+        ));
+        let mut client = TestClient::connect(&path).await;
+        client.subscribe().await;
+        assert!(matches!(client.read_event().await, Event::Snapshot { .. }));
+
+        let record = history_record(
+            "01HXYZABCDEF0123456789AAA1",
+            datetime!(2026-06-20 12:00:00 UTC),
+            "done",
+        );
+        history.append(record.clone()).unwrap();
+
+        match client.read_event().await {
+            Event::HistoryAppended {
+                record: event_record,
+            } => assert_eq!(*event_record, record),
+            event => panic!("expected history_appended event, got {event:?}"),
+        }
         server.abort();
         let _ = fs::remove_file(path);
         let _ = fs::remove_dir_all(dir);

@@ -191,7 +191,10 @@ mod tests {
             .append(record("b", datetime!(2026-06-01 01:00:00 UTC), "two"))
             .unwrap();
 
-        assert_eq!(recv_event(&mut rx), HistoryEvent::Appended);
+        match recv_event(&mut rx) {
+            HistoryEvent::Appended(record) => assert_eq!(record.id, "b"),
+            event => panic!("expected appended event, got {event:?}"),
+        }
         assert_no_event(&mut rx);
         assert_eq!(service.stats().status, HistoryStatsStatus::Ready);
         assert_no_event(&mut rx);

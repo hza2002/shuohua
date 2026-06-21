@@ -97,9 +97,9 @@ pub struct AnalyticsSnapshot {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum HistoryEvent {
-    Appended,
+    Appended(Box<HistoryRecord>),
     Changed,
 }
 
@@ -439,7 +439,7 @@ impl HistoryService {
                     }
                 }
             }
-            events.push(HistoryEvent::Appended);
+            events.push(HistoryEvent::Appended(Box::new(record)));
         }
         self.publish(events);
         Ok(())

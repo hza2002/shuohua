@@ -65,9 +65,9 @@ src/
 
 Daemon startup 只创建 `HistoryService` 和轻量目录 watcher，然后继续 bind IPC / register hotkeys；这个路径不 list/open/scan history shards。TUI startup 也只 `subscribe`，第一次进入 History 页才发送当前页、stats 和 visible analytics 请求。第一个 history 请求在 `spawn_blocking` 中初始化索引；并发 history 请求通过同一个 operations mutex 串行，复用初始化结果。
 
-Watcher 只负责创建 history 目录、监听目录并 mark dirty；callback 不 parse JSONL。实际 reconcile 在 request time 执行：读取前取 metadata fingerprint，bounded scan/read，读取后复查 fingerprint，一致才接受；不一致 retry once。fingerprint 是跨平台 metadata identity/change marker（macOS/Linux 用 dev/ino/ctime/mtime/len；其他平台可降级），正常路径不做 content hash。
+Watcher 只负责创建 history 目录、监听目录并 mark dirty；callback 不 parse JSONL。实际 reconcile 在 request time 执行：读取前取 metadata fingerprint，bounded scan/read，读取后复查 file set fingerprint，一致才接受；不一致 retry once。fingerprint 是跨平台 metadata identity/change marker（macOS/Linux 用 dev/ino/ctime/mtime/len；其他平台可降级），正常路径不做 content hash。
 
-`HistoryService` 的 append/page/stats/analytics/delete 共用一个 operations mutex。page 持锁完成 reconcile + bounded read，并复查参与文件 fingerprint；事件在释放 mutex 后 publish，避免 subscriber re-enter deadlock。
+`HistoryService` 的 append/page/stats/analytics/delete 共用一个 operations mutex。page 持锁完成 reconcile + bounded read，并复查 file set fingerprint；事件在释放 mutex 后 publish，避免 subscriber re-enter deadlock。
 
 External edits 语义是 eventually consistent：watcher 事件或下一次 request-time fingerprint 会修复 missed event；和任意 concurrent external writer 不承诺 linearizable。批量编辑 history JSONL 时建议先停 daemon。
 

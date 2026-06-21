@@ -12,14 +12,6 @@ pub fn history_dir() -> PathBuf {
     StateDirs::discover().history()
 }
 
-pub fn append_default(record: &HistoryRecord) -> Result<()> {
-    append_record(&path_for_month(record.started_at), record)
-}
-
-pub fn path_for_month(now: OffsetDateTime) -> PathBuf {
-    path_for_month_in_dir(&history_dir(), now)
-}
-
 pub fn path_for_month_in_dir(dir: &Path, now: OffsetDateTime) -> PathBuf {
     let local = now.to_offset(local_offset());
     let name = format!("{:04}-{:02}.jsonl", local.year(), u8::from(local.month()));

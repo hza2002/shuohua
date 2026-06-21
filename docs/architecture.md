@@ -20,7 +20,7 @@
 | daemon（`shuo --daemon` 或 smart fallback） | launchd 开机自启，常驻 | 上述全部 |
 | TUI（`shuo` 检测到 daemon 存在） | 用户按需 | 连 UDS 看状态/历史；关掉不影响 daemon |
 
-**Daemon↔TUI 双通道**：UDS `/tmp/shuohua-${UID}.sock`（实时状态 + 控制，TUI 不连时零 UI 开销）+ history JSONL（月分片，外部脚本/未来 GUI 也读）。daemon 日志（日分片）TUI 不读。
+**Daemon↔TUI 双通道**：UDS `/tmp/shuohua-${UID}.sock`（实时状态 + 控制，TUI 不连时零 UI 开销）+ history JSONL（月分片，外部脚本/未来 GUI 也读）。daemon 日志（日分片）TUI 不读。JSONL 是唯一 durable source of truth；统计、分页、analytics 都由 daemon 内存索引从 JSONL 派生。
 
 ## 2. 数据流（一次录音）
 
@@ -41,13 +41,15 @@ src/
 ├── cli/           doctor / config-template / launchd service
 ├── config/        config.toml/profile/asr/post/theme 解析 + 校验 + 模板
 ├── reload.rs      notify watcher + watch 广播 + 三 subscriber
+├── paths.rs       state/history/audio/log/trace 路径
 ├── platform/      OS 能力 facade（clipboard/autotype/permissions/daemon）+ macos/
 ├── hotkey/        语法 + tracker 状态机 + suppress + CGEventTap          → modules/hotkey.md
 ├── asr/           AsrProvider/Session trait + providers/                 → modules/asr.md
 ├── post/          PostProcessor trait + zh_filter + llm                  → modules/post.md
 ├── voice/         录音生命周期：engine（运行期）+ finish（收尾）          → modules/voice.md
 ├── overlay/       平台无关 command/model/layout + macos renderer         → modules/overlay.md
-├── state/         StateStore 快照广播 + history JSONL writer
+├── history/       JSONL records、分页、统计/analytics、删除、audio 关联
+├── state/         StateStore 快照广播（非持久状态源）
 ├── ipc/           UDS server/client + protocol                          → schema.md
 ├── tui/           ratatui：Status/History/Configure 三页
 ├── i18n/          内部 i18n（见 §7）
@@ -55,7 +57,19 @@ src/
 └── text_stats.rs  UAX #29 word count（history/UDS 共用）
 ```
 
-**单向依赖原则**：`reload` 依赖各模块对外 API，不被反向 import；`voice::engine` 不调 `post::run_chain` / `voice::dispatch` / history；`platform` 业务层调 facade，macOS 实现在 `platform::macos`，非 macOS 返回明确 unsupported。**不抽 Plugin trait**——voice/overlay/debug 固定模块，直接 `tokio::spawn`，配置变化走 `watch::Receiver<Arc<Config>>` 广播。
+**单向依赖原则**：`reload` 依赖各模块对外 API，不被反向 import；`voice::engine` 不调 `post::run_chain` / `voice::dispatch` / history；`voice::finish` 构造 `HistoryRecord` 后只通过 `HistoryService` append；`ipc`/TUI 只能经 UDS 和 `crate::history` facade 访问 history，不直接读写 JSONL store primitives；`platform` 业务层调 facade，macOS 实现在 `platform::macos`，非 macOS 返回明确 unsupported。**不抽 Plugin trait**——voice/overlay/debug 固定模块，直接 `tokio::spawn`，配置变化走 `watch::Receiver<Arc<Config>>` 广播。
+
+### 3.1 HistoryService 与 lazy analytics
+
+`history` owns persisted records、bounded pagination、summary stats、year/month/day analytics、record/audio deletion、retained-audio association。JSONL 仍是唯一持久化数据；内存索引只是从 JSONL 派生的可重建缓存，不落盘。
+
+Daemon startup 只创建 `HistoryService` 和轻量目录 watcher，然后继续 bind IPC / register hotkeys；这个路径不 list/open/scan history shards。TUI startup 也只 `subscribe`，第一次进入 History 页才发送当前页、stats 和 visible analytics 请求。第一个 history 请求在 `spawn_blocking` 中初始化索引；并发 history 请求通过同一个 operations mutex 串行，复用初始化结果。
+
+Watcher 只负责创建 history 目录、监听目录并 mark dirty；callback 不 parse JSONL。实际 reconcile 在 request time 执行：读取前取 metadata fingerprint，bounded scan/read，读取后复查 file set fingerprint，一致才接受；不一致 retry once。fingerprint 是跨平台 metadata identity/change marker（macOS/Linux 用 dev/ino/ctime/mtime/len；其他平台可降级），正常路径不做 content hash。
+
+`HistoryService` 的 append/page/stats/analytics/delete 共用一个 operations mutex。page 持锁完成 reconcile + bounded read，并复查 file set fingerprint；事件在释放 mutex 后 publish，避免 subscriber re-enter deadlock。
+
+External edits 语义是 eventually consistent：watcher 事件或下一次 request-time fingerprint 会修复 missed event；和任意 concurrent external writer 不承诺 linearizable。批量编辑 history JSONL 时建议先停 daemon。
 
 **跨平台**：AppKit/core-graphics/objc2 依赖只挂 macOS target。真做 Linux/Windows 时补各平台 sibling（`_darwin.rs` / `overlay/<platform>/`），在此之前不提前扩大 trait 面。
 

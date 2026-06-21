@@ -58,8 +58,8 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Notify;
 
+    use crate::history::HistoryStatus;
     use crate::post::{self, PipelineText, PostChain, PostError, PostProcessor};
-    use crate::state::history::HistoryStatus;
     use crate::voice::post_dispatch::dispatch_with_post_chain;
 
     fn session() -> (ActiveSession, tokio::sync::watch::Receiver<SessionControl>) {

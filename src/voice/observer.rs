@@ -399,7 +399,7 @@ mod imp {
     }
 
     fn default_trace_dir() -> PathBuf {
-        crate::state::history::state_dir().join("traces")
+        crate::paths::StateDirs::discover().traces()
     }
 }
 

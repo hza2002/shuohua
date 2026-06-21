@@ -1,11 +1,11 @@
 //! 一次录音的完整生命周期：运行录音引擎，再统一完成 post、dispatch 和 history。
 
 use crate::asr::types::AsrProvider;
+use crate::history::{HistoryRecord, HistoryService, HistoryStatus};
 use crate::overlay::{OverlayCmd, OverlayHandle, TextKind};
-use crate::state::history::{HistoryRecord, HistoryStatus};
 use crate::state::StateStore;
 use crate::voice::engine::{self, EngineOutcome};
-use crate::voice::history_build::{append_history, HistoryInput};
+use crate::voice::history_build::{build_record, HistoryInput};
 use crate::voice::observer::observe_finish;
 use crate::voice::post_dispatch::dispatch_with_post_chain;
 use crate::voice::SessionControl;
@@ -19,17 +19,19 @@ pub async fn run_recording(
     provider: &dyn AsrProvider,
     params: SessionParams,
     control_rx: watch::Receiver<SessionControl>,
+    history: HistoryService,
 ) {
     let mut completion_control_rx = control_rx.clone();
     let Some(outcome) = engine::run(provider, params, control_rx).await else {
         return;
     };
-    complete_recording(outcome, &mut completion_control_rx).await;
+    complete_recording(outcome, &mut completion_control_rx, history).await;
 }
 
 async fn complete_recording(
     outcome: EngineOutcome,
     control_rx: &mut watch::Receiver<SessionControl>,
+    history: HistoryService,
 ) {
     let EngineOutcome {
         params,
@@ -51,20 +53,24 @@ async fn complete_recording(
         tracing::info!(recording_id, "recording canceled");
         params.state.set_idle();
         if crate::voice::capture::has_archivable_content(&sessions) {
-            let history_result = append_history(HistoryInput {
-                id: recording_id.clone(),
-                provider: provider_name,
-                started_at: recording_started_at,
-                ended_at: time::OffsetDateTime::now_utc(),
-                started_instant: recording_started_instant,
-                asr_text: raw_text.clone(),
-                final_text: raw_text,
-                sessions,
-                pipeline: Vec::new(),
-                app: app_context.bundle_id,
-                status: HistoryStatus::Canceled,
-                error: None,
-            });
+            let history_result = append_history(
+                history.clone(),
+                HistoryInput {
+                    id: recording_id.clone(),
+                    provider: provider_name,
+                    started_at: recording_started_at,
+                    ended_at: time::OffsetDateTime::now_utc(),
+                    started_instant: recording_started_instant,
+                    asr_text: raw_text.clone(),
+                    final_text: raw_text,
+                    sessions,
+                    pipeline: Vec::new(),
+                    app: app_context.bundle_id,
+                    status: HistoryStatus::Canceled,
+                    error: None,
+                },
+            );
+            let history_result = history_result.await;
             publish_history_result(
                 &params.state,
                 params.overlay.as_ref(),
@@ -140,20 +146,24 @@ async fn complete_recording(
         HistoryStatus::Timeout => "timeout",
     };
     let should_hide = terminal_error.is_none() && dispatch_error.is_none();
-    let history_result = append_history(HistoryInput {
-        id: recording_id.clone(),
-        provider: provider_name,
-        started_at: recording_started_at,
-        ended_at: time::OffsetDateTime::now_utc(),
-        started_instant: recording_started_instant,
-        asr_text: raw_text,
-        final_text,
-        sessions,
-        pipeline,
-        app: app_context.bundle_id,
-        status: history_status,
-        error: terminal_error.or(dispatch_error),
-    });
+    let history_result = append_history(
+        history,
+        HistoryInput {
+            id: recording_id.clone(),
+            provider: provider_name,
+            started_at: recording_started_at,
+            ended_at: time::OffsetDateTime::now_utc(),
+            started_instant: recording_started_instant,
+            asr_text: raw_text,
+            final_text,
+            sessions,
+            pipeline,
+            app: app_context.bundle_id,
+            status: history_status,
+            error: terminal_error.or(dispatch_error),
+        },
+    );
+    let history_result = history_result.await;
     publish_history_result(
         &params.state,
         params.overlay.as_ref(),
@@ -166,6 +176,27 @@ async fn complete_recording(
     observe_finish(&mut trace, trace_status, total_audio_samples);
 }
 
+async fn append_history(
+    history: HistoryService,
+    input: HistoryInput,
+) -> anyhow::Result<HistoryRecord> {
+    let record = build_record(input);
+    let record_for_append = record.clone();
+    tokio::task::spawn_blocking(move || history.append(record_for_append))
+        .await
+        .map_err(|error| anyhow::anyhow!("join history append task: {error}"))??;
+    tracing::info!(
+        recording_id = %record.id,
+        status = ?record.status,
+        provider = %record.asr.provider,
+        audio_ms = record.asr.audio_ms,
+        session_count = record.asr.sessions.len(),
+        pipeline_steps = record.pipeline.len(),
+        "recording ended"
+    );
+    Ok(record)
+}
+
 fn publish_history_result(
     state: &StateStore,
     overlay: Option<&OverlayHandle>,
@@ -173,7 +204,7 @@ fn publish_history_result(
     result: anyhow::Result<HistoryRecord>,
 ) {
     match result {
-        Ok(record) => state.history_appended(record),
+        Ok(_record) => {}
         Err(error) => {
             tracing::error!(recording_id, error = ?error, "history append failed");
             state.error(
@@ -192,7 +223,7 @@ fn publish_history_result(
 }
 
 fn history_status_for_completion(
-    terminal_error: Option<&crate::state::history::HistoryError>,
+    terminal_error: Option<&crate::history::HistoryError>,
     status: HistoryStatus,
 ) -> HistoryStatus {
     match terminal_error {
@@ -205,7 +236,7 @@ fn history_status_for_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::history::HistoryError;
+    use crate::history::HistoryError;
     use crate::voice::capture::SessionCapture;
     use crate::voice::observer::{RecordingObserver, TraceStart};
     use std::time::Instant;
@@ -256,7 +287,7 @@ mod tests {
     }
 
     /// Contentless cancel：complete_recording 必须跳过 history append（不发
-    /// history_appended 事件），但仍回 Idle 并 Hide overlay。无 FS 触碰。
+    /// history changed 事件），但仍回 Idle 并 Hide overlay。
     #[tokio::test]
     async fn contentless_cancel_skips_history_append_and_event() {
         let state = StateStore::new();
@@ -264,19 +295,18 @@ mod tests {
         let (overlay, mut overlay_rx) = OverlayHandle::channel();
         let outcome = cancel_outcome(Vec::new(), state.clone(), overlay);
         let (_control_tx, mut control_rx) = watch::channel(SessionControl::Idle);
+        let history = HistoryService::with_dir(
+            std::env::temp_dir().join(format!("shuohua-voice-history-{}", ulid::Ulid::new())),
+        );
+        let mut history_rx = history.subscribe();
 
-        complete_recording(outcome, &mut control_rx).await;
+        complete_recording(outcome, &mut control_rx, history).await;
 
         let mut events = Vec::new();
         while let Ok(event) = state_rx.try_recv() {
             events.push(event);
         }
-        assert!(
-            !events
-                .iter()
-                .any(|e| matches!(e, crate::state::StateEvent::HistoryAppended { .. })),
-            "contentless cancel must not append history: {events:?}"
-        );
+        assert!(history_rx.try_recv().is_err());
         assert!(
             events
                 .iter()

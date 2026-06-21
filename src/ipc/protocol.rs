@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::state::history::HistoryRecord;
+use crate::history::{AnalyticsPeriod, AnalyticsSnapshot, HistoryRecord, HistoryStatsSnapshot};
 use crate::state::{AudioMeter, SessionMeta, SessionPhase};
 
 pub const PROTO_VERSION: u8 = 2;
@@ -28,7 +28,20 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        before_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         query: Option<String>,
+    },
+    GetHistoryStats,
+    GetHistoryAnalytics {
+        period: AnalyticsPeriod,
+        anchor: String,
+    },
+    DeleteAudio {
+        id: String,
+    },
+    DeleteHistory {
+        id: String,
     },
     DaemonStatus,
     Shutdown,
@@ -100,6 +113,23 @@ pub enum Event {
     History {
         records: Vec<HistoryRecord>,
     },
+    HistoryStats {
+        snapshot: HistoryStatsSnapshot,
+    },
+    HistoryAnalytics {
+        snapshot: AnalyticsSnapshot,
+    },
+    HistoryChanged,
+    AudioDeleted {
+        id: String,
+        deleted: bool,
+    },
+    HistoryDeleted {
+        id: String,
+        record_deleted: bool,
+        audio_deleted: bool,
+        audio_error: Option<String>,
+    },
     DaemonStatus {
         pid: u32,
         uptime_ms: u64,
@@ -147,6 +177,7 @@ mod tests {
         let command = Command::GetHistory {
             limit: 50,
             before: Some("2026-06-12T22:00:00Z".to_string()),
+            before_id: Some("01HXYZ".to_string()),
             query: Some("rust".to_string()),
         };
 
@@ -162,6 +193,96 @@ mod tests {
 
         assert!(line.contains(r#""op":"shutdown""#));
         assert_eq!(decode_command(&line).unwrap(), Command::Shutdown);
+    }
+
+    #[test]
+    fn history_service_commands_round_trip_without_bumping_proto_version() {
+        assert_eq!(PROTO_VERSION, 2);
+        let commands = vec![
+            Command::GetHistoryStats,
+            Command::GetHistoryAnalytics {
+                period: AnalyticsPeriod::Month,
+                anchor: "2026-06".to_string(),
+            },
+            Command::DeleteAudio {
+                id: "01HAUDIO".to_string(),
+            },
+            Command::DeleteHistory {
+                id: "01HHISTORY".to_string(),
+            },
+        ];
+
+        for command in commands {
+            let line = encode_command(&command).unwrap();
+            assert_eq!(decode_command(&line).unwrap(), command);
+        }
+    }
+
+    #[test]
+    fn history_service_events_round_trip() {
+        let stats = HistoryStatsSnapshot {
+            status: crate::history::HistoryStatsStatus::Ready,
+            total: crate::history::AggregateStats {
+                records: 1,
+                words: 2,
+                duration_ms: 3,
+                asr_audio_ms: 4,
+            },
+            current_month: crate::history::AggregateStats::default(),
+            today: crate::history::AggregateStats::default(),
+            error: None,
+        };
+        let analytics = AnalyticsSnapshot {
+            status: crate::history::HistoryStatsStatus::Ready,
+            period: AnalyticsPeriod::Month,
+            anchor: "2026-06".to_string(),
+            points: Vec::new(),
+            error: None,
+        };
+        let events = vec![
+            Event::HistoryAppended {
+                record: Box::new(HistoryRecord {
+                    version: 1,
+                    id: "01HLEGACY".to_string(),
+                    started_at: time::OffsetDateTime::UNIX_EPOCH,
+                    ended_at: time::OffsetDateTime::UNIX_EPOCH,
+                    duration_ms: 0,
+                    status: crate::history::HistoryStatus::Submitted,
+                    app: None,
+                    text: String::new(),
+                    text_stats: crate::text_stats::TextStats { words: 0 },
+                    asr: crate::history::AsrHistory {
+                        provider: "test".to_string(),
+                        text: String::new(),
+                        duration_ms: 0,
+                        audio_ms: 0,
+                        sessions: Vec::new(),
+                    },
+                    pipeline: Vec::new(),
+                    error: None,
+                }),
+            },
+            Event::HistoryStats { snapshot: stats },
+            Event::HistoryAnalytics {
+                snapshot: analytics,
+            },
+            Event::HistoryChanged,
+            Event::AudioDeleted {
+                id: "01HAUDIO".to_string(),
+                deleted: true,
+            },
+            Event::HistoryDeleted {
+                id: "01HHISTORY".to_string(),
+                record_deleted: true,
+                audio_deleted: false,
+                audio_error: Some("missing".to_string()),
+            },
+        ];
+
+        for event in events {
+            let line = encode_event(&event).unwrap();
+            assert_eq!(decode_event(&line).unwrap(), event);
+        }
     }
 
     #[test]

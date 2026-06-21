@@ -15,14 +15,14 @@ use tokio::sync::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::history::{
+    AnalyticsQuery, AudioDeleteResult, DeleteResult, HistoryEvent, HistoryQuery, HistoryRecord,
+    HistoryService, PipelineStepHistory, PipelineStepStatus,
+};
 use crate::ipc::protocol::{Command, Event, WireState, PROTO_VERSION};
-use crate::state::history::{self, HistoryRecord, PipelineStepHistory, PipelineStepStatus};
 use crate::state::{DaemonState, StateEvent, StateSnapshot, StateStore};
 
 const CLIENT_QUEUE: usize = 256;
-const DEFAULT_HISTORY_LIMIT: usize = 50;
-const MAX_HISTORY_LIMIT: usize = 500;
-
 pub fn default_socket_path() -> PathBuf {
     let uid = unsafe { libc::getuid() };
     PathBuf::from(format!("/tmp/shuohua-{uid}.sock"))
@@ -89,13 +89,19 @@ pub struct ServerControl {
     pub shutdown: watch::Sender<bool>,
 }
 
-pub async fn run(listener: UnixListener, state: StateStore, control: ServerControl) -> Result<()> {
+pub async fn run(
+    listener: UnixListener,
+    state: StateStore,
+    history: HistoryService,
+    control: ServerControl,
+) -> Result<()> {
     loop {
         let (stream, _) = listener.accept().await.context("accept UDS client")?;
         let state = state.clone();
+        let history = history.clone();
         let control = control.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, state, control).await {
+            if let Err(e) = handle_client(stream, state, history, control).await {
                 tracing::debug!(error = ?e, "IPC client ended");
             }
         });
@@ -105,6 +111,7 @@ pub async fn run(listener: UnixListener, state: StateStore, control: ServerContr
 async fn handle_client(
     stream: UnixStream,
     state: StateStore,
+    history: HistoryService,
     control: ServerControl,
 ) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
@@ -141,6 +148,7 @@ async fn handle_client(
 
     let mut subscribed = false;
     let mut state_forwarder = None;
+    let mut history_forwarder = None;
     let mut graceful_close = false;
     loop {
         let line = tokio::select! {
@@ -184,16 +192,58 @@ async fn handle_client(
                     forwarder_cancel.clone(),
                     client_cancel.clone(),
                 ));
+                history_forwarder = Some(spawn_history_forwarder(
+                    history.subscribe(),
+                    tx.clone(),
+                    forwarder_cancel.clone(),
+                    client_cancel.clone(),
+                ));
             }
             Command::Subscribe => {}
             Command::GetHistory {
                 limit,
                 before,
+                before_id,
                 query,
             } => {
-                let event = history_response_event(
-                    read_history(limit, before.as_deref(), query.as_deref()).await,
+                let event = match history_query(limit, before, before_id, query) {
+                    Ok(query) => history_response_event(history_page(history.clone(), query).await),
+                    Err(error) => bad_command_event(error),
+                };
+                if !send_or_drop(&tx, event) {
+                    client_cancel.cancel();
+                    forwarder_cancel.cancel();
+                    break;
+                }
+            }
+            Command::GetHistoryStats => {
+                let event = history_stats_event(history_stats(history.clone()).await);
+                if !send_or_drop(&tx, event) {
+                    client_cancel.cancel();
+                    forwarder_cancel.cancel();
+                    break;
+                }
+            }
+            Command::GetHistoryAnalytics { period, anchor } => {
+                let event = history_analytics_event(
+                    history_analytics(history.clone(), AnalyticsQuery::new(period, anchor)).await,
                 );
+                if !send_or_drop(&tx, event) {
+                    client_cancel.cancel();
+                    forwarder_cancel.cancel();
+                    break;
+                }
+            }
+            Command::DeleteAudio { id } => {
+                let event = audio_deleted_event(delete_audio(history.clone(), id).await);
+                if !send_or_drop(&tx, event) {
+                    client_cancel.cancel();
+                    forwarder_cancel.cancel();
+                    break;
+                }
+            }
+            Command::DeleteHistory { id } => {
+                let event = history_deleted_event(delete_history(history.clone(), id).await);
                 if !send_or_drop(&tx, event) {
                     client_cancel.cancel();
                     forwarder_cancel.cancel();
@@ -283,10 +333,13 @@ async fn handle_client(
     if !graceful_close {
         client_cancel.cancel();
         forwarder_cancel.cancel();
-    } else if state_forwarder.is_some() {
+    } else if state_forwarder.is_some() || history_forwarder.is_some() {
         forwarder_cancel.cancel();
     }
     if let Some(task) = state_forwarder {
+        let _ = task.await;
+    }
+    if let Some(task) = history_forwarder {
         let _ = task.await;
     }
     drop(tx);
@@ -322,6 +375,54 @@ fn spawn_state_forwarder(
                             recording_id: None,
                             kind: "lag".to_string(),
                             msg: format!("client lagged by {n} events"),
+                        },
+                    ) {
+                        client_cancel.cancel();
+                        forwarder_cancel.cancel();
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    })
+}
+
+fn spawn_history_forwarder(
+    mut rx: tokio::sync::broadcast::Receiver<HistoryEvent>,
+    tx: mpsc::Sender<Event>,
+    forwarder_cancel: CancellationToken,
+    client_cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            let event = tokio::select! {
+                _ = forwarder_cancel.cancelled() => break,
+                event = rx.recv() => event,
+            };
+            match event {
+                Ok(HistoryEvent::Appended(record)) => {
+                    if !send_or_drop(&tx, Event::HistoryAppended { record }) {
+                        client_cancel.cancel();
+                        forwarder_cancel.cancel();
+                        break;
+                    }
+                }
+                Ok(HistoryEvent::Changed) => {
+                    if !send_or_drop(&tx, Event::HistoryChanged) {
+                        client_cancel.cancel();
+                        forwarder_cancel.cancel();
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(lagged = n, "IPC history client lagged");
+                    if !send_or_drop(
+                        &tx,
+                        Event::Error {
+                            recording_id: None,
+                            kind: "lag".to_string(),
+                            msg: format!("client lagged by {n} history events"),
                         },
                     ) {
                         client_cancel.cancel();
@@ -380,6 +481,59 @@ fn history_response_event(result: Result<Vec<HistoryRecord>>) -> Event {
                 msg: e.to_string(),
             }
         }
+    }
+}
+
+fn history_stats_event(result: Result<crate::history::HistoryStatsSnapshot>) -> Event {
+    match result {
+        Ok(snapshot) => Event::HistoryStats { snapshot },
+        Err(e) => history_error_event("history_stats", e),
+    }
+}
+
+fn history_analytics_event(result: Result<crate::history::AnalyticsSnapshot>) -> Event {
+    match result {
+        Ok(snapshot) => Event::HistoryAnalytics { snapshot },
+        Err(e) => history_error_event("history_analytics", e),
+    }
+}
+
+fn audio_deleted_event(result: Result<AudioDeleteResult>) -> Event {
+    match result {
+        Ok(result) => Event::AudioDeleted {
+            id: result.id,
+            deleted: result.deleted,
+        },
+        Err(e) => history_error_event("audio_delete", e),
+    }
+}
+
+fn history_deleted_event(result: Result<DeleteResult>) -> Event {
+    match result {
+        Ok(result) => Event::HistoryDeleted {
+            id: result.id,
+            record_deleted: result.record_deleted,
+            audio_deleted: result.audio_deleted,
+            audio_error: result.audio_error,
+        },
+        Err(e) => history_error_event("history_delete", e),
+    }
+}
+
+fn history_error_event(kind: &str, error: anyhow::Error) -> Event {
+    tracing::warn!(error = ?error, kind, "history command failed");
+    Event::Error {
+        recording_id: None,
+        kind: kind.to_string(),
+        msg: error.to_string(),
+    }
+}
+
+fn bad_command_event(error: anyhow::Error) -> Event {
+    Event::Error {
+        recording_id: None,
+        kind: "bad_command".to_string(),
+        msg: error.to_string(),
     }
 }
 
@@ -445,7 +599,6 @@ impl From<StateEvent> for Event {
                 kind,
                 msg,
             },
-            StateEvent::HistoryAppended { record } => Event::HistoryAppended { record },
         }
     }
 }
@@ -476,105 +629,79 @@ fn step_status(status: PipelineStepStatus) -> &'static str {
     }
 }
 
-async fn read_history(
+fn history_query(
     limit: usize,
-    before: Option<&str>,
-    query: Option<&str>,
-) -> Result<Vec<HistoryRecord>> {
-    let dir = history::history_dir();
-    let before = before.map(str::to_string);
-    let query = query.map(str::to_string);
-    tokio::task::spawn_blocking(move || {
-        read_history_from_dir(&dir, limit, before.as_deref(), query.as_deref())
-    })
-    .await
-    .context("join history read task")?
-}
-
-fn read_history_from_dir(
-    dir: &Path,
-    limit: usize,
-    before: Option<&str>,
-    query: Option<&str>,
-) -> Result<Vec<HistoryRecord>> {
-    let limit = normalize_history_limit(limit);
+    before: Option<String>,
+    before_id: Option<String>,
+    query: Option<String>,
+) -> Result<HistoryQuery> {
+    if before_id.is_some() && before.is_none() {
+        anyhow::bail!("before_id requires before");
+    }
     let before = before
         .map(|value| {
-            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+            time::OffsetDateTime::parse(&value, &time::format_description::well_known::Rfc3339)
+                .with_context(|| format!("parse history before timestamp {value}"))
         })
-        .transpose()
-        .context("parse history before timestamp")?;
-    let query = query.map(str::to_lowercase);
-    let mut records = Vec::new();
-    for path in history::monthly_history_files_in_dir(dir)? {
-        let body = fs::read_to_string(&path)
-            .with_context(|| format!("read history {}", path.display()))?;
-        let has_complete_final_line = body.ends_with('\n');
-        let mut lines = body.split('\n').peekable();
-        while let Some(line) = lines.next() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let record: HistoryRecord = match serde_json::from_str(line) {
-                Ok(record) => record,
-                Err(error) if lines.peek().is_none() && !has_complete_final_line => {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %error,
-                        "ignoring truncated final history line"
-                    );
-                    break;
-                }
-                Err(error) => {
-                    return Err(error)
-                        .with_context(|| format!("parse history line in {}", path.display()));
-                }
-            };
-            if before.is_some_and(|before| record.started_at >= before) {
-                continue;
-            }
-            if let Some(query) = query.as_deref() {
-                if !history_matches(&record, query) {
-                    continue;
-                }
-            }
-            records.push(record);
-        }
-    }
-    records.sort_by(|a, b| b.started_at.cmp(&a.started_at));
-    records.truncate(limit);
-    Ok(records)
+        .transpose()?;
+    Ok(HistoryQuery {
+        limit,
+        before,
+        before_id,
+        query,
+    })
 }
 
-fn normalize_history_limit(limit: usize) -> usize {
-    if limit == 0 {
-        DEFAULT_HISTORY_LIMIT
-    } else {
-        limit.min(MAX_HISTORY_LIMIT)
-    }
+async fn history_page(history: HistoryService, query: HistoryQuery) -> Result<Vec<HistoryRecord>> {
+    tokio::task::spawn_blocking(move || history.page(query))
+        .await
+        .context("join history page task")?
 }
 
-fn history_matches(record: &HistoryRecord, query: &str) -> bool {
-    let haystack = [
-        record.id.as_str(),
-        record.app.as_deref().unwrap_or_default(),
-        record.asr.text.as_str(),
-        &record.text,
-    ]
-    .join("\n")
-    .to_lowercase();
-    haystack.contains(query)
+async fn history_stats(history: HistoryService) -> Result<crate::history::HistoryStatsSnapshot> {
+    tokio::task::spawn_blocking(move || history.stats())
+        .await
+        .context("join history stats task")
+}
+
+async fn history_analytics(
+    history: HistoryService,
+    query: AnalyticsQuery,
+) -> Result<crate::history::AnalyticsSnapshot> {
+    tokio::task::spawn_blocking(move || history.analytics(query))
+        .await
+        .context("join history analytics task")?
+}
+
+async fn delete_audio(history: HistoryService, id: String) -> Result<AudioDeleteResult> {
+    tokio::task::spawn_blocking(move || history.delete_audio(&id))
+        .await
+        .context("join audio delete task")?
+}
+
+async fn delete_history(history: HistoryService, id: String) -> Result<DeleteResult> {
+    tokio::task::spawn_blocking(move || history.delete(&id))
+        .await
+        .context("join history delete task")?
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
     use time::macros::datetime;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
 
     use super::*;
+    use crate::history::{
+        stats::tests_support::TestHooks, AsrHistory, HistoryService, HistoryStatus,
+        PipelineStepStatus,
+    };
     use crate::ipc::protocol::{decode_event, encode_command};
-    use crate::state::history::{AsrHistory, HistoryStatus, PipelineStepStatus};
 
     fn test_reload_handle() -> crate::reload::Handle {
         let dir = std::env::temp_dir().join(format!("shuohua-reload-handle-{}", ulid::Ulid::new()));
@@ -608,9 +735,13 @@ trigger = "f16"
             std::env::temp_dir().join(format!("shuohua-ipc-test-{}.toml", ulid::Ulid::new()));
         std::fs::write(&cfg_path, "[hotkey]\ntrigger=\"f16\"\n").unwrap();
         let (_rx, reload) = crate::reload::watch_with_handle(cfg_path, None).unwrap();
+        let history = HistoryService::with_dir(
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new())),
+        );
         let server = tokio::spawn(run(
             listener,
             state.clone(),
+            history,
             ServerControl {
                 reload,
                 started_at: Instant::now(),
@@ -744,7 +875,10 @@ trigger = "f16"
             started_at: Instant::now(),
             shutdown: shutdown_tx,
         };
-        let server = tokio::spawn(run(listener, StateStore::new(), control));
+        let history = HistoryService::with_dir(
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new())),
+        );
+        let server = tokio::spawn(run(listener, StateStore::new(), history, control));
         let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
 
         client.send(&Command::Shutdown).await.unwrap();
@@ -771,7 +905,10 @@ trigger = "f16"
             started_at: Instant::now(),
             shutdown: shutdown_tx,
         };
-        let server = tokio::spawn(run(listener, StateStore::new(), control));
+        let history = HistoryService::with_dir(
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new())),
+        );
+        let server = tokio::spawn(run(listener, StateStore::new(), history, control));
         let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
 
         client.send(&Command::Subscribe).await.unwrap();
@@ -856,7 +993,7 @@ trigger = "f16"
     }
 
     #[test]
-    fn read_history_from_dir_reads_monthly_files_newest_first() {
+    fn history_service_page_reads_monthly_files_newest_first() {
         let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
         fs::create_dir_all(&dir).unwrap();
 
@@ -873,12 +1010,24 @@ trigger = "f16"
             history_record("jul-b", datetime!(2026-07-04 12:00:00 UTC), "七月较晚"),
         );
 
-        let records = read_history_from_dir(&dir, 2, None, None).unwrap();
+        let service = HistoryService::with_dir(dir.clone());
+        let records = service
+            .page(HistoryQuery {
+                limit: 2,
+                ..HistoryQuery::default()
+            })
+            .unwrap();
         let ids: Vec<_> = records.iter().map(|record| record.id.as_str()).collect();
         assert_eq!(ids, vec!["jul-b", "jul-a"]);
 
-        let records =
-            read_history_from_dir(&dir, 10, Some("2026-07-04T00:00:00Z"), Some("六月")).unwrap();
+        let records = service
+            .page(HistoryQuery {
+                limit: 10,
+                before: Some(datetime!(2026-07-04 00:00:00 UTC)),
+                query: Some("六月".to_string()),
+                ..HistoryQuery::default()
+            })
+            .unwrap();
         let ids: Vec<_> = records.iter().map(|record| record.id.as_str()).collect();
         assert_eq!(ids, vec!["jun"]);
 
@@ -886,7 +1035,7 @@ trigger = "f16"
     }
 
     #[test]
-    fn read_history_from_dir_clamps_large_limits() {
+    fn history_service_page_clamps_large_limits() {
         let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
         fs::create_dir_all(&dir).unwrap();
         for n in 0..600 {
@@ -900,7 +1049,12 @@ trigger = "f16"
             );
         }
 
-        let records = read_history_from_dir(&dir, usize::MAX, None, None).unwrap();
+        let records = HistoryService::with_dir(dir.clone())
+            .page(HistoryQuery {
+                limit: usize::MAX,
+                ..HistoryQuery::default()
+            })
+            .unwrap();
 
         assert_eq!(records.len(), 500);
 
@@ -924,7 +1078,12 @@ trigger = "f16"
             .write_all(br#"{"version":1,"id":"truncated""#)
             .unwrap();
 
-        let records = read_history_from_dir(&dir, 10, None, None).unwrap();
+        let records = HistoryService::with_dir(dir.clone())
+            .page(HistoryQuery {
+                limit: 10,
+                ..HistoryQuery::default()
+            })
+            .unwrap();
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, "valid");
@@ -938,7 +1097,12 @@ trigger = "f16"
         let path = dir.join("2026-06.jsonl");
         fs::write(&path, "not-json\n").unwrap();
 
-        let error = read_history_from_dir(&dir, 10, None, None).unwrap_err();
+        let error = HistoryService::with_dir(dir.clone())
+            .page(HistoryQuery {
+                limit: 10,
+                ..HistoryQuery::default()
+            })
+            .unwrap_err();
 
         assert!(
             error.to_string().contains("parse history line"),
@@ -965,6 +1129,290 @@ trigger = "f16"
             }
             event => panic!("expected history_read error, got {event:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn before_id_without_before_maps_to_bad_command() {
+        let sock = PathBuf::from(format!(
+            "/tmp/shuohua-ipc-before-id-{}.sock",
+            ulid::Ulid::new()
+        ));
+        let _ = fs::remove_file(&sock);
+        let listener = bind(&sock).await.unwrap();
+        let history = HistoryService::with_dir(
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new())),
+        );
+        let server = tokio::spawn(run(
+            listener,
+            StateStore::new(),
+            history,
+            ServerControl {
+                reload: test_reload_handle(),
+                started_at: Instant::now(),
+                shutdown: test_shutdown_sender(),
+            },
+        ));
+        let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
+
+        client
+            .send(&Command::GetHistory {
+                limit: 10,
+                before: None,
+                before_id: Some("01HXYZ".to_string()),
+                query: None,
+            })
+            .await
+            .unwrap();
+
+        match client.recv().await.unwrap().unwrap() {
+            Event::Error { kind, msg, .. } => {
+                assert_eq!(kind, "bad_command");
+                assert!(msg.contains("before_id"), "{msg}");
+            }
+            event => panic!("expected bad_command error, got {event:?}"),
+        }
+        server.abort();
+        let _ = fs::remove_file(sock);
+    }
+
+    #[tokio::test]
+    async fn first_stats_request_initializes_history() {
+        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-stats-{}.sock", ulid::Ulid::new()));
+        let _ = fs::remove_file(&sock);
+        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&dir).unwrap();
+        write_history_record(
+            &dir.join("2026-06.jsonl"),
+            history_record("one", datetime!(2026-06-20 12:00:00 UTC), "hello world"),
+        );
+        let scan_attempts = Arc::new(AtomicUsize::new(0));
+        let history = HistoryService::with_test_hooks(
+            dir.clone(),
+            time::macros::offset!(+0),
+            TestHooks::default().with_before_scan_attempt({
+                let scan_attempts = Arc::clone(&scan_attempts);
+                move || {
+                    scan_attempts.fetch_add(1, Ordering::SeqCst);
+                }
+            }),
+        );
+        let listener = bind(&sock).await.unwrap();
+        let server = tokio::spawn(run(
+            listener,
+            StateStore::new(),
+            history,
+            ServerControl {
+                reload: test_reload_handle(),
+                started_at: Instant::now(),
+                shutdown: test_shutdown_sender(),
+            },
+        ));
+        let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
+
+        client.send(&Command::Subscribe).await.unwrap();
+        assert!(matches!(
+            client.recv().await.unwrap().unwrap(),
+            Event::Snapshot { .. }
+        ));
+        assert_eq!(scan_attempts.load(Ordering::SeqCst), 0);
+
+        client.send(&Command::GetHistoryStats).await.unwrap();
+
+        match client.recv().await.unwrap().unwrap() {
+            Event::HistoryStats { snapshot } => {
+                assert_eq!(snapshot.total.records, 1);
+                assert_eq!(snapshot.total.words, 2);
+                assert!(scan_attempts.load(Ordering::SeqCst) > 0);
+            }
+            event => panic!("expected history stats, got {event:?}"),
+        }
+        server.abort();
+        let _ = fs::remove_file(sock);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn subscribed_clients_receive_external_history_changed() {
+        let path = PathBuf::from(format!("/tmp/sh-ipc-chg-{}.sock", ulid::Ulid::new()));
+        let listener = bind(&path).await.unwrap();
+        let state = StateStore::new();
+        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&dir).unwrap();
+        let history = HistoryService::with_dir(dir.clone());
+        assert_eq!(history.stats().total.records, 0);
+        let server = tokio::spawn(run(
+            listener,
+            state,
+            history.clone(),
+            ServerControl {
+                reload: test_reload_handle(),
+                started_at: Instant::now(),
+                shutdown: test_shutdown_sender(),
+            },
+        ));
+        let mut client = TestClient::connect(&path).await;
+        client.subscribe().await;
+        assert!(matches!(client.read_event().await, Event::Snapshot { .. }));
+
+        let changed_path = dir.join("2026-06.jsonl");
+        write_history_record(
+            &changed_path,
+            history_record(
+                "01HXYZABCDEF0123456789AAA1",
+                datetime!(2026-06-20 12:00:00 UTC),
+                "external",
+            ),
+        );
+        history.mark_history_paths_changed(&[changed_path]);
+
+        assert_eq!(client.read_event().await, Event::HistoryChanged);
+        server.abort();
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn subscribed_clients_receive_history_appended_record() {
+        let path = PathBuf::from(format!("/tmp/sh-ipc-app-{}.sock", ulid::Ulid::new()));
+        let listener = bind(&path).await.unwrap();
+        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        let history = HistoryService::with_dir(dir.clone());
+        let server = tokio::spawn(run(
+            listener,
+            StateStore::new(),
+            history.clone(),
+            ServerControl {
+                reload: test_reload_handle(),
+                started_at: Instant::now(),
+                shutdown: test_shutdown_sender(),
+            },
+        ));
+        let mut client = TestClient::connect(&path).await;
+        client.subscribe().await;
+        assert!(matches!(client.read_event().await, Event::Snapshot { .. }));
+
+        let record = history_record(
+            "01HXYZABCDEF0123456789AAA1",
+            datetime!(2026-06-20 12:00:00 UTC),
+            "done",
+        );
+        history.append(record.clone()).unwrap();
+
+        match client.read_event().await {
+            Event::HistoryAppended {
+                record: event_record,
+            } => assert_eq!(*event_record, record),
+            event => panic!("expected history_appended event, got {event:?}"),
+        }
+        server.abort();
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn delete_response_includes_record_deleted() {
+        let sock = PathBuf::from(format!(
+            "/tmp/shuohua-ipc-delete-{}.sock",
+            ulid::Ulid::new()
+        ));
+        let _ = fs::remove_file(&sock);
+        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&dir).unwrap();
+        write_history_record(
+            &dir.join("2026-06.jsonl"),
+            history_record(
+                "01HXYZABCDEF0123456789AAA1",
+                datetime!(2026-06-20 12:00:00 UTC),
+                "delete",
+            ),
+        );
+        let history = HistoryService::with_dir(dir.clone());
+        let listener = bind(&sock).await.unwrap();
+        let server = tokio::spawn(run(
+            listener,
+            StateStore::new(),
+            history,
+            ServerControl {
+                reload: test_reload_handle(),
+                started_at: Instant::now(),
+                shutdown: test_shutdown_sender(),
+            },
+        ));
+        let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
+
+        client
+            .send(&Command::DeleteHistory {
+                id: "01HXYZABCDEF0123456789AAA1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        match client.recv().await.unwrap().unwrap() {
+            Event::HistoryDeleted {
+                id, record_deleted, ..
+            } => {
+                assert_eq!(id, "01HXYZABCDEF0123456789AAA1");
+                assert!(record_deleted);
+            }
+            event => panic!("expected history deleted, got {event:?}"),
+        }
+        server.abort();
+        let _ = fs::remove_file(sock);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn history_changed_and_delete_response_work_in_either_order() {
+        let path = PathBuf::from(format!("/tmp/sh-ipc-del-{}.sock", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&dir).unwrap();
+        write_history_record(
+            &dir.join("2026-06.jsonl"),
+            history_record(
+                "01HXYZABCDEF0123456789AAA1",
+                datetime!(2026-06-20 12:00:00 UTC),
+                "delete",
+            ),
+        );
+        let history = HistoryService::with_dir(dir.clone());
+        let listener = bind(&path).await.unwrap();
+        let server = tokio::spawn(run(
+            listener,
+            StateStore::new(),
+            history,
+            ServerControl {
+                reload: test_reload_handle(),
+                started_at: Instant::now(),
+                shutdown: test_shutdown_sender(),
+            },
+        ));
+        let mut client = TestClient::connect(&path).await;
+        client.subscribe().await;
+        assert!(matches!(client.read_event().await, Event::Snapshot { .. }));
+
+        let line = encode_command(&Command::DeleteHistory {
+            id: "01HXYZABCDEF0123456789AAA1".to_string(),
+        })
+        .unwrap();
+        client.writer.write_all(line.as_bytes()).await.unwrap();
+
+        let first = client.read_event().await;
+        let second = client.read_event().await;
+        let events = [first, second];
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::HistoryDeleted {
+                id,
+                record_deleted: true,
+                ..
+            } if id == "01HXYZABCDEF0123456789AAA1"
+        )));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, Event::HistoryChanged)));
+        server.abort();
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_dir_all(dir);
     }
 
     struct TestClient {
@@ -999,7 +1447,7 @@ trigger = "f16"
     }
 
     fn write_history_record(path: &Path, record: HistoryRecord) {
-        history::append_record(path, &record).unwrap();
+        crate::history::store::append_record(path, &record).unwrap();
     }
 
     fn history_record(id: &str, started_at: time::OffsetDateTime, text: &str) -> HistoryRecord {

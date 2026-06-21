@@ -37,12 +37,21 @@ async fn run_daemon_with_platform(
     overlay: OverlayHandle,
     state_store: StateStore,
 ) -> Result<()> {
+    let history = crate::history::HistoryService::new();
+    let _history_watcher = match history.watch() {
+        Ok(watcher) => Some(watcher),
+        Err(error) => {
+            tracing::warn!(error = ?error, "history watcher unavailable");
+            None
+        }
+    };
     let listener = crate::ipc::server::bind_default().await?;
     let socket_path = crate::ipc::server::default_socket_path();
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     let mut ipc_task = tokio::spawn(crate::ipc::server::run(
         listener,
         state_store.clone(),
+        history.clone(),
         crate::ipc::server::ServerControl {
             reload: reload_handle,
             started_at: Instant::now(),
@@ -117,11 +126,13 @@ async fn run_daemon_with_platform(
                         ) {
                             Ok(start) => {
                                 let suppressor_for_task = hotkey_input.suppressor();
+                                let history_for_task = history.clone();
                                 let join = tokio::spawn(async move {
                                     crate::voice::finish::run_recording(
                                         start.provider.as_ref(),
                                         start.params,
                                         start.control_rx,
+                                        history_for_task,
                                     )
                                     .await;
                                     if let Ok(mut s) = suppressor_for_task.lock() {

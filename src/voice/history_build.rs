@@ -1,18 +1,17 @@
-//! HistoryRecord 构造与落盘。
+//! HistoryRecord 构造。
 //!
 //! 从 [`SessionCapture`] + post pipeline + status 构造 schema v1 record，
-//! append 到 monthly history JSONL。
 //!
 //! 输入数据全部来自 [`crate::voice::capture`] 和 orchestration 状态；本模块不
 //! 触碰 overlay / state 广播 / dispatch。
 
 use std::time::Instant;
 
-use crate::post::{self, PipelineStepStatus};
-use crate::state::history::{
-    self, AsrHistory, AsrSessionHistory, HistoryError, HistoryRecord, HistoryStatus,
-    PipelineStepHistory, PipelineStepStatus as HistoryPipelineStepStatus,
+use crate::history::{
+    AsrHistory, AsrSessionHistory, HistoryError, HistoryRecord, HistoryStatus, PipelineStepHistory,
+    PipelineStepStatus as HistoryPipelineStepStatus,
 };
+use crate::post::{self, PipelineStepStatus};
 use crate::voice::capture::{instant_to_datetime, samples_to_ms, session_text, SessionCapture};
 
 pub(crate) struct HistoryInput {
@@ -76,21 +75,6 @@ pub(crate) fn build_record(input: HistoryInput) -> HistoryRecord {
         pipeline: input.pipeline,
         error: input.error,
     }
-}
-
-pub(crate) fn append_history(input: HistoryInput) -> anyhow::Result<HistoryRecord> {
-    let record = build_record(input);
-    history::append_default(&record)?;
-    tracing::info!(
-        recording_id = %record.id,
-        status = ?record.status,
-        provider = %record.asr.provider,
-        audio_ms = record.asr.audio_ms,
-        session_count = record.asr.sessions.len(),
-        pipeline_steps = record.pipeline.len(),
-        "recording ended"
-    );
-    Ok(record)
 }
 
 fn build_asr_sessions(

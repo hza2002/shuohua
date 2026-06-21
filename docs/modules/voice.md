@@ -11,9 +11,11 @@
 `finish::run_recording` 是唯一公开入口。两层分工是硬边界：
 
 - **engine** = 录音运行期：PCM 路由、ASR event、stop drain、provider finalize、错误/取消、retained audio。返回 `EngineOutcome`。
-- **finish** = 收尾：post chain、dispatch、history、最终 StateStore/Overlay。
+- **finish** = 收尾：post chain、dispatch、构造 history record、调用 `HistoryService` append、最终 StateStore/Overlay。
 
 engine **不调** `post::run_chain` / `voice::dispatch::dispatch` / history append。engine 对 post 的唯一接触面：用 `post::AppContext` 当数据载体、stop 时调一次 `frontmost_app()`、读 `SessionParams.post_chain.name` 当 overlay header 字符串。改动时别让 engine 反向依赖 post/dispatch/history。
+
+voice 只负责把一次 recording 的 capture/ASR/post 结果翻译成 `HistoryRecord`。durable append、history event、pagination、stats/analytics、deletion、retained-audio association 都归 `HistoryService`；voice 不直接读写 JSONL store primitives，也不持有 history index。
 
 `engine::run` 只负责 recorder 启动这一个 `!Send` 边界，其余在 `run_with_recorder`。测试用 `RecordingStream::for_test` 不依赖 cpal 即可驱动整条生命周期（`engine_lifecycle_tests.rs`）。
 
@@ -42,4 +44,6 @@ engine **不调** `post::run_chain` / `voice::dispatch::dispatch` / history appe
 
 ## 终态与 history 触发
 
-engine 返回后由 finish 决定写不写 history（schema 见 [schema §2](../schema.md)）。「有可归档内容」判据集中在 `voice::capture`，audio（engine）与 history（finish）共用以保持一致：喂过音频或有识别文本才落 history + retained audio；toggle 后立即 cancel、什么都没说则都不留，避免 TUI 无法关联的孤儿音频。
+engine 返回后由 finish 决定写不写 history（schema 见 [schema §2](../schema.md)）。「有可归档内容」判据集中在 `voice::capture`，audio（engine）与 history record 构造（finish）共用以保持一致：喂过音频或有识别文本才落 history + retained audio；toggle 后立即 cancel、什么都没说则都不留，避免 TUI 无法关联的孤儿音频。
+
+finish append 时只调用 `HistoryService::append`。append 成功后由 history 模块发布 history event 并维护内存统计；append 失败只走 schema 中的 `history_append` error/Notice 语义，不回滚已经完成的 dispatch。

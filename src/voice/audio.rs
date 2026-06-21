@@ -16,7 +16,7 @@ pub(crate) struct AudioOutput {
 
 pub(crate) fn prepare(recording_id: &str, mode: RecordAudioMode) -> Result<Option<AudioOutput>> {
     prepare_in_dir(
-        &crate::state::history::state_dir().join("audio"),
+        &crate::paths::StateDirs::discover().audio(),
         recording_id,
         mode,
     )

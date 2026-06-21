@@ -10,10 +10,10 @@
 
 [English](README.en.md) · [安装](#安装) · [快速开始](#快速开始) · [文档](#文档)
 
-[![CI](https://github.com/HuZiang/shuohua/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/HuZiang/shuohua/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/HuZiang/shuohua?display_name=tag&sort=semver)](https://github.com/HuZiang/shuohua/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/HuZiang/shuohua/total)](https://github.com/HuZiang/shuohua/releases)
-[![License](https://img.shields.io/github/license/HuZiang/shuohua)](LICENSE)
+[![CI](https://github.com/hza2002/shuohua/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hza2002/shuohua/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/hza2002/shuohua?display_name=tag&sort=semver)](https://github.com/hza2002/shuohua/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/hza2002/shuohua/total)](https://github.com/hza2002/shuohua/releases)
+[![License](https://img.shields.io/github/license/hza2002/shuohua)](LICENSE)
 ![macOS 15+](https://img.shields.io/badge/macOS-15%2B-000000?logo=apple)
 ![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-arm64-333333?logo=apple)
 ![Rust](https://img.shields.io/badge/built_with-Rust-dea584?logo=rust)
@@ -51,7 +51,7 @@
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/HuZiang/shuohua/releases/latest) 下载最新的
+从 [GitHub Releases](https://github.com/hza2002/shuohua/releases/latest) 下载最新的
 `shuo-vX.Y.Z-aarch64-apple-darwin.tar.gz` 和同名 `.sha256` 文件。
 
 ```bash
@@ -75,7 +75,7 @@ shuo version
 需要 Rust stable、Xcode 26 SDK 和 Apple Silicon Mac：
 
 ```bash
-git clone https://github.com/HuZiang/shuohua.git
+git clone https://github.com/hza2002/shuohua.git
 cd shuohua
 cargo build --release
 sudo install -m 755 target/release/shuo /usr/local/bin/shuo
@@ -192,7 +192,7 @@ shuo status
 - Apple ASR 在 macOS 25 或更低版本不可用：切换到云端 provider。
 
 更多步骤见 [排障文档](docs/debug.md)。如果问题仍能复现，请提交
-[Issue](https://github.com/HuZiang/shuohua/issues)，并附上 macOS 版本、`shuo version`
+[Issue](https://github.com/hza2002/shuohua/issues)，并附上 macOS 版本、`shuo version`
 和已脱敏的诊断信息。
 
 ## 文档

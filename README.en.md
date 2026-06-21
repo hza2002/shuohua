@@ -10,10 +10,10 @@ Press a global hotkey, speak, transcribe in real time, optionally refine the tex
 
 [简体中文](README.md) · [Install](#installation) · [Quick start](#quick-start) · [Docs](#documentation)
 
-[![CI](https://github.com/HuZiang/shuohua/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/HuZiang/shuohua/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/HuZiang/shuohua?display_name=tag&sort=semver)](https://github.com/HuZiang/shuohua/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/HuZiang/shuohua/total)](https://github.com/HuZiang/shuohua/releases)
-[![License](https://img.shields.io/github/license/HuZiang/shuohua)](LICENSE)
+[![CI](https://github.com/hza2002/shuohua/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hza2002/shuohua/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/hza2002/shuohua?display_name=tag&sort=semver)](https://github.com/hza2002/shuohua/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/hza2002/shuohua/total)](https://github.com/hza2002/shuohua/releases)
+[![License](https://img.shields.io/github/license/hza2002/shuohua)](LICENSE)
 ![macOS 15+](https://img.shields.io/badge/macOS-15%2B-000000?logo=apple)
 ![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-arm64-333333?logo=apple)
 ![Rust](https://img.shields.io/badge/built_with-Rust-dea584?logo=rust)
@@ -52,7 +52,7 @@ Global hotkey  →  Recording and streaming ASR  →  Rules / LLM post-processin
 ## Installation
 
 Download the latest `shuo-vX.Y.Z-aarch64-apple-darwin.tar.gz` and matching
-`.sha256` file from [GitHub Releases](https://github.com/HuZiang/shuohua/releases/latest).
+`.sha256` file from [GitHub Releases](https://github.com/hza2002/shuohua/releases/latest).
 
 ```bash
 # 1. Verify the download
@@ -75,7 +75,7 @@ shuo version
 This requires stable Rust, the Xcode 26 SDK, and an Apple Silicon Mac:
 
 ```bash
-git clone https://github.com/HuZiang/shuohua.git
+git clone https://github.com/hza2002/shuohua.git
 cd shuohua
 cargo build --release
 sudo install -m 755 target/release/shuo /usr/local/bin/shuo
@@ -190,7 +190,7 @@ Common fixes:
 - Apple ASR is unavailable on macOS 25 or earlier: switch to a cloud provider.
 
 See the [troubleshooting guide](docs/debug.md) for more steps. If the problem is reproducible, open an
-[issue](https://github.com/HuZiang/shuohua/issues) with your macOS version, `shuo version`, and redacted diagnostics.
+[issue](https://github.com/hza2002/shuohua/issues) with your macOS version, `shuo version`, and redacted diagnostics.
 
 ## Documentation
 

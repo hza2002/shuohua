@@ -4,9 +4,9 @@
 # 只允许从 main 发版
 allow-branch = ["main"]
 
-# 与仓库 commit.gpgsign=false 一致
-sign-commit = false
-sign-tag = false
+# 与仓库 commit.gpgsign=true 一致
+sign-commit = true
+sign-tag = true
 
 # tag 直接 vX.Y.Z，不带 crate 前缀
 tag-prefix = ""
@@ -25,6 +25,7 @@ pre-release-commit-message = "release: v{{version}}"
 # 发版前必须通过：fmt 检查、clippy 零警告、全量 test
 # 任何一项失败都停下，不进入 bump/commit/tag/push 阶段
 pre-release-hook = [
-  "sh", "-c",
-  "cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test"
+  "sh",
+  "-c",
+  "cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test",
 ]

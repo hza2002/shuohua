@@ -1,12 +1,13 @@
 use std::cell::{OnceCell, RefCell};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSEvent, NSFont,
-    NSFontWeightBold, NSForegroundColorAttributeName, NSGlassEffectView, NSImage, NSImageAlignment,
+    NSAnimatablePropertyContainer, NSAnimationContext, NSApplication,
+    NSApplicationActivationPolicy, NSApplicationDelegate, NSEvent, NSFont, NSFontWeightBold,
+    NSForegroundColorAttributeName, NSGlassEffectView, NSImage, NSImageAlignment,
     NSImageFrameStyle, NSImageScaling, NSImageSymbolConfiguration, NSImageSymbolScale, NSImageView,
     NSLineBreakMode, NSPanel, NSScreen, NSTextAlignment, NSTextField, NSView,
 };
@@ -165,6 +166,15 @@ struct OverlayView {
     icon_fx: IconFx,
     /// 上一帧渲染的状态，用于检测"进入 Error"以触发一次性抖动。
     last_icon_state: Option<OverlayState>,
+    /// panel 当前是否在屏（已 orderFront）。和 `model.visible` 分开：淡出期间 model 已
+    /// 不可见但 panel 仍在屏。
+    panel_shown: bool,
+    /// 淡出动画结束、该真正 `orderOut` 的时刻。
+    pending_order_out: Option<Instant>,
+    /// 上次 panel 高度，用于检测尺寸变化以触发同步过渡动画。
+    last_height: Option<f64>,
+    /// 上一帧是否已有 final 文本，用于 final 定稿时做一次淡入。
+    last_had_final: bool,
     animation_started: Instant,
     last_text_update: Option<Instant>,
     last_panel_frame: Option<NSRect>,
@@ -264,6 +274,10 @@ impl OverlayView {
             icon_fx_view,
             icon_fx,
             last_icon_state: None,
+            panel_shown: false,
+            pending_order_out: None,
+            last_height: None,
+            last_had_final: false,
             animation_started: Instant::now(),
             last_text_update: None,
             last_panel_frame: None,
@@ -334,6 +348,18 @@ impl OverlayView {
     }
 
     fn render(&mut self) {
+        // 淡出动画结束且仍不可见 → 真正下屏。若期间又变可见，留给下面的可见分支取走
+        // pending 并淡回不透明（避免清了 pending 却没恢复 alpha 的竞态）。
+        if let Some(at) = self.pending_order_out {
+            if Instant::now() >= at && !self.model.visible {
+                self.panel.orderOut(None);
+                self.panel_shown = false;
+                self.pending_order_out = None;
+                self.last_panel_frame = None;
+                self.last_height = None;
+            }
+        }
+
         if self.model.visible {
             let full_text = self.model.display_text();
             let (_, current_lines) = L::display_text_plan(
@@ -349,16 +375,42 @@ impl OverlayView {
             };
             let height = L::constants::BASE_HEIGHT
                 + (lines.saturating_sub(1) as f64 * L::constants::BODY_LINE_H);
-            self.layout(height, lines);
-            self.place(height);
-            if self.panel.alphaValue() < 1.0 {
-                self.panel.setAlphaValue(1.0);
+            let height_changed = self.last_height != Some(height);
+            self.last_height = Some(height);
+
+            if !self.panel_shown {
+                // 首次出现：先就位，再 alpha 0→1 淡入。
+                self.pending_order_out = None;
+                self.layout(height, lines, false);
+                self.place(height, false);
+                self.panel.setAlphaValue(0.0);
+                self.panel.makeKeyAndOrderFront(None);
+                fade_window_alpha(&self.panel, 1.0);
+                self.panel_shown = true;
+            } else {
+                // 淡出途中又要显示 → 取消下屏、淡回不透明。
+                if self.pending_order_out.take().is_some() {
+                    fade_window_alpha(&self.panel, 1.0);
+                }
+                // 高度变化时，窗口与内容用同一动画组同步过渡，避免文字瞬移。
+                if height_changed {
+                    NSAnimationContext::beginGrouping();
+                    NSAnimationContext::currentContext().setDuration(RESIZE_ANIM);
+                    self.layout(height, lines, true);
+                    self.place(height, true);
+                    NSAnimationContext::endGrouping();
+                } else {
+                    self.layout(height, lines, false);
+                    self.place(height, true);
+                }
             }
-            self.panel.makeKeyAndOrderFront(None);
         } else {
-            self.panel.setAlphaValue(0.0);
-            self.panel.orderOut(None);
-            self.last_panel_frame = None;
+            // 隐藏：先淡出，淡完再 orderOut（上面的 pending 逻辑收尾）。
+            if self.panel_shown && self.pending_order_out.is_none() {
+                fade_window_alpha(&self.panel, 0.0);
+                self.pending_order_out =
+                    Some(Instant::now() + Duration::from_secs_f64(APPEAR_FADE));
+            }
             return;
         }
 
@@ -433,9 +485,14 @@ impl OverlayView {
         } else {
             self.cfg.core.text.primary
         };
+        // final 定稿（empty→非空）时做一次轻淡入；live partial 不淡，保持 crisp。
+        let final_appeared = !self.model.final_text.is_empty() && !self.last_had_final;
+        self.last_had_final = !self.model.final_text.is_empty();
         if self.last_visible_text != display_text {
             if !self.model.error_text.is_empty() {
                 fade_view(&self.text, 0.10);
+            } else if final_appeared {
+                fade_view(&self.text, 0.18);
             }
             self.render_body_text(&live_plan, text_color);
             self.last_visible_text = display_text;
@@ -564,35 +621,40 @@ impl OverlayView {
         self.last_visible_text.clear();
         self.last_stats_text.clear();
         self.last_meta_text.clear();
-        // 隐藏后重置，下次重新进入 Error 能再触发抖动。
+        // 隐藏后重置，下次重新进入 Error 能再触发抖动 / final 能再淡入。
         self.last_icon_state = None;
+        self.last_had_final = false;
     }
 
-    fn layout(&mut self, height: f64, lines: usize) {
+    fn layout(&mut self, height: f64, lines: usize, animated: bool) {
         let top_offset = height - L::constants::BASE_HEIGHT;
         let full = NSRect::new(
             NSPoint::new(0.0, 0.0),
             NSSize::new(L::constants::WIDTH, height),
         );
         // panel.contentView (glass 或 fallback) 跟随 panel 自动 resize；container 显式 set 确保 labels 坐标系对齐
-        self.container.setFrame(full);
+        set_view_frame(&self.container, full, animated);
         let row = L::first_row_frames(top_offset);
-        self.state_icon.setFrame(to_nsrect(row.icon));
-        self.icon_fx_view.setFrame(to_nsrect(row.icon));
-        self.status.setFrame(to_nsrect(row.status));
-        self.stats.setFrame(to_nsrect(row.stats));
-        self.meta.setFrame(to_nsrect(row.meta));
-        self.text.setFrame(NSRect::new(
-            NSPoint::new(L::constants::H_PAD, L::constants::BOTTOM_PAD),
-            NSSize::new(
-                L::constants::BODY_W,
-                L::constants::BODY_LINE_H
-                    + (lines.saturating_sub(1) as f64 * L::constants::BODY_LINE_H),
+        set_view_frame(&self.state_icon, to_nsrect(row.icon), animated);
+        set_view_frame(&self.icon_fx_view, to_nsrect(row.icon), animated);
+        set_view_frame(&self.status, to_nsrect(row.status), animated);
+        set_view_frame(&self.stats, to_nsrect(row.stats), animated);
+        set_view_frame(&self.meta, to_nsrect(row.meta), animated);
+        set_view_frame(
+            &self.text,
+            NSRect::new(
+                NSPoint::new(L::constants::H_PAD, L::constants::BOTTOM_PAD),
+                NSSize::new(
+                    L::constants::BODY_W,
+                    L::constants::BODY_LINE_H
+                        + (lines.saturating_sub(1) as f64 * L::constants::BODY_LINE_H),
+                ),
             ),
-        ));
+            animated,
+        );
     }
 
-    fn place(&mut self, height: f64) {
+    fn place(&mut self, height: f64, animated: bool) {
         let screens = screen_frames(self.mtm);
         let fallback = fallback_screen(self.mtm, &screens);
         let (anchor, screen) =
@@ -605,12 +667,15 @@ impl OverlayView {
             height,
             from_nsrect(screen),
         ));
-        let animate = self.last_panel_frame.is_some();
         if self
             .last_panel_frame
             .is_none_or(|last| !L::frame_nearly_eq(from_nsrect(last), from_nsrect(frame)))
         {
-            self.panel.setFrame_display_animate(frame, true, animate);
+            if animated && self.last_panel_frame.is_some() {
+                self.panel.animator().setFrame_display(frame, true);
+            } else {
+                self.panel.setFrame_display_animate(frame, true, false);
+            }
             self.last_panel_frame = Some(frame);
         }
     }
@@ -735,6 +800,28 @@ fn state_symbol(state: OverlayState) -> &'static str {
         OverlayState::Thinking => "sparkles",
         OverlayState::Stopping => "stop.circle",
         OverlayState::Error => "exclamationmark.triangle.fill",
+    }
+}
+
+/// overlay 淡入/淡出时长。
+const APPEAR_FADE: f64 = 0.14;
+/// 尺寸变化时窗口+内容同步过渡时长。
+const RESIZE_ANIM: f64 = 0.2;
+
+/// 在 Core Animation 过渡里把 panel alpha 动到目标值（show/hide 淡变）。
+fn fade_window_alpha(panel: &NSPanel, target: f64) {
+    NSAnimationContext::beginGrouping();
+    NSAnimationContext::currentContext().setDuration(APPEAR_FADE);
+    panel.animator().setAlphaValue(target);
+    NSAnimationContext::endGrouping();
+}
+
+/// 设置视图 frame；`animated` 时走 `animator()` 代理，由外层 NSAnimationContext 决定时长。
+fn set_view_frame(view: &NSView, frame: NSRect, animated: bool) {
+    if animated {
+        view.animator().setFrame(frame);
+    } else {
+        view.setFrame(frame);
     }
 }
 

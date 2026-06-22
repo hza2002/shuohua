@@ -81,7 +81,6 @@ fn description_key(name: &str) -> &'static str {
         "overlay" => "config.field.overlay.description",
         "overlay.position" => "config.field.overlay.position.description",
         "overlay.max_text_lines" => "config.field.overlay.max_text_lines.description",
-        "overlay.thinking_delay_ms" => "config.field.overlay.thinking_delay_ms.description",
         "palette" => "config.field.theme.palette.description",
         "foreground" => "config.field.theme.foreground.description",
         "muted" => "config.field.theme.muted.description",
@@ -228,11 +227,6 @@ pub fn main_spec() -> ConfigSpec {
             field(FieldSpec::integer, "overlay.max_text_lines")
                 .optional()
                 .range(1.0, 10.0),
-        )
-        .field(
-            field(FieldSpec::integer, "overlay.thinking_delay_ms")
-                .optional()
-                .range(0.0, 10_000.0),
         )
 }
 

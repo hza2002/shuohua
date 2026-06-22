@@ -40,6 +40,14 @@ mod tests {
     }
 
     #[test]
+    fn doubao_template_enables_vad_pause() {
+        let body = render_by_id("asr/doubao").unwrap();
+        let value: toml::Value = toml::from_str(&body).unwrap();
+
+        assert_eq!(value["idle_pause"].as_bool(), Some(true));
+    }
+
+    #[test]
     fn rendered_registry_templates_are_valid_toml() {
         for template in registry() {
             assert!(
@@ -91,6 +99,96 @@ mod tests {
         assert!(body.contains("trigger = \"right_option:double\""));
         let config = crate::config::main::parse(&body).unwrap();
         crate::hotkey::Bindings::parse(&config.hotkey.trigger, &config.hotkey.cancel).unwrap();
+    }
+
+    #[test]
+    fn config_template_exports_production_defaults_and_routes() {
+        let body = render_by_id("config").unwrap();
+        let config = crate::config::main::parse(&body).unwrap();
+
+        assert_eq!(
+            config.voice.vad.backend,
+            crate::config::VoiceVadBackend::Silero
+        );
+        assert_eq!(config.post.timeout_ms, 30_000);
+        assert_eq!(config.profile.default, "default");
+        assert!(body.contains("threshold = 0.5"));
+        assert!(body.contains("pause_silence_ms = 1500"));
+        assert!(body.contains("pre_roll_ms = 300"));
+        assert!(body.contains("max_overlap_ms = 200"));
+        assert!(body.contains("min_start_voiced_frames = 2"));
+        assert!(body.contains("[overlay]"));
+        assert!(body.contains("[dev]"));
+        assert!(config.profile.routes.contains_key("chat"));
+        assert!(config.profile.routes.contains_key("agent"));
+        assert!(config
+            .profile
+            .routes
+            .get("chat")
+            .unwrap()
+            .contains(&"com.openai.chat".to_string()));
+        assert!(config
+            .profile
+            .routes
+            .get("agent")
+            .unwrap()
+            .contains(&"com.microsoft.VSCode".to_string()));
+    }
+
+    #[test]
+    fn config_template_routes_are_disjoint_and_conservative() {
+        let body = render_by_id("config").unwrap();
+        let config = crate::config::main::parse(&body).unwrap();
+        let chat = config.profile.routes.get("chat").unwrap();
+        let agent = config.profile.routes.get("agent").unwrap();
+
+        for bundle_id in chat {
+            assert!(
+                !agent.contains(bundle_id),
+                "{bundle_id} appears in both chat and agent routes"
+            );
+        }
+        for broad_app in [
+            "com.google.Chrome",
+            "com.apple.Safari",
+            "org.mozilla.firefox",
+            "com.apple.mail",
+            "com.microsoft.Outlook",
+            "us.zoom.xos",
+        ] {
+            assert!(!chat.contains(&broad_app.to_string()));
+            assert!(!agent.contains(&broad_app.to_string()));
+        }
+    }
+
+    #[test]
+    fn registry_exports_chat_and_agent_profiles_with_llm_prompts() {
+        for (id, name) in [("profile/chat", "chat"), ("profile/agent", "agent")] {
+            let body = render_by_id(id).unwrap();
+            let profile = crate::config::profile::parse(&body).unwrap();
+
+            assert_eq!(profile.name, name);
+            assert_eq!(profile.asr.provider, "doubao");
+            assert!(profile.asr.hotwords.is_empty());
+            assert_eq!(
+                profile.post.chain,
+                vec!["rule:zh_filter".to_string(), "llm:deepseek".to_string()]
+            );
+            let llm = profile
+                .post
+                .llm
+                .get("deepseek")
+                .and_then(toml::Value::as_table)
+                .unwrap();
+            assert!(llm
+                .get("system_prompt")
+                .and_then(toml::Value::as_str)
+                .is_some_and(|prompt| prompt.contains("ASR 文本整理器")));
+            assert!(llm
+                .get("prompt")
+                .and_then(toml::Value::as_str)
+                .is_some_and(|prompt| prompt.contains("{{app_name}}")));
+        }
     }
 
     #[test]

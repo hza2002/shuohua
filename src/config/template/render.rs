@@ -54,20 +54,39 @@ fn render_from_spec(
         if let Some(field) = spec.field_for_path(name) {
             push_field_comment(&mut body, field, lang);
         }
-        body.push_str(&format!("[{name}]\n"));
-        let TemplateValue::Table(entries) = value else {
-            continue;
-        };
-        for (key, value) in *entries {
-            let field_path = format!("{name}.{key}");
-            if let Some(field) = spec.field_for_path(&field_path) {
-                push_field_comment(&mut body, field, lang);
-            }
-            body.push_str(&format!("{key} = {}\n", render_value(value)));
-        }
+        render_table(&mut body, spec, name, value, lang);
     }
 
     body
+}
+
+fn render_table(
+    body: &mut String,
+    spec: &ConfigSpec,
+    name: &str,
+    value: &TemplateValue,
+    lang: Option<crate::i18n::Lang>,
+) {
+    body.push_str(&format!("[{name}]\n"));
+    let TemplateValue::Table(entries) = value else {
+        return;
+    };
+    let mut nested_tables = Vec::new();
+    for (key, value) in *entries {
+        let field_path = format!("{name}.{key}");
+        if matches!(value, TemplateValue::Table(_)) {
+            nested_tables.push((field_path, *value));
+            continue;
+        }
+        if let Some(field) = spec.field_for_path(&field_path) {
+            push_field_comment(body, field, lang);
+        }
+        body.push_str(&format!("{key} = {}\n", render_value(value)));
+    }
+    for (nested_name, nested_value) in nested_tables {
+        body.push('\n');
+        render_table(body, spec, &nested_name, &nested_value, lang);
+    }
 }
 
 fn push_field_comment(
@@ -92,15 +111,33 @@ fn push_field_comment(
 fn render_value(value: &TemplateValue) -> String {
     match value {
         TemplateValue::String(value) => format!("{value:?}"),
+        TemplateValue::MultilineString(value) => format!("\"\"\"\n{value}\n\"\"\""),
         TemplateValue::Integer(value) => value.to_string(),
+        TemplateValue::Float(value) => {
+            let value = value.to_string();
+            if value.contains('.') {
+                value
+            } else {
+                format!("{value}.0")
+            }
+        }
         TemplateValue::Bool(value) => value.to_string(),
         TemplateValue::StringArray(values) => {
-            let values = values
-                .iter()
-                .map(|value| format!("{value:?}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("[{values}]")
+            if values.len() > 4 {
+                let values = values
+                    .iter()
+                    .map(|value| format!("  {value:?},"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("[\n{values}\n]")
+            } else {
+                let values = values
+                    .iter()
+                    .map(|value| format!("{value:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{values}]")
+            }
         }
         TemplateValue::InlineTable(entries) => {
             let entries = entries

@@ -135,7 +135,7 @@ impl Default for VoiceVadCfg {
 }
 
 fn default_vad_backend() -> VoiceVadBackend {
-    VoiceVadBackend::Off
+    VoiceVadBackend::Silero
 }
 fn default_vad_threshold() -> f32 {
     0.5
@@ -189,7 +189,7 @@ impl Default for PostCfg {
 }
 
 fn default_post_timeout_ms() -> u64 {
-    10_000
+    30_000
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -316,7 +316,7 @@ trigger = "f16"
         assert_eq!(cfg.ui.theme, "gruvbox-dark");
         assert_eq!(cfg.ui.theme_tui, "");
         assert_eq!(cfg.ui.theme_overlay, "");
-        assert_eq!(cfg.post.timeout_ms, 10_000);
+        assert_eq!(cfg.post.timeout_ms, 30_000);
         assert_eq!(cfg.profile.default, "default");
         assert!(cfg.profile.routes.is_empty());
         assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
@@ -452,7 +452,7 @@ thinking_delay_ms = 900
     }
 
     #[test]
-    fn voice_vad_defaults_are_disabled() {
+    fn voice_vad_defaults_use_silero() {
         let cfg: Config = toml::from_str(
             r#"
 [hotkey]
@@ -461,7 +461,7 @@ trigger = "f16"
         )
         .unwrap();
 
-        assert_eq!(cfg.voice.vad.backend, VoiceVadBackend::Off);
+        assert_eq!(cfg.voice.vad.backend, VoiceVadBackend::Silero);
         assert!((cfg.voice.vad.threshold - 0.5).abs() < 1e-6);
         assert_eq!(cfg.voice.vad.pause_silence_ms, 1500);
         assert_eq!(cfg.voice.vad.pre_roll_ms, 300);
@@ -518,7 +518,7 @@ trigger = "f16"
         )
         .unwrap();
 
-        assert_eq!(cfg.post.timeout_ms, 10_000);
+        assert_eq!(cfg.post.timeout_ms, 30_000);
     }
 
     #[test]

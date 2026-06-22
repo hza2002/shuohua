@@ -231,7 +231,7 @@ chain = []
         assert_eq!(start.params.hotwords, ["Rust", "macOS"]);
         assert!(start.params.idle_pause);
         assert_eq!(start.params.finalize_timeout_ms, 1234);
-        assert_eq!(start.params.post_timeout_ms, 10_000);
+        assert_eq!(start.params.post_timeout_ms, 30_000);
         assert_eq!(
             start.params.start_app_context.app_name.as_deref(),
             Some("Example")

@@ -4,7 +4,7 @@
 
 > **何时读**：改热键语法、suppress 行为、tracker 状态机、CGEventTap 桥。
 > **不在这里**：reload 时热替换 trigger 见 [config](config.md)。
-> **代码**：`src/hotkey/`。`combo.rs`(类型+精确匹配) / `parse.rs`(grammar→Combo) / `tracker.rs`(状态机) / `suppressor.rs`(吞哪些) / `provider_darwin.rs`(CGEventTap+ModMask 解码) / `bindings.rs`(trigger/cancel + cancel-first TrackerSet)。
+> **代码**：`src/hotkey/`。`combo.rs`(类型+精确匹配) / `parse.rs`(grammar→Combo) / `tracker.rs`(状态机) / `suppressor.rs`(吞哪些) / `provider_darwin.rs`(CGEventTap+ModMask 解码) / `bindings.rs`(trigger/cancel + cancel-first TrackerSet)。provider 启动和平台 unsupported 边界在 `src/platform/hotkey.rs`。
 
 ## 配置语法（grammar）
 

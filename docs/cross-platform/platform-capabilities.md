@@ -126,6 +126,16 @@ Phase 5a 之后，voice、daemon、TUI 和 doctor 不应直接依赖 `platform::
 这些调用应通过 `platform::desktop`。`post::AppContext` 仍是 post pipeline 的数据模型，
 但前台 App 查询属于 desktop capability，不属于 post processor 实现细节。
 
+Phase 5b 只移动 hotkey provider 启动边界：
+
+- `platform::hotkey` 拥有 hotkey provider backend 选择、OS thread spawn 和 unsupported
+  fallback。
+- macOS backend 继续调用 `hotkey::provider_darwin::run()`；CGEventTap callback、
+  pipe wire format、`Suppressor` 和 `TrackerSet` 行为不变。
+- `platform::daemon` 只保留 daemon runtime 需要的抽象 trait，不直接知道
+  `provider_darwin`、thread 名称或非 macOS unsupported 文案。
+- 不在 Phase 5b 实现 Linux/Windows global hotkey backend，也不引入跨平台 hotkey crate。
+
 ## Phase 1 非目标
 
 - 不抽 hotkey backend。

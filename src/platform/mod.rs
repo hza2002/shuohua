@@ -3,6 +3,7 @@ pub(crate) mod capability;
 pub(crate) mod clipboard;
 pub(crate) mod daemon;
 pub(crate) mod desktop;
+pub(crate) mod hotkey;
 pub(crate) mod lifecycle;
 #[cfg(target_os = "macos")]
 pub mod macos;

@@ -6,11 +6,11 @@
 
 ## 最近 commit
 
-HEAD: `feat: add desktop capability facade`
+HEAD: `feat: add hotkey provider facade`
 
 ## 当前 phase
 
-Phase 5a: Desktop Facade 已完成并提交。下一步进入 Phase 5b。
+Phase 5b: Hotkey Provider Facade 已完成并提交。下一步进入 Phase 6。
 
 ## 已完成事项
 
@@ -59,6 +59,14 @@ Phase 5a: Desktop Facade 已完成并提交。下一步进入 Phase 5b。
   - 删除 `src/post/app_context.rs`；`post::AppContext` 保留为 post pipeline 数据模型，
     前台 App 查询归 desktop capability。
   - `tests/platform_layout.rs` 增加 desktop facade import 边界测试。
+- Phase 5b:
+  - 更新 `docs/cross-platform/platform-capabilities.md`，记录 hotkey provider facade 的边界。
+  - 新增 `src/platform/hotkey.rs`，集中 hotkey provider backend 选择、OS thread spawn 和
+    非 macOS unsupported fallback。
+  - `src/platform/daemon.rs` 不再直接知道 `provider_darwin`、thread 名称或 unsupported 文案。
+  - macOS 仍调用 `hotkey::provider_darwin::run()`；CGEventTap callback、pipe wire format、
+    `Suppressor` 和 `TrackerSet` 未改变。
+  - `tests/platform_layout.rs` 增加 hotkey provider facade import 边界测试。
 
 ## 验证结果
 
@@ -71,11 +79,15 @@ Phase 5a: Desktop Facade 已完成并提交。下一步进入 Phase 5b。
   测试已随实现迁移到 `platform::service::`。
 - 已跑：`cargo test --test platform_layout desktop_capabilities_live_behind_platform_desktop_facade`，
   先红灯失败于缺少 `src/platform/desktop.rs`，实现后通过。
+- 已跑：`cargo test --test platform_layout hotkey_provider_lives_behind_platform_hotkey_facade`，
+  先红灯失败于缺少 `src/platform/hotkey.rs`，实现后通过。
 - 已跑：`cargo test cli::doctor::tests`，通过 6 个测试。
-- 已跑：`cargo test --test platform_layout`，通过 9 个测试。
+- 已跑：`cargo test hotkey`，通过 81 个测试。
+- 已跑：`cargo test --test doc_consistency`，通过 2 个测试。
+- 已跑：`cargo test --test platform_layout`，通过 10 个测试。
 - 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`，通过。
   `cargo test` 覆盖：629 个 unit tests、5 个 `apple_helper_build` tests、
-  1 个 `cli_runtime_boundary` test、2 个 `doc_consistency` tests、9 个 `platform_layout` tests、
+  1 个 `cli_runtime_boundary` test、2 个 `doc_consistency` tests、10 个 `platform_layout` tests、
   6 个 `theme_registry_build` tests。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
@@ -86,14 +98,13 @@ Phase 5a: Desktop Facade 已完成并提交。下一步进入 Phase 5b。
   这是后续 smart fallback lifecycle 目标，不在 Phase 4 抽。
 - `src/cli/doctor.rs` 仍有 launchd-centric 诊断输出；service manager facade 后应通过
   capability/status 和 service manager 模型收敛。
-- Phase 5a 没有抽 hotkey provider；`src/hotkey/provider_darwin.rs` 和
-  `platform::daemon::spawn_hotkey_event_tap()` 仍是 Phase 5b 目标。
+- Phase 5b 只抽 hotkey provider 启动边界，没有实现 Linux/Windows global hotkey backend。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
   静态 `desktop.permissions=available` 误解为当前已授权。
 
 ## 下一步
 
-进入 Phase 5b: Hotkey Provider Facade。
+进入 Phase 6: Overlay Renderer Boundary。
 
 建议下一 session prompt：
 
@@ -102,6 +113,6 @@ Phase 5a: Desktop Facade 已完成并提交。下一步进入 Phase 5b。
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、ipc-service.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 5a Desktop Facade 已提交；从 Phase 5b Hotkey Provider Facade 开始。不要改变
-macOS CGEventTap 线程模型或 suppress down/up 配对；先更新文档，再写最小架构测试。
+Phase 5b Hotkey Provider Facade 已提交；从 Phase 6 Overlay Renderer Boundary 开始。
+不要改变 macOS overlay 视觉和状态机；先更新 overlay 文档，再写最小架构测试。
 ```

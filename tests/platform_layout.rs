@@ -244,6 +244,35 @@ fn desktop_capabilities_live_behind_platform_desktop_facade() {
     }
 }
 
+#[test]
+fn hotkey_provider_lives_behind_platform_hotkey_facade() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    assert!(
+        root.join("src/platform/hotkey.rs").exists(),
+        "Phase 5b hotkey provider facade should live at src/platform/hotkey.rs"
+    );
+
+    let platform_mod = std::fs::read_to_string(root.join("src/platform/mod.rs")).unwrap();
+    assert!(
+        platform_mod.contains("pub(crate) mod hotkey;"),
+        "src/platform/mod.rs must expose the hotkey provider facade"
+    );
+
+    let daemon_platform = std::fs::read_to_string(root.join("src/platform/daemon.rs")).unwrap();
+    for token in [
+        "provider_darwin",
+        "hotkey-eventtap",
+        "thread::Builder",
+        "daemon hotkey event tap is not implemented",
+    ] {
+        assert!(
+            !daemon_platform.contains(token),
+            "src/platform/daemon.rs should delegate hotkey provider details to platform::hotkey instead of owning `{token}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

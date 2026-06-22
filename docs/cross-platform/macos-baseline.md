@@ -33,11 +33,11 @@ history/TUI 纯逻辑、voice fake recorder 生命周期和平台边界架构测
 
 - `src/platform/macos/**`：AppKit、CoreGraphics、AX、clipboard、permissions 等 macOS
   backend。
-- `src/platform/{autotype,clipboard,permissions,daemon}.rs`：共享 facade，按
+- `src/platform/{autotype,clipboard,permissions,desktop,hotkey,daemon}.rs`：共享 facade，按
   `cfg(target_os = "macos")` 转发到 macOS backend，非 macOS 返回明确 unsupported 或
   conservative default。
-- `src/hotkey/provider_darwin.rs` 和 `src/hotkey/mod.rs`：CGEventTap provider，Phase 5
-  再抽 desktop capability/backend。
+- `src/hotkey/provider_darwin.rs` 和 `src/hotkey/mod.rs`：CGEventTap callback、wire decode、
+  tracker 和 suppress 状态机；provider 启动边界已在 `src/platform/hotkey.rs`。
 - `src/overlay/macos/**`：AppKit renderer，Phase 6 再抽 renderer boundary。
 - `src/platform/service.rs` 和 `src/cli/service/mod.rs`：service manager facade 和 CLI
   分发层；macOS backend 当前仍是 launchd user agent。

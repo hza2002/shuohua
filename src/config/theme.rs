@@ -68,7 +68,6 @@ pub struct CoreOverlayCfg {
     pub background_alpha: f64,
     pub corner_radius: f64,
     pub max_text_lines: usize,
-    pub thinking_delay_ms: u64,
     pub text: OverlayTextTheme,
     pub state: OverlayStateTheme,
 }
@@ -284,7 +283,6 @@ impl Default for CoreOverlayCfg {
             background_alpha: 0.70,
             corner_radius: 18.0,
             max_text_lines: 5,
-            thinking_delay_ms: 200,
             text: OverlayTextTheme::default(),
             state: OverlayStateTheme::default(),
         }
@@ -391,7 +389,6 @@ pub fn default_for_config(config: &crate::config::Config) -> EffectiveTheme {
         normalized_theme_name(non_empty_or(&config.ui.theme_overlay, &theme.theme)).to_string();
     theme.overlay.core.position = config.overlay.position;
     theme.overlay.core.max_text_lines = config.overlay.max_text_lines;
-    theme.overlay.core.thinking_delay_ms = config.overlay.thinking_delay_ms;
     theme
 }
 

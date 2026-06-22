@@ -228,8 +228,6 @@ pub struct OverlayCfg {
     pub position: OverlayPosition,
     #[serde(default = "default_max_text_lines")]
     pub max_text_lines: usize,
-    #[serde(default = "default_thinking_delay_ms")]
-    pub thinking_delay_ms: u64,
 }
 
 impl Default for OverlayCfg {
@@ -237,7 +235,6 @@ impl Default for OverlayCfg {
         Self {
             position: OverlayPosition::default(),
             max_text_lines: default_max_text_lines(),
-            thinking_delay_ms: default_thinking_delay_ms(),
         }
     }
 }
@@ -253,10 +250,6 @@ pub enum OverlayPosition {
 
 fn default_max_text_lines() -> usize {
     5
-}
-
-fn default_thinking_delay_ms() -> u64 {
-    1200
 }
 
 /// `$XDG_CONFIG_HOME/shuohua/config.toml` or `~/.config/shuohua/config.toml`.
@@ -321,7 +314,6 @@ trigger = "f16"
         assert!(cfg.profile.routes.is_empty());
         assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
         assert_eq!(cfg.overlay.max_text_lines, 5);
-        assert_eq!(cfg.overlay.thinking_delay_ms, 1200);
     }
 
     #[test]
@@ -443,12 +435,26 @@ trigger = "f16"
 [overlay]
 position          = "top"
 max_text_lines    = 6
-thinking_delay_ms = 900
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.overlay.position, OverlayPosition::Top);
         assert_eq!(cfg.overlay.max_text_lines, 6);
-        assert_eq!(cfg.overlay.thinking_delay_ms, 900);
+    }
+
+    #[test]
+    fn rejects_removed_overlay_thinking_delay_ms() {
+        let error = parse(
+            r#"
+[hotkey]
+trigger = "f16"
+
+[overlay]
+thinking_delay_ms = 900
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("overlay.thinking_delay_ms"));
     }
 
     #[test]

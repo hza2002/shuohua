@@ -9,8 +9,7 @@ use crate::voice::SessionControl;
 pub(super) struct SessionStart {
     pub(super) provider: Arc<dyn crate::asr::AsrProvider>,
     pub(super) params: SessionParams,
-    pub(super) control_tx: tokio::sync::watch::Sender<SessionControl>,
-    pub(super) control_rx: tokio::sync::watch::Receiver<SessionControl>,
+    pub(super) control: SessionControl,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +74,6 @@ pub(super) fn prepare(
             SessionStartError::AsrProvider
         })?;
 
-    let (control_tx, control_rx) = tokio::sync::watch::channel(SessionControl::Idle);
     Ok(SessionStart {
         provider: runtime.provider,
         params: SessionParams {
@@ -93,8 +91,7 @@ pub(super) fn prepare(
             overlay: Some(overlay),
             state: state_store,
         },
-        control_tx,
-        control_rx,
+        control: SessionControl::new(),
     })
 }
 

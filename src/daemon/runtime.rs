@@ -127,11 +127,13 @@ async fn run_daemon_with_platform(
                             Ok(start) => {
                                 let suppressor_for_task = hotkey_input.suppressor();
                                 let history_for_task = history.clone();
+                                let control = start.control;
+                                let task_control = control.clone();
                                 let join = tokio::spawn(async move {
                                     crate::voice::finish::run_recording(
                                         start.provider.as_ref(),
                                         start.params,
-                                        start.control_rx,
+                                        task_control,
                                         history_for_task,
                                     )
                                     .await;
@@ -139,7 +141,7 @@ async fn run_daemon_with_platform(
                                         s.set_cancel_active(false);
                                     }
                                 });
-                                active = Some(ActiveSession::new(start.control_tx, join));
+                                active = Some(ActiveSession::new(control, join));
                                 hotkey_input.set_cancel_active(true);
                             }
                             Err(error) => {
@@ -251,12 +253,13 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_active_session_sends_stop_and_waits_for_completion() {
-        let (control_tx, mut control_rx) = tokio::sync::watch::channel(SessionControl::Idle);
+        let control = SessionControl::new();
+        let task_control = control.clone();
         let join = tokio::spawn(async move {
-            control_rx.changed().await.unwrap();
-            assert_eq!(*control_rx.borrow_and_update(), SessionControl::Stop);
+            task_control.stopped().await;
+            assert!(task_control.is_stop_requested());
         });
-        let mut active = Some(ActiveSession::new(control_tx, join));
+        let mut active = Some(ActiveSession::new(control, join));
 
         let stopped = shutdown_active_session(&mut active, Duration::from_millis(100)).await;
 

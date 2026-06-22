@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 
 use crate::asr::types::{AsrError, AsrEvent, AsrProvider, AsrSession, Caps, SessionCtx};
@@ -223,7 +223,7 @@ fn fresh_handles() -> RunHandles {
 async fn drive_engine(
     provider: Arc<ScriptedProvider>,
     params: SessionParams,
-    control_rx: watch::Receiver<SessionControl>,
+    control: SessionControl,
     rec: RecordingStream,
     mode: RecordingMode,
 ) -> Option<EngineOutcome> {
@@ -231,7 +231,7 @@ async fn drive_engine(
     // 5 秒上限保护，防止 bug 让测试挂死。
     timeout(
         Duration::from_secs(5),
-        run_owned(provider, params, control_rx, rec, mode, handles),
+        run_owned(provider, params, control, rec, mode, handles),
     )
     .await
     .expect("engine.run_with_recorder did not return within 5s")
@@ -240,7 +240,7 @@ async fn drive_engine(
 async fn run_owned(
     provider: Arc<ScriptedProvider>,
     params: SessionParams,
-    control_rx: watch::Receiver<SessionControl>,
+    control: SessionControl,
     rec: RecordingStream,
     mode: RecordingMode,
     handles: RunHandles,
@@ -248,7 +248,7 @@ async fn run_owned(
     engine::run_with_recorder(
         provider.as_ref(),
         params,
-        control_rx,
+        control,
         rec,
         handles.recording_id,
         handles.recording_started_at,
@@ -274,7 +274,7 @@ async fn continuous_normal_completion_yields_single_session() {
     let state = StateStore::new();
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let params = make_params(state.clone(), Some(overlay), false, 200);
-    let (control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let control = SessionControl::new();
     let (rec, pcm_tx) = make_recorder();
 
     pcm_tx.send(signal_frame(480)).unwrap();
@@ -283,13 +283,13 @@ async fn continuous_normal_completion_yields_single_session() {
     let engine_task = tokio::spawn(drive_engine(
         provider.clone(),
         params,
-        control_rx,
+        control.clone(),
         rec,
         RecordingMode::Continuous,
     ));
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    control_tx.send(SessionControl::Stop).unwrap();
+    control.request_stop();
     // finalize 期间 provider 必须发 Segment + Done 才能让 engine 顺利收尾
     event_tx
         .send(AsrEvent::Segment {
@@ -330,20 +330,20 @@ async fn provider_done_during_stop_drain_skips_finalize() {
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let mut params = make_params(state, Some(overlay), false, 200);
     params.stop_delay_ms = 100;
-    let (control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let control = SessionControl::new();
     let (rec, pcm_tx) = make_recorder();
     pcm_tx.send(signal_frame(480)).unwrap();
 
     let engine_task = tokio::spawn(drive_engine(
         provider,
         params,
-        control_rx,
+        control.clone(),
         rec,
         RecordingMode::Continuous,
     ));
 
     tokio::time::sleep(Duration::from_millis(40)).await;
-    control_tx.send(SessionControl::Stop).unwrap();
+    control.request_stop();
     tokio::time::sleep(Duration::from_millis(20)).await;
     event_tx.send(AsrEvent::Done).await.unwrap();
 
@@ -380,7 +380,7 @@ async fn vad_pause_provider_done_does_not_double_finalize() {
     let state = StateStore::new();
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let params = make_params(state.clone(), Some(overlay), true, 100);
-    let (control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let control = SessionControl::new();
     let (rec, pcm_tx) = make_recorder();
 
     pcm_tx.send(signal_frame(480)).unwrap();
@@ -388,7 +388,7 @@ async fn vad_pause_provider_done_does_not_double_finalize() {
     let engine_task = tokio::spawn(drive_engine(
         provider.clone(),
         params,
-        control_rx,
+        control.clone(),
         rec,
         RecordingMode::VadPause,
     ));
@@ -396,7 +396,7 @@ async fn vad_pause_provider_done_does_not_double_finalize() {
     // 给 engine 时间处理 PCM → session.send_pcm → AutoDoneSession 触发 Done。
     tokio::time::sleep(Duration::from_millis(80)).await;
     // 此时 engine 应当已经离开 Active，进入 Idle。
-    control_tx.send(SessionControl::Stop).unwrap();
+    control.request_stop();
 
     let outcome = engine_task.await.unwrap().expect("engine returned None");
     assert!(
@@ -429,20 +429,20 @@ async fn cancel_during_active_marks_cancel_requested() {
     let state = StateStore::new();
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let params = make_params(state, Some(overlay), false, 200);
-    let (control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let control = SessionControl::new();
     let (rec, pcm_tx) = make_recorder();
     pcm_tx.send(signal_frame(480)).unwrap();
 
     let engine_task = tokio::spawn(drive_engine(
         provider.clone(),
         params,
-        control_rx,
+        control.clone(),
         rec,
         RecordingMode::Continuous,
     ));
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    control_tx.send(SessionControl::Cancel).unwrap();
+    control.request_cancel();
 
     let outcome = engine_task.await.unwrap().expect("engine returned None");
     assert!(outcome.cancel_requested);
@@ -463,7 +463,7 @@ async fn content_bearing_cancel_keeps_retained_audio() {
     let state = StateStore::new();
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let params = make_params(state, Some(overlay), false, 200);
-    let (control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let control = SessionControl::new();
     let (pcm_tx, pcm_rx) = mpsc::unbounded_channel();
     let (rec, finish_rx) = RecordingStream::for_test_observe(pcm_rx);
     pcm_tx.send(signal_frame(480)).unwrap();
@@ -471,13 +471,13 @@ async fn content_bearing_cancel_keeps_retained_audio() {
     let engine_task = tokio::spawn(drive_engine(
         provider,
         params,
-        control_rx,
+        control.clone(),
         rec,
         RecordingMode::Continuous,
     ));
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    control_tx.send(SessionControl::Cancel).unwrap();
+    control.request_cancel();
 
     let outcome = engine_task.await.unwrap().expect("engine returned None");
     assert!(outcome.cancel_requested);
@@ -506,7 +506,7 @@ async fn contentless_cancel_discards_retained_audio() {
     let state = StateStore::new();
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let params = make_params(state, Some(overlay), false, 200);
-    let (control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let control = SessionControl::new();
     let (_pcm_tx, pcm_rx) = mpsc::unbounded_channel();
     let (rec, finish_rx) = RecordingStream::for_test_observe(pcm_rx);
     // 不喂任何 PCM；立即取消（biased select 让 Cancel 抢在 1s watchdog 之前）。
@@ -514,13 +514,13 @@ async fn contentless_cancel_discards_retained_audio() {
     let engine_task = tokio::spawn(drive_engine(
         provider,
         params,
-        control_rx,
+        control.clone(),
         rec,
         RecordingMode::Continuous,
     ));
 
     tokio::time::sleep(Duration::from_millis(20)).await;
-    control_tx.send(SessionControl::Cancel).unwrap();
+    control.request_cancel();
 
     let outcome = engine_task.await.unwrap().expect("engine returned None");
     assert!(outcome.cancel_requested);
@@ -546,7 +546,7 @@ async fn normal_completion_publishes_retained_audio() {
     let state = StateStore::new();
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let params = make_params(state, Some(overlay), false, 200);
-    let (control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let control = SessionControl::new();
     let (pcm_tx, pcm_rx) = mpsc::unbounded_channel();
     let (rec, finish_rx) = RecordingStream::for_test_observe(pcm_rx);
     pcm_tx.send(signal_frame(480)).unwrap();
@@ -554,13 +554,13 @@ async fn normal_completion_publishes_retained_audio() {
     let engine_task = tokio::spawn(drive_engine(
         provider,
         params,
-        control_rx,
+        control.clone(),
         rec,
         RecordingMode::Continuous,
     ));
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    control_tx.send(SessionControl::Stop).unwrap();
+    control.request_stop();
     // 模拟真实 recorder：stop 后 cpal stream 关闭，PCM 通道随之 close，
     // 让 drain_after_stop 的阻塞 recv 能够终止。
     drop(pcm_tx);
@@ -600,14 +600,14 @@ async fn asr_stream_close_during_active_yields_terminal_error() {
     let state = StateStore::new();
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let params = make_params(state, Some(overlay), false, 200);
-    let (_control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let control = SessionControl::new();
     let (rec, pcm_tx) = make_recorder();
     pcm_tx.send(signal_frame(480)).unwrap();
 
     let engine_task = tokio::spawn(drive_engine(
         provider,
         params,
-        control_rx,
+        control.clone(),
         rec,
         RecordingMode::Continuous,
     ));
@@ -636,13 +636,19 @@ async fn pcm_send_failure_yields_terminal_error() {
     let state = StateStore::new();
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let params = make_params(state, Some(overlay), false, 200);
-    let (_control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let control = SessionControl::new();
     let (rec, pcm_tx) = make_recorder();
     pcm_tx.send(signal_frame(480)).unwrap();
 
-    let outcome = drive_engine(provider, params, control_rx, rec, RecordingMode::Continuous)
-        .await
-        .expect("engine returned None");
+    let outcome = drive_engine(
+        provider,
+        params,
+        control.clone(),
+        rec,
+        RecordingMode::Continuous,
+    )
+    .await
+    .expect("engine returned None");
     let err = outcome
         .terminal_error
         .expect("expected terminal_error from failed PCM send");
@@ -659,13 +665,13 @@ async fn initial_asr_open_failure_returns_none() {
     let state = StateStore::new();
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let params = make_params(state, Some(overlay), false, 200);
-    let (_control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let control = SessionControl::new();
     let (rec, _pcm_tx) = make_recorder();
 
     let outcome = drive_engine(
         provider.clone(),
         params,
-        control_rx,
+        control.clone(),
         rec,
         RecordingMode::Continuous,
     )
@@ -686,7 +692,7 @@ async fn first_audio_watchdog_returns_none_on_silent_input() {
     let state = StateStore::new();
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let params = make_params(state, Some(overlay), false, 200);
-    let (_control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let control = SessionControl::new();
     let (rec, pcm_tx) = make_recorder();
 
     // 全零帧低于 MIN_NONZERO_AMPLITUDE，无法触发 first_audio_seen。
@@ -696,7 +702,7 @@ async fn first_audio_watchdog_returns_none_on_silent_input() {
     let outcome = drive_engine(
         provider.clone(),
         params,
-        control_rx,
+        control.clone(),
         rec,
         RecordingMode::Continuous,
     )
@@ -721,7 +727,7 @@ async fn continuous_outcome_preserves_audio_ms_invariant() {
     let state = StateStore::new();
     let (overlay, _overlay_rx) = OverlayHandle::channel();
     let params = make_params(state, Some(overlay), false, 200);
-    let (control_tx, control_rx) = watch::channel(SessionControl::Idle);
+    let control = SessionControl::new();
     let (rec, pcm_tx) = make_recorder();
     pcm_tx.send(signal_frame(480)).unwrap();
     pcm_tx.send(signal_frame(960)).unwrap();
@@ -729,12 +735,12 @@ async fn continuous_outcome_preserves_audio_ms_invariant() {
     let engine_task = tokio::spawn(drive_engine(
         provider,
         params,
-        control_rx,
+        control.clone(),
         rec,
         RecordingMode::Continuous,
     ));
     tokio::time::sleep(Duration::from_millis(60)).await;
-    control_tx.send(SessionControl::Stop).unwrap();
+    control.request_stop();
     event_tx
         .send(AsrEvent::Segment {
             text: "ok".into(),

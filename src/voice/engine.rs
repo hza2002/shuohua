@@ -19,8 +19,8 @@ use crate::voice::observer::{
     observe_pcm, observe_provider_opened, observe_session, RecordingObserver, SessionPhase,
     TraceStart,
 };
-use crate::voice::{audio, recorder, SessionControl};
-use tokio::sync::{mpsc, watch};
+use crate::voice::{audio, recorder, CancelSignal, SessionControl};
+use tokio::sync::mpsc;
 use tokio::time::{sleep_until, Instant as TokioInstant};
 
 const FIRST_AUDIO_TIMEOUT_MS: u64 = 1000;
@@ -178,7 +178,7 @@ pub(crate) struct EngineOutcome {
 pub(crate) async fn run(
     provider: &dyn AsrProvider,
     params: SessionParams,
-    control_rx: watch::Receiver<SessionControl>,
+    control: SessionControl,
 ) -> Option<EngineOutcome> {
     let mode = RecordingMode::select(params.idle_pause, &params.vad);
     let recording_id = ulid::Ulid::new().to_string();
@@ -218,7 +218,7 @@ pub(crate) async fn run(
     run_with_recorder(
         provider,
         params,
-        control_rx,
+        control,
         rec,
         recording_id,
         recording_started_at,
@@ -235,7 +235,7 @@ pub(crate) async fn run(
 pub(crate) async fn run_with_recorder(
     provider: &dyn AsrProvider,
     params: SessionParams,
-    mut control_rx: watch::Receiver<SessionControl>,
+    control: SessionControl,
     mut rec: recorder::RecordingStream,
     recording_id: String,
     recording_started_at: time::OffsetDateTime,
@@ -342,22 +342,13 @@ pub(crate) async fn run_with_recorder(
             'active: loop {
                 tokio::select! {
                     biased;
-                    changed = control_rx.changed() => {
-                        if changed.is_err() {
-                            stop_requested = true;
-                            break 'active;
-                        }
-                        match *control_rx.borrow_and_update() {
-                            SessionControl::Stop => {
-                                stop_requested = true;
-                                break 'active;
-                            }
-                            SessionControl::Cancel => {
-                                cancel_requested = true;
-                                break 'recording;
-                            }
-                            SessionControl::Idle => {}
-                        }
+                    _ = control.cancelled() => {
+                        cancel_requested = true;
+                        break 'recording;
+                    }
+                    _ = control.stopped() => {
+                        stop_requested = true;
+                        break 'active;
                     }
                     pcm = rec.recv() => {
                         match pcm {
@@ -477,7 +468,7 @@ pub(crate) async fn run_with_recorder(
                     &mut total_audio_samples,
                     &mut last_sent_sample,
                     params.stop_delay_ms,
-                    &mut control_rx,
+                    control.cancel_signal(),
                     &mut cancel_requested,
                     &mut meter,
                     &recording_id,
@@ -515,7 +506,7 @@ pub(crate) async fn run_with_recorder(
                     &mut current.final_text,
                     &mut current.pending_overlay_segments,
                     params.finalize_timeout_ms,
-                    &mut control_rx,
+                    control.cancel_signal(),
                     &mut terminal_error,
                     &mut trace,
                     recording_started_instant,
@@ -558,6 +549,16 @@ pub(crate) async fn run_with_recorder(
                 sessions.push(capture);
             }
 
+            // 进 idle 前用电平复核 control。finalize / drain 只观察 cancel，按设计拿不到
+            // stop —— 一个在 finalize 窗口里发来的 stop 不会被任何人"消费"，但它存在于 stop
+            // 闩里。这里读电平把它折进 stop_requested，否则会误入 idle（且 cancel 优先）。
+            if control.is_cancelled() {
+                cancel_requested = true;
+                break 'recording;
+            }
+            if control.is_stop_requested() {
+                stop_requested = true;
+            }
             if !should_enter_idle(mode, stop_requested, pause_requested) {
                 break 'recording;
             }
@@ -582,22 +583,13 @@ pub(crate) async fn run_with_recorder(
             'idle: loop {
                 tokio::select! {
                     biased;
-                    changed = control_rx.changed() => {
-                        if changed.is_err() {
-                            stop_requested = true;
-                            break 'idle;
-                        }
-                        match *control_rx.borrow_and_update() {
-                            SessionControl::Stop => {
-                                stop_requested = true;
-                                break 'idle;
-                            }
-                            SessionControl::Cancel => {
-                                cancel_requested = true;
-                                break 'recording;
-                            }
-                            SessionControl::Idle => {}
-                        }
+                    _ = control.cancelled() => {
+                        cancel_requested = true;
+                        break 'recording;
+                    }
+                    _ = control.stopped() => {
+                        stop_requested = true;
+                        break 'idle;
                     }
                     pcm = rec.recv() => {
                         match pcm {
@@ -852,7 +844,7 @@ async fn drain_stop_audio(
     total_audio_samples: &mut u64,
     last_sent_sample: &mut u64,
     stop_delay_ms: u32,
-    control_rx: &mut watch::Receiver<SessionControl>,
+    cancel: CancelSignal<'_>,
     cancel_requested: &mut bool,
     meter: &mut MeterCollector,
     recording_id: &str,
@@ -864,13 +856,9 @@ async fn drain_stop_audio(
     while Instant::now() < drain_until {
         tokio::select! {
             biased;
-            changed = control_rx.changed() => {
-                if changed.is_ok()
-                    && matches!(*control_rx.borrow_and_update(), SessionControl::Cancel)
-                {
-                    *cancel_requested = true;
-                    return Ok(StopDrainOutcome::Canceled);
-                }
+            _ = cancel.cancelled() => {
+                *cancel_requested = true;
+                return Ok(StopDrainOutcome::Canceled);
             }
             _ = sleep_until(TokioInstant::from_std(drain_until)) => break,
             pcm = rec.recv() => {

@@ -1,14 +1,10 @@
-//! UDS daemon server.
+//! IPC daemon server.
 
-use std::fs;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
-use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{
     mpsc::{self, error::TrySendError},
     watch,
@@ -25,64 +21,6 @@ use crate::ipc::protocol::{Command, Event, WireState, PROTO_VERSION};
 use crate::state::{DaemonState, StateEvent, StateSnapshot, StateStore};
 
 const CLIENT_QUEUE: usize = 256;
-pub fn default_socket_path() -> PathBuf {
-    let uid = unsafe { libc::getuid() };
-    PathBuf::from(format!("/tmp/shuohua-{uid}.sock"))
-}
-
-pub async fn bind_default() -> Result<UnixListener> {
-    bind(default_socket_path()).await
-}
-
-pub async fn bind(path: impl AsRef<Path>) -> Result<UnixListener> {
-    let path = path.as_ref();
-    prepare_socket_path(path).await?;
-    let listener =
-        UnixListener::bind(path).with_context(|| format!("bind UDS {}", path.display()))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("chmod 0600 {}", path.display()))?;
-    Ok(listener)
-}
-
-async fn prepare_socket_path(path: &Path) -> Result<()> {
-    if let Ok(meta) = fs::symlink_metadata(path) {
-        if !meta.file_type().is_socket() {
-            anyhow::bail!("refusing to use UDS path {}: not a socket", path.display());
-        }
-    }
-    match UnixStream::connect(path).await {
-        Ok(_) => anyhow::bail!(
-            "another shuo daemon is already running at {}",
-            path.display()
-        ),
-        Err(error) => match error.raw_os_error() {
-            Some(libc::ENOENT) => Ok(()),
-            Some(libc::ECONNREFUSED) => remove_stale_socket(path),
-            _ => Err(error).with_context(|| format!("probe UDS {}", path.display())),
-        },
-    }
-}
-
-fn remove_stale_socket(path: &Path) -> Result<()> {
-    let meta = fs::symlink_metadata(path)
-        .with_context(|| format!("inspect stale UDS {}", path.display()))?;
-    if !meta.file_type().is_socket() {
-        anyhow::bail!(
-            "refusing to remove non-stale UDS path {}: not a socket",
-            path.display()
-        );
-    }
-    let uid = unsafe { libc::geteuid() };
-    if meta.uid() != uid {
-        anyhow::bail!(
-            "refusing to remove stale UDS {} owned by uid {}, expected {}",
-            path.display(),
-            meta.uid(),
-            uid
-        );
-    }
-    fs::remove_file(path).with_context(|| format!("remove stale UDS {}", path.display()))
-}
 
 #[derive(Clone)]
 pub struct ServerControl {
@@ -92,13 +30,13 @@ pub struct ServerControl {
 }
 
 pub async fn run(
-    listener: UnixListener,
+    listener: crate::ipc::transport::Listener,
     state: StateStore,
     history: HistoryService,
     control: ServerControl,
 ) -> Result<()> {
     loop {
-        let (stream, _) = listener.accept().await.context("accept UDS client")?;
+        let stream = listener.accept().await?;
         let state = state.clone();
         let history = history.clone();
         let control = control.clone();
@@ -111,7 +49,7 @@ pub async fn run(
 }
 
 async fn handle_client(
-    stream: UnixStream,
+    stream: crate::ipc::transport::Stream,
     state: StateStore,
     history: HistoryService,
     control: ServerControl,
@@ -693,6 +631,8 @@ async fn delete_history(history: HistoryService, id: String) -> Result<DeleteRes
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -700,7 +640,6 @@ mod tests {
 
     use time::macros::datetime;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::UnixStream;
 
     use super::*;
     use crate::history::{
@@ -735,7 +674,7 @@ trigger = "f16"
     async fn subscribe_fans_out_snapshot_and_live_events() {
         let path =
             std::env::temp_dir().join(format!("shuohua-ipc-test-{}.sock", ulid::Ulid::new()));
-        let listener = bind(&path).await.unwrap();
+        let listener = crate::ipc::transport::bind(&path).await.unwrap();
         let state = StateStore::new();
         let cfg_path =
             std::env::temp_dir().join(format!("shuohua-ipc-test-{}.toml", ulid::Ulid::new()));
@@ -874,7 +813,7 @@ trigger = "f16"
     async fn shutdown_command_acknowledges_and_requests_shutdown() {
         let sock = PathBuf::from(format!("/tmp/shuohua-ipc-{}.sock", ulid::Ulid::new()));
         let _ = fs::remove_file(&sock);
-        let listener = bind(&sock).await.unwrap();
+        let listener = crate::ipc::transport::bind(&sock).await.unwrap();
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
         let control = ServerControl {
             reload: test_reload_handle(),
@@ -904,7 +843,7 @@ trigger = "f16"
             ulid::Ulid::new()
         ));
         let _ = fs::remove_file(&sock);
-        let listener = bind(&sock).await.unwrap();
+        let listener = crate::ipc::transport::bind(&sock).await.unwrap();
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
         let control = ServerControl {
             reload: test_reload_handle(),
@@ -933,50 +872,6 @@ trigger = "f16"
             .expect("subscribed shutdown connection should close")
             .unwrap();
         server.abort();
-        let _ = fs::remove_file(sock);
-    }
-
-    #[tokio::test]
-    async fn bind_rejects_live_socket_without_unlinking_it() {
-        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-live-{}.sock", ulid::Ulid::new()));
-        let _ = fs::remove_file(&sock);
-        let _listener = bind(&sock).await.unwrap();
-
-        let error = bind(&sock).await.unwrap_err();
-
-        assert!(error.to_string().contains("already running"), "{error:#}");
-        UnixStream::connect(&sock)
-            .await
-            .expect("original live socket must remain reachable");
-        let _ = fs::remove_file(sock);
-    }
-
-    #[tokio::test]
-    async fn bind_recovers_stale_user_socket() {
-        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-stale-{}.sock", ulid::Ulid::new()));
-        let _ = fs::remove_file(&sock);
-        {
-            let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
-        }
-
-        let _listener = bind(&sock).await.unwrap();
-
-        UnixStream::connect(&sock)
-            .await
-            .expect("replacement socket should accept connections");
-        let _ = fs::remove_file(sock);
-    }
-
-    #[tokio::test]
-    async fn bind_rejects_regular_file_without_unlinking_it() {
-        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-file-{}.sock", ulid::Ulid::new()));
-        let _ = fs::remove_file(&sock);
-        fs::write(&sock, "not a socket").unwrap();
-
-        let error = bind(&sock).await.unwrap_err();
-
-        assert!(error.to_string().contains("not a socket"), "{error:#}");
-        assert_eq!(fs::read_to_string(&sock).unwrap(), "not a socket");
         let _ = fs::remove_file(sock);
     }
 
@@ -1144,7 +1039,7 @@ trigger = "f16"
             ulid::Ulid::new()
         ));
         let _ = fs::remove_file(&sock);
-        let listener = bind(&sock).await.unwrap();
+        let listener = crate::ipc::transport::bind(&sock).await.unwrap();
         let history = HistoryService::with_dir(
             std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new())),
         );
@@ -1202,7 +1097,7 @@ trigger = "f16"
                 }
             }),
         );
-        let listener = bind(&sock).await.unwrap();
+        let listener = crate::ipc::transport::bind(&sock).await.unwrap();
         let server = tokio::spawn(run(
             listener,
             StateStore::new(),
@@ -1240,7 +1135,7 @@ trigger = "f16"
     #[tokio::test]
     async fn subscribed_clients_receive_external_history_changed() {
         let path = PathBuf::from(format!("/tmp/sh-ipc-chg-{}.sock", ulid::Ulid::new()));
-        let listener = bind(&path).await.unwrap();
+        let listener = crate::ipc::transport::bind(&path).await.unwrap();
         let state = StateStore::new();
         let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
         fs::create_dir_all(&dir).unwrap();
@@ -1280,7 +1175,7 @@ trigger = "f16"
     #[tokio::test]
     async fn subscribed_clients_receive_history_appended_record() {
         let path = PathBuf::from(format!("/tmp/sh-ipc-app-{}.sock", ulid::Ulid::new()));
-        let listener = bind(&path).await.unwrap();
+        let listener = crate::ipc::transport::bind(&path).await.unwrap();
         let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
         let history = HistoryService::with_dir(dir.clone());
         let server = tokio::spawn(run(
@@ -1333,7 +1228,7 @@ trigger = "f16"
             ),
         );
         let history = HistoryService::with_dir(dir.clone());
-        let listener = bind(&sock).await.unwrap();
+        let listener = crate::ipc::transport::bind(&sock).await.unwrap();
         let server = tokio::spawn(run(
             listener,
             StateStore::new(),
@@ -1381,7 +1276,7 @@ trigger = "f16"
             ),
         );
         let history = HistoryService::with_dir(dir.clone());
-        let listener = bind(&path).await.unwrap();
+        let listener = crate::ipc::transport::bind(&path).await.unwrap();
         let server = tokio::spawn(run(
             listener,
             StateStore::new(),
@@ -1422,13 +1317,13 @@ trigger = "f16"
     }
 
     struct TestClient {
-        lines: tokio::io::Lines<BufReader<tokio::net::unix::OwnedReadHalf>>,
-        writer: tokio::net::unix::OwnedWriteHalf,
+        lines: tokio::io::Lines<BufReader<crate::ipc::transport::ReadHalf>>,
+        writer: crate::ipc::transport::WriteHalf,
     }
 
     impl TestClient {
         async fn connect(path: &Path) -> Self {
-            let stream = UnixStream::connect(path).await.unwrap();
+            let stream = crate::ipc::transport::connect(path).await.unwrap();
             let (reader, writer) = stream.into_split();
             Self {
                 lines: BufReader::new(reader).lines(),

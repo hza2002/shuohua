@@ -45,8 +45,8 @@ async fn run_daemon_with_platform(
             None
         }
     };
-    let listener = crate::ipc::server::bind_default().await?;
-    let socket_path = crate::ipc::server::default_socket_path();
+    let listener = crate::ipc::transport::bind_default().await?;
+    let socket_path = crate::ipc::transport::default_endpoint();
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     let mut ipc_task = tokio::spawn(crate::ipc::server::run(
         listener,
@@ -67,7 +67,7 @@ async fn run_daemon_with_platform(
     let mut hotkey_input = HotkeyInput::spawn(&platform, &initial_hotkeys)?;
 
     tracing::info!(
-        uds = %socket_path.display(),
+        ipc_endpoint = %socket_path.display(),
         trigger = %cfg_rx.borrow().config.hotkey.trigger,
         "daemon ready"
     );

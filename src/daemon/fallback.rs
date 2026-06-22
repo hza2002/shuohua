@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub fn run_smart_fallback() -> Result<()> {
-    let socket = crate::ipc::server::default_socket_path();
+    let socket = crate::ipc::transport::default_endpoint();
     match socket_status(&socket) {
         SocketStatus::AcceptsConnections => {}
         SocketStatus::Absent => {
@@ -21,7 +21,7 @@ pub fn run_smart_fallback() -> Result<()> {
             wait_for_socket(&socket, Duration::from_secs(2))?;
         }
         SocketStatus::Inaccessible(error) => {
-            return Err(error).with_context(|| format!("connect UDS {}", socket.display()));
+            return Err(error).with_context(|| format!("connect IPC {}", socket.display()));
         }
     }
 
@@ -75,7 +75,7 @@ fn wait_for_socket(path: &Path, timeout: Duration) -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    anyhow::bail!("daemon did not accept UDS connections within {:?}", timeout)
+    anyhow::bail!("daemon did not accept IPC connections within {:?}", timeout)
 }
 
 #[cfg(test)]

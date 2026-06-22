@@ -133,7 +133,7 @@ fn startup_commands() -> Vec<Command> {
 
 pub async fn run() -> Result<()> {
     init_i18n_from_config();
-    let mut client = IpcClient::connect(crate::ipc::server::default_socket_path()).await?;
+    let mut client = IpcClient::connect_default().await?;
     for command in startup_commands() {
         client.send(&command).await?;
     }

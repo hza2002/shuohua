@@ -124,9 +124,7 @@ where
 
 async fn request_daemon_shutdown() -> Result<libc::pid_t> {
     tokio::time::timeout(DAEMON_STATUS_TIMEOUT, async {
-        let mut client =
-            crate::ipc::client::IpcClient::connect(crate::ipc::server::default_socket_path())
-                .await?;
+        let mut client = crate::ipc::client::IpcClient::connect_default().await?;
         client.send(&Command::Shutdown).await?;
         parse_shutdown_reply(client.recv().await?)
     })
@@ -259,13 +257,10 @@ pub async fn status() -> Result<()> {
 }
 
 async fn uds_status() -> Result<Option<String>> {
-    let mut client =
-        match crate::ipc::client::IpcClient::connect(crate::ipc::server::default_socket_path())
-            .await
-        {
-            Ok(client) => client,
-            Err(_) => return Ok(None),
-        };
+    let mut client = match crate::ipc::client::IpcClient::connect_default().await {
+        Ok(client) => client,
+        Err(_) => return Ok(None),
+    };
     client.send(&Command::DaemonStatus).await?;
     client
         .recv_until(|event| match event {

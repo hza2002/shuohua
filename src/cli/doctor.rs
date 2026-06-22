@@ -561,7 +561,7 @@ async fn check_uds() -> CheckStatus {
                     "cli.doctor.daemon_not_running",
                     &[(
                         "socket",
-                        crate::ipc::server::default_socket_path()
+                        crate::ipc::transport::default_endpoint()
                             .display()
                             .to_string()
                     )]
@@ -587,7 +587,7 @@ async fn check_uds() -> CheckStatus {
 }
 
 async fn query_daemon_status() -> Result<Option<String>> {
-    let socket = crate::ipc::server::default_socket_path();
+    let socket = crate::ipc::transport::default_endpoint();
     let mut client = match crate::ipc::client::IpcClient::connect(&socket).await {
         Ok(client) => client,
         Err(_) => return Ok(None),

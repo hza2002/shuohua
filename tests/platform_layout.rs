@@ -118,6 +118,41 @@ fn business_layers_do_not_import_macos_backend_directly() {
     );
 }
 
+#[test]
+fn ipc_protocol_and_handlers_do_not_own_transport_backend() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    assert!(
+        root.join("src/ipc/transport.rs").exists(),
+        "Phase 3 IPC transport facade should live at src/ipc/transport.rs"
+    );
+
+    for file in [
+        "src/ipc/protocol.rs",
+        "src/ipc/client.rs",
+        "src/ipc/server.rs",
+    ] {
+        let body = std::fs::read_to_string(root.join(file)).unwrap();
+        for token in [
+            "tokio::net::UnixListener",
+            "tokio::net::UnixStream",
+            "std::os::unix::net::UnixStream",
+            "std::os::unix::net::UnixListener",
+        ] {
+            assert!(
+                !body.contains(token),
+                "{file} should depend on ipc::transport instead of `{token}`"
+            );
+        }
+    }
+
+    let transport = std::fs::read_to_string(root.join("src/ipc/transport.rs")).unwrap();
+    assert!(
+        transport.contains("UnixStream") || transport.contains("NamedPipe"),
+        "transport facade should own concrete IPC backend types"
+    );
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

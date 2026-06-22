@@ -1,25 +1,26 @@
-//! UDS client helpers shared by smart fallback and TUI.
+//! IPC client helpers shared by smart fallback and TUI.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use std::ops::ControlFlow;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 
 use crate::ipc::protocol::{Command, Event};
 
 pub struct IpcClient {
-    lines: tokio::io::Lines<BufReader<tokio::net::unix::OwnedReadHalf>>,
-    writer: tokio::net::unix::OwnedWriteHalf,
+    lines: tokio::io::Lines<BufReader<crate::ipc::transport::ReadHalf>>,
+    writer: crate::ipc::transport::WriteHalf,
 }
 
 impl IpcClient {
+    pub async fn connect_default() -> Result<Self> {
+        Self::connect(crate::ipc::transport::default_endpoint()).await
+    }
+
     pub async fn connect(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let stream = UnixStream::connect(path)
-            .await
-            .with_context(|| format!("connect UDS {}", path.display()))?;
+        let stream = crate::ipc::transport::connect(path).await?;
         let (reader, writer) = stream.into_split();
         Ok(Self {
             lines: BufReader::new(reader).lines(),

@@ -2,6 +2,16 @@
 
 本文件只记录公开发布版本的用户可感知变化，最新版本在最上面。
 
+## v0.1.1 - 2026-06-22
+
+### Changed
+
+- New configuration templates use a double-tap of Right Option as the default recording hotkey, with clearer setup and platform guidance in the documentation.
+
+### Fixed
+
+- Fixed `shuo doctor` crashing when its timeout checks ran without an active Tokio runtime.
+
 ## v0.1.0 - 2026-06-22
 
 First public release.

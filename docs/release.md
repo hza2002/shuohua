@@ -94,13 +94,16 @@ fi
 
 条目用用户视角写，避免内部过程描述，不逐条镜像 commit。GitHub Release 页面会额外生成 "What's Changed" 提交 / PR / contributor 列表。
 
-确认后只 stage changelog，不手动创建 release commit：
+确认后创建并推送 signed changelog commit，等待 `main` CI 通过：
 
 ```bash
 git add CHANGELOG.md
+git commit -S -m "docs: add vX.Y.Z changelog"
+git push origin main
 ```
 
-`cargo release` 会把 `Cargo.toml` 版本变更和 staged changelog 一起放进 `release: vX.Y.Z` commit。
+`cargo-release` 要求工作区干净。后续生成的 `release: vX.Y.Z` commit 只包含版本
+bump，不要通过绕过 dirty check 把其他修改混入 release commit。
 
 ## 6. 手动冒烟
 

@@ -39,8 +39,8 @@ history/TUI 纯逻辑、voice fake recorder 生命周期和平台边界架构测
 - `src/hotkey/provider_darwin.rs` 和 `src/hotkey/mod.rs`：CGEventTap provider，Phase 5
   再抽 desktop capability/backend。
 - `src/overlay/macos/**`：AppKit renderer，Phase 6 再抽 renderer boundary。
-- `src/cli/service/macos.rs` 和 `src/cli/service/mod.rs`：launchd service backend，Phase 4
-  再抽 service manager。
+- `src/platform/service.rs` 和 `src/cli/service/mod.rs`：service manager facade 和 CLI
+  分发层；macOS backend 当前仍是 launchd user agent。
 - `src/cli/app/platform/**`：self-update 的平台 adapter。
 
 已知后续阶段要处理但 Phase 0 不抽的边界：

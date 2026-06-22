@@ -1,15 +1,7 @@
 use anyhow::Result;
 use clap::Subcommand;
 
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(not(target_os = "macos"))]
-mod unsupported;
-
-#[cfg(target_os = "macos")]
-use macos as platform;
-#[cfg(not(target_os = "macos"))]
-use unsupported as platform;
+pub use crate::platform::service::LaunchdStatus;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
 pub enum ServiceCommand {
@@ -21,26 +13,18 @@ pub enum ServiceCommand {
     Status,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LaunchdStatus {
-    Installed(std::path::PathBuf),
-    NotInstalled(std::path::PathBuf),
-    #[cfg(not(target_os = "macos"))]
-    Unsupported,
-}
-
 pub fn launchd_status() -> LaunchdStatus {
-    platform::launchd_status()
+    crate::platform::service::launchd_status()
 }
 
 pub async fn run(command: ServiceCommand) -> Result<()> {
     match command {
-        ServiceCommand::Install => platform::install(),
-        ServiceCommand::Uninstall => platform::uninstall(),
-        ServiceCommand::Start => platform::start(),
-        ServiceCommand::Stop => platform::stop().await,
-        ServiceCommand::Restart => platform::restart().await,
-        ServiceCommand::Status => platform::status().await,
+        ServiceCommand::Install => crate::platform::service::install(),
+        ServiceCommand::Uninstall => crate::platform::service::uninstall(),
+        ServiceCommand::Start => crate::platform::service::start(),
+        ServiceCommand::Stop => crate::platform::service::stop().await,
+        ServiceCommand::Restart => crate::platform::service::restart().await,
+        ServiceCommand::Status => crate::platform::service::status().await,
     }
 }
 

@@ -6,3 +6,4 @@ pub(crate) mod lifecycle;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub(crate) mod permissions;
+pub(crate) mod service;

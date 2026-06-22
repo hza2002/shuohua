@@ -67,6 +67,17 @@ Phase 4a 不改 `shuo app service` 用户可见语义，也不搬 launchd 实现
 `cli::service` 依赖一个 service manager facade，同时保持 macOS launchd 输出、timeout、
 stop/restart 顺序不变。
 
+Phase 4b 的 facade 边界：
+
+- `platform::service` 拥有用户会话级 service manager backend 选择。
+- macOS backend 继续使用 launchd user agent，plist path、label、`launchctl` 调用、status
+  输出、stop timeout 和 restart 顺序保持不变。
+- `cli::service` 只保留 clap command、命令分发和向后兼容的 `launchd_status()` 入口，不直接
+  拥有 `launchctl`、plist 生成、平台 unsupported 文案或具体 service manager backend。
+- 非 macOS 继续返回明确 unsupported；Phase 4b 不实现 systemd user 或 Windows logon task。
+- `doctor` 暂时可以继续调用 `cli::service::launchd_status()` 兼容入口，后续诊断阶段再改成通用
+  service status 模型。
+
 ## Smart Fallback
 
 CLI/TUI/GUI 连接 daemon 时：

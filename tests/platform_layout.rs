@@ -170,12 +170,43 @@ fn daemon_lifecycle_primitives_live_behind_platform_facade() {
 
     for (file, forbidden) in [
         ("src/daemon/process.rs", "DaemonLock"),
-        ("src/cli/service/macos.rs", "libc::kill"),
+        ("src/platform/service.rs", "libc::kill"),
     ] {
         let body = std::fs::read_to_string(root.join(file)).unwrap();
         assert!(
             !body.contains(forbidden),
             "{file} should use platform::lifecycle instead of `{forbidden}`"
+        );
+    }
+}
+
+#[test]
+fn service_manager_lives_behind_platform_facade() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    assert!(
+        root.join("src/platform/service.rs").exists(),
+        "Phase 4b service manager facade should live at src/platform/service.rs"
+    );
+
+    let platform_mod = std::fs::read_to_string(root.join("src/platform/mod.rs")).unwrap();
+    assert!(
+        platform_mod.contains("pub(crate) mod service;"),
+        "src/platform/mod.rs must expose the service manager facade"
+    );
+
+    for file in ["src/cli/service/macos.rs", "src/cli/service/unsupported.rs"] {
+        assert!(
+            !root.join(file).exists(),
+            "cli service should use platform::service instead of owning {file}"
+        );
+    }
+
+    let cli_service = std::fs::read_to_string(root.join("src/cli/service/mod.rs")).unwrap();
+    for token in ["launchctl", "plist_body", "gui_domain"] {
+        assert!(
+            !cli_service.contains(token),
+            "src/cli/service/mod.rs should dispatch to platform::service instead of owning `{token}`"
         );
     }
 }
@@ -207,10 +238,6 @@ fn allows_direct_macos_backend(relative: &str) -> bool {
         || relative.starts_with("src/cli/app/platform/")
         || matches!(
             relative,
-            "src/hotkey/mod.rs"
-                | "src/hotkey/provider_darwin.rs"
-                | "src/cli/service/mod.rs"
-                | "src/cli/service/macos.rs"
-                | "src/post/app_context.rs"
+            "src/hotkey/mod.rs" | "src/hotkey/provider_darwin.rs" | "src/post/app_context.rs"
         )
 }

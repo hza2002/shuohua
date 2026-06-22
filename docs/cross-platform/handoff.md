@@ -6,11 +6,11 @@
 
 ## 最近 commit
 
-HEAD: `feat: add daemon lifecycle facade`
+HEAD: `feat: add service manager facade`
 
 ## 当前 phase
 
-Phase 4a: Single Instance And Process Probe 已完成并提交。下一步进入 Phase 4b。
+Phase 4b: Service Manager Facade 已完成并提交。下一步进入 Phase 5。
 
 ## 已完成事项
 
@@ -41,17 +41,28 @@ Phase 4a: Single Instance And Process Probe 已完成并提交。下一步进入
   - `cli::service::macos` 的 wait-for-exit 改用 `platform::lifecycle::process_exists()`，
     macOS stop/restart/status 用户可见语义不变。
   - `tests/platform_layout.rs` 增加 daemon lifecycle primitive import 边界测试。
+- Phase 4b:
+  - 更新 `docs/cross-platform/ipc-service.md`，记录 `platform::service` facade 边界。
+  - 新增 `src/platform/service.rs`，集中 service manager backend 选择；macOS backend 继续使用
+    launchd user agent。
+  - `src/cli/service/mod.rs` 保留 clap command、命令分发和 `launchd_status()` 兼容入口，不再
+    拥有 launchd 或 unsupported backend 文件。
+  - 删除旧 `src/cli/service/macos.rs` / `src/cli/service/unsupported.rs`。
+  - `tests/platform_layout.rs` 增加 service manager import 边界测试。
 
 ## 验证结果
 
 - 已跑：`cargo test --test platform_layout daemon_lifecycle_primitives_live_behind_platform_facade`，通过。
+- 已跑：`cargo test --test platform_layout service_manager_lives_behind_platform_facade`，通过。
+- 已跑：`cargo test platform::service::`，通过 12 个测试。
+- 已跑：`cargo test cli::service::`，通过 1 个测试。
 - 已跑：`cargo test platform::lifecycle`，通过 2 个测试。
-- 已跑：`cargo test cli::service::macos::tests`，通过 12 个测试。
-- 已跑：`cargo test --test platform_layout`，通过 7 个测试。
-- 已跑：`cargo fmt --check`，通过。
-- 已跑：`cargo clippy --all-targets -- -D warnings`，通过。
-- 已跑：`cargo test`，通过：629 个 unit tests、5 个 `apple_helper_build` tests、
-  1 个 `cli_runtime_boundary` test、2 个 `doc_consistency` tests、7 个 `platform_layout` tests、
+- Phase 4a 曾跑：`cargo test cli::service::macos::tests`，通过 12 个测试；Phase 4b 后这些
+  测试已随实现迁移到 `platform::service::`。
+- 已跑：`cargo test --test platform_layout`，通过 8 个测试。
+- 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`，通过。
+  `cargo test` 覆盖：629 个 unit tests、5 个 `apple_helper_build` tests、
+  1 个 `cli_runtime_boundary` test、2 个 `doc_consistency` tests、8 个 `platform_layout` tests、
   6 个 `theme_registry_build` tests。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
@@ -59,9 +70,7 @@ Phase 4a: Single Instance And Process Probe 已完成并提交。下一步进入
 ## 已知风险
 
 - `src/daemon/fallback.rs` 仍用 `std::os::unix::net::UnixStream` 做 smart fallback endpoint probe；
-  这是 Phase 4b/4c smart fallback lifecycle 目标，不在 Phase 4a 抽。
-- `src/cli/service/macos.rs` 仍是 launchd 具体实现；Phase 4b 需要抽 service manager facade，
-  保持 `shuo app service` 用户可见语义不变。
+  这是后续 smart fallback lifecycle 目标，不在 Phase 4 抽。
 - `src/cli/doctor.rs` 仍有 launchd-centric 诊断输出；service manager facade 后应通过
   capability/status 和 service manager 模型收敛。
 - `src/post/app_context.rs` 当前作为 post 平台入口直接转发到 macOS app context；Phase 5
@@ -71,7 +80,7 @@ Phase 4a: Single Instance And Process Probe 已完成并提交。下一步进入
 
 ## 下一步
 
-进入 Phase 4b: Service Manager Facade。
+进入 Phase 5: Desktop Capability Boundary。
 
 建议下一 session prompt：
 
@@ -80,7 +89,7 @@ Phase 4a: Single Instance And Process Probe 已完成并提交。下一步进入
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、ipc-service.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-从 Phase 4b Service Manager Facade 开始：先更新 ipc-service.md，再写最小测试，最后抽
-service manager 边界。不要改变 `shuo app service` 用户可见语义，不要改 IPC JSON-line
-protocol，不要自动安装 Linux/Windows service。
+Phase 4b Service Manager Facade 已提交；从 Phase 5 Desktop Capability Boundary 开始。
+不要改变 macOS hotkey、clipboard/paste、active app 或 permission 行为；先更新文档，
+再写最小架构测试。
 ```

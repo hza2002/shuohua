@@ -3,6 +3,7 @@
 mod command;
 pub mod layout;
 mod model;
+mod renderer;
 
 pub use command::{OverlayCmd, OverlayHandle, OverlayReceiver, OverlayState, TextKind};
 pub use model::OverlayModel;
@@ -10,13 +11,9 @@ pub use model::OverlayModel;
 #[cfg(target_os = "macos")]
 mod macos;
 
-#[cfg(target_os = "macos")]
-pub use macos::run;
-
-#[cfg(not(target_os = "macos"))]
 pub fn run(
-    _rx: OverlayReceiver,
-    _cfg: crate::config::theme::EffectiveOverlayCfg,
+    rx: OverlayReceiver,
+    cfg: crate::config::theme::EffectiveOverlayCfg,
 ) -> anyhow::Result<()> {
-    anyhow::bail!("overlay is not implemented on this platform")
+    renderer::run(rx, cfg)
 }

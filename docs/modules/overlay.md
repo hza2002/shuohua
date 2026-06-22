@@ -25,7 +25,7 @@
 
 ## 平台边界
 
-command/model/layout 平台无关；`macos/` 是唯一 renderer（`view.rs` NSPanel+mpsc+动画，`chrome.rs` 集中 glass/SkyLight SPI/HUD fallback，`debug.rs` SPI 探针）。`mod.rs` 用 `#[cfg(target_os="macos")] pub use macos::run`。**加新平台 = 加 `overlay/<platform>/` 兄弟目录写自己的 view/chrome + 加 `MacosOverlayCfg` 兄弟 struct，不动 command/model/layout/上层。**
+command/model/layout 平台无关；`macos/` 是当前唯一 renderer（`view.rs` NSPanel+mpsc+动画，`chrome.rs` 集中 glass/SkyLight SPI/HUD fallback，`debug.rs` SPI 探针）。`renderer.rs` 拥有平台 renderer 选择，`mod.rs` 的 `run()` 只转发到 renderer。**加新平台 = 加 `overlay/<platform>/` 兄弟目录写自己的 view/chrome + 加 `MacosOverlayCfg` 兄弟 struct，不动 command/model/layout/上层。**
 
 ## 本模块持有的不变量
 

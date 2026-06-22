@@ -89,3 +89,15 @@ Renderer 负责：
 - 锚定策略。
 
 Renderer 不应直接读取业务配置；应只消费合并后的 effective overlay config。
+
+## Phase 6a Renderer Facade
+
+Phase 6a 先抽 renderer 选择边界，不改变 macOS renderer 行为：
+
+- `overlay::renderer` 拥有平台 renderer backend 选择和 unsupported fallback。
+- `overlay::run(rx, cfg)` 保持上层 API 不变，只转发到 `renderer::run(rx, cfg)`。
+- macOS backend 继续调用 `overlay::macos::run()`；AppKit view/chrome/icon_fx、动画、窗口层级、
+  focused window 锚定和 material fallback 不变。
+- `command.rs`、`model.rs`、`layout.rs` 仍是共享层，不 import `overlay::macos` 或平台 SDK。
+- Phase 6a 不实现 Windows/Linux renderer，只保留明确 unsupported fallback；Windows/Linux
+  骨架和 PoC 留给后续阶段。

@@ -273,6 +273,44 @@ fn hotkey_provider_lives_behind_platform_hotkey_facade() {
     }
 }
 
+#[test]
+fn overlay_renderer_lives_behind_renderer_facade() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    assert!(
+        root.join("src/overlay/renderer.rs").exists(),
+        "Phase 6 overlay renderer facade should live at src/overlay/renderer.rs"
+    );
+
+    let overlay_mod = std::fs::read_to_string(root.join("src/overlay/mod.rs")).unwrap();
+    assert!(
+        overlay_mod.contains("mod renderer;"),
+        "src/overlay/mod.rs must include the renderer facade"
+    );
+    assert!(
+        !overlay_mod.contains("pub use macos::run"),
+        "src/overlay/mod.rs should expose run() through overlay::renderer, not re-export macOS"
+    );
+
+    let renderer = std::fs::read_to_string(root.join("src/overlay/renderer.rs")).unwrap();
+    assert!(
+        renderer.contains("macos::run"),
+        "overlay::renderer should own the current macOS renderer selection"
+    );
+
+    for file in [
+        "src/overlay/command.rs",
+        "src/overlay/model.rs",
+        "src/overlay/layout.rs",
+    ] {
+        let body = std::fs::read_to_string(root.join(file)).unwrap();
+        assert!(
+            !body.contains("overlay::macos") && !body.contains("crate::overlay::macos"),
+            "{file} must stay shared and not import the macOS renderer"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

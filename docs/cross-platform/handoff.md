@@ -6,11 +6,11 @@
 
 ## 最近 commit
 
-HEAD: `feat: add hotkey provider facade`
+HEAD: `feat: add overlay renderer facade`
 
 ## 当前 phase
 
-Phase 5b: Hotkey Provider Facade 已完成并提交。下一步进入 Phase 6。
+Phase 6a: Overlay Renderer Facade 已完成并提交。下一步进入 Phase 6b。
 
 ## 已完成事项
 
@@ -67,6 +67,15 @@ Phase 5b: Hotkey Provider Facade 已完成并提交。下一步进入 Phase 6。
   - macOS 仍调用 `hotkey::provider_darwin::run()`；CGEventTap callback、pipe wire format、
     `Suppressor` 和 `TrackerSet` 未改变。
   - `tests/platform_layout.rs` 增加 hotkey provider facade import 边界测试。
+- Phase 6a:
+  - 更新 `docs/cross-platform/overlay.md` 和 `docs/modules/overlay.md`，记录 renderer facade
+    边界。
+  - 新增 `src/overlay/renderer.rs`，集中 overlay renderer backend 选择和非 macOS
+    unsupported fallback。
+  - `src/overlay/mod.rs` 的 `run()` 保持上层 API 不变，只转发到 `overlay::renderer`。
+  - macOS backend 仍调用 `overlay::macos::run()`；AppKit view/chrome/icon_fx、动画、
+    窗口层级、focused window 锚定和 material fallback 未改变。
+  - `tests/platform_layout.rs` 增加 overlay renderer facade import 边界测试。
 
 ## 验证结果
 
@@ -81,13 +90,16 @@ Phase 5b: Hotkey Provider Facade 已完成并提交。下一步进入 Phase 6。
   先红灯失败于缺少 `src/platform/desktop.rs`，实现后通过。
 - 已跑：`cargo test --test platform_layout hotkey_provider_lives_behind_platform_hotkey_facade`，
   先红灯失败于缺少 `src/platform/hotkey.rs`，实现后通过。
+- 已跑：`cargo test --test platform_layout overlay_renderer_lives_behind_renderer_facade`，
+  先红灯失败于缺少 `src/overlay/renderer.rs`，实现后通过。
 - 已跑：`cargo test cli::doctor::tests`，通过 6 个测试。
 - 已跑：`cargo test hotkey`，通过 81 个测试。
+- 已跑：`cargo test overlay`，通过 42 个测试。
 - 已跑：`cargo test --test doc_consistency`，通过 2 个测试。
-- 已跑：`cargo test --test platform_layout`，通过 10 个测试。
+- 已跑：`cargo test --test platform_layout`，通过 11 个测试。
 - 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`，通过。
   `cargo test` 覆盖：629 个 unit tests、5 个 `apple_helper_build` tests、
-  1 个 `cli_runtime_boundary` test、2 个 `doc_consistency` tests、10 个 `platform_layout` tests、
+  1 个 `cli_runtime_boundary` test、2 个 `doc_consistency` tests、11 个 `platform_layout` tests、
   6 个 `theme_registry_build` tests。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
@@ -99,12 +111,13 @@ Phase 5b: Hotkey Provider Facade 已完成并提交。下一步进入 Phase 6。
 - `src/cli/doctor.rs` 仍有 launchd-centric 诊断输出；service manager facade 后应通过
   capability/status 和 service manager 模型收敛。
 - Phase 5b 只抽 hotkey provider 启动边界，没有实现 Linux/Windows global hotkey backend。
+- Phase 6a 只抽 renderer 选择边界，没有实现 Windows/Linux overlay renderer 骨架。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
   静态 `desktop.permissions=available` 误解为当前已授权。
 
 ## 下一步
 
-进入 Phase 6: Overlay Renderer Boundary。
+进入 Phase 6b: Overlay Renderer Capability Skeleton。
 
 建议下一 session prompt：
 
@@ -113,6 +126,6 @@ Phase 5b: Hotkey Provider Facade 已完成并提交。下一步进入 Phase 6。
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、ipc-service.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 5b Hotkey Provider Facade 已提交；从 Phase 6 Overlay Renderer Boundary 开始。
-不要改变 macOS overlay 视觉和状态机；先更新 overlay 文档，再写最小架构测试。
+Phase 6a Overlay Renderer Facade 已提交；继续 Phase 6b Overlay Renderer Capability
+Skeleton。不要改变 macOS overlay 视觉和状态机；先更新 overlay 文档，再写最小架构测试。
 ```

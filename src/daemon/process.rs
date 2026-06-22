@@ -65,6 +65,5 @@ pub fn run_daemon_process() -> Result<()> {
         })
         .context("spawn tokio daemon thread")?;
 
-    crate::overlay::run(overlay_rx, runtime_cfg.theme.overlay.clone());
-    Ok(())
+    crate::overlay::run(overlay_rx, runtime_cfg.theme.overlay.clone())
 }

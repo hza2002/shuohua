@@ -10,11 +10,11 @@ JSON-line command/event protocol 保持共享。平台只替换 transport：
 | Linux | Unix domain socket |
 | Windows | Named Pipe |
 
-协议层不得依赖 transport path 类型。client/server 应通过 transport facade 创建 stream。
+协议层不应依赖 transport path 类型。client/server 应通过 transport facade 创建 stream。
 
 ## 单实例
 
-daemon 单实例锁和 stale endpoint 清理必须平台化：
+daemon 单实例锁和 stale endpoint 清理需要平台化：
 
 - macOS/Linux：lock file + UDS endpoint。
 - Windows：named mutex 或 lock file + Named Pipe endpoint。

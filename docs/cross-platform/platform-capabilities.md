@@ -2,12 +2,12 @@
 
 ## 目标
 
-平台差异必须显式建模。调用方不应通过字符串错误猜测某能力是否支持，也不应把
+平台差异需要显式建模。调用方不应通过字符串错误猜测某能力是否支持，也不应把
 macOS 的实现细节投射到 Windows/Linux。
 
 ## 状态模型
 
-建议共享状态：
+当前建议共享状态：
 
 | 状态 | 含义 |
 |---|---|
@@ -28,7 +28,7 @@ macOS 的实现细节投射到 Windows/Linux。
 
 ## 能力列表
 
-第一批能力：
+第一批候选能力：
 
 - `ipc.transport`
 - `daemon.single_instance`
@@ -60,5 +60,5 @@ macOS 的实现细节投射到 Windows/Linux。
 
 - capability probe 不执行高风险动作。
 - probe 不应阻塞 AppKit/Tauri/window callback。
-- permission 诊断必须平台化。
+- permission 诊断应平台化。
 - unsupported 是正常状态，不是 panic。

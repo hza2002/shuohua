@@ -1,9 +1,11 @@
 # Cross-Platform Overlay
 
-## 决策
+## 当前设计基线
 
 Overlay 三端优先原生 renderer。共享 `OverlayCmd`、model、layout、theme token 和状态语义；
 平台 renderer 只负责窗口能力、材质、绘制、动画、定位和输入穿透。
+
+这个方向允许随 PoC 修订。只要共享 command/model/theme 不被破坏，具体 renderer 技术可以换。
 
 ## 视觉优先级
 
@@ -14,7 +16,7 @@ Overlay 三端优先原生 renderer。共享 `OverlayCmd`、model、layout、the
 3. `translucent`：半透明 tint，无 blur。
 4. `solid`：实心背景，保证文字可读。
 
-可读性优先于特效。任何平台上，如果 blur/透明导致对比度不足或实现成本过高，必须降级到
+可读性优先于特效。任何平台上，如果 blur/透明导致对比度不足或实现成本过高，应降级到
 更重 tint 或 solid。
 
 ## 平台 renderer
@@ -53,7 +55,7 @@ X11 backend 不作为第一阶段目标。
 
 ## Capability 分级
 
-Renderer 启动时应报告能力：
+Renderer 启动时建议报告能力：
 
 | Capability | 含义 |
 |---|---|
@@ -66,7 +68,7 @@ Renderer 启动时应报告能力：
 | `blur` | 是否支持背景模糊 |
 | `animation` | 是否支持低 CPU 动画 |
 
-doctor/TUI/GUI 应能展示这些能力和降级原因。
+doctor/TUI/GUI 后续应能展示这些能力和降级原因。
 
 ## 共享边界
 
@@ -86,4 +88,4 @@ Renderer 负责：
 - 文本绘制和图标/动画绘制。
 - 锚定策略。
 
-Renderer 不得直接读取业务配置；只能消费合并后的 effective overlay config。
+Renderer 不应直接读取业务配置；应只消费合并后的 effective overlay config。

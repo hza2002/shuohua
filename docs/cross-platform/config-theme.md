@@ -47,7 +47,7 @@ material_backend = "mica"
 material_backend = "blurred_glass"
 ```
 
-当前平台读取通用字段和自身平台段；其他平台段忽略。未知字段仍按 schema 诊断，不静默吞掉
+当前平台读取通用字段和自身平台段；其他平台段忽略。未知字段默认按 schema 诊断，不静默吞掉
 拼写错误。
 
 ## 降级规则
@@ -63,7 +63,7 @@ Theme 表达用户偏好，renderer 决定实际能力：
 
 ## 字段治理
 
-- 导出到官方模板的字段必须有运行时使用点或明确是 metadata。
+- 导出到官方模板的字段应有运行时使用点或明确是 metadata。
 - 实验字段可以保留 schema 支持，但不应默认出现在 starter config。
 - 平台私有调试字段应放在平台段，并在文档里标记为 advanced。
 - 删除无效字段时同步更新 schema、template、i18n 和用户迁移说明。

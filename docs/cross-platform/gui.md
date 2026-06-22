@@ -1,6 +1,6 @@
 # GUI App
 
-## 决策
+## 当前设计基线
 
 GUI App 使用 Tauri 最新稳定版。Tauri GUI 是按需 client，不嵌入 daemon，不参与录音热路径。
 daemon 未打开 GUI 时不加载 WebView。
@@ -8,6 +8,9 @@ daemon 未打开 GUI 时不加载 WebView。
 Tauri 当前文档定位是 Rust backend + Web frontend，底层通过 WRY 使用各平台 WebView，
 并提供 commands/events 与前端通信；bundler 覆盖 macOS、Windows、Linux。这个能力匹配
 配置、历史、诊断、onboarding 等复杂 GUI。
+
+如果后续 PoC 证明 Tauri 在目标平台的启动、内存、打包或系统集成成本不可接受，可以重新评估。
+在有反证前，Tauri 是默认路线。
 
 ## 范围
 
@@ -47,7 +50,7 @@ daemon event -> shuohua client API -> Tauri event -> frontend
 
 ## 验收指标
 
-GUI PoC 进入实现前必须记录：
+GUI PoC 进入实现前建议记录：
 
 - macOS/Windows/Linux 打包体积。
 - 冷启动时间。

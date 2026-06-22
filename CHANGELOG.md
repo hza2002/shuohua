@@ -2,6 +2,15 @@
 
 本文件只记录公开发布版本的用户可感知变化，最新版本在最上面。
 
+## v0.1.2 - 2026-06-22
+
+### Changed
+
+- Exported configuration templates now default to Silero VAD with a longer post-processing timeout.
+- Exported Doubao templates now enable VAD pause so the starter configuration can pause and resume ASR sessions.
+- Exported profile templates now include default, chat, and agent profiles using Doubao ASR and the DeepSeek post-processing chain.
+- Default app routes for chat and agent profiles are more conservative and avoid duplicate bundle IDs that could match multiple profiles.
+
 ## v0.1.1 - 2026-06-22
 
 ### Changed

@@ -70,6 +70,21 @@ Renderer 启动时建议报告能力：
 
 doctor/TUI/GUI 后续应能展示这些能力和降级原因。
 
+Phase 6b 先把 renderer capability 作为只读 skeleton 放在 `overlay::renderer`：
+
+- 使用 `platform::capability::{CapabilityStatus, CapabilityStatusKind, CapabilityId}`，
+  不新增另一套 status 语义。
+- `renderer_capabilities()` 返回 overlay renderer 相关能力的静态快照；它不创建窗口、
+  不 probe 权限、不读取业务配置。
+- macOS snapshot 只描述现有 AppKit renderer：`overlay.renderer` available、
+  `overlay.material` degraded、`overlay.always_on_top` available、
+  `overlay.input_passthrough` partial、`overlay.window_anchor` degraded。
+- 非 macOS snapshot 先返回 structured unsupported，原因仍是 backend 未实现。
+- material preference 使用固定降级顺序
+  `liquid_glass -> blurred_glass -> translucent -> solid`；Phase 6b 只建模，不做运行时选择。
+- `screen_anchor`、`transparency`、`blur`、`animation` 这些更细能力先留在设计文档和后续 PoC，
+  不急着扩大共享 `CapabilityId`。
+
 ## 共享边界
 
 共享层负责：
@@ -101,3 +116,12 @@ Phase 6a 先抽 renderer 选择边界，不改变 macOS renderer 行为：
 - `command.rs`、`model.rs`、`layout.rs` 仍是共享层，不 import `overlay::macos` 或平台 SDK。
 - Phase 6a 不实现 Windows/Linux renderer，只保留明确 unsupported fallback；Windows/Linux
   骨架和 PoC 留给后续阶段。
+
+## Phase 6b Renderer Capability Skeleton
+
+Phase 6b 只补 renderer capability/status skeleton，不改变任何绘制行为：
+
+- `overlay::renderer` 同时拥有 backend 选择和 overlay-specific capability snapshot。
+- `overlay::run(rx, cfg)` 的 macOS 分支仍直接调用 `overlay::macos::run(rx, cfg)`。
+- 不修改 `OverlayCmd`、`OverlayModel`、layout、theme parser、AppKit view/chrome/icon_fx。
+- 不实现 Windows/Linux renderer，也不把 capability snapshot 当成实时 permission probe。

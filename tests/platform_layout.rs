@@ -311,6 +311,41 @@ fn overlay_renderer_lives_behind_renderer_facade() {
     }
 }
 
+#[test]
+fn overlay_renderer_capabilities_live_with_renderer_facade() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let renderer = std::fs::read_to_string(root.join("src/overlay/renderer.rs")).unwrap();
+
+    for token in [
+        "renderer_capabilities",
+        "CapabilityStatus",
+        "CapabilityId::OverlayRenderer",
+        "CapabilityId::OverlayMaterial",
+        "CapabilityId::OverlayAlwaysOnTop",
+        "CapabilityId::OverlayInputPassthrough",
+        "CapabilityId::OverlayWindowAnchor",
+        "MaterialPreference",
+        "MATERIAL_FALLBACK_ORDER",
+    ] {
+        assert!(
+            renderer.contains(token),
+            "overlay::renderer should own renderer capability skeleton token `{token}`"
+        );
+    }
+
+    for file in [
+        "src/overlay/command.rs",
+        "src/overlay/model.rs",
+        "src/overlay/layout.rs",
+    ] {
+        let body = std::fs::read_to_string(root.join(file)).unwrap();
+        assert!(
+            !body.contains("CapabilityStatus") && !body.contains("CapabilityId"),
+            "{file} must stay shared overlay behavior, not renderer capability reporting"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

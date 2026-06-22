@@ -136,6 +136,18 @@ Phase 5b 只移动 hotkey provider 启动边界：
   `provider_darwin`、thread 名称或非 macOS unsupported 文案。
 - 不在 Phase 5b 实现 Linux/Windows global hotkey backend，也不引入跨平台 hotkey crate。
 
+## Phase 6 Overlay Renderer Capability
+
+Phase 6b 将 overlay renderer 相关静态快照收敛到 `overlay::renderer`：
+
+- `platform::capability` 继续拥有共享 status/id/platform 类型和全局静态快照。
+- `overlay::renderer::renderer_capabilities()` 只返回 overlay renderer surface：
+  `overlay.renderer`、`overlay.material`、`overlay.always_on_top`、
+  `overlay.input_passthrough`、`overlay.window_anchor`。
+- 该函数不创建窗口、不读取业务配置、不执行权限或 compositor probe；它只是给后续
+  doctor/TUI/GUI 接入 renderer 降级信息预留稳定形状。
+- macOS 值与 Phase 1 全局快照保持一致；非 macOS 返回 unsupported/backend_not_implemented。
+
 ## Phase 1 非目标
 
 - 不抽 hotkey backend。

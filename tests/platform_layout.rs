@@ -5,6 +5,7 @@ fn shared_macos_adapters_live_under_platform_module() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for file in [
         "src/platform/mod.rs",
+        "src/platform/capability.rs",
         "src/platform/macos/mod.rs",
         "src/platform/macos/app_context.rs",
         "src/platform/macos/autotype.rs",
@@ -44,6 +45,11 @@ fn business_layers_use_platform_facades_not_macos_modules() {
 fn macos_platform_module_is_cfg_gated() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let body = std::fs::read_to_string(root.join("src/platform/mod.rs")).unwrap();
+
+    assert!(
+        body.contains("pub(crate) mod capability;"),
+        "src/platform/mod.rs must expose the shared capability model"
+    );
 
     assert!(
         body.contains("#[cfg(target_os = \"macos\")]"),

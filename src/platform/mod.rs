@@ -1,4 +1,5 @@
 pub(crate) mod autotype;
+pub(crate) mod capability;
 pub(crate) mod clipboard;
 pub(crate) mod daemon;
 #[cfg(target_os = "macos")]

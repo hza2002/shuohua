@@ -41,6 +41,7 @@ pub async fn run(args: DoctorArgs) -> Result<()> {
     );
     report.record_with_step(check_uds().await, "cli.doctor.next_step_daemon");
     report.record_with_step(check_launchd(), "cli.doctor.next_step_launchd");
+    print_platform_capabilities();
     report.record_with_step(check_permissions(), "cli.doctor.next_step_permissions");
     if args.runtime {
         report.record_with_step(check_runtime().await, "cli.doctor.next_step_runtime_config");
@@ -714,6 +715,73 @@ fn check_permissions() -> CheckStatus {
     status
 }
 
+fn print_platform_capabilities() {
+    for line in platform_capability_summary_lines() {
+        println!("{line}");
+    }
+}
+
+fn platform_capability_summary_lines() -> Vec<String> {
+    let capabilities = crate::platform::capability::current_platform_capabilities();
+    let platform = capabilities
+        .first()
+        .map(|status| status.platform.as_str())
+        .unwrap_or_else(|| crate::platform::capability::PlatformKind::current().as_str());
+    let mut available = 0;
+    let mut unsupported = 0;
+    let mut unavailable = 0;
+    let mut partial = 0;
+    let mut degraded = 0;
+    let mut unknown = 0;
+
+    let mut degraded_details = Vec::new();
+    let mut partial_details = Vec::new();
+
+    for capability in &capabilities {
+        match capability.status {
+            crate::platform::capability::CapabilityStatusKind::Available => available += 1,
+            crate::platform::capability::CapabilityStatusKind::Unsupported => unsupported += 1,
+            crate::platform::capability::CapabilityStatusKind::Unavailable => unavailable += 1,
+            crate::platform::capability::CapabilityStatusKind::Partial => {
+                partial += 1;
+                partial_details.push(format!(
+                    "{}={} reason={}",
+                    capability.id.as_str(),
+                    capability.status.as_str(),
+                    capability.reason
+                ));
+            }
+            crate::platform::capability::CapabilityStatusKind::Degraded => {
+                degraded += 1;
+                degraded_details.push(format!(
+                    "{}={} reason={}",
+                    capability.id.as_str(),
+                    capability.status.as_str(),
+                    capability.reason
+                ));
+            }
+            crate::platform::capability::CapabilityStatusKind::Unknown => unknown += 1,
+        }
+    }
+
+    let mut lines = vec![format!(
+        "platform: {platform} capabilities available={available} unsupported={unsupported} unavailable={unavailable} partial={partial} degraded={degraded} unknown={unknown}"
+    )];
+    if !degraded_details.is_empty() {
+        lines.push(format!(
+            "platform.capabilities.degraded: {}",
+            degraded_details.join(", ")
+        ));
+    }
+    if !partial_details.is_empty() {
+        lines.push(format!(
+            "platform.capabilities.partial: {}",
+            partial_details.join(", ")
+        ));
+    }
+    lines
+}
+
 fn format_duration(ms: u64) -> String {
     let secs = ms / 1000;
     let h = secs / 3600;
@@ -771,6 +839,25 @@ mod tests {
     fn doctor_timeouts_match_cli_contract() {
         assert_eq!(super::DAEMON_STATUS_TIMEOUT, Duration::from_secs(1));
         assert_eq!(super::RUNTIME_CHECK_TIMEOUT, Duration::from_secs(15));
+    }
+
+    #[test]
+    fn platform_capability_summary_counts_status_kinds() {
+        let lines = super::platform_capability_summary_lines();
+
+        assert!(lines.iter().any(|line| line.starts_with("platform: ")));
+        assert!(
+            lines.iter().any(|line| line.contains("available=")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("degraded=")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("partial=")),
+            "{lines:?}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

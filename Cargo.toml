@@ -1,6 +1,6 @@
 [package]
 name = "shuohua"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "macOS voice input assistant with realtime ASR, post-processing, overlay, and TUI"
 license = "MIT"

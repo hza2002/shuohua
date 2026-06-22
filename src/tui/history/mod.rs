@@ -387,7 +387,7 @@ impl HistoryPage {
         let Some(text) = self.selected_record().map(|record| record.text.clone()) else {
             return KeyOutcome::none();
         };
-        match crate::platform::clipboard::write_string(&text) {
+        match crate::platform::desktop::write_clipboard_string(&text) {
             Ok(()) => KeyOutcome::status(crate::t!("tui.history.copy.final_ok")),
             Err(e) => KeyOutcome::status(crate::i18n::tr(
                 "tui.error.clipboard",
@@ -400,7 +400,7 @@ impl HistoryPage {
         let Some(text) = self.selected_record().map(|record| record.asr.text.clone()) else {
             return KeyOutcome::none();
         };
-        match crate::platform::clipboard::write_string(&text) {
+        match crate::platform::desktop::write_clipboard_string(&text) {
             Ok(()) => KeyOutcome::status(crate::t!("tui.history.copy.asr_ok")),
             Err(e) => KeyOutcome::status(crate::i18n::tr(
                 "tui.error.clipboard",

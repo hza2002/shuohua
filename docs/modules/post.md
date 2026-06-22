@@ -4,7 +4,7 @@
 
 > **何时读**：改 processor、链执行规则、profile 路由、prompt 变量。
 > **不在这里**：pipeline[] / history 字段见 [schema](../schema.md)；overlay notice 通道见 [overlay](overlay.md)。
-> **代码**：`src/post/`（`mod.rs` trait+run_chain / `zh_filter.rs` / `llm.rs` / `app_context.rs`）；profile 路由在 `src/daemon/session_start.rs` + `src/config/profile.rs`。
+> **代码**：`src/post/`（`mod.rs` trait+run_chain / `zh_filter.rs` / `llm.rs`）；profile 路由在 `src/daemon/session_start.rs` + `src/config/profile.rs`，前台 App 查询在 `src/platform/desktop.rs`。
 
 ## 数据形态与 trait
 

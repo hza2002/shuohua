@@ -19,7 +19,7 @@ pub(crate) struct SystemDaemonPlatform;
 
 impl DaemonPlatform for SystemDaemonPlatform {
     fn frontmost_app(&self) -> AppContext {
-        crate::post::app_context::frontmost_app()
+        crate::platform::desktop::frontmost_app()
     }
 
     #[cfg(target_os = "macos")]

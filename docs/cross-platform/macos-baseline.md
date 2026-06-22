@@ -49,8 +49,8 @@ history/TUI 纯逻辑、voice fake recorder 生命周期和平台边界架构测
   Unix process primitives；这是 Phase 3/4 范围。
 - `src/cli/doctor.rs` 仍有 launchd-centric 诊断文案和 service status；Phase 1/4 后应通过
   capability/service manager status 表达。
-- `src/post/app_context.rs` 当前作为 post 层平台入口直接转发到 macOS app context；后续
-  desktop capability boundary 可以收敛到更统一的 facade。
+- 前台 App 查询已收敛到 `src/platform/desktop.rs`；`src/post/mod.rs` 中的 `AppContext`
+  只作为 post pipeline 数据模型保留。
 
 ## 手动验证 Checklist
 

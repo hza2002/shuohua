@@ -7,7 +7,7 @@ use crate::asr::types::{LanguageMode, SessionCtx};
 use crate::asr::AsrProvider;
 use crate::config::diagnostics::{AsrRuntimeTarget, LlmRuntimeTarget};
 use crate::ipc::protocol::{Command, Event};
-use crate::platform::permissions::{
+use crate::platform::desktop::{
     accessibility_trusted, microphone_authorization, MicrophoneAuthorization,
 };
 use crate::post::llm::LlmCleanup;

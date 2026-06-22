@@ -76,9 +76,9 @@ fn shared_platform_facades_do_not_import_apple_sdks() {
     for file in [
         "src/platform/autotype.rs",
         "src/platform/clipboard.rs",
+        "src/platform/desktop.rs",
         "src/platform/permissions.rs",
         "src/platform/daemon.rs",
-        "src/post/app_context.rs",
     ] {
         let body = std::fs::read_to_string(root.join(file)).unwrap();
         for token in forbidden {
@@ -211,6 +211,39 @@ fn service_manager_lives_behind_platform_facade() {
     }
 }
 
+#[test]
+fn desktop_capabilities_live_behind_platform_desktop_facade() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    assert!(
+        root.join("src/platform/desktop.rs").exists(),
+        "Phase 5 desktop capability facade should live at src/platform/desktop.rs"
+    );
+
+    let platform_mod = std::fs::read_to_string(root.join("src/platform/mod.rs")).unwrap();
+    assert!(
+        platform_mod.contains("pub(crate) mod desktop;"),
+        "src/platform/mod.rs must expose the desktop capability facade"
+    );
+
+    for (file, forbidden) in [
+        ("src/voice/dispatch.rs", "platform::{autotype, clipboard}"),
+        ("src/voice/engine.rs", "post::app_context::frontmost_app"),
+        ("src/platform/daemon.rs", "post::app_context::frontmost_app"),
+        (
+            "src/tui/history/mod.rs",
+            "platform::clipboard::write_string",
+        ),
+        ("src/cli/doctor.rs", "platform::permissions"),
+    ] {
+        let body = std::fs::read_to_string(root.join(file)).unwrap();
+        assert!(
+            !body.contains(forbidden),
+            "{file} should use platform::desktop instead of `{forbidden}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);
@@ -238,6 +271,6 @@ fn allows_direct_macos_backend(relative: &str) -> bool {
         || relative.starts_with("src/cli/app/platform/")
         || matches!(
             relative,
-            "src/hotkey/mod.rs" | "src/hotkey/provider_darwin.rs" | "src/post/app_context.rs"
+            "src/hotkey/mod.rs" | "src/hotkey/provider_darwin.rs"
         )
 }

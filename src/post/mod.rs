@@ -6,7 +6,6 @@
 //! - run_chain "链不阻塞"：单步 processor 失败/超时**跳过**，下一个继续用上一步
 //!   的 text。最差产出 == raw（不会丢内容）。
 
-pub mod app_context;
 pub mod llm;
 pub mod zh_filter;
 

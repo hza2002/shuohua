@@ -921,7 +921,7 @@ fn refresh_stop_context(
     recording_id: &str,
     app_context: &mut post::AppContext,
 ) {
-    *app_context = post::app_context::frontmost_app();
+    *app_context = crate::platform::desktop::frontmost_app();
     params
         .state
         .app(app_context.bundle_id.clone(), app_context.app_name.clone());

@@ -111,6 +111,21 @@ platform 按编译目标设置为 Linux/Windows/Unknown，reason 使用 `backend
 - permission 诊断应平台化。
 - unsupported 是正常状态，不是 panic。
 
+## Phase 5 Desktop Facade
+
+Phase 5 拆成两个小步，避免一次性改动 hotkey 热路径：
+
+- Phase 5a：新增 `platform::desktop` 作为业务层统一入口，聚合 active app、clipboard、
+  text injection 和 permission primitives。macOS 继续转发到现有 AppKit/CoreGraphics
+  backend；非 macOS 返回 capability-aware unsupported 或 conservative default。
+- Phase 5b：再评审 hotkey provider facade，保留 macOS CGEventTap 线程模型和 suppress
+  down/up 配对语义，不在 5a 改 CGEventTap callback 或 `hotkey` 状态机。
+
+Phase 5a 之后，voice、daemon、TUI 和 doctor 不应直接依赖 `platform::macos`、
+`platform::{clipboard,autotype,permissions}` 或 `post::app_context::frontmost_app()`；
+这些调用应通过 `platform::desktop`。`post::AppContext` 仍是 post pipeline 的数据模型，
+但前台 App 查询属于 desktop capability，不属于 post processor 实现细节。
+
 ## Phase 1 非目标
 
 - 不抽 hotkey backend。

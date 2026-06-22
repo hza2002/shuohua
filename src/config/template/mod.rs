@@ -84,11 +84,13 @@ mod tests {
     }
 
     #[test]
-    fn rendered_templates_include_field_comments_from_schema() {
+    fn config_template_uses_accessible_default_hotkey() {
         let body = render_by_id("config").unwrap();
 
         assert!(body.contains("# Hotkey that toggles recording."));
-        assert!(body.contains("trigger = \"f16\""));
+        assert!(body.contains("trigger = \"right_option:double\""));
+        let config = crate::config::main::parse(&body).unwrap();
+        crate::hotkey::Bindings::parse(&config.hotkey.trigger, &config.hotkey.cancel).unwrap();
     }
 
     #[test]

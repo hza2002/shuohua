@@ -3,7 +3,7 @@
 //!   * tokio multi-thread runtime
 //!   * hotkey CGEventTap CFRunLoop 专用 OS 线程 → os_pipe → 桥到 tokio mpsc
 //!   * Tracker 纯函数状态机消化 RawEvent → HotkeyEvent；trigger/cancel 可热替换
-//!   * F16 第一次按 = 起录音；第二次按 = 发 stop oneshot 让 task 收尾
+//!   * trigger 首次命中 = 起录音；再次命中 = 发 stop signal 让 task 收尾
 //!   * Session 起来时从 `cfg_rx.borrow()` 取**最新** voice/asr 配置，做到
 //!     "下次录音用新值"。
 //!   * 配置热重载靠 `reload` 模块（独立）：watcher 在 `~/.config/shuohua/`

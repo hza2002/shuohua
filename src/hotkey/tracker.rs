@@ -1,7 +1,7 @@
 //! Pure state machine: `RawEvent + Instant` → `HotkeyEvent`.
 //!
 //! Three trigger shapes from a [`Combo`] config (see [`super::combo`]):
-//! pure key (e.g. `f16`), combo (e.g. `cmd+r`), modifier-only (e.g.
+//! pure key (e.g. `f12`), combo (e.g. `cmd+r`), modifier-only (e.g.
 //! `right_shift`). `:double` is orthogonal — any shape may require two
 //! taps within [`DOUBLE_TAP_WINDOW`] to fire.
 //!

@@ -2,7 +2,7 @@ pub mod config_template;
 pub mod doctor;
 pub mod service;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -38,15 +38,23 @@ pub fn parse() -> Cli {
 
 pub fn run_command(command: Command) -> Result<()> {
     init_i18n_for_cli();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("create CLI runtime")?;
+    runtime.block_on(dispatch(command))
+}
+
+async fn dispatch(command: Command) -> Result<()> {
     match command {
-        Command::Doctor(args) => doctor::run(args),
+        Command::Doctor(args) => doctor::run(args).await,
         Command::ConfigTemplate(args) => config_template::run(args),
         Command::Install => service::install(),
         Command::Uninstall => service::uninstall(),
         Command::Start => service::start(),
-        Command::Stop => service::stop(),
-        Command::Restart => service::restart(),
-        Command::Status => service::status(),
+        Command::Stop => service::stop().await,
+        Command::Restart => service::restart().await,
+        Command::Status => service::status().await,
         Command::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
             Ok(())

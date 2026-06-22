@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Args;
 use std::ops::ControlFlow;
 use std::time::Duration;
@@ -22,7 +22,7 @@ pub struct DoctorArgs {
     pub runtime: bool,
 }
 
-pub fn run(args: DoctorArgs) -> Result<()> {
+pub async fn run(args: DoctorArgs) -> Result<()> {
     let mut report = DoctorReport::default();
     println!("shuo doctor");
     println!(
@@ -39,11 +39,11 @@ pub fn run(args: DoctorArgs) -> Result<()> {
         check_microphone_input(),
         "cli.doctor.next_step_microphone_input",
     );
-    report.record_with_step(check_uds(), "cli.doctor.next_step_daemon");
+    report.record_with_step(check_uds().await, "cli.doctor.next_step_daemon");
     report.record_with_step(check_launchd(), "cli.doctor.next_step_launchd");
     report.record_with_step(check_permissions(), "cli.doctor.next_step_permissions");
     if args.runtime {
-        report.record_with_step(check_runtime(), "cli.doctor.next_step_runtime_config");
+        report.record_with_step(check_runtime().await, "cli.doctor.next_step_runtime_config");
     } else {
         println!("runtime: {}", tr("cli.doctor.runtime_skipped", &[]));
         report.add_next_step("cli.doctor.next_step_runtime");
@@ -269,7 +269,7 @@ fn check_hotkey() -> CheckStatus {
     }
 }
 
-fn check_runtime() -> CheckStatus {
+async fn check_runtime() -> CheckStatus {
     let plan = match crate::config::diagnostics::runtime_check_plan() {
         Ok(plan) => plan,
         Err(report) => {
@@ -300,39 +300,26 @@ fn check_runtime() -> CheckStatus {
         );
         return CheckStatus::Warning;
     }
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("create doctor runtime")
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            println!("runtime: ERROR {e:#}");
-            return CheckStatus::Error;
+    let mut status = CheckStatus::Ok;
+    for target in plan.asr_targets() {
+        if check_asr_runtime(target).await == CheckStatus::Error {
+            status = CheckStatus::Error;
         }
-    };
-    rt.block_on(async {
-        let mut status = CheckStatus::Ok;
-        for target in plan.asr_targets() {
-            if check_asr_runtime(target).await == CheckStatus::Error {
+    }
+    let llm_targets = plan.llm_targets();
+    if llm_targets.is_empty() {
+        println!(
+            "llm.runtime: {}",
+            tr("cli.doctor.llm_runtime_no_components", &[])
+        );
+    } else {
+        for target in llm_targets {
+            if check_llm_runtime(target).await == CheckStatus::Error {
                 status = CheckStatus::Error;
             }
         }
-        let llm_targets = plan.llm_targets();
-        if llm_targets.is_empty() {
-            println!(
-                "llm.runtime: {}",
-                tr("cli.doctor.llm_runtime_no_components", &[])
-            );
-        } else {
-            for target in llm_targets {
-                if check_llm_runtime(target).await == CheckStatus::Error {
-                    status = CheckStatus::Error;
-                }
-            }
-        }
-        status
-    })
+    }
+    status
 }
 
 async fn check_asr_runtime(target: AsrRuntimeTarget) -> CheckStatus {
@@ -560,22 +547,8 @@ async fn check_llm_runtime(target: LlmRuntimeTarget) -> CheckStatus {
     }
 }
 
-fn check_uds() -> CheckStatus {
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("create doctor runtime")
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            println!("daemon: ERROR {e:#}");
-            return CheckStatus::Error;
-        }
-    };
-    match rt.block_on(tokio::time::timeout(
-        DAEMON_STATUS_TIMEOUT,
-        query_daemon_status(),
-    )) {
+async fn check_uds() -> CheckStatus {
+    match tokio::time::timeout(DAEMON_STATUS_TIMEOUT, query_daemon_status()).await {
         Ok(Ok(Some(status))) => {
             println!("{status}");
             CheckStatus::Ok
@@ -788,5 +761,10 @@ mod tests {
     fn doctor_timeouts_match_cli_contract() {
         assert_eq!(super::DAEMON_STATUS_TIMEOUT, Duration::from_secs(1));
         assert_eq!(super::RUNTIME_CHECK_TIMEOUT, Duration::from_secs(15));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn uds_check_runs_inside_cli_runtime() {
+        let _ = super::check_uds().await;
     }
 }

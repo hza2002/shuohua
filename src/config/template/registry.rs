@@ -72,7 +72,7 @@ const CONFIG_VALUES: &[(&str, TemplateValue)] = &[
     (
         "hotkey",
         TemplateValue::Table(&[
-            ("trigger", TemplateValue::String("f16")),
+            ("trigger", TemplateValue::String("right_option:double")),
             ("cancel", TemplateValue::String("escape")),
         ]),
     ),

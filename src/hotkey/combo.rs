@@ -7,7 +7,7 @@
 //!
 //! Three shapes are supported (all may carry the `:double` suffix):
 //!
-//! - **Pure key**: e.g. `f16`, `a`, `space`. `mods` is all `NotPresent`,
+//! - **Pure key**: e.g. `f12`, `a`, `space`. `mods` is all `NotPresent`,
 //!   `key` is `Some(keycode)`.
 //! - **Modifier + key**: e.g. `cmd+r`, `left_cmd+shift+r`. `mods` has at
 //!   least one non-`NotPresent` matcher, `key` is `Some(keycode)`.

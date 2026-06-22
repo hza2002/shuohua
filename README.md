@@ -26,13 +26,13 @@
 ## 它能做什么
 
 ```text
-全局热键  →  录音与实时 ASR  →  规则 / LLM 后处理  →  剪贴板 + 自动粘贴
-    F16          Apple / 豆包          可按应用切 profile          当前光标
+     热键      →    识别    →   处理    →   输出
+右 Option 双击 → Apple/云端 → 规则/LLM  → 自动粘贴
 ```
 
-- 全局热键开始、停止或取消录音，默认使用 `F16`。
+- 双击右 Option 开始或停止录音，按 Escape 取消；两个全局快捷键均可修改。
 - 实时显示录音、识别和后处理状态。
-- 支持 macOS 26+ 的 Apple 本地 SpeechAnalyzer，以及适用于 macOS 15+ 的豆包流式 ASR。
+- macOS 15+ 可使用豆包等云端 ASR；macOS 26+ 还可选择 Apple 本地 SpeechAnalyzer。
 - 支持规则和 OpenAI-compatible / Anthropic LLM 后处理链。
 - 可按前台应用选择不同 profile、热词、ASR 和后处理配置。
 - 提供 TUI 状态页、历史记录、配置浏览和诊断。
@@ -45,8 +45,8 @@
 |---|---|
 | 操作系统 | macOS 15 或更高版本 |
 | CPU | Apple Silicon（当前 Release 仅提供 arm64 artifact） |
-| 本地 ASR | Apple SpeechAnalyzer 需要 macOS 26+ |
-| macOS 15 至 25 | 使用豆包等云端 ASR provider |
+| 云端 ASR | macOS 15+ 可使用豆包等云端 provider |
+| Apple 本地 ASR | SpeechAnalyzer 仅在 macOS 26+ 可用 |
 | 权限 | Microphone、Accessibility |
 
 ## 安装
@@ -93,12 +93,26 @@ sudo install -m 755 target/release/shuo /usr/local/bin/shuo
 shuo config-template --out ~/.config/shuohua --lang zh-CN
 ```
 
+默认快捷键是双击右 Option（PC 键盘通常标为右 Alt），可编辑
+`~/.config/shuohua/config.toml` 修改：
+
+```toml
+[hotkey]
+# 修饰键组合
+trigger = "ctrl+shift+space"
+# 双击按键
+# trigger = "right_option:double"
+```
+
 然后选择 ASR：
 
-- **macOS 26+**：把 `~/.config/shuohua/profile/default.toml` 中的
-  `provider = "doubao"` 改为 `provider = "apple"`。
-- **macOS 15 至 25**：保留 `provider = "doubao"`，并在
-  `~/.config/shuohua/asr/doubao.toml` 填入豆包凭据。
+- **所有支持的 macOS 版本**：可保留 `provider = "doubao"`，并在
+  `~/.config/shuohua/asr/doubao.toml` 填入豆包凭据。当前 provider 使用
+  `app_key` / `access_key` 鉴权，获取方式见豆包语音
+  [旧版控制台快速入门](https://www.volcengine.com/docs/6561/163043)，协议参数见
+  [大模型流式语音识别 API](https://www.volcengine.com/docs/6561/1354869)。
+- **macOS 26+**：也可把 `~/.config/shuohua/profile/default.toml` 中的
+  `provider = "doubao"` 改为 `provider = "apple"`，使用本地 SpeechAnalyzer。
 
 模板命令不会覆盖已有文件。需要重新生成时，请指定一个空目录。
 
@@ -124,8 +138,8 @@ shuo status
 
 `shuo install` 会安装并启动当前用户的 launchd 服务。之后：
 
-1. 在任意输入框按 `F16` 开始录音。
-2. 再按一次 `F16` 停止并等待转写。
+1. 在任意输入框双击右 Option（右 Alt）开始录音。
+2. 再双击一次右 Option（右 Alt）停止并等待转写。
 3. 文本会写入剪贴板，并默认通过 `Cmd+V` 自动粘贴。
 4. 录音过程中按 `Escape` 可取消本次输入。
 5. 在终端运行 `shuo` 可打开状态、历史和配置 TUI。
@@ -166,12 +180,13 @@ shuohua 只需要两项 macOS 系统权限：
 |---|---|
 | `~/.config/shuohua/` | 主配置、profile、ASR、post、theme |
 | `~/.local/state/shuohua/history/` | 按月分片的历史记录 |
+| `~/.local/state/shuohua/audio/` | 可选保留的 FLAC 或 AAC 录音 |
 | `~/.local/state/shuohua/logs/` | 按日分片的诊断日志 |
 
 - `config.toml` 和主题变更可热重载。
 - profile、ASR 和 post 配置在下一次录音开始时读取。
 - history 以明文 JSONL 保存，请按本机敏感数据管理。
-- 录音默认不落盘，可配置为 FLAC 或 AAC。
+- 录音默认不落盘；启用 `voice.record_audio` 后写入 `audio/`，可选 FLAC 或 AAC。
 - 使用云端 ASR 或 LLM 时，相关音频或文本会发送给你配置的第三方服务。
 
 ## 排障
@@ -210,15 +225,15 @@ shuo status
 - [协议与数据格式](docs/schema.md)
 - [排障](docs/debug.md)
 - [变更历史](CHANGELOG.md)
-- [发版](RELEASE.md)
+- [发版](docs/release.md)
 
 ## 开发
 
 ```bash
-cargo fmt
-cargo check
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo fmt                                  # 格式化 Rust 源码
+cargo check                                # 快速编译检查
+cargo test                                 # 运行全部测试
+cargo clippy --all-targets -- -D warnings  # 静态检查，warning 视为错误
 ```
 
 真实的 macOS 权限、录音和自动粘贴体验需要在本机手动验证。

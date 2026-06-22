@@ -26,13 +26,13 @@ Press a global hotkey, speak, transcribe in real time, optionally refine the tex
 ## What it does
 
 ```text
-Global hotkey  →  Recording and streaming ASR  →  Rules / LLM post-processing  →  Clipboard + paste
-     F16               Apple / Doubao                 Per-app profiles               Active cursor
+    Hotkey      →     ASR     →  Process   →   Output
+Right Option x2 → Apple/cloud → Rules/LLM  → Auto-paste
 ```
 
-- Start, stop, or cancel recording with global hotkeys. The default trigger is `F16`.
+- Double-tap Right Option to start or stop recording, and press Escape to cancel; both global hotkeys are configurable.
 - Show live recording, transcription, and post-processing status.
-- Use local Apple SpeechAnalyzer on macOS 26+, or Doubao streaming ASR on macOS 15+.
+- Use cloud ASR providers such as Doubao on macOS 15+, with Apple SpeechAnalyzer available locally on macOS 26+.
 - Build post-processing chains from rules and OpenAI-compatible or Anthropic LLMs.
 - Select profiles, hotwords, ASR providers, and processing chains by active app.
 - Inspect status, history, configuration, and diagnostics in a terminal UI.
@@ -45,8 +45,8 @@ Global hotkey  →  Recording and streaming ASR  →  Rules / LLM post-processin
 |---|---|
 | Operating system | macOS 15 or later |
 | CPU | Apple Silicon; current releases provide arm64 artifacts only |
-| Local ASR | Apple SpeechAnalyzer requires macOS 26+ |
-| macOS 15 through 25 | Use a cloud ASR provider such as Doubao |
+| Cloud ASR | Providers such as Doubao work on macOS 15+ |
+| Apple local ASR | SpeechAnalyzer is available only on macOS 26+ |
 | Permissions | Microphone and Accessibility |
 
 ## Installation
@@ -93,12 +93,26 @@ Configuration lives in `~/.config/shuohua/`. Export the complete commented templ
 shuo config-template --out ~/.config/shuohua --lang en-US
 ```
 
+The default hotkey is a double-tap of Right Option, usually labeled Right Alt
+on PC keyboards. Edit `~/.config/shuohua/config.toml` to change it:
+
+```toml
+[hotkey]
+# Modifier combination
+trigger = "ctrl+shift+space"
+# Double-tap
+# trigger = "right_option:double"
+```
+
 Then select an ASR provider:
 
-- **macOS 26+**: change `provider = "doubao"` to `provider = "apple"` in
-  `~/.config/shuohua/profile/default.toml`.
-- **macOS 15 through 25**: keep `provider = "doubao"` and add your credentials
-  to `~/.config/shuohua/asr/doubao.toml`.
+- **All supported macOS versions**: keep `provider = "doubao"` and add credentials
+  to `~/.config/shuohua/asr/doubao.toml`. The current provider authenticates
+  with `app_key` and `access_key`; see the official Doubao Speech
+  [legacy console quick start](https://www.volcengine.com/docs/6561/163043) for credentials and the
+  [streaming speech recognition API](https://www.volcengine.com/docs/6561/1354869).
+- **macOS 26+**: optionally change `provider = "doubao"` to `provider = "apple"`
+  in `~/.config/shuohua/profile/default.toml` to use local SpeechAnalyzer.
 
 The template command never overwrites existing files. Use an empty directory if you need to export them again.
 
@@ -123,8 +137,8 @@ shuo status
 
 `shuo install` installs and starts a per-user launchd service. Then:
 
-1. Focus any text field and press `F16` to start recording.
-2. Press `F16` again to stop and finish transcription.
+1. Focus any text field and double-tap Right Option (Right Alt) to start recording.
+2. Double-tap Right Option (Right Alt) again to stop and finish transcription.
 3. The text is copied to the clipboard and pasted with `Cmd+V` by default.
 4. Press `Escape` while recording to cancel the current input.
 5. Run `shuo` in a terminal to open the status, history, and configuration TUI.
@@ -164,12 +178,13 @@ See the [CLI documentation](docs/cli.md) for the complete behavior. The develope
 |---|---|
 | `~/.config/shuohua/` | Main configuration, profiles, ASR, post-processing, and themes |
 | `~/.local/state/shuohua/history/` | Monthly history files |
+| `~/.local/state/shuohua/audio/` | Optional retained FLAC or AAC recordings |
 | `~/.local/state/shuohua/logs/` | Daily diagnostic logs |
 
 - Changes to `config.toml` and themes can be hot-reloaded.
 - Profile, ASR, and post-processing files are read at the start of the next recording.
 - History is stored as plaintext JSONL and should be treated as sensitive local data.
-- Audio is not retained by default; optional FLAC and AAC retention is available.
+- Audio is not retained by default. Enabling `voice.record_audio` writes FLAC or AAC files under `audio/`.
 - Cloud ASR and LLM providers receive the audio or text required by the services you configure.
 
 ## Troubleshooting
@@ -207,15 +222,15 @@ See the [troubleshooting guide](docs/debug.md) for more steps. If the problem is
 - [Protocols and data formats](docs/schema.md)
 - [Troubleshooting](docs/debug.md)
 - [Changelog](CHANGELOG.md)
-- [Release process](RELEASE.md)
+- [Release process](docs/release.md)
 
 ## Development
 
 ```bash
-cargo fmt
-cargo check
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo fmt                                  # Format Rust source files
+cargo check                                # Run a fast compilation check
+cargo test                                 # Run the complete test suite
+cargo clippy --all-targets -- -D warnings  # Run static checks; reject warnings
 ```
 
 Real macOS permission, recording, and automatic-paste behavior must be verified manually on a Mac.

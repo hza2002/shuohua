@@ -16,7 +16,7 @@
 
 ## 实现要点
 
-- **监听目录而非文件**（不变量 #4）：编辑器保存常 atomic rename 换 inode，监听文件本身丢事件。
+- **监听目录而非文件**：编辑器保存常 atomic rename 换 inode，监听文件本身丢事件。
 - 自动 reload 只把 `config.toml` + `theme/*.toml` 当触发源；`profile/*.toml`/`asr/*.toml`/`post/**` 不触发 broadcast，下次录音开始同步读最新。
 - **150ms debounce**（一次保存常触发 2-3 事件）。
 - **parse 失败保留旧值**：只打日志 `config reload failed; keeping previous config`，不发空值。

@@ -1,6 +1,6 @@
 //! CGEventTap → pipe bridge + foreground-app suppress.
 //!
-//! docs/modules/hotkey.md（依赖红线 + 不变量 8）: the tap runs in `Default` mode so
+//! docs/modules/hotkey.md（依赖红线）: the tap runs in `Default` mode so
 //! the callback can `CallbackResult::Drop` events (returns NULL to the OS).
 //! Every event (KeyDown / KeyUp / FlagsChanged) is encoded into the 4-byte
 //! `RawEvent` wire format and pushed to the pipe so the tokio-side

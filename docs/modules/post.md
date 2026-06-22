@@ -32,7 +32,7 @@ toggle ON 时取一次 `frontmost_bundle_id`，按 `config.toml` 的 `[profile]`
 
 ## 本模块持有的不变量
 
-- **#9** `frontmostApplication` 在 toggle OFF 瞬间取一次缓存，**不在 processor 内反复取**——pipeline 跑期间用户可能切走，会拿到错的 app。
+- `frontmostApplication` 在 toggle OFF 瞬间取一次缓存，**不在 processor 内反复取**——pipeline 跑期间用户可能切走，会拿到错的 app。
 
 ## 不做的事
 

@@ -37,10 +37,10 @@ voice 只负责把一次 recording 的 capture/ASR/post 结果翻译成 `History
 
 ## 本模块持有的不变量
 
-- **#3 停止必 drain residual + `stop_delay_ms`**（默认值见 `src/config/main.rs`），否则尾字被切。
-- **#11 Idle 录音资源按模式分**：Continuous 未激活不持 cpal stream（避免 always-recording / 空闲 CPU 开销）；VadPause 的 Idle 继续持有并读 cpal stream 做 VAD/pre-roll，但 **Idle PCM 不发 provider**。
-- **#12 麦克风可用性靠运行时 watchdog，不靠预检**：`recorder::start()` 同步段只校验 cpal build/play；真正判定是主 select 里一个 duration 首帧 watchdog（PCM 全 ≤ `MIN_NONZERO_AMPLITUDE` 判设备不可用，当前值见 `engine.rs`）。阈值不进配置——超过这个窗口几乎一定不是正常设备状态。
-- **#13 Error/Timeout 路径不上屏不写剪贴板**：任意 terminal error → 跳过 post → 跳过 dispatch → history 写失败状态并保留累积 segments。一般 error 写 `status=Error`；ASR finalize 超时写 `status=Timeout` + `error.kind=asr_timeout`。无语音内容的早期失败（启动前失败、ASR 初连失败、watchdog 无音频）只走 overlay/UDS error/log，不写 history。半成品上屏是 bug。
+- **停止必 drain residual + `stop_delay_ms`**（默认值见 `src/config/main.rs`），否则尾字被切。
+- **Idle 录音资源按模式分**：Continuous 未激活不持 cpal stream（避免 always-recording / 空闲 CPU 开销）；VadPause 的 Idle 继续持有并读 cpal stream 做 VAD/pre-roll，但 **Idle PCM 不发 provider**。
+- **麦克风可用性靠运行时 watchdog，不靠预检**：`recorder::start()` 同步段只校验 cpal build/play；真正判定是主 select 里一个 duration 首帧 watchdog（PCM 全 ≤ `MIN_NONZERO_AMPLITUDE` 判设备不可用，当前值见 `engine.rs`）。阈值不进配置——超过这个窗口几乎一定不是正常设备状态。
+- **Error/Timeout 路径不上屏不写剪贴板**：任意 terminal error → 跳过 post → 跳过 dispatch → history 写失败状态并保留累积 segments。一般 error 写 `status=Error`；ASR finalize 超时写 `status=Timeout` + `error.kind=asr_timeout`。无语音内容的早期失败（启动前失败、ASR 初连失败、watchdog 无音频）只走 overlay/UDS error/log，不写 history。半成品上屏是 bug。
 
 ## 终态与 history 触发
 

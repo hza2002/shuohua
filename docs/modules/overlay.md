@@ -29,5 +29,5 @@ command/model/layout 平台无关；`macos/` 是唯一 renderer（`view.rs` NSPa
 
 ## 本模块持有的不变量
 
-- **#5** `NSGlassEffectView` 必须作子视图，不作 contentView（否则 AppKit 加 legibility blur）。
-- **#8** AppKit 主线程与 tokio runtime 用 `tokio::sync::mpsc` 通信，**绝不在 AppKit callback 里 block tokio future**（用 `try_recv` 或 dispatch 到主线程）。
+- `NSGlassEffectView` 必须作子视图，不作 contentView（否则 AppKit 加 legibility blur）。
+- AppKit 主线程与 tokio runtime 用 `tokio::sync::mpsc` 通信，**绝不在 AppKit callback 里 block tokio future**（用 `try_recv` 或 dispatch 到主线程）。

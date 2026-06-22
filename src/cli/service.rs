@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
@@ -88,38 +89,39 @@ pub fn start() -> Result<()> {
     Ok(())
 }
 
-pub fn stop() -> Result<()> {
+pub async fn stop() -> Result<()> {
     stop_with(request_daemon_shutdown, wait_for_pid_exit, || {
         println!(
             "{}",
             crate::i18n::tr("cli.service.stopped", &[("label", LABEL.to_string())])
         );
     })
+    .await
 }
 
-fn stop_with(
-    request_shutdown: impl FnOnce() -> Result<libc::pid_t>,
+async fn stop_with<F>(
+    request_shutdown: impl FnOnce() -> F,
     wait_for_exit: impl FnOnce(libc::pid_t) -> Result<()>,
     print_stopped: impl FnOnce(),
-) -> Result<()> {
-    let pid = request_shutdown()?;
+) -> Result<()>
+where
+    F: Future<Output = Result<libc::pid_t>>,
+{
+    let pid = request_shutdown().await?;
     wait_for_exit(pid)?;
     print_stopped();
     Ok(())
 }
 
-fn request_daemon_shutdown() -> Result<libc::pid_t> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("create stop runtime")?;
-    rt.block_on(tokio::time::timeout(DAEMON_STATUS_TIMEOUT, async {
+async fn request_daemon_shutdown() -> Result<libc::pid_t> {
+    tokio::time::timeout(DAEMON_STATUS_TIMEOUT, async {
         let mut client =
             crate::ipc::client::IpcClient::connect(crate::ipc::server::default_socket_path())
                 .await?;
         client.send(&Command::Shutdown).await?;
         parse_shutdown_reply(client.recv().await?)
-    }))
+    })
+    .await
     .context("shutdown IPC timed out")?
 }
 
@@ -194,24 +196,20 @@ fn process_exists_from_kill_result(result: libc::c_int, errno: libc::c_int) -> R
     }
 }
 
-pub fn restart() -> Result<()> {
-    restart_with(stop, start)
+pub async fn restart() -> Result<()> {
+    restart_with(stop, start).await
 }
 
-fn restart_with(
-    stop: impl FnOnce() -> Result<()>,
-    start: impl FnOnce() -> Result<()>,
-) -> Result<()> {
-    stop()?;
+async fn restart_with<F>(stop: impl FnOnce() -> F, start: impl FnOnce() -> Result<()>) -> Result<()>
+where
+    F: Future<Output = Result<()>>,
+{
+    stop().await?;
     start()
 }
 
-pub fn status() -> Result<()> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("create status runtime")?;
-    match rt.block_on(tokio::time::timeout(DAEMON_STATUS_TIMEOUT, uds_status())) {
+pub async fn status() -> Result<()> {
+    match tokio::time::timeout(DAEMON_STATUS_TIMEOUT, uds_status()).await {
         Ok(Ok(Some(line))) => {
             println!("{line}");
             return Ok(());
@@ -546,12 +544,12 @@ mod tests {
         assert_eq!(probes.get(), 2);
     }
 
-    #[test]
-    fn stop_prints_only_after_pid_exit_is_confirmed() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn stop_prints_only_after_pid_exit_is_confirmed() {
         let calls = RefCell::new(Vec::new());
 
         super::stop_with(
-            || {
+            || async {
                 calls.borrow_mut().push("request");
                 Ok(42)
             },
@@ -562,34 +560,36 @@ mod tests {
             },
             || calls.borrow_mut().push("print"),
         )
+        .await
         .unwrap();
 
         assert_eq!(*calls.borrow(), ["request", "wait", "print"]);
     }
 
-    #[test]
-    fn restart_propagates_stop_error_without_starting() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn restart_propagates_stop_error_without_starting() {
         let starts = Cell::new(0);
 
         let error = super::restart_with(
-            || Err(anyhow!("stop failed")),
+            || async { Err(anyhow!("stop failed")) },
             || {
                 starts.set(starts.get() + 1);
                 Ok(())
             },
         )
+        .await
         .unwrap_err();
 
         assert_eq!(error.to_string(), "stop failed");
         assert_eq!(starts.get(), 0);
     }
 
-    #[test]
-    fn restart_starts_only_after_stop_completes() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn restart_starts_only_after_stop_completes() {
         let calls = RefCell::new(Vec::new());
 
         super::restart_with(
-            || {
+            || async {
                 calls.borrow_mut().push("stop");
                 Ok(())
             },
@@ -598,6 +598,7 @@ mod tests {
                 Ok(())
             },
         )
+        .await
         .unwrap();
 
         assert_eq!(*calls.borrow(), ["stop", "start"]);

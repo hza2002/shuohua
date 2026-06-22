@@ -12,7 +12,7 @@
 | 线程 | 职责 |
 |---|---|
 | 主线程（AppKit/CFRunLoop） | NSPanel + glass 渲染；`NSApplication.run()` |
-| 专用 OS 线程（CFRunLoop） | CGEventTap 热键拦截（不让出，不变量 #1） |
+| 专用 OS 线程（CFRunLoop） | CGEventTap 热键拦截（callback 不让出） |
 | tokio multi-thread runtime | 录音、VAD、ASR、post、UDS server、history、reload |
 
 | 进程 | 何时跑 | 职责 |

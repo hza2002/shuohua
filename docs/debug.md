@@ -16,9 +16,9 @@
 
 ## 常见定位捷径
 
-- 尾字被切 → voice 不变量 #3（drain + stop_delay）。
-- 浮层材质不对/不显示 → overlay 不变量 #5、macOS 26 fallback。
-- 前台 App modifier 卡住 → hotkey 不变量 #7（down/up 配对吞）。
-- 录音无声但不报错 → voice 不变量 #12（1s 首帧 watchdog）。
-- 半成品上屏/该上没上 → voice 不变量 #13（error/timeout 不 dispatch）。
+- 尾字被切 → voice 的 stop drain + `stop_delay_ms`。
+- 浮层材质不对/不显示 → overlay 的 Glass 视图层级和 macOS 26 fallback。
+- 前台 App modifier 卡住 → hotkey 的 down/up 配对吞。
+- 录音无声但不报错 → voice 的首帧 watchdog。
+- 半成品上屏/该上没上 → voice 的 Error/Timeout 不 dispatch 约束。
 - 合盖/换设备后异常 → 麦克风 watchdog；看 trace 首帧。

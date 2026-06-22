@@ -9,6 +9,7 @@
 | 要改 | 读 |
 |---|---|
 | 总体目标、阶段边界、文档维护规则 | [overview.md](overview.md) |
+| macOS 回归基线、平台边界审计 | [macos-baseline.md](macos-baseline.md) |
 | GUI App / Tauri client | [gui.md](gui.md) |
 | 三端原生 overlay renderer | [overlay.md](overlay.md) |
 | 一份配置和 theme 如何跨端工作 | [config-theme.md](config-theme.md) |

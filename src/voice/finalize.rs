@@ -7,7 +7,7 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 
 use crate::asr::types::{AsrEvent, AsrSession};
 use crate::history::HistoryError;
@@ -15,7 +15,7 @@ use crate::overlay::{OverlayCmd, OverlayHandle};
 use crate::state::StateStore;
 use crate::voice::capture::SegmentCapture;
 use crate::voice::observer::{observe_asr_event, RecordingObserver};
-use crate::voice::SessionControl;
+use crate::voice::CancelSignal;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FinalizeOutcome {
@@ -27,7 +27,7 @@ pub(crate) enum FinalizeOutcome {
 ///
 /// 返回值：
 ///   - `Ok(Done)`：收到 `Done`。
-///   - `Ok(Canceled)`：等待期间收到 `SessionControl::Cancel`；调用方负责清理。
+///   - `Ok(Canceled)`：等待期间 `cancel` token 被取消；调用方负责清理。
 ///   - `Err(asr_send_last)`：`send_pcm(&[], true)` 失败。
 ///   - `Err(asr_timeout)`：`finalize_timeout_ms` 内未收到 `Done`。
 ///   - `Err(asr_stream_closed)`：provider 未发 `Done` 就关闭事件通道。
@@ -40,7 +40,7 @@ pub(crate) async fn finalize_provider_session(
     session_final_text: &mut Option<String>,
     pending_overlay_segments: &mut usize,
     finalize_timeout_ms: u64,
-    control_rx: &mut watch::Receiver<SessionControl>,
+    cancel: CancelSignal<'_>,
     terminal_error: &mut Option<HistoryError>,
     trace: &mut RecordingObserver,
     recording_started_instant: Instant,
@@ -60,10 +60,8 @@ pub(crate) async fn finalize_provider_session(
     loop {
         tokio::select! {
             biased;
-            _ = control_rx.changed() => {
-                if matches!(*control_rx.borrow_and_update(), SessionControl::Cancel) {
-                    return Ok(FinalizeOutcome::Canceled);
-                }
+            _ = cancel.cancelled() => {
+                return Ok(FinalizeOutcome::Canceled);
             }
             _ = &mut timeout => {
                 return Err(HistoryError {
@@ -149,6 +147,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use std::sync::{Arc, Mutex};
+    use tokio_util::sync::CancellationToken;
 
     use crate::asr::types::AsrError;
     use crate::voice::observer::TraceStart;
@@ -196,7 +195,7 @@ mod tests {
         let mut pending_segments = Vec::new();
         let mut session_final_text = None;
         let mut pending_overlay_segments = 0;
-        let (_control_tx, mut control_rx) = watch::channel(SessionControl::Idle);
+        let cancel = CancellationToken::new();
         let mut terminal_error = None;
         let started = Instant::now();
         let mut trace = RecordingObserver::start(TraceStart {
@@ -214,7 +213,7 @@ mod tests {
             &mut session_final_text,
             &mut pending_overlay_segments,
             100,
-            &mut control_rx,
+            CancelSignal::new(&cancel),
             &mut terminal_error,
             &mut trace,
             started,
@@ -242,7 +241,7 @@ mod tests {
         let mut pending_segments = Vec::new();
         let mut session_final_text = None;
         let mut pending_overlay_segments = 0;
-        let (_control_tx, mut control_rx) = watch::channel(SessionControl::Idle);
+        let cancel = CancellationToken::new();
         let mut terminal_error = None;
         let started = Instant::now();
         let mut trace = RecordingObserver::start(TraceStart {
@@ -260,7 +259,7 @@ mod tests {
             &mut session_final_text,
             &mut pending_overlay_segments,
             100,
-            &mut control_rx,
+            CancelSignal::new(&cancel),
             &mut terminal_error,
             &mut trace,
             started,
@@ -286,7 +285,7 @@ mod tests {
         let mut pending_segments = Vec::new();
         let mut session_final_text = None;
         let mut pending_overlay_segments = 0;
-        let (_control_tx, mut control_rx) = watch::channel(SessionControl::Idle);
+        let cancel = CancellationToken::new();
         let mut terminal_error = None;
         let started = Instant::now();
         let mut trace = RecordingObserver::start(TraceStart {
@@ -304,7 +303,7 @@ mod tests {
             &mut session_final_text,
             &mut pending_overlay_segments,
             100,
-            &mut control_rx,
+            CancelSignal::new(&cancel),
             &mut terminal_error,
             &mut trace,
             started,

@@ -9,7 +9,6 @@ use crate::voice::history_build::{build_record, HistoryInput};
 use crate::voice::observer::observe_finish;
 use crate::voice::post_dispatch::dispatch_with_post_chain;
 use crate::voice::SessionControl;
-use tokio::sync::watch;
 
 pub use crate::voice::engine::SessionParams;
 
@@ -18,19 +17,19 @@ const NOTICE_TTL_MS: u32 = 3_000;
 pub async fn run_recording(
     provider: &dyn AsrProvider,
     params: SessionParams,
-    control_rx: watch::Receiver<SessionControl>,
+    control: SessionControl,
     history: HistoryService,
 ) {
-    let mut completion_control_rx = control_rx.clone();
-    let Some(outcome) = engine::run(provider, params, control_rx).await else {
+    let completion_control = control.clone();
+    let Some(outcome) = engine::run(provider, params, control).await else {
         return;
     };
-    complete_recording(outcome, &mut completion_control_rx, history).await;
+    complete_recording(outcome, &completion_control, history).await;
 }
 
 async fn complete_recording(
     outcome: EngineOutcome,
-    control_rx: &mut watch::Receiver<SessionControl>,
+    control: &SessionControl,
     history: HistoryService,
 ) {
     let EngineOutcome {
@@ -98,7 +97,7 @@ async fn complete_recording(
             &params.post_chain,
             params.post_timeout_ms,
             params.overlay.as_ref(),
-            control_rx,
+            control.cancel_signal(),
         )
         .await;
         (
@@ -294,13 +293,13 @@ mod tests {
         let (_snapshot, mut state_rx) = state.subscribe_with_snapshot();
         let (overlay, mut overlay_rx) = OverlayHandle::channel();
         let outcome = cancel_outcome(Vec::new(), state.clone(), overlay);
-        let (_control_tx, mut control_rx) = watch::channel(SessionControl::Idle);
+        let control = SessionControl::new();
         let history = HistoryService::with_dir(
             std::env::temp_dir().join(format!("shuohua-voice-history-{}", ulid::Ulid::new())),
         );
         let mut history_rx = history.subscribe();
 
-        complete_recording(outcome, &mut control_rx, history).await;
+        complete_recording(outcome, &control, history).await;
 
         let mut events = Vec::new();
         while let Ok(event) = state_rx.try_recv() {

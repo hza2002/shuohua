@@ -8,8 +8,8 @@ use std::time::Duration;
 use crate::history::{HistoryError, HistoryStatus, PipelineStepHistory};
 use crate::overlay::{OverlayCmd, OverlayHandle, OverlayState};
 use crate::post::{self, PipelineStepStatus, PipelineText, PostChain};
-use crate::voice::{dispatch, SessionControl};
-use tokio::sync::watch;
+use crate::voice::dispatch;
+use crate::voice::CancelSignal;
 
 /// 非阻断 warn 在 meta 行上显示多久。跟 overlay 的 ERROR_TTL_MS 对齐。
 const NOTICE_TTL_MS: u32 = 3000;
@@ -28,7 +28,7 @@ pub(crate) async fn dispatch_with_post_chain(
     post_chain: &PostChain,
     post_timeout_ms: u64,
     overlay: Option<&OverlayHandle>,
-    control_rx: &mut watch::Receiver<SessionControl>,
+    cancel: CancelSignal<'_>,
 ) -> DispatchOutcome {
     let raw_text: String = segment_texts.concat();
     if raw_text.is_empty() {
@@ -55,11 +55,8 @@ pub(crate) async fn dispatch_with_post_chain(
     let (out, steps) = tokio::select! {
         biased;
         result = &mut post => result,
-        canceled = wait_for_cancel(control_rx) => {
-            if canceled {
-                return canceled_outcome(raw_text);
-            }
-            post.await
+        _ = cancel.cancelled() => {
+            return canceled_outcome(raw_text);
         }
     };
     for step in &steps {
@@ -84,7 +81,7 @@ pub(crate) async fn dispatch_with_post_chain(
     let dispatched = out.text.clone();
     let pipeline: Vec<PipelineStepHistory> =
         steps.into_iter().map(PipelineStepHistory::from).collect();
-    if matches!(*control_rx.borrow(), SessionControl::Cancel) {
+    if cancel.is_cancelled() {
         return canceled_outcome(raw_text);
     }
     if let Err(e) = dispatch::dispatch(&out.text, auto_paste) {
@@ -116,23 +113,13 @@ fn canceled_outcome(final_text: String) -> DispatchOutcome {
     }
 }
 
-async fn wait_for_cancel(control_rx: &mut watch::Receiver<SessionControl>) -> bool {
-    loop {
-        if matches!(*control_rx.borrow_and_update(), SessionControl::Cancel) {
-            return true;
-        }
-        if control_rx.changed().await.is_err() {
-            return false;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
     use std::sync::Arc;
-    use tokio::sync::{watch, Notify};
+    use tokio::sync::Notify;
+    use tokio_util::sync::CancellationToken;
 
     use crate::post::{PostError, PostProcessor};
     struct BlockingProcessor {
@@ -156,7 +143,7 @@ mod tests {
     }
 
     struct CancelOnReturnProcessor {
-        control_tx: watch::Sender<SessionControl>,
+        cancel: CancellationToken,
     }
 
     #[async_trait]
@@ -170,7 +157,7 @@ mod tests {
             input: PipelineText,
             _ctx: &post::AppContext,
         ) -> Result<PipelineText, PostError> {
-            self.control_tx.send(SessionControl::Cancel).unwrap();
+            self.cancel.cancel();
             Ok(PipelineText {
                 text: String::new(),
                 ..input
@@ -187,7 +174,7 @@ mod tests {
                 started: Arc::clone(&started),
             })],
         };
-        let (control_tx, mut control_rx) = watch::channel(SessionControl::Idle);
+        let cancel = CancellationToken::new();
         let segment_texts = vec!["hello".into()];
         let app_context = post::AppContext::default();
         let future = dispatch_with_post_chain(
@@ -197,7 +184,7 @@ mod tests {
             &post_chain,
             60_000,
             None,
-            &mut control_rx,
+            CancelSignal::new(&cancel),
         );
         tokio::pin!(future);
 
@@ -205,7 +192,7 @@ mod tests {
             _ = started.notified() => {}
             outcome = &mut future => panic!("post completed before cancel: {:?}", outcome.status),
         }
-        control_tx.send(SessionControl::Cancel).unwrap();
+        cancel.cancel();
 
         let outcome = tokio::time::timeout(Duration::from_millis(100), future)
             .await
@@ -218,10 +205,12 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_after_post_completion_is_checked_before_dispatch() {
-        let (control_tx, mut control_rx) = watch::channel(SessionControl::Idle);
+        let cancel = CancellationToken::new();
         let post_chain = PostChain {
             name: "test".into(),
-            processors: vec![Box::new(CancelOnReturnProcessor { control_tx })],
+            processors: vec![Box::new(CancelOnReturnProcessor {
+                cancel: cancel.clone(),
+            })],
         };
         let segment_texts = vec!["hello".into()];
         let outcome = dispatch_with_post_chain(
@@ -231,7 +220,7 @@ mod tests {
             &post_chain,
             1_000,
             None,
-            &mut control_rx,
+            CancelSignal::new(&cancel),
         )
         .await;
 
@@ -243,7 +232,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_asr_text_is_not_user_cancel() {
-        let (_control_tx, mut control_rx) = watch::channel(SessionControl::Idle);
+        let cancel = CancellationToken::new();
         let post_chain = PostChain {
             name: "test".into(),
             processors: Vec::new(),
@@ -256,7 +245,7 @@ mod tests {
             &post_chain,
             1_000,
             None,
-            &mut control_rx,
+            CancelSignal::new(&cancel),
         )
         .await;
 

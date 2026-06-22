@@ -2,15 +2,12 @@ use crate::voice::SessionControl;
 use std::time::Duration;
 
 pub(super) struct ActiveSession {
-    control: tokio::sync::watch::Sender<SessionControl>,
+    control: SessionControl,
     join: tokio::task::JoinHandle<()>,
 }
 
 impl ActiveSession {
-    pub(super) fn new(
-        control: tokio::sync::watch::Sender<SessionControl>,
-        join: tokio::task::JoinHandle<()>,
-    ) -> Self {
+    pub(super) fn new(control: SessionControl, join: tokio::task::JoinHandle<()>) -> Self {
         Self { control, join }
     }
 
@@ -19,17 +16,11 @@ impl ActiveSession {
     }
 
     pub(super) fn cancel(&self) {
-        let _ = self.control.send(SessionControl::Cancel);
+        self.control.request_cancel();
     }
 
     pub(super) fn stop(&self) {
-        self.control.send_if_modified(|control| {
-            if matches!(*control, SessionControl::Cancel | SessionControl::Stop) {
-                return false;
-            }
-            *control = SessionControl::Stop;
-            true
-        });
+        self.control.request_stop();
     }
 
     pub(super) async fn stop_and_join(&mut self, timeout: Duration) -> ShutdownStopResult {
@@ -41,6 +32,16 @@ impl ActiveSession {
                 self.join.abort();
                 ShutdownStopResult::TimedOut
             }
+        }
+    }
+}
+
+impl Drop for ActiveSession {
+    fn drop(&mut self) {
+        // 守网：会话被异常丢弃（既未 stop 也未 cancel）时请求 stop，让 engine 收尾。
+        // 复刻旧 watch sender-drop → stop 语义。正常路径已显式 stop/cancel，此处 no-op。
+        if !self.control.is_stop_requested() && !self.control.is_cancelled() {
+            self.control.request_stop();
         }
     }
 }
@@ -62,29 +63,32 @@ mod tests {
     use crate::post::{self, PipelineText, PostChain, PostError, PostProcessor};
     use crate::voice::post_dispatch::dispatch_with_post_chain;
 
-    fn session() -> (ActiveSession, tokio::sync::watch::Receiver<SessionControl>) {
-        let (control_tx, control_rx) = tokio::sync::watch::channel(SessionControl::Idle);
+    fn session() -> (ActiveSession, SessionControl) {
+        let control = SessionControl::new();
         let join = tokio::spawn(std::future::pending());
-        (ActiveSession::new(control_tx, join), control_rx)
+        (ActiveSession::new(control.clone(), join), control)
     }
 
     #[tokio::test]
-    async fn stop_does_not_overwrite_cancel() {
-        let (session, control_rx) = session();
+    async fn stop_after_cancel_stays_canceled() {
+        // 两个独立的终态闩可以同时置位；观察方一律先查 cancel，所以 stop 不会把语义
+        // 降级回 Stop —— cancel 永远优先。
+        let (session, control) = session();
 
         session.cancel();
         session.stop();
 
-        assert_eq!(*control_rx.borrow(), SessionControl::Cancel);
+        assert!(control.is_cancelled());
     }
 
     #[tokio::test]
-    async fn stop_from_idle_keeps_stop_semantics() {
-        let (session, control_rx) = session();
+    async fn stop_requests_stop_signal() {
+        let (session, control) = session();
 
         session.stop();
 
-        assert_eq!(*control_rx.borrow(), SessionControl::Stop);
+        assert!(control.is_stop_requested());
+        assert!(!control.is_cancelled());
     }
 
     struct BlockingProcessor {
@@ -116,7 +120,7 @@ mod tests {
                 started: Arc::clone(&started),
             })],
         };
-        let (session, mut control_rx) = session();
+        let (session, control) = session();
         let segment_texts = vec!["hello".into()];
         let app_context = post::AppContext::default();
         let future = dispatch_with_post_chain(
@@ -126,7 +130,7 @@ mod tests {
             &post_chain,
             60_000,
             None,
-            &mut control_rx,
+            control.cancel_signal(),
         );
         tokio::pin!(future);
 

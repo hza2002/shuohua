@@ -1,6 +1,6 @@
 # voice — 录音生命周期
 
-**TL;DR**：`finish` 收尾、`engine` 运行期，两层不可互相反向依赖；控制信号走单一 `watch::Receiver<SessionControl>` + 显式 bool，别加第二条取消通道。
+**TL;DR**：`finish` 收尾、`engine` 运行期，两层不可互相反向依赖；控制信号是 `SessionControl`——两个 level-triggered 终态闩（`stop` / `cancel`，`tokio_util::CancellationToken`），按消费模式分发，别退回 watch 边沿语义。
 
 > **何时读**：改录音状态机、VAD 暂停/多段 session、engine/finish 边界、终止/取消/超时处理。
 > **不在这里**：UDS/history 字段格式见 [schema](../schema.md)；ASR provider 契约见 [asr](asr.md)。
@@ -21,7 +21,12 @@ voice 只负责把一次 recording 的 capture/ASR/post 结果翻译成 `History
 
 ## 为什么这么写（别"简化"掉）
 
-- **控制信号走单一 `watch::Receiver<SessionControl>`**（`Idle` / `Stop` / `Cancel`）：engine 在 `tokio::select!` 里和 PCM、ASR event 一起轮询，运行态用显式 bool（`active` / `stop_requested` / `cancel_requested`）推进。别再开第二条取消通道。
+- **控制信号 = `SessionControl`，两个 level-triggered 终态闩**（`stop` / `cancel`，各是一个 `CancellationToken`），按消费模式分发，**别退回 `watch` + `borrow_and_update` 的边沿语义**：
+  - `cancel` 广播给所有阶段（engine / finalize / drain / post-dispatch），但下游只拿 `cancel_signal()` 返回的只读 `CancelSignal` 视图——只能 await/查询，**既看不到 stop、也无法主动触发 cancel**（触发权留在持 `SessionControl` 的 daemon 侧）。这把「stop 引擎私有、下游对 cancel 只读」做成类型保证而非约定。
+  - `stop` 只有 engine 的 `'active` / `'idle` 边界关心；finalize / drain / post **拿不到它**，从结构上杜绝把 Stop 边沿吞掉（这正是「按 trigger 停不下来、只能 ESC」卡死的根因——见 git history `fix/stop-signal-wedge`）。
+  - 闩单调（仅 未置位→置位），**cancel 优先于 stop**：每个 `select!` 把 `cancelled()` 排在 `stopped()` 前（`biased`），电平复核也先查 cancel。
+  - **正确性永远来自电平**（`is_stop_requested()` / `is_cancelled()` / `cancelled()` / `stopped()`），`select!` 的 await 只当唤醒。典型：finalize 只观察 cancel，所以进 Idle 前 engine 必须电平复核一次 stop，否则 finalize 窗口内发来的 stop 会被漏掉。运行态仍用显式 bool（`active` / `stop_requested` / `cancel_requested`）推进。别再开第三条信号或回退到一次性边沿。
+  - **terminal latch 只适合「单向、一次性、不可回退」的 stop/cancel。** 未来若加 *可回退* 的控制（如 pause/resume、restart session），那是另一种语义，需要另配原语（如 level-read 的 `watch<bool>` 或 `Notify` 对），**不要**硬塞成第三个 `CancellationToken`——token 无法 un-cancel。
 - **provider 主动 Done 用 `provider_done` 标志收口**：provider 自发 `AsrEvent::Done` 后 engine 不再发 `send_pcm(is_last=true)`、不再等第二个 Done，否则 VadPause 会把自发结束误判成 `asr_timeout`。
 - **session 收口集中在 `finalize.rs`**：`Final` / `Segment` / `Done` / timeout / cancel 归一成 `FinalizeOutcome`；结果收齐到 `pending_segments` / `session_final_text`，`pending_overlay_segments` 计数避免重复推 overlay。别把收口逻辑散到 engine 主循环里。
 

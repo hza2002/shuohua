@@ -38,7 +38,18 @@ stale endpoint 清理仍只允许 daemon 持 lock 的启动路径执行。
 
 Phase 3 不抽 daemon lock。现有启动顺序已经先持有 `DaemonLock` 再 bind IPC endpoint；因此
 UDS stale cleanup 可暂时留在 `ipc::transport::bind_default()` 内，但调用方必须仍只从 daemon
-启动路径进入。Phase 4 再把 lock、process probe 和 service manager 一起平台化。
+启动路径进入。
+
+Phase 4a 先抽两个低风险 facade：
+
+- `platform::lifecycle::acquire_daemon_lock()`：保持 macOS 当前 lock file + `flock` 语义。
+- `platform::lifecycle::process_exists(pid)`：保持 macOS 当前 `kill(pid, 0)` 语义，
+  `EPERM` 视为进程仍存在，`ESRCH` 视为已退出。
+
+`daemon::process` 和 `cli::service::macos` 不再直接依赖 Unix lock/process primitive。
+stale endpoint cleanup 仍只通过 daemon 持 lock 后的 bind 路径发生。
+
+Phase 4b 再抽 service manager facade；不要和 lock/process probe 混在同一 commit。
 
 ## Service Manager
 
@@ -51,6 +62,10 @@ Service manager 是用户会话级服务，不按 server daemon 设计：
 | Windows | logon task / startup app；慎用 Windows Service |
 
 Windows Service 通常不适合需要用户会话、桌面权限、clipboard/text injection 的应用。
+
+Phase 4a 不改 `shuo app service` 用户可见语义，也不搬 launchd 实现。Phase 4b 的目标是让
+`cli::service` 依赖一个 service manager facade，同时保持 macOS launchd 输出、timeout、
+stop/restart 顺序不变。
 
 ## Smart Fallback
 

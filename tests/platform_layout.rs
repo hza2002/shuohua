@@ -153,6 +153,33 @@ fn ipc_protocol_and_handlers_do_not_own_transport_backend() {
     );
 }
 
+#[test]
+fn daemon_lifecycle_primitives_live_behind_platform_facade() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    assert!(
+        root.join("src/platform/lifecycle.rs").exists(),
+        "Phase 4 daemon lifecycle facade should live at src/platform/lifecycle.rs"
+    );
+
+    let platform_mod = std::fs::read_to_string(root.join("src/platform/mod.rs")).unwrap();
+    assert!(
+        platform_mod.contains("pub(crate) mod lifecycle;"),
+        "src/platform/mod.rs must expose the daemon lifecycle facade"
+    );
+
+    for (file, forbidden) in [
+        ("src/daemon/process.rs", "DaemonLock"),
+        ("src/cli/service/macos.rs", "libc::kill"),
+    ] {
+        let body = std::fs::read_to_string(root.join(file)).unwrap();
+        assert!(
+            !body.contains(forbidden),
+            "{file} should use platform::lifecycle instead of `{forbidden}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

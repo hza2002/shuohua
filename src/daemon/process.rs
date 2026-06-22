@@ -1,14 +1,13 @@
 use anyhow::{Context, Result};
 use std::thread;
 
-use crate::daemon::lock::DaemonLock;
 use crate::daemon::runtime;
 use crate::hotkey::{Bindings, HotkeyAction};
 use crate::overlay::OverlayHandle;
 use crate::state::StateStore;
 
 pub fn run_daemon_process() -> Result<()> {
-    let _lock = DaemonLock::acquire()?;
+    let _lock = crate::platform::lifecycle::acquire_daemon_lock()?;
     let _log_guard = crate::log::init_daemon().context("initialize daemon logger")?;
     let cfg_path = crate::config::default_path();
     let (overlay, overlay_rx) = OverlayHandle::channel();

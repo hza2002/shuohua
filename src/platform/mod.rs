@@ -2,6 +2,7 @@ pub(crate) mod autotype;
 pub(crate) mod capability;
 pub(crate) mod clipboard;
 pub(crate) mod daemon;
+pub(crate) mod lifecycle;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub(crate) mod permissions;

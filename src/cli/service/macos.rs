@@ -149,7 +149,7 @@ fn wait_for_pid_exit(pid: libc::pid_t) -> Result<()> {
         pid,
         DAEMON_EXIT_TIMEOUT,
         DAEMON_EXIT_POLL_INTERVAL,
-        process_exists,
+        crate::platform::lifecycle::process_exists,
         std::thread::sleep,
         Instant::now,
     )
@@ -175,31 +175,6 @@ fn wait_for_pid_exit_with(
             );
         }
         sleep(poll_interval);
-    }
-}
-
-fn process_exists(pid: libc::pid_t) -> Result<bool> {
-    debug_assert!(pid > 0);
-    let result = unsafe { libc::kill(pid, 0) };
-    let errno = if result == -1 {
-        std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
-    } else {
-        0
-    };
-    process_exists_from_kill_result(result, errno)
-}
-
-fn process_exists_from_kill_result(result: libc::c_int, errno: libc::c_int) -> Result<bool> {
-    if result == 0 {
-        return Ok(true);
-    }
-    match errno {
-        libc::EPERM => Ok(true),
-        libc::ESRCH => Ok(false),
-        _ => anyhow::bail!(
-            "check daemon process failed: {}",
-            std::io::Error::from_raw_os_error(errno)
-        ),
     }
 }
 
@@ -476,14 +451,6 @@ mod tests {
                 "{error:#}"
             );
         }
-    }
-
-    #[test]
-    fn pid_probe_treats_eperm_as_running_and_esrch_as_exited() {
-        assert!(super::process_exists_from_kill_result(-1, libc::EPERM).unwrap());
-        assert!(!super::process_exists_from_kill_result(-1, libc::ESRCH).unwrap());
-        assert!(super::process_exists_from_kill_result(0, 0).unwrap());
-        assert!(super::process_exists_from_kill_result(-1, libc::EIO).is_err());
     }
 
     #[test]

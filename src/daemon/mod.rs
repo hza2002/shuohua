@@ -1,7 +1,6 @@
 mod active_session;
 mod fallback;
 mod hotkey_input;
-mod lock;
 mod process;
 mod runtime;
 mod session_start;

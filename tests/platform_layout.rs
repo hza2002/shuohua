@@ -346,6 +346,38 @@ fn overlay_renderer_capabilities_live_with_renderer_facade() {
     }
 }
 
+#[test]
+fn overlay_renderer_capabilities_are_consumed_by_doctor_only() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut offenders = Vec::new();
+
+    for file in rust_files_under(&root.join("src")) {
+        let relative = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        if matches!(
+            relative.as_str(),
+            "src/overlay/mod.rs" | "src/overlay/renderer.rs" | "src/cli/doctor.rs"
+        ) {
+            continue;
+        }
+
+        let body = std::fs::read_to_string(&file).unwrap();
+        if body.contains("renderer_capabilities") {
+            offenders.push(relative);
+        }
+    }
+    offenders.sort();
+
+    assert!(
+        offenders.is_empty(),
+        "overlay renderer capability snapshot should only feed doctor until GUI/TUI consumption is designed:\n{}",
+        offenders.join("\n")
+    );
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

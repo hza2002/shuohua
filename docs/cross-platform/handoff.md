@@ -6,12 +6,12 @@
 
 ## 最近 commit
 
-HEAD: `feat: add overlay renderer capabilities`（Phase 6b 提交后）
+HEAD: `feat: expose overlay renderer diagnostics`（Phase 6c 提交后）
 
 ## 当前 phase
 
-Phase 6b: Overlay Renderer Capability Skeleton 已完成并提交。下一步进入 overlay
-capability 消费方接入评审，或按计划进入 Windows Overlay PoC。
+Phase 6c: Overlay Renderer Capability Consumption 已完成并提交。下一步按计划进入
+Windows Overlay PoC，或先做更窄的 capability 消费方设计评审。
 
 ## 已完成事项
 
@@ -89,6 +89,14 @@ capability 消费方接入评审，或按计划进入 Windows Overlay PoC。
   - macOS `overlay::run()` 仍调用 `overlay::macos::run()`；未修改 AppKit renderer、
     `OverlayCmd`、`OverlayModel`、layout 或 theme parser。
   - `tests/platform_layout.rs` 增加 renderer capability skeleton 边界测试。
+- Phase 6c:
+  - 更新 `docs/cross-platform/overlay.md`、`docs/cross-platform/platform-capabilities.md` 和
+    `docs/cross-platform/overview.md`，记录 doctor 只读消费 renderer capability snapshot。
+  - `src/overlay/mod.rs` 对 crate 内暴露 `renderer_capabilities()`。
+  - `src/cli/doctor.rs` 的 capability summary 先读全局静态快照，再用 renderer snapshot
+    覆盖同 `CapabilityId` 的 overlay 条目。
+  - doctor 错误/警告计数、退出码、IPC/daemon/overlay 运行路径不变；TUI/GUI 未接入。
+  - `tests/platform_layout.rs` 增加 renderer capability 仅由 doctor 消费的边界测试。
 
 ## 验证结果
 
@@ -108,14 +116,14 @@ capability 消费方接入评审，或按计划进入 Windows Overlay PoC。
 - 已跑：`cargo test --test platform_layout overlay_renderer_capabilities_live_with_renderer_facade`，
   先红灯失败于缺少 `renderer_capabilities`，实现后通过。
 - 已跑：`cargo test overlay::renderer`，通过 3 个 renderer 单元测试。
-- 已跑：`cargo test cli::doctor::tests`，通过 6 个测试。
+- 已跑：`cargo test cli::doctor::tests`，通过 7 个测试。
 - 已跑：`cargo test hotkey`，通过 81 个测试。
 - 已跑：`cargo test overlay`，通过 45 个 unit tests，另外 integration tests 过滤项正常。
 - 已跑：`cargo test --test doc_consistency`，通过 2 个测试。
-- 已跑：`cargo test --test platform_layout`，通过 12 个测试。
+- 已跑：`cargo test --test platform_layout`，通过 13 个测试。
 - 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`，通过。
-  `cargo test` 覆盖：632 个 unit tests、5 个 `apple_helper_build` tests、
-  1 个 `cli_runtime_boundary` test、2 个 `doc_consistency` tests、12 个 `platform_layout` tests、
+  `cargo test` 覆盖：633 个 unit tests、5 个 `apple_helper_build` tests、
+  1 个 `cli_runtime_boundary` test、2 个 `doc_consistency` tests、13 个 `platform_layout` tests、
   6 个 `theme_registry_build` tests。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
@@ -127,8 +135,8 @@ capability 消费方接入评审，或按计划进入 Windows Overlay PoC。
 - `src/cli/doctor.rs` 仍有 launchd-centric 诊断输出；service manager facade 后应通过
   capability/status 和 service manager 模型收敛。
 - Phase 5b 只抽 hotkey provider 启动边界，没有实现 Linux/Windows global hotkey backend。
-- Phase 6b 只抽 renderer capability skeleton，没有实现 Windows/Linux overlay renderer 骨架，
-  也没有把 snapshot 接入 doctor/TUI/GUI。
+- Phase 6c 只把 renderer capability snapshot 接入 doctor summary，没有实现 Windows/Linux
+  overlay renderer 骨架，也没有接入 TUI/GUI。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
   静态 `desktop.permissions=available` 误解为当前已授权。
 - `overlay::renderer::renderer_capabilities()` 同样是静态快照，不创建窗口、不 probe 当前
@@ -136,9 +144,9 @@ capability 消费方接入评审，或按计划进入 Windows Overlay PoC。
 
 ## 下一步
 
-提交 Phase 6b 后，进入 Phase 6c/Phase 7 前需要决定下一小步：
+提交 Phase 6c 后，进入 Phase 7 前需要决定下一小步：
 
-- 若继续收敛 capability 消费方，评审是否让 doctor/TUI 读取 overlay renderer snapshot。
+- 若继续收敛 capability 消费方，评审是否让 TUI/GUI 读取 overlay renderer snapshot。
 - 若进入 PoC，按 `development-plan.md` 先做 Windows Overlay PoC，仍不要实现完整 backend。
 
 建议下一 session prompt：
@@ -148,6 +156,6 @@ capability 消费方接入评审，或按计划进入 Windows Overlay PoC。
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 6b Overlay Renderer Capability Skeleton 已实现；先查看最新 commit 和验证结果。
-下一步在接入 overlay capability 消费方或进入 Windows Overlay PoC 之间做小步计划。
+Phase 6c Overlay Renderer Capability Consumption 已实现；先查看最新 commit 和验证结果。
+下一步在 TUI/GUI capability 消费方设计评审或 Windows Overlay PoC 之间做小步计划。
 ```

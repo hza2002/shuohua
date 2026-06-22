@@ -7,6 +7,7 @@ mod renderer;
 
 pub use command::{OverlayCmd, OverlayHandle, OverlayReceiver, OverlayState, TextKind};
 pub use model::OverlayModel;
+pub(crate) use renderer::renderer_capabilities;
 
 #[cfg(target_os = "macos")]
 mod macos;

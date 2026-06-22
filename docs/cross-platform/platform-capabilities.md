@@ -148,6 +148,13 @@ Phase 6b 将 overlay renderer 相关静态快照收敛到 `overlay::renderer`：
   doctor/TUI/GUI 接入 renderer 降级信息预留稳定形状。
 - macOS 值与 Phase 1 全局快照保持一致；非 macOS 返回 unsupported/backend_not_implemented。
 
+Phase 6c 先只接入 doctor：
+
+- `shuo doctor` 的 capability summary 先读全局静态快照，再用
+  `overlay::renderer_capabilities()` 覆盖同 `CapabilityId` 的 overlay 条目。
+- doctor 仍只打印非阻断 summary，不改变错误/警告计数或退出码。
+- TUI/GUI 消费方式留到单独阶段设计，不让 daemon 热路径或业务层直接依赖 renderer snapshot。
+
 ## Phase 1 非目标
 
 - 不抽 hotkey backend。

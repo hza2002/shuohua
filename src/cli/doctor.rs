@@ -722,7 +722,7 @@ fn print_platform_capabilities() {
 }
 
 fn platform_capability_summary_lines() -> Vec<String> {
-    let capabilities = crate::platform::capability::current_platform_capabilities();
+    let capabilities = merged_platform_capabilities();
     let platform = capabilities
         .first()
         .map(|status| status.platform.as_str())
@@ -780,6 +780,30 @@ fn platform_capability_summary_lines() -> Vec<String> {
         ));
     }
     lines
+}
+
+fn merged_platform_capabilities() -> Vec<crate::platform::capability::CapabilityStatus> {
+    merge_platform_and_renderer_capabilities(
+        crate::platform::capability::current_platform_capabilities(),
+        crate::overlay::renderer_capabilities(),
+    )
+}
+
+fn merge_platform_and_renderer_capabilities(
+    mut capabilities: Vec<crate::platform::capability::CapabilityStatus>,
+    renderer_capabilities: Vec<crate::platform::capability::CapabilityStatus>,
+) -> Vec<crate::platform::capability::CapabilityStatus> {
+    for renderer_capability in renderer_capabilities {
+        if let Some(existing) = capabilities
+            .iter_mut()
+            .find(|capability| capability.id == renderer_capability.id)
+        {
+            *existing = renderer_capability;
+        } else {
+            capabilities.push(renderer_capability);
+        }
+    }
+    capabilities
 }
 
 fn format_duration(ms: u64) -> String {
@@ -858,6 +882,54 @@ mod tests {
             lines.iter().any(|line| line.contains("partial=")),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn overlay_renderer_capabilities_override_global_snapshot_entries() {
+        use crate::platform::capability::{
+            CapabilityId, CapabilityStatus, CapabilityStatusKind, PlatformKind,
+        };
+
+        let merged = super::merge_platform_and_renderer_capabilities(
+            vec![
+                CapabilityStatus {
+                    id: CapabilityId::OverlayMaterial,
+                    platform: PlatformKind::Macos,
+                    backend: "global_overlay_material",
+                    status: CapabilityStatusKind::Unknown,
+                    summary: "global",
+                    reason: "global_reason",
+                    next_step: None,
+                },
+                CapabilityStatus {
+                    id: CapabilityId::DesktopHotkey,
+                    platform: PlatformKind::Macos,
+                    backend: "cgeventtap",
+                    status: CapabilityStatusKind::Available,
+                    summary: "hotkey",
+                    reason: "available",
+                    next_step: None,
+                },
+            ],
+            vec![CapabilityStatus {
+                id: CapabilityId::OverlayMaterial,
+                platform: PlatformKind::Macos,
+                backend: "renderer_overlay_material",
+                status: CapabilityStatusKind::Degraded,
+                summary: "renderer",
+                reason: "renderer_reason",
+                next_step: None,
+            }],
+        );
+
+        let material = merged
+            .iter()
+            .find(|status| status.id == CapabilityId::OverlayMaterial)
+            .expect("merged overlay material capability");
+        assert_eq!(material.backend, "renderer_overlay_material");
+        assert_eq!(material.status, CapabilityStatusKind::Degraded);
+        assert_eq!(material.reason, "renderer_reason");
+        assert_eq!(merged.len(), 2);
     }
 
     #[tokio::test(flavor = "current_thread")]

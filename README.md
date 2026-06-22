@@ -167,10 +167,17 @@ shuohua 只需要两项 macOS 系统权限：
 | `shuo doctor` | 检查权限、麦克风、配置和 launchd 状态 |
 | `shuo doctor --runtime` | 额外检查已配置的 ASR 和 LLM provider |
 | `shuo config-template` | 导出内置配置模板和主题 |
+| `shuo completions <shell>` | 生成 zsh、bash 或 fish completion 脚本 |
 | `shuo install` | 安装并启动 launchd 服务 |
 | `shuo start` / `stop` / `restart` | 管理 daemon |
 | `shuo status` | 查看 daemon PID、运行时长和录音状态 |
 | `shuo uninstall` | 停止服务并移除 launchd 配置，不删除 binary 和用户数据 |
+
+completion 脚本输出到 stdout。Homebrew 环境的 zsh 手动安装示例：
+
+```bash
+shuo completions zsh > "$(brew --prefix)/share/zsh/site-functions/_shuo"
+```
 
 完整说明见 [CLI 文档](docs/cli.md)。
 

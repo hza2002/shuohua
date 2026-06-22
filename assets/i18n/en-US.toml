@@ -314,6 +314,10 @@ about = "Generate reference config templates from the built-in registry"
 out = "Directory to write generated templates into"
 lang = "Comment language for generated templates: auto, en-US, zh-CN, zh-Hant, zh-TW, zh-HK, or pseudo"
 
+[cli.help.completions]
+about = "Generate shell completion scripts"
+shell = "Shell to generate completions for"
+
 [cli.help.install]
 about = "Install and start the launchd service"
 

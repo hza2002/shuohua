@@ -165,10 +165,17 @@ Current releases are unsigned. macOS TCC identifies unsigned tools by binary con
 | `shuo doctor` | Check permissions, microphone input, configuration, and launchd state |
 | `shuo doctor --runtime` | Also exercise configured ASR and LLM providers |
 | `shuo config-template` | Export built-in configuration templates and themes |
+| `shuo completions <shell>` | Generate zsh, bash, or fish completion scripts |
 | `shuo install` | Install and start the launchd service |
 | `shuo start` / `stop` / `restart` | Manage the daemon |
 | `shuo status` | Show daemon PID, uptime, and recording state |
 | `shuo uninstall` | Stop the service and remove its launchd configuration without deleting the binary or user data |
+
+Completion scripts are written to stdout. Manual zsh install example for Homebrew environments:
+
+```bash
+shuo completions zsh > "$(brew --prefix)/share/zsh/site-functions/_shuo"
+```
 
 See the [CLI documentation](docs/cli.md) for the complete behavior. The developer documentation is currently written in Chinese.
 

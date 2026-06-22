@@ -314,6 +314,10 @@ about = "从内置注册表生成参考配置模板"
 out = "写入生成模板的目录"
 lang = "生成模板注释语言：auto、en-US、zh-CN、zh-Hant、zh-TW、zh-HK 或 pseudo"
 
+[cli.help.completions]
+about = "生成 shell completion 脚本"
+shell = "要生成 completion 的 shell"
+
 [cli.help.install]
 about = "安装并启动 launchd 服务"
 

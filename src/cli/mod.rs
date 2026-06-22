@@ -1,3 +1,4 @@
+pub mod completions;
 pub mod config_template;
 pub mod doctor;
 pub mod service;
@@ -21,6 +22,8 @@ pub enum Command {
     Doctor(doctor::DoctorArgs),
     /// Generate reference config templates from the built-in registry.
     ConfigTemplate(config_template::ConfigTemplateArgs),
+    /// Generate shell completion scripts.
+    Completions(completions::CompletionsArgs),
     Install,
     Uninstall,
     Start,
@@ -49,6 +52,7 @@ async fn dispatch(command: Command) -> Result<()> {
     match command {
         Command::Doctor(args) => doctor::run(args).await,
         Command::ConfigTemplate(args) => config_template::run(args),
+        Command::Completions(args) => completions::run(args),
         Command::Install => service::install(),
         Command::Uninstall => service::uninstall(),
         Command::Start => service::start(),
@@ -87,6 +91,12 @@ fn localized_command() -> clap::Command {
                     arg.help(crate::t!("cli.help.config_template.lang"))
                 })
         })
+        .mut_subcommand("completions", |cmd| {
+            cmd.about(crate::t!("cli.help.completions.about"))
+                .mut_arg("shell", |arg| {
+                    arg.help(crate::t!("cli.help.completions.shell"))
+                })
+        })
         .mut_subcommand("install", |cmd| {
             cmd.about(crate::t!("cli.help.install.about"))
         })
@@ -120,6 +130,30 @@ mod tests {
             }
             other => panic!("expected doctor command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn completions_parse_shell() {
+        let cli = Cli::try_parse_from(["shuo", "completions", "zsh"]).unwrap();
+
+        match cli.command {
+            Some(Command::Completions(args)) => {
+                assert_eq!(args.shell, completions::Shell::Zsh);
+            }
+            other => panic!("expected completions command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn completions_generate_zsh_script() {
+        crate::i18n::init("en-US");
+
+        let mut out = Vec::new();
+        completions::write(completions::Shell::Zsh, &mut out).unwrap();
+        let script = String::from_utf8(out).unwrap();
+
+        assert!(script.contains("#compdef shuo"), "{script}");
+        assert!(script.contains("_shuo()"), "{script}");
     }
 
     #[test]
@@ -163,6 +197,7 @@ mod tests {
         let help = err.to_string();
 
         assert!(help.contains("安装并启动 launchd 服务"), "{help}");
+        assert!(help.contains("生成 shell completion 脚本"), "{help}");
         assert!(help.contains("显示版本号"), "{help}");
     }
 }

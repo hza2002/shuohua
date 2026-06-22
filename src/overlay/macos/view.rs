@@ -151,7 +151,7 @@ struct OverlayView {
     cfg: EffectiveOverlayCfg,
     model: OverlayModel,
     panel: Retained<NSPanel>,
-    /// 装文字 / icon 的容器：glass 路径下 = `glass.contentView`；fallback 路径下 = 直接挂在 panel 的 visualEffect。
+    /// root content view。glass/background/labels 都是它的直接子视图。
     container: Retained<NSView>,
     /// `Some` 表示拿到了真正的 `NSGlassEffectView`；`None` 表示走 NSVisualEffectView fallback。
     glass: Option<Retained<NSGlassEffectView>>,
@@ -632,8 +632,12 @@ impl OverlayView {
             NSPoint::new(0.0, 0.0),
             NSSize::new(L::constants::WIDTH, height),
         );
-        // panel.contentView (glass 或 fallback) 跟随 panel 自动 resize；container 显式 set 确保 labels 坐标系对齐
+        // 材质层和色层必须跟 root 同步动画，避免 Liquid Glass 边缘与实际外框短暂错位。
         set_view_frame(&self.container, full, animated);
+        if let Some(glass) = &self.glass {
+            set_view_frame(glass, full, animated);
+        }
+        set_view_frame(&self.background, full, animated);
         let row = L::first_row_frames(top_offset);
         set_view_frame(&self.state_icon, to_nsrect(row.icon), animated);
         set_view_frame(&self.icon_fx_view, to_nsrect(row.icon), animated);

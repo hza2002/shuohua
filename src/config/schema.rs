@@ -102,6 +102,10 @@ fn description_key(name: &str) -> &'static str {
         "overlay.macos.background_blur_radius" => {
             "config.field.theme.overlay.macos.background_blur_radius.description"
         }
+        "overlay.windows" => "config.field.theme.overlay.windows.description",
+        "overlay.windows.material" => "config.field.theme.overlay.windows.material.description",
+        "overlay.linux" => "config.field.theme.overlay.linux.description",
+        "overlay.linux.material" => "config.field.theme.overlay.linux.material.description",
         "overlay.surface" => "config.field.theme.overlay.surface.description",
         "overlay.surface.background" => "config.field.theme.overlay.surface.background.description",
         "overlay.surface.background_alpha" => {
@@ -337,6 +341,18 @@ pub fn theme_spec() -> ConfigSpec {
         )
         .field(field(FieldSpec::integer, "overlay.macos.subdued").optional())
         .field(field(FieldSpec::integer, "overlay.macos.background_blur_radius").optional())
+        .field(field(FieldSpec::table, "overlay.windows").optional())
+        .field(
+            field(FieldSpec::string, "overlay.windows.material")
+                .optional()
+                .allowed_values(["mica", "acrylic", "translucent", "solid"]),
+        )
+        .field(field(FieldSpec::table, "overlay.linux").optional())
+        .field(
+            field(FieldSpec::string, "overlay.linux.material")
+                .optional()
+                .allowed_values(["blurred_glass", "translucent", "solid"]),
+        )
         .field(field(FieldSpec::table, "overlay.surface").optional())
         .field(field(FieldSpec::color, "overlay.surface.background").optional())
         .field(
@@ -491,5 +507,47 @@ mod tests {
         assert!(validate_value(&spec_for(SchemaId::Theme), &theme)
             .iter()
             .any(|diagnostic| diagnostic.path == "overlay.surface.background_alfa"));
+    }
+
+    #[test]
+    fn theme_schema_accepts_declared_future_platform_sections_only() {
+        let theme = toml::toml! {
+            [overlay.windows]
+            material = "mica"
+
+            [overlay.linux]
+            material = "blurred_glass"
+        }
+        .into();
+        assert!(validate_value(&spec_for(SchemaId::Theme), &theme).is_empty());
+
+        let typo = toml::toml! {
+            [overlay.windows]
+            materiall = "mica"
+        }
+        .into();
+        assert!(validate_value(&spec_for(SchemaId::Theme), &typo)
+            .iter()
+            .any(|diagnostic| diagnostic.path == "overlay.windows.materiall"));
+    }
+
+    #[test]
+    fn starter_config_does_not_emit_experimental_dev_section() {
+        let config_template = crate::config::template::registry()
+            .iter()
+            .find(|template| template.id == "config")
+            .expect("config template exists");
+        let rendered = crate::config::template::render(config_template);
+
+        assert!(
+            !rendered.contains("[dev]"),
+            "starter config should not expose experimental dev fields by default:\n{rendered}"
+        );
+        assert!(
+            spec_for(SchemaId::Main)
+                .field_for_path("dev.vad_trace")
+                .is_some(),
+            "dev.vad_trace remains schema-supported for existing configs"
+        );
     }
 }

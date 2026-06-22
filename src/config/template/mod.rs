@@ -118,7 +118,8 @@ mod tests {
         assert!(body.contains("max_overlap_ms = 200"));
         assert!(body.contains("min_start_voiced_frames = 2"));
         assert!(body.contains("[overlay]"));
-        assert!(body.contains("[dev]"));
+        assert!(!body.contains("[dev]"));
+        assert!(!config.dev.vad_trace);
         assert!(config.profile.routes.contains_key("chat"));
         assert!(config.profile.routes.contains_key("agent"));
         assert!(config

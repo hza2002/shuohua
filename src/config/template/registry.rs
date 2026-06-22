@@ -98,10 +98,6 @@ const CONFIG_VALUES: &[(&str, TemplateValue)] = &[
         ]),
     ),
     (
-        "dev",
-        TemplateValue::Table(&[("vad_trace", TemplateValue::Bool(false))]),
-    ),
-    (
         "overlay",
         TemplateValue::Table(&[
             ("position", TemplateValue::String("bottom")),

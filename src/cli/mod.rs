@@ -1,3 +1,4 @@
+pub mod app;
 pub mod completions;
 pub mod config_template;
 pub mod doctor;
@@ -24,12 +25,9 @@ pub enum Command {
     ConfigTemplate(config_template::ConfigTemplateArgs),
     /// Generate shell completion scripts.
     Completions(completions::CompletionsArgs),
-    Install,
-    Uninstall,
-    Start,
-    Stop,
-    Restart,
-    Status,
+    #[command(subcommand)]
+    Service(service::ServiceCommand),
+    Update(app::UpdateArgs),
     Version,
 }
 
@@ -53,12 +51,8 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Doctor(args) => doctor::run(args).await,
         Command::ConfigTemplate(args) => config_template::run(args),
         Command::Completions(args) => completions::run(args),
-        Command::Install => service::install(),
-        Command::Uninstall => service::uninstall(),
-        Command::Start => service::start(),
-        Command::Stop => service::stop().await,
-        Command::Restart => service::restart().await,
-        Command::Status => service::status().await,
+        Command::Service(command) => service::run(command).await,
+        Command::Update(args) => app::update(args).await,
         Command::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -97,19 +91,32 @@ fn localized_command() -> clap::Command {
                     arg.help(crate::t!("cli.help.completions.shell"))
                 })
         })
-        .mut_subcommand("install", |cmd| {
-            cmd.about(crate::t!("cli.help.install.about"))
+        .mut_subcommand("service", |cmd| {
+            cmd.about(crate::t!("cli.help.service.about"))
+                .mut_subcommand("install", |cmd| {
+                    cmd.about(crate::t!("cli.help.service.install.about"))
+                })
+                .mut_subcommand("uninstall", |cmd| {
+                    cmd.about(crate::t!("cli.help.service.uninstall.about"))
+                })
+                .mut_subcommand("start", |cmd| {
+                    cmd.about(crate::t!("cli.help.service.start.about"))
+                })
+                .mut_subcommand("stop", |cmd| {
+                    cmd.about(crate::t!("cli.help.service.stop.about"))
+                })
+                .mut_subcommand("restart", |cmd| {
+                    cmd.about(crate::t!("cli.help.service.restart.about"))
+                })
+                .mut_subcommand("status", |cmd| {
+                    cmd.about(crate::t!("cli.help.service.status.about"))
+                })
         })
-        .mut_subcommand("uninstall", |cmd| {
-            cmd.about(crate::t!("cli.help.uninstall.about"))
-        })
-        .mut_subcommand("start", |cmd| cmd.about(crate::t!("cli.help.start.about")))
-        .mut_subcommand("stop", |cmd| cmd.about(crate::t!("cli.help.stop.about")))
-        .mut_subcommand("restart", |cmd| {
-            cmd.about(crate::t!("cli.help.restart.about"))
-        })
-        .mut_subcommand("status", |cmd| {
-            cmd.about(crate::t!("cli.help.status.about"))
+        .mut_subcommand("update", |cmd| {
+            cmd.about(crate::t!("cli.help.update.about"))
+                .mut_arg("allow_major", |arg| {
+                    arg.help(crate::t!("cli.help.update.allow_major"))
+                })
         })
         .mut_subcommand("version", |cmd| {
             cmd.about(crate::t!("cli.help.version.about"))
@@ -141,6 +148,46 @@ mod tests {
                 assert_eq!(args.shell, completions::Shell::Zsh);
             }
             other => panic!("expected completions command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn service_subcommands_parse() {
+        let cases = [
+            ("install", service::ServiceCommand::Install),
+            ("uninstall", service::ServiceCommand::Uninstall),
+            ("start", service::ServiceCommand::Start),
+            ("stop", service::ServiceCommand::Stop),
+            ("restart", service::ServiceCommand::Restart),
+            ("status", service::ServiceCommand::Status),
+        ];
+
+        for (name, expected) in cases {
+            let cli = Cli::try_parse_from(["shuo", "service", name]).unwrap();
+            match cli.command {
+                Some(Command::Service(actual)) => assert_eq!(actual, expected),
+                other => panic!("expected service {name}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn old_top_level_service_commands_are_removed() {
+        for name in ["install", "uninstall", "start", "stop", "restart", "status"] {
+            assert!(
+                Cli::try_parse_from(["shuo", name]).is_err(),
+                "{name} should no longer parse as a top-level service command"
+            );
+        }
+    }
+
+    #[test]
+    fn update_parses_allow_major() {
+        let cli = Cli::try_parse_from(["shuo", "update", "--allow-major"]).unwrap();
+
+        match cli.command {
+            Some(Command::Update(args)) => assert!(args.allow_major),
+            other => panic!("expected update command, got {other:?}"),
         }
     }
 
@@ -196,7 +243,7 @@ mod tests {
             .unwrap_err();
         let help = err.to_string();
 
-        assert!(help.contains("安装并启动 launchd 服务"), "{help}");
+        assert!(help.contains("管理后台服务"), "{help}");
         assert!(help.contains("生成 shell completion 脚本"), "{help}");
         assert!(help.contains("显示版本号"), "{help}");
     }

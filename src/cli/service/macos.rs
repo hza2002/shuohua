@@ -17,6 +17,15 @@ pub fn plist_path() -> PathBuf {
     home_dir().join("Library/LaunchAgents/com.hza2002.shuohua.plist")
 }
 
+pub fn launchd_status() -> super::LaunchdStatus {
+    let path = plist_path();
+    if path.exists() {
+        super::LaunchdStatus::Installed(path)
+    } else {
+        super::LaunchdStatus::NotInstalled(path)
+    }
+}
+
 pub fn install() -> Result<()> {
     let state_dir = crate::paths::StateDirs::discover().root().to_path_buf();
     std::fs::create_dir_all(&state_dir)
@@ -427,7 +436,7 @@ mod tests {
         );
 
         assert!(msg.contains("starting launchd service"), "{msg}");
-        assert!(msg.contains("run `shuo install` first"), "{msg}");
+        assert!(msg.contains("run `shuo service install` first"), "{msg}");
         assert!(msg.contains("service not found"), "{msg}");
     }
 

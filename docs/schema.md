@@ -18,8 +18,8 @@
 {"op":"get_history_analytics","period":"month","anchor":"2026-06"}
 {"op":"delete_audio","id":"01HXYZ..."}
 {"op":"delete_history","id":"01HXYZ..."}
-{"op":"daemon_status"}          // 返回 PID / 启动时间 / 在录音否（shuo status 用）
-{"op":"shutdown"}               // shuo stop 用；daemon 正常退出 0，避免 launchd KeepAlive 重启
+{"op":"daemon_status"}          // 返回 PID / 启动时间 / 在录音否（shuo service status 用）
+{"op":"shutdown"}               // shuo service stop 用；daemon 正常退出 0，避免 launchd KeepAlive 重启
 {"op":"start_recording"}        // 预留：当前 daemon 返回 unsupported
 {"op":"stop_recording"}         // 预留：当前 daemon 返回 unsupported
 {"op":"cancel_recording"}       // 预留：当前 daemon 返回 unsupported

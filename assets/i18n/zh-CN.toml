@@ -284,10 +284,11 @@ status_timeout = "daemon 状态查询超过 {seconds}s"
 not_running = "未运行"
 plist_installed = "已安装 {path}"
 plist_not_installed = "未安装 {path}"
+management_unsupported = "当前平台暂不支持后台服务管理"
 action_install = "正在安装 launchd 服务；请确认 shuo binary 路径和 LaunchAgents 权限"
 action_uninstall = "正在移除 launchd 服务"
-action_start = "正在启动 launchd 服务；如果尚未安装，请先运行 `shuo install`"
-action_stop = "正在停止 launchd 服务；如果尚未安装，请先运行 `shuo install`"
+action_start = "正在启动 launchd 服务；如果尚未安装，请先运行 `shuo service install`"
+action_stop = "正在停止 launchd 服务；如果尚未安装，请先运行 `shuo service install`"
 launchctl_command = "launchctl 命令：{args}"
 launchctl_failed = "launchctl {args} 失败，状态 {status}\nstdout：{stdout}\nstderr：{stderr}"
 create_state_dir_failed = "创建 state 目录失败：{path}"
@@ -301,6 +302,14 @@ written = "配置模板已写入 {path}"
 refuse_overwrite = "拒绝覆盖已存在的模板文件："
 create_dir_failed = "创建模板目录失败：{path}"
 write_file_failed = "写入模板文件失败：{path}"
+
+[cli.app.update]
+checking = "正在检查最新版本"
+current = "已是最新版本：{version}"
+refuse_major = "最新版本 {latest} 跨大版本升级（当前 {current}），请查看 release notes；确认后可加 --allow-major"
+downloading = "正在下载 {version}"
+updated = "已更新 shuo：{current} -> {latest}（{path}）"
+restart_hint = "如果 daemon 正在运行，它仍会继续使用旧版本；请运行 `shuo service restart` 让后台服务加载新 binary"
 
 [cli.help]
 about = "macOS 语音输入助手"
@@ -318,23 +327,30 @@ lang = "生成模板注释语言：auto、en-US、zh-CN、zh-Hant、zh-TW、zh-H
 about = "生成 shell completion 脚本"
 shell = "要生成 completion 的 shell"
 
-[cli.help.install]
-about = "安装并启动 launchd 服务"
+[cli.help.service]
+about = "管理后台服务"
 
-[cli.help.uninstall]
-about = "停止并移除 launchd 服务"
+[cli.help.service.install]
+about = "安装并启动后台服务"
 
-[cli.help.start]
-about = "启动 launchd 服务"
+[cli.help.service.uninstall]
+about = "停止并移除后台服务"
 
-[cli.help.stop]
-about = "停止 launchd 服务"
+[cli.help.service.start]
+about = "启动后台服务"
 
-[cli.help.restart]
-about = "重启 launchd 服务"
+[cli.help.service.stop]
+about = "停止后台服务"
 
-[cli.help.status]
-about = "显示 daemon 和 launchd 状态"
+[cli.help.service.restart]
+about = "重启后台服务"
+
+[cli.help.service.status]
+about = "显示 daemon 和服务状态"
+
+[cli.help.update]
+about = "检查并更新 shuo binary"
+allow_major = "允许跨大版本更新"
 
 [cli.help.version]
 about = "显示版本号"
@@ -379,8 +395,8 @@ next_step_config = "修复配置诊断后重新运行 `shuo doctor`"
 next_step_report_issue = "上报内置 i18n 诊断；这是构建问题"
 next_step_hotkey = "修复 config.toml 里的 [hotkey]"
 next_step_microphone_input = "在系统设置 > 声音 中连接或选择默认麦克风"
-next_step_daemon = "用 `shuo start` 启动 daemon，或用 `shuo install` 安装服务"
-next_step_launchd = "用 `shuo install` 安装 launchd 服务"
+next_step_daemon = "用 `shuo service start` 启动 daemon，或用 `shuo service install` 安装服务"
+next_step_launchd = "用 `shuo service install` 安装后台服务"
 next_step_permissions = "在系统设置中授予缺失的 macOS 权限"
 next_step_runtime = "本地检查通过后运行 `shuo doctor --runtime`"
 next_step_runtime_config = "修复 ASR/LLM provider 配置后重新运行 `shuo doctor --runtime`"

@@ -152,7 +152,8 @@ gh run watch <run-id>
 
 Release body 由两部分组成：
 
-- `.github/release-body.md`：固定安装和权限提醒。
+- `.github/release-body.md`：固定安装和权限提醒；workflow 会把其中的
+  `shuo-*-aarch64-apple-darwin` 渲染成本次 tag 对应的 artifact 名。
 - GitHub 自动生成 release notes：commit / PR / contributor 摘要。
 
 ## 10. 验证 Artifact
@@ -163,9 +164,7 @@ rm -rf /tmp/shuo-release-check
 mkdir -p /tmp/shuo-release-check
 gh release download vX.Y.Z -p '*.tar.gz' -p '*.sha256' -D /tmp/shuo-release-check
 cd /tmp/shuo-release-check
-expected=$(cat *.sha256 | tr -d '[:space:]')
-actual=$(shasum -a 256 *.tar.gz | awk '{print $1}')
-test "$expected" = "$actual"
+shasum -a 256 -c *.sha256
 tar -tzf *.tar.gz
 ```
 
@@ -192,6 +191,18 @@ xattr -d com.apple.quarantine ./shuo 2>/dev/null
 ```
 
 确认版本号、权限提示、doctor 输出正常。
+
+已安装旧版本的用户再验证自更新路径：
+
+```bash
+shuo update
+shuo service restart
+shuo doctor
+```
+
+`shuo update` 替换当前 `shuo` binary 后不会自动重启已运行 daemon；需要
+`shuo service restart` 让后台服务加载新 binary。当前 release 未签名，更新后仍可能
+需要重新授权 Microphone 和 Accessibility。
 
 ## 12. 出问题时
 

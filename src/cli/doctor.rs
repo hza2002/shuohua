@@ -621,25 +621,35 @@ async fn query_daemon_status() -> Result<Option<String>> {
 }
 
 fn check_launchd() -> CheckStatus {
-    let path = crate::cli::service::plist_path();
-    if path.exists() {
-        println!(
-            "launchd.plist: {}",
-            tr(
-                "cli.service.plist_installed",
-                &[("path", path.display().to_string())]
-            )
-        );
-        CheckStatus::Ok
-    } else {
-        println!(
-            "launchd.plist: {}",
-            tr(
-                "cli.service.plist_not_installed",
-                &[("path", path.display().to_string())]
-            )
-        );
-        CheckStatus::Warning
+    match crate::cli::service::launchd_status() {
+        crate::cli::service::LaunchdStatus::Installed(path) => {
+            println!(
+                "launchd.plist: {}",
+                tr(
+                    "cli.service.plist_installed",
+                    &[("path", path.display().to_string())]
+                )
+            );
+            CheckStatus::Ok
+        }
+        crate::cli::service::LaunchdStatus::NotInstalled(path) => {
+            println!(
+                "launchd.plist: {}",
+                tr(
+                    "cli.service.plist_not_installed",
+                    &[("path", path.display().to_string())]
+                )
+            );
+            CheckStatus::Warning
+        }
+        #[cfg(not(target_os = "macos"))]
+        crate::cli::service::LaunchdStatus::Unsupported => {
+            println!(
+                "launchd.plist: {}",
+                tr("cli.service.management_unsupported", &[])
+            );
+            CheckStatus::Warning
+        }
     }
 }
 

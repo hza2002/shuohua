@@ -56,18 +56,21 @@ Download the latest `shuo-vX.Y.Z-aarch64-apple-darwin.tar.gz` and matching
 
 ```bash
 # 1. Verify the download
-shasum -a 256 shuo-vX.Y.Z-aarch64-apple-darwin.tar.gz
-# The output must match the .sha256 file
+shasum -a 256 -c shuo-vX.Y.Z-aarch64-apple-darwin.tar.gz.sha256
 
 # 2. Extract and install
 tar -xzf shuo-vX.Y.Z-aarch64-apple-darwin.tar.gz
 cd shuo-vX.Y.Z-aarch64-apple-darwin
 xattr -d com.apple.quarantine ./shuo
-sudo install -m 755 ./shuo /usr/local/bin/shuo
+mkdir -p ~/.local/bin
+install -m 755 ./shuo ~/.local/bin/shuo
 
 # 3. Confirm the command is available
 shuo version
 ```
+
+Make sure `~/.local/bin` is on your `PATH`. If this machine already has
+`/usr/local/bin/shuo`, remove the old file or put `~/.local/bin` earlier in `PATH`.
 
 <details>
 <summary>Build from source</summary>
@@ -78,7 +81,8 @@ This requires stable Rust, the Xcode 26 SDK, and an Apple Silicon Mac:
 git clone https://github.com/hza2002/shuohua.git
 cd shuohua
 cargo build --release
-sudo install -m 755 target/release/shuo /usr/local/bin/shuo
+mkdir -p ~/.local/bin
+install -m 755 target/release/shuo ~/.local/bin/shuo
 ```
 
 </details>
@@ -131,11 +135,11 @@ shuo doctor --runtime
 ### 3. Install the background service
 
 ```bash
-shuo install
-shuo status
+shuo service install
+shuo service status
 ```
 
-`shuo install` installs and starts a per-user launchd service. Then:
+`shuo service install` installs and starts a per-user launchd service. Then:
 
 1. Focus any text field and double-tap Right Option (Right Alt) to start recording.
 2. Double-tap Right Option (Right Alt) again to stop and finish transcription.
@@ -154,6 +158,14 @@ shuohua requires two macOS permissions:
 
 Current releases are unsigned. macOS TCC identifies unsigned tools by binary content, so replacing the binary during an upgrade normally requires granting both permissions again. Run `shuo doctor` after upgrading and follow its instructions.
 
+For later upgrades:
+
+```bash
+shuo update
+shuo service restart
+shuo doctor
+```
+
 > [!NOTE]
 > Separate Input Monitoring permission is not required. The current implementation uses Accessibility for the global hotkey capability.
 
@@ -166,10 +178,11 @@ Current releases are unsigned. macOS TCC identifies unsigned tools by binary con
 | `shuo doctor --runtime` | Also exercise configured ASR and LLM providers |
 | `shuo config-template` | Export built-in configuration templates and themes |
 | `shuo completions <shell>` | Generate zsh, bash, or fish completion scripts |
-| `shuo install` | Install and start the launchd service |
-| `shuo start` / `stop` / `restart` | Manage the daemon |
-| `shuo status` | Show daemon PID, uptime, and recording state |
-| `shuo uninstall` | Stop the service and remove its launchd configuration without deleting the binary or user data |
+| `shuo update` | Check for and update the current shuo binary |
+| `shuo service install` | Install and start the background service |
+| `shuo service start` / `stop` / `restart` | Manage the background service |
+| `shuo service status` | Show daemon PID, uptime, and recording state |
+| `shuo service uninstall` | Stop the service and remove its launchd configuration without deleting the binary or user data |
 
 Completion scripts are written to stdout. Manual zsh install example for Homebrew environments:
 
@@ -200,14 +213,14 @@ Start with:
 
 ```bash
 shuo doctor
-shuo status
+shuo service status
 ```
 
 Common fixes:
 
 - Hotkeys or recording stop working after an upgrade: grant Microphone and Accessibility again.
 - Configuration fails to load: use the exact file and field reported by `shuo doctor`.
-- The daemon is unhealthy: run `shuo restart`, then inspect
+- The daemon is unhealthy: run `shuo service restart`, then inspect
   `~/.local/state/shuohua/logs/`.
 - Apple ASR is unavailable on macOS 25 or earlier: switch to a cloud provider.
 

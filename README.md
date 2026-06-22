@@ -56,18 +56,21 @@
 
 ```bash
 # 1. 校验下载文件
-shasum -a 256 shuo-vX.Y.Z-aarch64-apple-darwin.tar.gz
-# 输出应与 .sha256 文件一致
+shasum -a 256 -c shuo-vX.Y.Z-aarch64-apple-darwin.tar.gz.sha256
 
 # 2. 解压并安装
 tar -xzf shuo-vX.Y.Z-aarch64-apple-darwin.tar.gz
 cd shuo-vX.Y.Z-aarch64-apple-darwin
 xattr -d com.apple.quarantine ./shuo
-sudo install -m 755 ./shuo /usr/local/bin/shuo
+mkdir -p ~/.local/bin
+install -m 755 ./shuo ~/.local/bin/shuo
 
 # 3. 确认命令可用
 shuo version
 ```
+
+请确认 `~/.local/bin` 已在 `PATH` 中；如果机器上曾安装过
+`/usr/local/bin/shuo`，请移除旧文件或确保 `~/.local/bin` 在 `PATH` 中更靠前。
 
 <details>
 <summary>从源码构建</summary>
@@ -78,7 +81,8 @@ shuo version
 git clone https://github.com/hza2002/shuohua.git
 cd shuohua
 cargo build --release
-sudo install -m 755 target/release/shuo /usr/local/bin/shuo
+mkdir -p ~/.local/bin
+install -m 755 target/release/shuo ~/.local/bin/shuo
 ```
 
 </details>
@@ -132,11 +136,11 @@ shuo doctor --runtime
 ### 3. 安装后台服务
 
 ```bash
-shuo install
-shuo status
+shuo service install
+shuo service status
 ```
 
-`shuo install` 会安装并启动当前用户的 launchd 服务。之后：
+`shuo service install` 会安装并启动当前用户的 launchd 服务。之后：
 
 1. 在任意输入框双击右 Option（右 Alt）开始录音。
 2. 再双击一次右 Option（右 Alt）停止并等待转写。
@@ -156,6 +160,14 @@ shuohua 只需要两项 macOS 系统权限：
 当前 Release 未签名。macOS TCC 会按 binary 内容识别这类程序，因此升级 binary
 后通常需要重新授权以上两项权限。升级后运行 `shuo doctor`，按提示处理即可。
 
+后续升级可运行：
+
+```bash
+shuo update
+shuo service restart
+shuo doctor
+```
+
 > [!NOTE]
 > 不需要单独授予 Input Monitoring。当前实现使用 Accessibility 覆盖全局热键所需能力。
 
@@ -168,10 +180,11 @@ shuohua 只需要两项 macOS 系统权限：
 | `shuo doctor --runtime` | 额外检查已配置的 ASR 和 LLM provider |
 | `shuo config-template` | 导出内置配置模板和主题 |
 | `shuo completions <shell>` | 生成 zsh、bash 或 fish completion 脚本 |
-| `shuo install` | 安装并启动 launchd 服务 |
-| `shuo start` / `stop` / `restart` | 管理 daemon |
-| `shuo status` | 查看 daemon PID、运行时长和录音状态 |
-| `shuo uninstall` | 停止服务并移除 launchd 配置，不删除 binary 和用户数据 |
+| `shuo update` | 检查并更新当前 shuo binary |
+| `shuo service install` | 安装并启动后台服务 |
+| `shuo service start` / `stop` / `restart` | 管理后台服务 |
+| `shuo service status` | 查看 daemon PID、运行时长和录音状态 |
+| `shuo service uninstall` | 停止服务并移除 launchd 配置，不删除 binary 和用户数据 |
 
 completion 脚本输出到 stdout。Homebrew 环境的 zsh 手动安装示例：
 
@@ -202,14 +215,14 @@ shuo completions zsh > "$(brew --prefix)/share/zsh/site-functions/_shuo"
 
 ```bash
 shuo doctor
-shuo status
+shuo service status
 ```
 
 常见处理：
 
 - 升级后热键或录音失效：重新授权 Microphone 与 Accessibility。
 - 配置无法加载：查看 `shuo doctor` 输出中的具体文件和字段。
-- daemon 异常：执行 `shuo restart`，再查看
+- daemon 异常：执行 `shuo service restart`，再查看
   `~/.local/state/shuohua/logs/`。
 - Apple ASR 在 macOS 25 或更低版本不可用：切换到云端 provider。
 

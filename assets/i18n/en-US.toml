@@ -284,10 +284,11 @@ status_timeout = "daemon status query timed out after {seconds}s"
 not_running = "not running"
 plist_installed = "installed {path}"
 plist_not_installed = "not installed {path}"
+management_unsupported = "background service management is not supported on this platform yet"
 action_install = "installing launchd service; verify the shuo binary path and LaunchAgents permissions"
 action_uninstall = "removing launchd service"
-action_start = "starting launchd service; if it is not installed, run `shuo install` first"
-action_stop = "stopping launchd service; if it is not installed, run `shuo install` first"
+action_start = "starting launchd service; if it is not installed, run `shuo service install` first"
+action_stop = "stopping launchd service; if it is not installed, run `shuo service install` first"
 launchctl_command = "launchctl command: {args}"
 launchctl_failed = "launchctl {args} failed with status {status}\nstdout: {stdout}\nstderr: {stderr}"
 create_state_dir_failed = "failed to create state directory {path}"
@@ -301,6 +302,14 @@ written = "config templates written to {path}"
 refuse_overwrite = "refusing to overwrite existing template files:"
 create_dir_failed = "failed to create template directory {path}"
 write_file_failed = "failed to write template file {path}"
+
+[cli.app.update]
+checking = "checking latest version"
+current = "already up to date: {version}"
+refuse_major = "latest version {latest} crosses a major version from {current}; review the release notes and rerun with --allow-major"
+downloading = "downloading {version}"
+updated = "updated shuo: {current} -> {latest} ({path})"
+restart_hint = "if the daemon is running, it will keep using the old version; run `shuo service restart` to load the new binary"
 
 [cli.help]
 about = "macOS voice input assistant"
@@ -318,23 +327,30 @@ lang = "Comment language for generated templates: auto, en-US, zh-CN, zh-Hant, z
 about = "Generate shell completion scripts"
 shell = "Shell to generate completions for"
 
-[cli.help.install]
-about = "Install and start the launchd service"
+[cli.help.service]
+about = "Manage the background service"
 
-[cli.help.uninstall]
-about = "Stop and remove the launchd service"
+[cli.help.service.install]
+about = "Install and start the background service"
 
-[cli.help.start]
-about = "Start the launchd service"
+[cli.help.service.uninstall]
+about = "Stop and remove the background service"
 
-[cli.help.stop]
-about = "Stop the launchd service"
+[cli.help.service.start]
+about = "Start the background service"
 
-[cli.help.restart]
-about = "Restart the launchd service"
+[cli.help.service.stop]
+about = "Stop the background service"
 
-[cli.help.status]
-about = "Show daemon and launchd status"
+[cli.help.service.restart]
+about = "Restart the background service"
+
+[cli.help.service.status]
+about = "Show daemon and service status"
+
+[cli.help.update]
+about = "Check for and update the shuo binary"
+allow_major = "Allow updates across major versions"
 
 [cli.help.version]
 about = "Print version information"
@@ -379,8 +395,8 @@ next_step_config = "fix config diagnostics, then run `shuo doctor` again"
 next_step_report_issue = "report the embedded i18n diagnostics; this is a build issue"
 next_step_hotkey = "fix [hotkey] in config.toml"
 next_step_microphone_input = "connect or select a default microphone in System Settings > Sound"
-next_step_daemon = "start the daemon with `shuo start` or install it with `shuo install`"
-next_step_launchd = "install the launchd service with `shuo install`"
+next_step_daemon = "start the daemon with `shuo service start` or install it with `shuo service install`"
+next_step_launchd = "install the background service with `shuo service install`"
 next_step_permissions = "grant missing macOS permissions in System Settings"
 next_step_runtime = "run `shuo doctor --runtime` after local checks pass"
 next_step_runtime_config = "fix ASR/LLM provider configuration and rerun `shuo doctor --runtime`"

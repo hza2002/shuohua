@@ -6,11 +6,26 @@
 tar -xzf shuo-*-aarch64-apple-darwin.tar.gz
 cd shuo-*-aarch64-apple-darwin
 xattr -d com.apple.quarantine ./shuo
-mv shuo /usr/local/bin/
+mkdir -p ~/.local/bin
+install -m 755 ./shuo ~/.local/bin/shuo
 shuo doctor
 ```
 
-校验 sha256：与同名 `.sha256` 文件内容比对。
+请确认 `~/.local/bin` 已在 `PATH` 中。
+
+校验 SHA256：
+
+```bash
+shasum -a 256 -c shuo-*-aarch64-apple-darwin.tar.gz.sha256
+```
+
+后续升级可运行：
+
+```bash
+shuo update
+shuo service restart
+shuo doctor
+```
 
 ## ⚠️ 权限说明（必读）
 

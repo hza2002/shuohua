@@ -67,8 +67,18 @@ jobs:
           cp target/release/shuo "dist/${name}/"
           cp LICENSE README.md README.en.md "dist/${name}/"
           tar -C dist -czf "dist/${name}.tar.gz" "${name}"
-          shasum -a 256 "dist/${name}.tar.gz" | awk '{print $1}' > "dist/${name}.tar.gz.sha256"
+          (
+            cd dist
+            shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          )
           ls -lh dist/
+
+      - name: Render release body
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          name="shuo-v${ver}-aarch64-apple-darwin"
+          sed "s/shuo-\\*-aarch64-apple-darwin/${name}/g" \
+            .github/release-body.md > dist/release-body.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3.0.1
@@ -76,6 +86,6 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.sha256
-          body_path: .github/release-body.md
+          body_path: dist/release-body.md
           generate_release_notes: true
           fail_on_unmatched_files: true

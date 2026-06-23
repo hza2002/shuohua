@@ -250,6 +250,14 @@ Phase 9e 记录 library split audit baseline，不写 GUI app：
   transport 现状。
 - 不创建 `src/lib.rs`，不创建 Tauri workspace，不移动核心文件。
 
+Phase 9f 做最小 library split，不写 GUI app：
+
+- 新增 library target，让后续外部 GUI backend 可依赖 `client_api`、`ipc::client`、
+  `ipc::protocol`、`ipc::transport` 和必要 DTO。
+- binary 继续拥有 daemon、CLI/TUI、platform backend、overlay、voice、hotkey、reload/config
+  和 IPC server。
+- 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime，不抽 Windows Named Pipe。
+
 范围：
 
 - 建一个最小 Tauri app。

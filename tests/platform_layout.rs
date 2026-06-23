@@ -468,13 +468,8 @@ fn gui_first_screen_helpers_live_in_client_api_without_gui_runtime() {
 }
 
 #[test]
-fn gui_library_boundary_is_not_split_before_design_review() {
+fn gui_library_boundary_does_not_create_tauri_workspace_or_runtime() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-
-    assert!(
-        !root.join("src/lib.rs").exists(),
-        "GUI library split must be a dedicated phase; do not add src/lib.rs as part of GUI PoC setup"
-    );
 
     for file in [
         "src-tauri/tauri.conf.json",
@@ -491,17 +486,13 @@ fn gui_library_boundary_is_not_split_before_design_review() {
     let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
     assert!(
         cargo.contains("[[bin]]") && cargo.contains("name = \"shuo\""),
-        "current package should still expose the existing shuo binary target"
-    );
-    assert!(
-        !cargo.contains("[lib]"),
-        "library target should be introduced only in the dedicated library split phase"
+        "package should still expose the existing shuo binary target"
     );
 
     for token in ["tauri", "wry", "webview", "WebView", "tao"] {
         assert!(
             !cargo.contains(token),
-            "GUI library boundary review must happen before adding GUI runtime dependency token `{token}`"
+            "GUI library split must happen before adding GUI runtime dependency token `{token}`"
         );
     }
 }
@@ -526,6 +517,78 @@ fn gui_library_split_audit_records_minimal_surface_and_blockers() {
         assert!(
             gui_doc.contains(token),
             "docs/cross-platform/gui.md should record Phase 9e library split audit token `{token}`"
+        );
+    }
+}
+
+#[test]
+fn gui_minimal_library_split_exposes_only_client_protocol_surface() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let lib_path = root.join("src/lib.rs");
+    assert!(
+        lib_path.exists(),
+        "Phase 9f should add src/lib.rs as the minimal reusable GUI client library surface"
+    );
+    let lib = std::fs::read_to_string(&lib_path).unwrap();
+
+    for token in [
+        "pub mod client_api;",
+        "pub mod history;",
+        "pub mod ipc;",
+        "pub mod paths;",
+        "pub mod state;",
+        "pub mod text_stats;",
+    ] {
+        assert!(
+            lib.contains(token),
+            "src/lib.rs should expose required client/protocol DTO surface token `{token}`"
+        );
+    }
+
+    for token in [
+        "mod daemon;",
+        "pub mod daemon;",
+        "mod cli;",
+        "pub mod cli;",
+        "mod tui;",
+        "pub mod tui;",
+        "mod overlay;",
+        "pub mod overlay;",
+        "mod platform;",
+        "pub mod platform;",
+        "mod voice;",
+        "pub mod voice;",
+        "mod hotkey;",
+        "pub mod hotkey;",
+        "mod config;",
+        "pub mod config;",
+        "mod reload;",
+        "pub mod reload;",
+    ] {
+        assert!(
+            !lib.contains(token),
+            "src/lib.rs must not expose daemon/runtime/UI/platform implementation token `{token}`"
+        );
+    }
+
+    let ipc_mod = std::fs::read_to_string(root.join("src/ipc/mod.rs")).unwrap();
+    for token in ["pub mod client;", "pub mod protocol;", "pub mod transport;"] {
+        assert!(
+            ipc_mod.contains(token),
+            "library IPC surface should expose `{token}`"
+        );
+    }
+    assert!(
+        !ipc_mod.contains("pub mod server;"),
+        "library IPC surface must not expose ipc::server to GUI backend"
+    );
+
+    let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    for token in ["tauri", "wry", "webview", "WebView", "tao"] {
+        assert!(
+            !cargo.contains(token),
+            "Phase 9f must not add GUI runtime dependency token `{token}` to Cargo.toml"
         );
     }
 }

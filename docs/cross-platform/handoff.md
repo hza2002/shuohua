@@ -6,12 +6,13 @@
 
 ## 最近 commit
 
-HEAD: `docs: record gui library boundary preconditions`
+HEAD: `feat: add minimal gui client library surface`
 
 ## 当前 phase
 
-Phase 9e: GUI Library Split Audit Baseline 已实现，提交前验证中。下一步应先做 library
-split 最小实现，或继续停留在文档化 PoC，不要直接创建 Tauri workspace。
+Phase 9f: GUI Minimal Library Split 已实现并完成自动验证。下一步可以继续 GUI client
+API 的重连状态设计，或在已有 library surface 基础上再评审是否创建最小 Tauri workspace。
+不要在未设计权限/指标/重连前直接做完整 GUI。
 
 ## 已完成事项
 
@@ -166,6 +167,18 @@ split 最小实现，或继续停留在文档化 PoC，不要直接创建 Tauri 
   - 继续禁止在 library split 前创建 Tauri workspace，避免复制 IPC 类型或绕过 `client_api`。
   - `tests/platform_layout.rs` 增加 audit 文档守卫，确认 GUI 文档记录最小 surface、阻塞点和
     禁止方向。
+- Phase 9f:
+  - 更新 `docs/cross-platform/gui.md`，记录最小 library split 的范围、禁止方向和验收标准。
+  - 更新 `docs/cross-platform/development-plan.md` 和 `docs/cross-platform/overview.md`，记录
+    Phase 9f 状态。
+  - 新增 `src/lib.rs`，只公开 `client_api`、`history`、`ipc`、`paths`、`state`、
+    `text_stats`。
+  - `src/ipc/mod.rs` 的 library surface 只公开 `client`、`protocol`、`transport`；`ipc::server`
+    留在 binary 的内联 `ipc` 模块中。
+  - `src/main.rs` 继续挂载 `ipc::server`，daemon runtime 可用路径不变。
+  - `tests/platform_layout.rs` 增加最小 library surface 守卫，并把旧 9d 测试调整为继续禁止
+    Tauri workspace / GUI runtime 依赖。
+  - 未新增 IPC command/event，未 bump `PROTO_VERSION`，未新增 Tauri/WRY/WebView 依赖。
 
 ## 验证结果
 
@@ -211,6 +224,15 @@ split 最小实现，或继续停留在文档化 PoC，不要直接创建 Tauri 
 - Phase 9e 已跑：`cargo test --test platform_layout gui_library_split_audit_records_minimal_surface_and_blockers`，
   先红灯失败于缺少 Phase 9e 文档，补文档后通过。
 - Phase 9e 已跑：`cargo test --test platform_layout`，通过 17 个测试。
+- Phase 9f 已跑：`cargo test --test platform_layout gui_minimal_library_split_exposes_only_client_protocol_surface`，
+  先红灯失败于缺少 `src/lib.rs`，实现后通过。
+- Phase 9f 已跑：`cargo test client_api::tests`，通过。该命令同时覆盖 `src/lib.rs` 和
+  `src/main.rs` 中的 client API 单元测试。
+- Phase 9f 已跑：`cargo test --test platform_layout`，通过 18 个测试。
+- Phase 9f 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`，
+  通过。`cargo test` 覆盖：89 个 library unit tests、636 个 binary unit tests、
+  5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
+  tests、18 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -232,10 +254,10 @@ split 最小实现，或继续停留在文档化 PoC，不要直接创建 Tauri 
   GUI PoC 仍需证明 daemon 未打开 GUI 时不加载 WebView，且 GUI 退出不影响 daemon。
 - Phase 9c 只提供首屏 command helper 和 event classifier；尚未实现真实 Tauri GUI app、
   frontend view model、重连策略、指标采集或打包验证。
-- Phase 9d 明确当前还没有 library target；独立 Tauri backend 不能直接依赖当前 binary
-  crate 内的 `client_api`。下一步若要做 GUI app，先做 library split，而不是复制 IPC 类型。
-- Phase 9e 仍未创建 library target。最小 split 会被 `history` / `state` 模型依赖和 Unix-only
-  transport 约束；需要先决定是暴露这些数据模型，还是拆出更小 wire DTO。
+- Phase 9f 已创建最小 library target，但 surface 仍包含现有 `history` / `state` 模型，而不是
+  更小 wire DTO；这避免协议复制，但也意味着 GUI backend 会看到这些数据模型。
+- `ipc::transport` 仍是 Unix-only，library client 只实际覆盖 macOS/Linux 当前 transport。
+  Windows Named Pipe adapter 仍是后续 IPC transport backend 工作。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
   静态 `desktop.permissions=available` 误解为当前已授权。
 - `overlay::renderer::renderer_capabilities()` 同样是静态快照，不创建窗口、不 probe 当前
@@ -243,12 +265,11 @@ split 最小实现，或继续停留在文档化 PoC，不要直接创建 Tauri 
 
 ## 下一步
 
-提交 Phase 9e 后，进入下一小步：
+Phase 9f 后，进入下一小步：
 
-- 若继续 GUI 路线，先做 library split 最小实现：创建 library target，只暴露经审计的
-  client/protocol surface，并保护 daemon/TUI/GUI 依赖方向。
-- 若暂不拆 library，可以停在文档化 GUI PoC，避免创建只能复制 IPC 类型的 Tauri workspace。
 - 若继续 shared client API，先设计可恢复连接错误和重连状态，不新增 daemon protocol。
+- 若准备创建 Tauri workspace，先把权限/capabilities、首屏指标采集、daemon offline/reconnect
+  行为写入 `gui.md`，再做最小 PoC。
 - 若目标平台环境可用，也可以先按 Phase 7a/8a checklist 做 Windows/Linux 最小 overlay PoC。
 
 建议下一 session prompt：

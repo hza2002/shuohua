@@ -103,6 +103,20 @@ Phase 9e 记录 library split audit baseline，不做 crate 拆分：
 - 在 library split 阶段之前仍不创建 Tauri workspace。先让 library boundary 编译和测试成立，
   再创建 GUI app；否则 PoC 很容易复制 IPC 类型或绕过 `client_api`。
 
+Phase 9f 做最小 library split，仍不创建 Tauri workspace：
+
+- 新增 `src/lib.rs`，只暴露后续 GUI backend 连接 daemon 所需的 client/protocol surface：
+  `client_api`、`ipc::client`、`ipc::protocol`、`ipc::transport`，以及现有 protocol DTO 依赖的
+  `history`、`state`、`paths`、`text_stats` 数据模型。
+- binary 继续拥有 daemon runtime、CLI/TUI、hotkey、voice、overlay、platform backend、config
+  reload 和 IPC server。library target 不暴露这些模块，也不把它们变成 GUI backend 依赖。
+- `ipc::server` 暂不进入 library surface，因为它依赖 daemon runtime 的 `state`、
+  `history` service、reload/config 控制面；GUI backend 只需要 client side。
+- 这个阶段不新增 IPC command/event，不 bump `PROTO_VERSION`，不改变 history schema，不创建
+  Tauri workspace，不新增 Tauri/WRY/WebView runtime 依赖。
+- `ipc::transport` 仍是 Unix-only；因此 Phase 9f 的 library client 只承诺 macOS/Linux 当前
+  transport 可编译。Windows Named Pipe 仍由后续 IPC transport backend 阶段处理。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：
@@ -175,6 +189,15 @@ Phase 9e 验收：
   Unix-only transport。
 - 明确 library split 前仍不创建 Tauri workspace，不把 daemon runtime 或平台 UI backend
   暴露给 GUI backend。
+
+Phase 9f 验收：
+
+- `src/lib.rs` 存在，并只公开最小 client/protocol surface 和必要 DTO 模块。
+- 外部 crate 可通过 `shuohua::client_api`、`shuohua::ipc::client`、
+  `shuohua::ipc::protocol` 和 `shuohua::ipc::transport` 使用现有 daemon client API。
+- library surface 不公开 `daemon`、`cli`、`tui`、`overlay`、`platform`、`voice`、
+  `hotkey`、`config`、`reload` 或 `ipc::server`。
+- 仍无 Tauri workspace 或 GUI runtime 依赖，daemon/TUI 用户可见行为不变。
 
 参考资料：
 

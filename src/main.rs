@@ -17,7 +17,12 @@ mod daemon;
 pub mod history;
 mod hotkey;
 mod i18n;
-mod ipc;
+mod ipc {
+    pub mod client;
+    pub mod protocol;
+    pub mod server;
+    pub mod transport;
+}
 mod log;
 mod overlay;
 pub mod paths;

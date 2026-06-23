@@ -783,8 +783,9 @@ Phase 10o Windows Path/Config/State Backend:
 
 Phase 10p Windows CI Artifact Build:
 
-- Add a `windows-latest` build path that produces a debug or release `shuo.exe` artifact suitable for manual
-  smoke testing.
+- Add a `windows-latest` CI job that produces a debug `shuo.exe` artifact suitable for manual smoke testing.
+- Include `docs/cross-platform/windows-runtime-validation.md` in the uploaded artifact so the user can run the
+  matching checklist beside the binary.
 - Keep artifact build separate from runtime validation. CI proves build/package shape, not hotkey/audio/overlay
   behavior.
 - This phase should run after the Windows path backend so first manual artifacts create data in final locations.

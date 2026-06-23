@@ -348,6 +348,9 @@ Artifact strategy:
   available.
 - A Windows artifact is testable only after `shuo.exe`, any required DLLs, and the expected config/runtime path
   behavior are captured in the validation notes.
+- CI artifact build is not runtime validation. The `shuo-windows-debug` artifact is only a convenient debug
+  binary plus the Windows runtime checklist; capabilities remain `runtime_not_verified` until the checklist is
+  run on Windows.
 
 Preferred artifact route before repeated manual testing:
 

@@ -170,6 +170,13 @@ paste、overlay、TUI、history 或 service lifecycle，应先回滚或修复该
 
 目标：验证 Windows 原生 overlay 技术路线。
 
+Phase 7a 先做文档化 PoC baseline，不写 backend：
+
+- 基于 Microsoft 文档确认 Win32 window style、layered alpha、topmost/no-activate/tool
+  window、hit-test 穿透和 Mica/DWM backdrop 的候选路径。
+- 把 Windows 11 / Windows 10 的实测 checklist 写入 `overlay.md`。
+- 不新增 Windows renderer 文件，不引入 windows crate，不改变 macOS overlay。
+
 范围：
 
 - 验证 Win32 topmost/layered/tool window。

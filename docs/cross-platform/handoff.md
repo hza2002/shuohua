@@ -6,12 +6,12 @@
 
 ## 最近 commit
 
-HEAD: `feat: expose overlay renderer diagnostics`（Phase 6c 提交后）
+HEAD: `docs: record windows overlay poc baseline`（Phase 7a 提交后）
 
 ## 当前 phase
 
-Phase 6c: Overlay Renderer Capability Consumption 已完成并提交。下一步按计划进入
-Windows Overlay PoC，或先做更窄的 capability 消费方设计评审。
+Phase 7a: Windows Overlay PoC Baseline 已完成并提交。下一步是在 Windows 环境做最小
+overlay PoC，或继续补 Linux Wayland PoC baseline。
 
 ## 已完成事项
 
@@ -97,6 +97,13 @@ Windows Overlay PoC，或先做更窄的 capability 消费方设计评审。
     覆盖同 `CapabilityId` 的 overlay 条目。
   - doctor 错误/警告计数、退出码、IPC/daemon/overlay 运行路径不变；TUI/GUI 未接入。
   - `tests/platform_layout.rs` 增加 renderer capability 仅由 doctor 消费的边界测试。
+- Phase 7a:
+  - 更新 `docs/cross-platform/overlay.md`，基于 Microsoft 文档记录 Windows overlay PoC
+    baseline：Win32 popup/top-level window、extended styles、layered alpha、SetWindowPos
+    topmost、WM_NCHITTEST click-through、Mica/DWM backdrop 降级判断和 capture exclusion。
+  - 更新 `docs/cross-platform/development-plan.md`，把 Phase 7 拆出 7a 文档化 baseline。
+  - 更新 `docs/cross-platform/overview.md`，记录 Phase 7a 当前状态。
+  - 未新增 Windows renderer 文件，未引入依赖，未修改 macOS overlay 或 daemon 热路径。
 
 ## 验证结果
 
@@ -137,6 +144,8 @@ Windows Overlay PoC，或先做更窄的 capability 消费方设计评审。
 - Phase 5b 只抽 hotkey provider 启动边界，没有实现 Linux/Windows global hotkey backend。
 - Phase 6c 只把 renderer capability snapshot 接入 doctor summary，没有实现 Windows/Linux
   overlay renderer 骨架，也没有接入 TUI/GUI。
+- Phase 7a 只是 Microsoft 文档基线，不代表已在 Windows 11/10 真机验证。实际 topmost、
+  no-activate、click-through、材质、capture exclusion 和性能数据仍需 PoC 记录。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
   静态 `desktop.permissions=available` 误解为当前已授权。
 - `overlay::renderer::renderer_capabilities()` 同样是静态快照，不创建窗口、不 probe 当前
@@ -144,10 +153,11 @@ Windows Overlay PoC，或先做更窄的 capability 消费方设计评审。
 
 ## 下一步
 
-提交 Phase 6c 后，进入 Phase 7 前需要决定下一小步：
+提交 Phase 7a 后，进入下一小步：
 
-- 若继续收敛 capability 消费方，评审是否让 TUI/GUI 读取 overlay renderer snapshot。
-- 若进入 PoC，按 `development-plan.md` 先做 Windows Overlay PoC，仍不要实现完整 backend。
+- Windows 环境可用时，按 `docs/cross-platform/overlay.md` 的 Phase 7a checklist 做最小
+  overlay PoC，不写完整 backend。
+- 若当前环境不能跑 Windows PoC，可先做 Linux Wayland overlay PoC baseline 文档。
 
 建议下一 session prompt：
 
@@ -156,6 +166,6 @@ Windows Overlay PoC，或先做更窄的 capability 消费方设计评审。
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 6c Overlay Renderer Capability Consumption 已实现；先查看最新 commit 和验证结果。
-下一步在 TUI/GUI capability 消费方设计评审或 Windows Overlay PoC 之间做小步计划。
+Phase 7a Windows Overlay PoC Baseline 已实现；先查看最新 commit 和验证结果。
+下一步根据环境选择 Windows 最小 overlay PoC 或 Linux Wayland PoC baseline 文档。
 ```

@@ -41,6 +41,52 @@ Overlay 三端优先原生 renderer。共享 `OverlayCmd`、model、layout、the
 
 Windows 10 可运行，但高级材质不是必须。
 
+### Windows Phase 7a PoC Baseline
+
+Phase 7a 先记录 Windows overlay 技术路线，不写 backend。当前依据 Microsoft 文档的判断：
+
+- 窗口形态优先 Win32 borderless popup/top-level window。`CreateWindowEx` 支持创建带 extended
+  style 的 overlapped、popup 或 child window；overlay PoC 应以 popup/top-level 为主，避免
+  先绑定到 GUI/WebView 宿主。
+- 基础样式候选：`WS_EX_TOPMOST` 保持置顶，`WS_EX_TOOLWINDOW` 避免进入 Alt-Tab/taskbar，
+  `WS_EX_NOACTIVATE` 避免抢焦点，`WS_EX_LAYERED` 支持 alpha/layered 绘制。Microsoft
+  extended window styles 文档明确 layered window 由 `WS_EX_LAYERED` 表达；Windows 8 起
+  top-level 和 child window 都支持 layered style。
+- 置顶和定位用 `SetWindowPos` 验证。Microsoft 文档把 topmost window 描述为 Z-order 中最高
+  rank；PoC 需要确认录音期间不会被普通 app 覆盖。
+- 透明/半透明先走 `SetLayeredWindowAttributes` 或 `UpdateLayeredWindow`，再评估
+  Direct2D/DirectComposition。DirectComposition 可组合 layered window surface，但第一步不把
+  GPU composition 作为必需项。
+- Mica/DWM system backdrop 只作为 Windows 11 高级材质候选，不作为 baseline。Microsoft
+  Mica 文档将 Mica 定位为 app/settings 等 long-lived window 背景；DWM system backdrop 文档
+  也说明 DWM 可能按 heuristics 不绘制 backdrop。因此 overlay baseline 应先保证
+  `translucent`/`solid` 可读，再探索 Acrylic/Mica。
+- 鼠标穿透必须单独验证。`WM_NCHITTEST` 是系统决定 mouse message 去向的机制；PoC 可测试
+  返回 `HTTRANSPARENT` 的区域穿透，同时记录 touch/pen 行为是否不同。
+- 可选隐私能力：`SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` 可让窗口不出现在 capture
+  中，但这是后续 capability，不作为 overlay 可用性的 gate。
+
+Phase 7 PoC 验收数据应写回本节：
+
+- Windows 11：topmost、no-activate、tool window、alpha、click-through、文字绘制、
+  show/hide 延迟、CPU/GPU 空闲占用、capture exclusion 是否可用。
+- Windows 10：至少验证 layered translucent/solid fallback、topmost、no-activate、
+  click-through；高级材质可 unsupported/degraded。
+- 结论必须映射回 capability：`overlay.renderer`、`overlay.material`、
+  `overlay.always_on_top`、`overlay.input_passthrough`、`overlay.window_anchor`。
+
+参考资料：
+
+- [CreateWindowExA function](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createwindowexa)
+- [Extended Window Styles](https://learn.microsoft.com/en-us/windows/win32/winmsg/extended-window-styles)
+- [SetWindowPos function](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos)
+- [SetLayeredWindowAttributes function](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setlayeredwindowattributes)
+- [UpdateLayeredWindow function](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-updatelayeredwindow)
+- [WM_NCHITTEST message](https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-nchittest)
+- [Mica material](https://learn.microsoft.com/en-us/windows/apps/design/style/mica)
+- [DWM_SYSTEMBACKDROP_TYPE enum](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwm_systembackdrop_type)
+- [SetWindowDisplayAffinity function](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowdisplayaffinity)
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。

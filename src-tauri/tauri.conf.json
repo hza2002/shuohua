@@ -11,6 +11,7 @@
     "icon": ["../assets/icon/shuohua-icon-1024.png"]
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",

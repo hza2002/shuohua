@@ -131,12 +131,16 @@
         refreshButton.addEventListener("click", handleExplicitRefresh);
       }
 
-      async function loadShellMetadata() {
+      function requireTauriInvoke() {
         const invoke = window.__TAURI__?.core?.invoke;
         if (!invoke) {
-          return;
+          throw new Error("tauri-api-missing");
         }
+        return invoke;
+      }
 
+      async function loadShellMetadata() {
+        const invoke = requireTauriInvoke();
         const metadata = await invoke("gui_shell_metadata");
         document.getElementById("phase").textContent = metadata.phase;
         document.getElementById("daemon-connected").textContent = String(
@@ -257,11 +261,6 @@
       }
 
       async function handleExplicitRefresh() {
-        const invoke = window.__TAURI__?.core?.invoke;
-        if (!invoke) {
-          return;
-        }
-
         const status = document.getElementById("refresh-action-status");
         const result = document.getElementById("refresh-action-result");
         const button = document.getElementById("refresh-action-button");
@@ -270,6 +269,7 @@
         result.textContent = "pending";
 
         try {
+          const invoke = requireTauriInvoke();
           const summary = await invoke("gui_first_screen_summary_request_once", {
             historyLimit: 20,
           });

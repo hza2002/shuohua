@@ -2251,6 +2251,49 @@ fn gui_frontend_invokes_are_authorized_and_init_errors_are_visible() {
     }
 }
 
+#[test]
+fn gui_static_frontend_global_tauri_api_is_enabled_and_missing_api_is_visible() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9af",
+        "withGlobalTauri = true",
+        "window.__TAURI__.core.invoke",
+        "tauri-api-missing",
+        "不得静默 return",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9af global API token `{token}`"
+        );
+    }
+
+    let tauri_conf = std::fs::read_to_string(root.join("src-tauri/tauri.conf.json")).unwrap();
+    assert!(
+        tauri_conf.contains("\"withGlobalTauri\": true"),
+        "src-tauri/tauri.conf.json must enable withGlobalTauri for the static HTML placeholder"
+    );
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "tauri-api-missing",
+        "requireTauriInvoke",
+        "throw new Error(\"tauri-api-missing\")",
+        "projectInitializationError(error)",
+        "projectExplicitRefreshError(error)",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should expose missing Tauri API token `{token}`"
+        );
+    }
+    assert!(
+        !frontend.contains("if (!invoke) {\n          return;\n        }"),
+        "missing Tauri invoke API must not silently return from initialization or refresh"
+    );
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

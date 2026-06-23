@@ -23,6 +23,45 @@ fn tauri_application_command_permission(command_name: &str) -> String {
     format!("allow-{}", command_name.replace('_', "-"))
 }
 
+fn section_body<'a>(document: &'a str, header: &str) -> &'a str {
+    let start = document
+        .find(header)
+        .unwrap_or_else(|| panic!("missing section {header}"));
+    let after_header = &document[start + header.len()..];
+    let end = after_header.find("\n[").unwrap_or(after_header.len());
+    &after_header[..end]
+}
+
+#[test]
+fn linux_cross_check_does_not_download_vad_runtime_at_build_time() {
+    let manifest =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
+
+    let linux_section = section_body(
+        &manifest,
+        r#"[target.'cfg(target_os = "linux")'.dependencies]"#,
+    );
+    assert!(
+        !linux_section.contains(r#"voice_activity_detector"#),
+        "Linux cross checks must not compile voice_activity_detector because it enables ort-sys/download-binaries"
+    );
+
+    let non_linux_section = section_body(
+        &manifest,
+        r#"[target.'cfg(not(target_os = "linux"))'.dependencies]"#,
+    );
+    assert!(
+        non_linux_section.contains(r#"voice_activity_detector = "0.2.1""#),
+        "macOS/Windows VAD dependency should keep the current default runtime behavior"
+    );
+
+    let common_dependencies = section_body(&manifest, "[dependencies]");
+    assert!(
+        !common_dependencies.contains("voice_activity_detector"),
+        "voice_activity_detector must stay target-specific so Linux cross checks can avoid build-time runtime downloads"
+    );
+}
+
 #[test]
 fn shared_macos_adapters_live_under_platform_module() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));

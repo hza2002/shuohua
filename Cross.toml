@@ -1,0 +1,4 @@
+[target.x86_64-unknown-linux-gnu]
+pre-build = [
+    "export HTTP_PROXY=http://host.docker.internal:7890 HTTPS_PROXY=http://host.docker.internal:7890 http_proxy=http://host.docker.internal:7890 https_proxy=http://host.docker.internal:7890 && apt-get update && apt-get --assume-yes install pkg-config libasound2-dev",
+]

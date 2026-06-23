@@ -37,7 +37,6 @@ ratatui         = "0.30"
 crossterm       = "0.29"
 libc            = "0.2"
 unicode-segmentation = "1.13"
-voice_activity_detector = "0.2.1"
 tracing         = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "time", "registry"] }
 tracing-appender = "0.2"
@@ -51,6 +50,7 @@ tokio-tungstenite = { version = "0.29", default-features = false, features = ["c
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 reqwest         = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
+voice_activity_detector = "0.2.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics   = "0.25"

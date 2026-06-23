@@ -31,6 +31,7 @@ help:
 	@echo "  make check           fmt check, clippy -D warnings, test"
 	@echo "  make check-windows   cargo check for x86_64-pc-windows-msvc"
 	@echo "  make check-linux     cargo check for x86_64-unknown-linux-gnu"
+	@echo "  make check-linux-cross  cross check for x86_64-unknown-linux-gnu in Docker"
 	@echo "  make fmt             Format Rust code"
 
 .PHONY: debug
@@ -115,3 +116,7 @@ check-windows:
 .PHONY: check-linux
 check-linux:
 	$(CARGO) check --target x86_64-unknown-linux-gnu
+
+.PHONY: check-linux-cross
+check-linux-cross:
+	HTTP_PROXY=http://host.docker.internal:7890 HTTPS_PROXY=http://host.docker.internal:7890 http_proxy=http://host.docker.internal:7890 https_proxy=http://host.docker.internal:7890 DOCKER_DEFAULT_PLATFORM=linux/amd64 cross check --target x86_64-unknown-linux-gnu

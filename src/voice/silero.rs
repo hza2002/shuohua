@@ -1,7 +1,7 @@
 //! Silero VAD backend wrapper.
 //!
 //! 把 ONNX 加载和样本缓冲都封死在本模块里，给 voice 层和 dev trace 共用同一
-//! 套帧边界（每 512 样本 = 32ms @ 16kHz）。[`SileroVad`] 在所有 build 里都可用。
+//! 套帧边界（每 512 样本 = 32ms @ 16kHz）。
 
 use crate::voice::vad::VadFrame;
 
@@ -36,6 +36,7 @@ pub struct SileroFrame {
     pub frame: VadFrame,
 }
 
+#[cfg(not(target_os = "linux"))]
 pub struct SileroVad {
     detector: voice_activity_detector::VoiceActivityDetector,
     threshold: f32,
@@ -43,6 +44,10 @@ pub struct SileroVad {
     sample_offset: u64,
 }
 
+#[cfg(target_os = "linux")]
+pub struct SileroVad;
+
+#[cfg(not(target_os = "linux"))]
 impl SileroVad {
     pub fn new(config: SileroConfig) -> anyhow::Result<Self> {
         let detector = voice_activity_detector::VoiceActivityDetector::builder()
@@ -89,7 +94,20 @@ impl SileroVad {
     }
 }
 
-#[cfg(test)]
+#[cfg(target_os = "linux")]
+impl SileroVad {
+    pub fn new(_config: SileroConfig) -> anyhow::Result<Self> {
+        Err(anyhow::anyhow!(
+            "Silero VAD is not available on Linux until ONNX Runtime provisioning is defined"
+        ))
+    }
+
+    pub fn accept(&mut self, _samples: &[i16]) -> Vec<SileroFrame> {
+        Vec::new()
+    }
+}
+
+#[cfg(all(test, not(target_os = "linux")))]
 mod tests {
     use super::*;
 

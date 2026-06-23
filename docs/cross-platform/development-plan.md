@@ -631,6 +631,37 @@ Phase 10b TUI capability diagnostics:
 - This is a diagnostics visibility step only; it does not implement Windows/Linux overlay, hotkey, clipboard,
   service, or IPC backends.
 
+Phase 10c Docker/cross Linux check baseline:
+
+- `make check-linux-cross` runs
+  `DOCKER_DEFAULT_PLATFORM=linux/amd64 cross check --target x86_64-unknown-linux-gnu`, with Docker
+  container proxy variables pointed at `host.docker.internal:7890` for the current macOS Docker Desktop
+  environment.
+- This is the preferred macOS-hosted Linux cfg/type check because Docker provides the Linux sysroot and C
+  toolchain required by native build scripts such as `ring`.
+- Apple Silicon Docker needs the explicit `linux/amd64` platform because the upstream
+  `ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5` image does not publish a Linux arm64 manifest.
+- The upstream image currently carries `127.0.0.1:7890` proxy variables in this environment; inside Docker
+  that address is the container itself. The make target overrides the outer `cross` environment to
+  `host.docker.internal:7890`.
+- `Cross.toml` installs `pkg-config libasound2-dev` for the Linux GNU container because `cpal`'s Linux ALSA
+  backend compiles `alsa-sys` and needs `alsa.pc` from the sysroot.
+- Linux should not download ONNX Runtime at build time during cross checks. The Linux target uses
+  a local Silero unavailable stub and does not depend on `voice_activity_detector`, because that crate's
+  current `load-dynamic` feature still leaves `ort` default features enabled and pulls
+  `ort-sys/download-binaries` plus `native-tls` into the Docker build. Linux ONNX Runtime/VAD provisioning
+  remains a later runtime design item.
+- `cross` still requires Docker/Podman to be running and may require rustup metadata for the target-specific
+  stable toolchain on macOS. If it fails before starting Docker with
+  `toolchain 'stable-x86_64-unknown-linux-gnu' may not be able to run on this system`, install it with:
+
+  ```sh
+  rustup toolchain add stable-x86_64-unknown-linux-gnu --profile minimal --force-non-host
+  ```
+
+- Passing this check proves Linux compile/cfg boundaries only. It does not prove Linux service lifecycle,
+  desktop permissions, hotkey capture, overlay compositor behavior, or runtime IPC behavior.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

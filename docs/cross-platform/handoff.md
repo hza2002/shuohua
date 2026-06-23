@@ -14,6 +14,9 @@ GUI PoC 冻结，当前主线回到非 macOS 可用性。
 Windows IPC capability 诊断已与 Phase 3c 同步：Windows target 使用 Tokio Named Pipe transport
 编译通过，`ipc.transport` 静态 capability 报 `partial/named_pipe/runtime_not_verified`；runtime/ACL/
 smart fallback 仍需 Windows 实机或 VM 验证。
+Phase 10c Docker/cross Linux check baseline 已完成：macOS 主机使用 Docker/cross 负责 Linux
+sysroot 和 C toolchain，`make check-linux-cross` 可通过；这只证明 Linux compile/cfg 边界，
+不代表 Linux runtime 可用。
 
 ## 已完成事项
 
@@ -52,6 +55,22 @@ smart fallback 仍需 Windows 实机或 VM 验证。
     `Validate Named Pipe transport on Windows`。
   - `tests/platform_layout.rs` 增加静态守护，避免 Windows Named Pipe compile backend 已存在但
     capability 仍误报 unsupported。
+- Phase 10c:
+  - `Makefile` 新增 `make check-linux-cross`，执行
+    带 `host.docker.internal:7890` 代理覆盖的
+    `DOCKER_DEFAULT_PLATFORM=linux/amd64 cross check --target x86_64-unknown-linux-gnu`。
+  - `Cargo.toml` 把 `voice_activity_detector` 改成非 Linux target dependency；Linux target 不再依赖
+    `voice_activity_detector`，`src/voice/silero.rs` 在 Linux 下提供同名 unavailable stub，macOS/Windows
+    真实 Silero 行为不变。这避免 Linux cross check 触发 `ort-sys/download-binaries` ->
+    `ureq/native-tls` -> `openssl-sys` build-time 链路。
+  - 新增 `Cross.toml`，只为 Linux GNU container 安装 `pkg-config libasound2-dev`，满足 `cpal` Linux
+    ALSA backend 的 `alsa-sys` build script。
+  - 更新 `docs/cross-platform/development-plan.md`，记录 macOS-hosted Linux check 应优先走
+    Docker/cross，普通 `make check-linux` 仍需要本机 Linux C cross compiler/sysroot。
+  - 当前本机探测：`cross 0.2.5` 已安装，Docker daemon 已运行，`docker info` 为
+    `27.5.1 linux/aarch64`，Rust host 为 `aarch64-apple-darwin`。
+  - 当前本机已安装 `stable-x86_64-unknown-linux-gnu --force-non-host`；`cross check` 已进入 Docker
+    编译路径。
 - Phase 4a:
   - 更新 `docs/cross-platform/ipc-service.md`，把 Phase 4 拆成 lock/process probe facade 和
     后续 service manager facade。
@@ -849,6 +868,46 @@ smart fallback 仍需 Windows 实机或 VM 验证。
   641 个 binary unit tests、5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、
   2 个 `doc_consistency` tests、56 个 `platform_layout` tests、6 个 `theme_registry_build` tests、
   0 个 doctests。
+- Phase 10c 已跑环境探测：
+  `cross --version` 为 `cross 0.2.5`；`docker info --format '{{.ServerVersion}} {{.OSType}}/{{.Architecture}}'`
+  为 `27.5.1 linux/aarch64`；`rustup target list --installed` 包含
+  `aarch64-apple-darwin`、`x86_64-unknown-linux-gnu`。
+- Phase 10c 已跑：`cross check --target x86_64-unknown-linux-gnu`，失败于
+  `toolchain 'stable-x86_64-unknown-linux-gnu' may not be able to run on this system`，尚未进入 Docker
+  编译。
+- Phase 10c 已尝试：
+  `rustup toolchain add stable-x86_64-unknown-linux-gnu --profile minimal --force-non-host`，开始下载
+  3 个组件但第一次超过 90 秒无新输出后中断；第二次恢复半安装并完成。
+- Phase 10c 已跑：`DOCKER_DEFAULT_PLATFORM=linux/amd64 docker pull ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5`
+  并用 `docker run ... uname -m` 验证容器为 `x86_64`。不设置该变量时 Apple Silicon Docker 会失败于
+  `no matching manifest for linux/arm64/v8`。
+- Phase 10c 已跑：
+  `DOCKER_DEFAULT_PLATFORM=linux/amd64 cross check --target x86_64-unknown-linux-gnu`，进入 Docker
+  编译后失败于 `openssl-sys` 找不到 OpenSSL；`cargo tree --target all -i openssl-sys` 显示真实来源是
+  `voice_activity_detector` 默认启用 `ort/download-binaries`，进而由 `ort-sys` build dependency
+  `ureq/native-tls` 拉入 OpenSSL。
+- Phase 10c 已跑：曾尝试新增 `Cross.toml` 安装 `pkg-config libssl-dev`，`make check-linux-cross`
+  进入 custom image build，但 apt
+  失败于容器内 `127.0.0.1:7890` 代理不可达。宿主机 `127.0.0.1:7890` 和 Docker 内
+  `host.docker.internal:7890` 均可连；已在 Makefile 目标中覆盖 HTTP/HTTPS proxy 到
+  `host.docker.internal:7890`，但外层环境没有传进 Dockerfile build step；继续把代理覆盖写入
+  `Cross.toml` pre-build 后 apt 可安装，但 Ubuntu xenial 的 OpenSSL 1.0.2 不满足
+  `openssl-sys 0.9.116` 的 OpenSSL 1.1.0+ 要求。因此撤销安装 OpenSSL 的方案，改为 Linux target
+  不依赖 `voice_activity_detector`，用 Silero unavailable stub 避开 build-time download/native-tls
+  链路。
+- Phase 10c 已跑：`cargo tree --target x86_64-unknown-linux-gnu -i openssl-sys` 和
+  `cargo tree --target x86_64-unknown-linux-gnu -i voice_activity_detector` 在 Linux target 下均
+  `warning: nothing to print`；随后 `make check-linux-cross` 继续推进到 `alsa-sys`，失败于缺少
+  `alsa.pc` / `libasound2-dev`。已新增 `Cross.toml` 只安装 `pkg-config libasound2-dev`，尚需重新验证。
+- Phase 10c 已跑：`cargo test --test platform_layout linux_cross_check_does_not_download_vad_runtime_at_build_time`
+  先红灯失败于 Linux 仍直接依赖 `voice_activity_detector`，改成 Linux Silero unavailable stub 后通过。
+- Phase 10c 已跑：`make check-linux-cross`，exit 0。首次构建会创建
+  `cross-custom-shuohua:x86_64-unknown-linux-gnu-a42a7-pre-build`，并有大量非 macOS skeleton/dead-code
+  warnings；这些 warnings 不等同于 Linux runtime 可用。
+- Phase 10c 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`，
+  通过。`cargo test` 覆盖：92 个 library unit tests、641 个 binary unit tests、
+  5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency` tests、
+  57 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -971,6 +1030,8 @@ Windows IPC capability 诊断已与 Phase 3c 同步。下一步：
 - 下一阶段若继续 Windows，可做 Windows daemon single-instance/process probe/smart fallback skeleton
   收敛，或继续把 desktop/hotkey/service 的 Windows unsupported skeleton 接入 doctor/TUI 诊断。
 - 若继续 Linux build baseline，应优先配置 Linux C cross compiler/sysroot，或改用 Docker/cross/CI。
+- Phase 10c 已完成。下一步可继续 Linux runtime boundary：把 Linux service/desktop/hotkey/overlay
+  unsupported 或 degraded 状态进一步接入 doctor/TUI，或开始 Linux service manager skeleton。
 - 若继续 overlay 视觉 PoC，则需要用户提供真实 Windows 11/10 或 Linux wlroots/KDE/GNOME 环境；
   在当前 macOS 主机上不要假装验证真实 topmost/click-through/layer-shell 行为。
 - 真实 Windows 11/10、wlroots/KDE/GNOME overlay 视觉验证需要用户后续提供目标系统环境。

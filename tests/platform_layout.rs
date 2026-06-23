@@ -3290,6 +3290,37 @@ fn gui_event_stream_projects_first_screen_data_without_refresh() {
     }
 }
 
+#[test]
+fn windows_development_design_records_first_runtime_baseline() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let readme = std::fs::read_to_string(root.join("docs/cross-platform/README.md")).unwrap();
+    assert!(
+        readme.contains("[windows.md](windows.md)"),
+        "cross-platform README should route Windows development decisions to windows.md"
+    );
+
+    let doc = std::fs::read_to_string(root.join("docs/cross-platform/windows.md")).unwrap();
+    for token in [
+        "Windows is the next primary cross-platform target",
+        "normal per-user desktop application",
+        "%APPDATA%\\Shuohua",
+        "%LOCALAPPDATA%\\Shuohua",
+        "\\\\.\\pipe\\shuohua-<logon-sid-or-session-scoped-hash>",
+        "security descriptor/DACL",
+        "Local\\shuohua-<logon-sid-or-session-scoped-hash>",
+        "Task Scheduler logon task",
+        "WH_KEYBOARD_LL",
+        "SendInput",
+        "native Win32",
+        "Windows runtime validation must happen on Windows hardware or a Windows VM",
+    ] {
+        assert!(
+            doc.contains(token),
+            "docs/cross-platform/windows.md should record Windows runtime baseline token `{token}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

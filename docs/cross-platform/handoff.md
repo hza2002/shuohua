@@ -6,11 +6,17 @@
 
 ## 最近 commit
 
-HEAD: `test: sync non-macos desktop capabilities`
+HEAD: `docs: add windows development design`
 
 ## 当前 phase
 
-GUI PoC 冻结，当前主线回到非 macOS 可用性。
+GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10m Windows Development Design Baseline 已完成：新增 `docs/cross-platform/windows.md`，
+记录 Windows per-user desktop app 方向、AppData/LocalAppData 文件布局、Named Pipe 安全、
+user-session daemon lifecycle、Task Scheduler startup 边界、audio/hotkey/clipboard/overlay 路线、
+artifact 策略、runtime 验证顺序和需要用户介入的 stop points。
+下一步不要继续打磨 GUI placeholder；优先做 Windows runtime validation checklist，然后做
+Windows path/config/state backend 和 Windows artifact/CI。
 Windows IPC capability 诊断已与 Phase 3c 同步：Windows target 使用 Tokio Named Pipe transport
 编译通过，`ipc.transport` 静态 capability 报 `partial/named_pipe/runtime_not_verified`；runtime/ACL/
 smart fallback 仍需 Windows 实机或 VM 验证。
@@ -1190,15 +1196,18 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- 下一阶段若继续 Windows，可继续把 desktop/hotkey/clipboard/text-injection 的 Windows unsupported
-  skeleton 接入 doctor/TUI 诊断，或细化 Windows IPC/service runtime validation checklist。
-- 若继续 Linux service manager，可在真实 Linux/VM 前先做 install/status 设计细化；不要在 macOS
-  上假装验证 `systemctl --user` runtime。
-- Phase 10l 已完成。下一步可继续把 Linux/Windows desktop/hotkey/overlay runtime gaps 细化到
-  capability/doctor/TUI；真正 runtime validation 需要 Windows/Linux 目标系统。
-- 若继续 overlay 视觉 PoC，则需要用户提供真实 Windows 11/10 或 Linux wlroots/KDE/GNOME 环境；
-  在当前 macOS 主机上不要假装验证真实 topmost/click-through/layer-shell 行为。
-- 真实 Windows 11/10、wlroots/KDE/GNOME overlay 视觉验证需要用户后续提供目标系统环境。
+- Phase 10n：写 Windows runtime validation checklist，第一版只覆盖 version/doctor/config path、
+  state/history/log path、Named Pipe daemon status、single-instance smoke、service dry-run、Explorer
+  open/reveal。不要把 audio/overlay/hotkey/paste 塞进第一版，等可测 artifact/backend 后再加。
+- Phase 10o：实现 Windows path/config/state backend。`src/paths.rs` 当前仍是 Unix/XDG/HOME 路线；
+  Windows 应使用 known-folder/AppData 方向，config -> `%APPDATA%\Shuohua`，state/history/audio/logs/
+  traces -> `%LOCALAPPDATA%\Shuohua`。先补测试保护 Windows 不走 dotfile/XDG/HOME。
+- Phase 10p：做 Windows CI artifact build，优先让用户测试下载的 `shuo.exe`，不要要求用户反复在
+  Windows 上手动构建。
+- Phase 10q 之后才做 Named Pipe endpoint scoping/security descriptor 和 Windows runtime smoke；
+  这一步需要用户 Windows 机器/VM 介入。
+- audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability
+  升级。
 - 不继续 GUI 产品化开发。
 
 建议下一 session prompt：
@@ -1209,6 +1218,9 @@ permission probe 或 active app runtime。
 development-plan.md、gui.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
 Phase 9al 后 GUI PoC 已冻结；不要继续打磨 GUI placeholder。
+Phase 10m Windows Development Design Baseline 已完成；`docs/cross-platform/windows.md` 是
+Windows-first 实现基线。后续主线是 Phase 10n Windows runtime validation checklist，然后
+Phase 10o Windows path/config/state backend，再做 Windows CI artifact build。
 Phase 7b/8b overlay backend skeleton、Phase 3b IPC transport cfg boundary、Phase 10a
 cross-check baseline、Phase 10b TUI capability diagnostics、Phase 10c Docker/cross Linux
 check baseline、Phase 10d Linux compile-time capability sync、Phase 3c Windows Named Pipe
@@ -1217,7 +1229,6 @@ Phase 10j Windows lifecycle primitive compile backend、Phase 10k Windows servic
 skeleton 和 Phase 10l non-macOS desktop capability truthfulness 已完成。先查看最新
 diff/commit 和验证结果。
 保持 macOS 不回退，不引入 GUI/WebView。不要把 Windows Named Pipe compile backend 当成实机
-runtime 验收。下一步优先考虑 Linux/Windows desktop/hotkey capability diagnostics、Windows IPC/service
-runtime validation checklist，或继续 overlay skeleton 诊断收敛；真实 overlay 视觉 PoC 需要用户
-提供目标系统。
+runtime 验收。下一步优先写 Windows runtime validation checklist；随后实现 Windows path/config/state
+backend。真实 Windows IPC/audio/overlay/hotkey/clipboard 验证需要用户目标系统。
 ```

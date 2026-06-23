@@ -600,14 +600,17 @@ Phase 9al 后冻结 GUI 产品化开发：
 
 目标：在不依赖完整 overlay/GUI 的前提下，让核心能力在第一个非 macOS 平台可运行。
 
-建议顺序：
+当前顺序：
 
-1. Linux cloud ASR core：config、ASR provider、post、history、IPC。
-2. Linux service manager。
-3. Linux desktop capability。
-4. Windows core。
+1. 保留已完成的 Linux compile/capability/service dry-run 基线，作为 Unix 侧回归保护。
+2. Windows-first core：path/config/state、IPC endpoint security、single instance runtime、audio、
+   overlay、hotkey、clipboard/paste。
+3. Windows artifact/CI 优先于反复让用户在 Windows 上手动构建。
+4. Linux runtime backend 在 Windows 核心路径稳定后继续推进。
 
-选择 Linux first 是为了更快复用 Unix socket 和 CI；Windows 设计约束必须在接口评审时同时考虑。
+选择 Windows first 是因为 Windows 与 macOS/Linux 的桌面、安全、IPC、启动和输入模型差异最大。
+先把 Windows 的约束落到接口和 runtime 验证里，可以降低后续从 Linux 回补 Windows 时重改边界的风险。
+Linux compile/cfg 基线仍保留，用于防止共享代码破坏非 macOS 编译。
 
 Phase 10a cross-check baseline:
 
@@ -746,6 +749,54 @@ Phase 10l Non-macOS Desktop Capability Truthfulness:
   to default/empty context; desktop permissions are unavailable because no permission probe exists.
 - This phase must not implement Linux/Windows desktop APIs, hotkey capture, clipboard writes, text injection,
   permission probes, or active-window lookup.
+
+Phase 10m Windows Development Design Baseline:
+
+- Add `docs/cross-platform/windows.md` as the Windows-first implementation baseline.
+- Record Windows per-user file layout, Named Pipe security, user-session daemon lifecycle, Task Scheduler
+  startup direction, audio/hotkey/clipboard/overlay routes, artifact strategy, runtime validation order, and
+  user-intervention points.
+- This phase is docs-only. It must not change Windows behavior or promote any Windows capability.
+
+Phase 10n Windows Runtime Validation Checklist:
+
+- Add a Windows validation checklist document or section that the user can run directly on Windows.
+- Include exact commands, expected observable behavior, and where to paste command output.
+- Scope the first checklist to version/doctor/config paths, state/history/log path creation, Named Pipe daemon
+  status, single-instance smoke, service dry-run status, and Explorer open/reveal.
+- Do not include audio, overlay, hotkey, or paste in the first checklist until a testable artifact exists.
+
+Phase 10o Windows Path/Config/State Backend:
+
+- Replace Unix-only path discovery in `src/paths.rs` with a Windows backend using per-user known folders:
+  config under `%APPDATA%\Shuohua`, state/history/audio/logs/traces under `%LOCALAPPDATA%\Shuohua`.
+- Prefer Windows known-folder APIs; allow environment fallback only when documented as development fallback.
+- Add tests that protect Windows from using Unix dotfile/XDG/HOME paths.
+- This phase must not change macOS path layout or config schema.
+
+Phase 10p Windows CI Artifact Build:
+
+- Add a `windows-latest` build path that produces a debug or release `shuo.exe` artifact suitable for manual
+  smoke testing.
+- Keep artifact build separate from runtime validation. CI proves build/package shape, not hotkey/audio/overlay
+  behavior.
+- This phase should run after the Windows path backend so first manual artifacts create data in final locations.
+
+Phase 10q Windows Named Pipe Security And Runtime Smoke:
+
+- Replace the skeleton pipe endpoint with a user/session scoped endpoint and explicit security descriptor/DACL.
+- Preserve the JSON-line protocol and existing transport facade.
+- Add compile checks/tests for endpoint naming and ACL construction where possible.
+- Stop for Windows runtime testing after this phase because pipe ACL, elevation, and session behavior cannot be
+  accepted from macOS.
+
+Phase 10r Windows Desktop Runtime Sequence:
+
+- Continue in this order after IPC runtime smoke: audio capture, overlay visible PoC, hotkey low-level hook,
+  clipboard/paste.
+- Each subphase should update `windows.md`, add focused tests/compile checks, implement the smallest backend,
+  and stop for user Windows runtime validation before capability promotion.
+- GUI product work remains frozen during these subphases.
 
 ## 持续维护
 

@@ -1,4 +1,4 @@
-use shuohua::ipc::protocol::Command;
+use shuohua::ipc::protocol::{Command, Event, WireState};
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,6 +41,9 @@ struct GuiDaemonStatusSnapshot {
     transport_opened: bool,
     snapshot_available: bool,
     state_label: &'static str,
+    pid: Option<u32>,
+    uptime_ms: Option<u64>,
+    recording_id: Option<String>,
     request: GuiDaemonStatusRequestSummary,
 }
 
@@ -71,17 +74,58 @@ fn gui_first_screen_request_plan(history_limit: Option<usize>) -> GuiFirstScreen
 
 #[tauri::command]
 fn gui_daemon_status_snapshot() -> GuiDaemonStatusSnapshot {
-    let request = Command::DaemonStatus;
+    empty_daemon_status_snapshot()
+}
 
+fn empty_daemon_status_snapshot() -> GuiDaemonStatusSnapshot {
     GuiDaemonStatusSnapshot {
         connected: false,
         transport_opened: false,
         snapshot_available: false,
         state_label: "disconnected",
+        pid: None,
+        uptime_ms: None,
+        recording_id: None,
         request: GuiDaemonStatusRequestSummary {
-            request_kind: daemon_status_request_kind(&request),
+            request_kind: daemon_status_request_kind(&Command::DaemonStatus),
             requires_daemon_connection: true,
         },
+    }
+}
+
+#[allow(dead_code)]
+fn gui_daemon_status_snapshot_from_event(event: &Event) -> Option<GuiDaemonStatusSnapshot> {
+    let Event::DaemonStatus {
+        pid,
+        uptime_ms,
+        state,
+        recording_id,
+    } = event
+    else {
+        return None;
+    };
+
+    Some(GuiDaemonStatusSnapshot {
+        connected: true,
+        transport_opened: true,
+        snapshot_available: true,
+        state_label: wire_state_label(*state),
+        pid: Some(*pid),
+        uptime_ms: Some(*uptime_ms),
+        recording_id: recording_id.clone(),
+        request: GuiDaemonStatusRequestSummary {
+            request_kind: daemon_status_request_kind(&Command::DaemonStatus),
+            requires_daemon_connection: true,
+        },
+    })
+}
+
+fn wire_state_label(state: WireState) -> &'static str {
+    match state {
+        WireState::Idle => "idle",
+        WireState::Recording => "recording",
+        WireState::Stopping => "stopping",
+        WireState::Error => "error",
     }
 }
 
@@ -111,4 +155,33 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Shuohua GUI");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shuohua::ipc::protocol::{Event, WireState};
+
+    #[test]
+    fn daemon_status_event_maps_to_snapshot_shape_without_ipc() {
+        let event = Event::DaemonStatus {
+            pid: 42,
+            uptime_ms: 12_345,
+            state: WireState::Recording,
+            recording_id: Some("01STATUS".to_string()),
+        };
+
+        let snapshot = gui_daemon_status_snapshot_from_event(&event).unwrap();
+
+        assert!(snapshot.connected);
+        assert!(snapshot.transport_opened);
+        assert!(snapshot.snapshot_available);
+        assert_eq!(snapshot.state_label, "recording");
+        assert_eq!(snapshot.pid, Some(42));
+        assert_eq!(snapshot.uptime_ms, Some(12_345));
+        assert_eq!(snapshot.recording_id.as_deref(), Some("01STATUS"));
+        assert_eq!(snapshot.request.request_kind, "daemonStatus");
+        assert!(snapshot.request.requires_daemon_connection);
+        assert!(gui_daemon_status_snapshot_from_event(&Event::HistoryChanged).is_none());
+    }
 }

@@ -960,7 +960,6 @@ fn gui_backend_shell_placeholder_stays_local_to_tauri_app() {
         "connect_default",
         "DaemonClient",
         "ipc::client",
-        "Event::",
         "tokio::spawn",
         "tokio::time",
         "std::thread::spawn",
@@ -1193,6 +1192,61 @@ fn gui_daemon_status_snapshot_shape_does_not_send_ipc() {
                 "{relative} must not import GUI runtime token `{token}`"
             );
         }
+    }
+}
+
+#[test]
+fn gui_daemon_status_event_mapper_is_pure_and_local_to_tauri_app() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9q",
+        "daemon status event mapper",
+        "Event::DaemonStatus",
+        "connected=true",
+        "transportOpened=true",
+        "snapshotAvailable=true",
+        "不得调用 `send_command`",
+        "不得订阅 daemon event stream",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9q daemon status mapper token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "gui_daemon_status_snapshot_from_event",
+        "Event::DaemonStatus",
+        "WireState::Idle",
+        "WireState::Recording",
+        "WireState::Stopping",
+        "WireState::Error",
+        "pid",
+        "uptime_ms",
+        "recording_id",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should expose Phase 9q daemon status mapper token `{token}`"
+        );
+    }
+
+    for token in [
+        "connect_default",
+        "DaemonClient",
+        "send_command",
+        "subscribe_events",
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+    ] {
+        assert!(
+            !tauri_lib.contains(token),
+            "Phase 9q daemon status mapper must not connect daemon or own runtime loop token `{token}`"
+        );
     }
 }
 

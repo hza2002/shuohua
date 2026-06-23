@@ -6,12 +6,12 @@
 
 ## 最近 commit
 
-HEAD: `feat: add gui daemon status snapshot shape`
+HEAD: `feat: add gui daemon status event mapper`
 
 ## 当前 phase
 
-Phase 9p: GUI Daemon Status Snapshot Shape 已实现并完成自动验证，但尚未提交。下一步可以继续做
-真实 daemon status IPC request 的设计前置小步，或回到 Windows/Linux overlay PoC；不要直接做完整
+Phase 9q: GUI Daemon Status Event Mapper 已实现并完成自动验证，但尚未提交。下一步可以继续做
+真实 daemon status IPC request 的一个窄切片，或回到 Windows/Linux overlay PoC；不要直接做完整
 GUI、reconnect runtime、service management、配置编辑器或 release 打包指标。
 
 ## 已完成事项
@@ -318,6 +318,21 @@ GUI、reconnect runtime、service management、配置编辑器或 release 打包
     不调用 `connect_default()`、不发送 IPC、不订阅 event stream、不启动 spawn/timer。
   - 未运行 `tauri dev` / `tauri build` / `tauri bundle`，未启动 daemon/GUI，未新增 IPC
     command/event，未实现 reconnect supervisor 或 service management。
+- Phase 9q:
+  - 更新 `docs/cross-platform/gui.md`，记录 GUI daemon status event mapper 的边界：只把调用方
+    已拿到的既有 `Event::DaemonStatus` 映射成 Phase 9p 的 status snapshot response shape。
+  - 更新 `docs/cross-platform/development-plan.md` 和 `docs/cross-platform/overview.md`，记录
+    Phase 9q 范围和状态。
+  - `src-tauri/src/lib.rs` 新增纯 `gui_daemon_status_snapshot_from_event()` mapper 和
+    `wire_state_label()` helper；mapper 只处理 `Event::DaemonStatus`，其他 event 返回 `None`。
+  - `GuiDaemonStatusSnapshot` 增加 `pid`、`uptime_ms`、`recording_id` 可选字段；9p 的
+    `gui_daemon_status_snapshot` 继续通过 empty helper 返回未连接静态 shape。
+  - 新增 Tauri crate 单元测试覆盖 `Event::DaemonStatus` 到 snapshot shape 的映射，以及
+    `HistoryChanged` 不被误处理。
+  - `tests/platform_layout.rs` 增加 Phase 9q 架构守卫，确认 mapper 不创建 `DaemonClient`、
+    不调用 `connect_default()`、不发送 IPC、不订阅 event stream、不启动 spawn/timer。
+  - 未运行 `tauri dev` / `tauri build` / `tauri bundle`，未启动 daemon/GUI，未新增 IPC
+    command/event，未实现真实 status request、reconnect supervisor 或 service management。
 
 ## 验证结果
 
@@ -460,6 +475,15 @@ GUI、reconnect runtime、service management、配置编辑器或 release 打包
   通过。`cargo test` 覆盖：92 个 library unit tests、639 个 binary unit tests、
   5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
   tests、28 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests。
+- Phase 9q 已跑：`cargo test --manifest-path src-tauri/Cargo.toml daemon_status_event_maps_to_snapshot_shape_without_ipc`，
+  先红灯失败于缺少 `gui_daemon_status_snapshot_from_event`，实现后通过。
+- Phase 9q 已跑：`cargo test --test platform_layout gui_daemon_status_event_mapper_is_pure_and_local_to_tauri_app`，
+  通过。
+- Phase 9q 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo check --manifest-path src-tauri/Cargo.toml && cargo test --manifest-path src-tauri/Cargo.toml daemon_status_event_maps_to_snapshot_shape_without_ipc`，
+  通过。`cargo test` 覆盖：92 个 library unit tests、639 个 binary unit tests、
+  5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
+  tests、29 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests；
+  Tauri crate 单测覆盖 1 个 `daemon_status_event_maps_to_snapshot_shape_without_ipc`。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -495,8 +519,9 @@ GUI、reconnect runtime、service management、配置编辑器或 release 打包
   capabilities JSON、frontend command binding、release build 或打包验证。
 - Phase 9l 只记录 reconnect supervisor ownership/cancellation 语义，没有实现真实 runtime loop、
   Tauri event emission、frontend view model 或 metrics sink。
-- Phase 9m/9n/9o/9p 只创建最小 `src-tauri/**` skeleton、静态 placeholder、本地 metadata command、
-  first-screen request plan command 和 daemon status snapshot shape command；
+- Phase 9m/9n/9o/9p/9q 只创建最小 `src-tauri/**` skeleton、静态 placeholder、本地 metadata
+  command、first-screen request plan command、daemon status snapshot shape command 和纯
+  daemon status event mapper；
   尚未运行 `tauri dev` / `tauri build` / `tauri bundle`，也没有启动 GUI 或 daemon。后续需要
   单独决定何时运行 release build、如何记录 cold start/RSS/CPU/bundle 指标。
 - Phase 9n 的 `gui_shell_metadata` 只验证本地 command wiring，不连接 daemon、不读
@@ -505,6 +530,8 @@ GUI、reconnect runtime、service management、配置编辑器或 release 打包
   event stream、不读取 daemon status。
 - Phase 9p 的 `gui_daemon_status_snapshot` 只固定 status response shape，不连接 daemon、
   不发送 `Command::DaemonStatus`、不读取真实 `Event::DaemonStatus`。
+- Phase 9q 的 `gui_daemon_status_snapshot_from_event` 只映射调用方已提供的
+  `Event::DaemonStatus`；仍没有真实 IPC request、event stream 或 Tauri event emission。
 - `ipc::transport` 仍是 Unix-only，library client 只实际覆盖 macOS/Linux 当前 transport。
   Windows Named Pipe adapter 仍是后续 IPC transport backend 工作。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
@@ -514,9 +541,9 @@ GUI、reconnect runtime、service management、配置编辑器或 release 打包
 
 ## 下一步
 
-Phase 9p 后，进入下一小步：
+Phase 9q 后，进入下一小步：
 
-- 若继续 GUI，下一阶段只能先设计真实 daemon status IPC request 的一个窄切片；继续禁止 daemon
+- 若继续 GUI，下一阶段可以做真实 daemon status IPC request 的一个窄切片；继续禁止 daemon
   热路径引入 WebView，且不要启动 daemon、GUI 或 release 打包。
 - 若目标平台环境可用，也可以先按 Phase 7a/8a checklist 做 Windows/Linux 最小 overlay PoC。
 
@@ -527,6 +554,6 @@ Phase 9p 后，进入下一小步：
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、gui.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 9p GUI Daemon Status Snapshot Shape 已实现；先查看最新 commit 和验证结果。
-下一步在真实 daemon status IPC request 设计前置小步或 Windows/Linux overlay PoC 之间做一个小步计划。
+Phase 9q GUI Daemon Status Event Mapper 已实现；先查看最新 commit 和验证结果。
+下一步在真实 daemon status IPC request 窄切片或 Windows/Linux overlay PoC 之间做一个小步计划。
 ```

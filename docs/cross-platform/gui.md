@@ -272,6 +272,21 @@ Phase 9p 增加 GUI daemon status snapshot shape command，不发送 IPC：
 - 这个阶段不新增 IPC command/event，不 bump `PROTO_VERSION`，不改变 TUI/CLI 行为，不运行
   `tauri dev`、`tauri build` 或 `tauri bundle`，不启动 daemon/GUI。
 
+Phase 9q 增加 GUI daemon status event mapper，不发送 IPC：
+
+- `src-tauri` 可以增加一个纯 mapper，把调用方已经拿到的既有 `Event::DaemonStatus` 转成
+  Phase 9p 固定的 daemon status snapshot response shape。mapper 只处理 status event，不解释
+  snapshot、history、error 或 config reload event。
+- mapper 输出字段保持稳定：`connected=true`、`transportOpened=true`、
+  `snapshotAvailable=true`、`stateLabel`、`pid`、`uptimeMs`、`recordingId`，并继续带
+  `request.requestKind=daemonStatus`。空 snapshot helper 继续表达未连接状态。
+- 该阶段仍不是真实 status client：不得创建 `DaemonClient`、不得调用 `connect_default()`、
+  不得调用 `send_command`、不得订阅 daemon event stream、不得启动 reconnect loop 或 timer。
+- `gui_daemon_status_snapshot` command 继续返回未连接静态 shape。真实连接、发送
+  `Command::DaemonStatus`、读取 `Event::DaemonStatus` 和 Tauri event emission 留给后续阶段。
+- 这个阶段不新增 IPC command/event，不 bump `PROTO_VERSION`，不改变 TUI/CLI 行为，不运行
+  `tauri dev`、`tauri build` 或 `tauri bundle`，不启动 daemon/GUI。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：

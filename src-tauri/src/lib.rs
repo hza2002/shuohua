@@ -166,6 +166,18 @@ struct GuiFirstScreenRefreshShape {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+struct GuiFirstScreenRefreshAffordanceShape {
+    button_label: &'static str,
+    enabled: bool,
+    explicit_trigger_required: bool,
+    invoke_target: &'static str,
+    default_history_limit: usize,
+    loading: bool,
+    source: &'static str,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct GuiFirstScreenReadinessShape {
     ready: bool,
     inputs: GuiFirstScreenReadinessInputs,
@@ -248,6 +260,21 @@ fn gui_first_screen_refresh_shape(history_limit: Option<usize>) -> GuiFirstScree
         requires_daemon_connection: true,
         transport_opened: false,
         invoke_target: "gui_first_screen_summary_request_once",
+    }
+}
+
+#[tauri::command]
+fn gui_first_screen_refresh_affordance_shape(
+    history_limit: Option<usize>,
+) -> GuiFirstScreenRefreshAffordanceShape {
+    GuiFirstScreenRefreshAffordanceShape {
+        button_label: "Refresh",
+        enabled: true,
+        explicit_trigger_required: true,
+        invoke_target: "gui_first_screen_summary_request_once",
+        default_history_limit: history_limit.unwrap_or(20),
+        loading: false,
+        source: "placeholder",
     }
 }
 
@@ -770,6 +797,7 @@ pub fn run() {
             gui_first_screen_request_plan,
             gui_daemon_status_snapshot,
             gui_first_screen_refresh_shape,
+            gui_first_screen_refresh_affordance_shape,
             gui_first_screen_readiness_shape,
             gui_first_screen_offline_shape,
             gui_first_screen_command_policy_shape,
@@ -986,6 +1014,22 @@ mod tests {
             shape.invoke_target,
             "gui_first_screen_summary_request_once"
         );
+    }
+
+    #[test]
+    fn first_screen_refresh_affordance_shape_is_static_placeholder() {
+        let shape = gui_first_screen_refresh_affordance_shape(Some(12));
+
+        assert_eq!(shape.button_label, "Refresh");
+        assert!(shape.enabled);
+        assert!(shape.explicit_trigger_required);
+        assert_eq!(
+            shape.invoke_target,
+            "gui_first_screen_summary_request_once"
+        );
+        assert_eq!(shape.default_history_limit, 12);
+        assert!(!shape.loading);
+        assert_eq!(shape.source, "placeholder");
     }
 
     #[test]

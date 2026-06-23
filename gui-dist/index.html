@@ -83,6 +83,14 @@
         <dd id="refresh-default-history-limit">20</dd>
         <dt>Refresh target</dt>
         <dd id="refresh-invoke-target">gui_first_screen_summary_request_once</dd>
+        <dt>Refresh affordance</dt>
+        <dd id="refresh-affordance-label">Refresh</dd>
+        <dt>Affordance enabled</dt>
+        <dd id="refresh-affordance-enabled">true</dd>
+        <dt>Affordance loading</dt>
+        <dd id="refresh-affordance-loading">false</dd>
+        <dt>Affordance source</dt>
+        <dd id="refresh-affordance-source">placeholder</dd>
         <dt>Readiness ready</dt>
         <dd id="readiness-ready">false</dd>
         <dt>Readiness inputs</dt>
@@ -163,6 +171,21 @@
         );
         document.getElementById("refresh-invoke-target").textContent =
           refreshShape.invokeTarget;
+
+        const refreshAffordance = await invoke(
+          "gui_first_screen_refresh_affordance_shape",
+          { historyLimit: 20 }
+        );
+        document.getElementById("refresh-affordance-label").textContent =
+          refreshAffordance.buttonLabel;
+        document.getElementById("refresh-affordance-enabled").textContent = String(
+          refreshAffordance.enabled
+        );
+        document.getElementById("refresh-affordance-loading").textContent = String(
+          refreshAffordance.loading
+        );
+        document.getElementById("refresh-affordance-source").textContent =
+          refreshAffordance.source;
 
         const readinessShape = await invoke("gui_first_screen_readiness_shape");
         document.getElementById("readiness-ready").textContent = String(

@@ -1775,6 +1775,84 @@ fn gui_first_screen_command_policy_shape_keeps_one_shots_explicit() {
     );
 }
 
+#[test]
+fn gui_first_screen_refresh_affordance_shape_stays_static() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9z",
+        "gui_first_screen_refresh_affordance_shape",
+        "affordance preflight",
+        "不得注册真实 click handler",
+        "不得调用 `gui_first_screen_summary_request_once`",
+        "loading=false",
+        "不得启动 timer/reconnect loop",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9z refresh affordance token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "gui_first_screen_refresh_affordance_shape",
+        "GuiFirstScreenRefreshAffordanceShape",
+        "button_label",
+        "enabled",
+        "explicit_trigger_required",
+        "invoke_target",
+        "default_history_limit",
+        "loading",
+        "source",
+        "tauri::generate_handler!",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should expose Phase 9z refresh affordance token `{token}`"
+        );
+    }
+
+    for token in [
+        "client.send(&Command::Subscribe)",
+        "subscribe_events",
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+    ] {
+        assert!(
+            !tauri_lib.contains(token),
+            "Phase 9z refresh affordance shape must not subscribe, reconnect, spawn, or own timer token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "gui_first_screen_refresh_affordance_shape",
+        "refresh-affordance-label",
+        "refresh-affordance-enabled",
+        "refresh-affordance-loading",
+        "refresh-affordance-source",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should display refresh affordance token `{token}`"
+        );
+    }
+    assert!(
+        !frontend.contains("addEventListener(\"click\"")
+            && !frontend.contains("addEventListener('click'")
+            && !frontend.contains("onclick="),
+        "placeholder must not register a real refresh click handler"
+    );
+    assert!(
+        !frontend.contains("invoke(\"gui_first_screen_summary_request_once\"")
+            && !frontend.contains("invoke('gui_first_screen_summary_request_once'"),
+        "placeholder must not auto-call the one-shot first-screen summary request"
+    );
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

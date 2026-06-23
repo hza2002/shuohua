@@ -2294,6 +2294,90 @@ fn gui_static_frontend_global_tauri_api_is_enabled_and_missing_api_is_visible() 
     );
 }
 
+#[test]
+fn gui_manual_refresh_summary_is_readable_and_click_scoped() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9ag",
+        "manual summary",
+        "最近一次显式 Refresh",
+        "summary projection 只发生在 explicit refresh click",
+        "不新增 backend command",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9ag manual summary token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "manual-summary-status",
+        "manual-summary-state",
+        "manual-summary-history",
+        "manual-summary-latest",
+        "manual-summary-timing",
+        "manual-summary-error",
+        "projectManualRefreshSummary",
+        "projectManualRefreshError",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should expose readable manual refresh summary token `{token}`"
+        );
+    }
+
+    let success_call_pos = frontend
+        .find("projectManualRefreshSummary(summary)")
+        .expect("manual refresh success summary projection call should be present");
+    let error_call_pos = frontend
+        .find("projectManualRefreshError(error)")
+        .expect("manual refresh error summary projection call should be present");
+    let click_handler_pos = frontend
+        .find("function handleExplicitRefresh")
+        .expect("explicit refresh handler should be present");
+    let catch_pos = frontend
+        .find("catch (error)")
+        .expect("explicit refresh catch path should be present");
+    assert!(
+        success_call_pos > click_handler_pos && success_call_pos < catch_pos,
+        "manual success summary projection must stay in the explicit refresh success path"
+    );
+    assert!(
+        error_call_pos > catch_pos,
+        "manual error summary projection must stay in the explicit refresh catch path"
+    );
+
+    for token in [
+        "summary.status.stateLabel",
+        "summary.history.pageRecordCount",
+        "summary.history.latestRecord",
+        "summary.timing.requestDurationMs",
+        "String(error?.message ?? error)",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "manual refresh summary projection should use token `{token}`"
+        );
+    }
+
+    for token in [
+        "setInterval",
+        "setTimeout",
+        "subscribe_events",
+        "client.send(&Command::Subscribe)",
+        "install_service",
+        "restart_service",
+    ] {
+        assert!(
+            !frontend.contains(token),
+            "Phase 9ag frontend must not subscribe, loop, or manage service token `{token}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

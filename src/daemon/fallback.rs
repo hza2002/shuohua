@@ -64,7 +64,17 @@ fn socket_status_from_connect_result(result: std::io::Result<()>) -> SocketStatu
 }
 
 fn socket_status(path: &Path) -> SocketStatus {
+    connect_endpoint(path)
+}
+
+#[cfg(unix)]
+fn connect_endpoint(path: &Path) -> SocketStatus {
     socket_status_from_connect_result(std::os::unix::net::UnixStream::connect(path).map(|_| ()))
+}
+
+#[cfg(windows)]
+fn connect_endpoint(_path: &Path) -> SocketStatus {
+    SocketStatus::Absent
 }
 
 fn wait_for_socket(path: &Path, timeout: Duration) -> Result<()> {

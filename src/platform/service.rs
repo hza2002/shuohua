@@ -124,11 +124,11 @@ mod imp {
 
     async fn stop_with<F>(
         request_shutdown: impl FnOnce() -> F,
-        wait_for_exit: impl FnOnce(libc::pid_t) -> Result<()>,
+        wait_for_exit: impl FnOnce(crate::platform::lifecycle::Pid) -> Result<()>,
         print_stopped: impl FnOnce(),
     ) -> Result<()>
     where
-        F: Future<Output = Result<libc::pid_t>>,
+        F: Future<Output = Result<crate::platform::lifecycle::Pid>>,
     {
         let pid = request_shutdown().await?;
         wait_for_exit(pid)?;
@@ -136,7 +136,7 @@ mod imp {
         Ok(())
     }
 
-    async fn request_daemon_shutdown() -> Result<libc::pid_t> {
+    async fn request_daemon_shutdown() -> Result<crate::platform::lifecycle::Pid> {
         tokio::time::timeout(DAEMON_STATUS_TIMEOUT, async {
             let mut client = crate::ipc::client::IpcClient::connect_default().await?;
             client.send(&Command::Shutdown).await?;
@@ -146,7 +146,7 @@ mod imp {
         .context("shutdown IPC timed out")?
     }
 
-    fn parse_shutdown_reply(reply: Option<Event>) -> Result<libc::pid_t> {
+    fn parse_shutdown_reply(reply: Option<Event>) -> Result<crate::platform::lifecycle::Pid> {
         let pid = match reply {
             Some(Event::DaemonStatus { pid, .. }) => pid,
             Some(event) => {
@@ -154,13 +154,13 @@ mod imp {
             }
             None => anyhow::bail!("daemon closed IPC before sending DaemonStatus"),
         };
-        if pid == 0 || pid > libc::pid_t::MAX as u32 {
+        if pid == 0 || pid > crate::platform::lifecycle::Pid::MAX as u32 {
             anyhow::bail!("invalid daemon PID in shutdown reply: {pid}");
         }
-        Ok(pid as libc::pid_t)
+        Ok(pid as crate::platform::lifecycle::Pid)
     }
 
-    fn wait_for_pid_exit(pid: libc::pid_t) -> Result<()> {
+    fn wait_for_pid_exit(pid: crate::platform::lifecycle::Pid) -> Result<()> {
         wait_for_pid_exit_with(
             pid,
             DAEMON_EXIT_TIMEOUT,
@@ -172,10 +172,10 @@ mod imp {
     }
 
     fn wait_for_pid_exit_with(
-        pid: libc::pid_t,
+        pid: crate::platform::lifecycle::Pid,
         timeout: Duration,
         poll_interval: Duration,
-        mut process_exists: impl FnMut(libc::pid_t) -> Result<bool>,
+        mut process_exists: impl FnMut(crate::platform::lifecycle::Pid) -> Result<bool>,
         mut sleep: impl FnMut(Duration),
         mut now: impl FnMut() -> Instant,
     ) -> Result<()> {

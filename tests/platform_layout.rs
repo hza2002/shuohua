@@ -177,6 +177,46 @@ fn ipc_protocol_and_handlers_do_not_own_transport_backend() {
 }
 
 #[test]
+fn ipc_transport_backends_are_cfg_gated() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let transport = std::fs::read_to_string(root.join("src/ipc/transport.rs")).unwrap();
+
+    for token in [
+        "#[cfg(unix)]",
+        "#[cfg(windows)]",
+        "mod imp",
+        "pub use imp::{",
+        "default_endpoint",
+        "bind_default",
+        "connect",
+        "Listener",
+        "ReadHalf",
+        "Stream",
+        "WriteHalf",
+    ] {
+        assert!(
+            transport.contains(token),
+            "src/ipc/transport.rs should cfg-gate transport backend token `{token}`"
+        );
+    }
+
+    let first_cfg = transport
+        .find("#[cfg(unix)]")
+        .expect("missing unix transport cfg");
+    let pre_cfg = &transport[..first_cfg];
+    for token in [
+        "std::os::unix",
+        "tokio::net::UnixListener",
+        "tokio::net::UnixStream",
+    ] {
+        assert!(
+            !pre_cfg.contains(token),
+            "Unix-only token `{token}` must live inside a cfg-gated transport backend"
+        );
+    }
+}
+
+#[test]
 fn daemon_lifecycle_primitives_live_behind_platform_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 

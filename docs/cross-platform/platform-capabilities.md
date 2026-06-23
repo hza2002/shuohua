@@ -101,8 +101,13 @@ macOS 当前快照先把现有能力映射为 current status：
 - `audio.convert`：`available`，backend `afconvert`.
 - `path.open_reveal`：`available`，backend `open_command`.
 
-非 macOS Phase 1 暂不实现 backend。快照应为上述 capability 返回 `unsupported`，
+非 macOS 默认不实现 backend。快照应为上述 capability 返回 `unsupported`，
 platform 按编译目标设置为 Linux/Windows/Unknown，reason 使用 `backend_not_implemented`。
+后续阶段已落地的编译级 backend 可以覆盖默认项，但必须如实表达未实机验证的范围。
+
+- Windows `ipc.transport`：`partial`，backend `named_pipe`，reason `runtime_not_verified`。
+  这表示 Tokio Named Pipe transport 已通过 Windows target compile check，但 connect/bind/accept、
+  ACL/security descriptor、multi-user 隔离和 pipe busy 行为仍需 Windows 实机/VM 验证。
 
 ## 设计约束
 

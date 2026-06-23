@@ -248,6 +248,26 @@ fn windows_ipc_transport_uses_tokio_named_pipe_backend() {
 }
 
 #[test]
+fn windows_capability_snapshot_marks_named_pipe_transport_partial() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+
+    for token in [
+        "fn windows_capabilities()",
+        "CapabilityId::IpcTransport",
+        "CapabilityStatusKind::Partial",
+        "named_pipe",
+        "runtime_not_verified",
+        "Validate Named Pipe transport on Windows",
+    ] {
+        assert!(
+            capability.contains(token),
+            "Windows capability snapshot should report Named Pipe compile backend token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn network_clients_use_rustls_for_cross_platform_checks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();

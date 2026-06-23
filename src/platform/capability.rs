@@ -196,14 +196,49 @@ pub(crate) fn current_platform_capabilities() -> Vec<CapabilityStatus> {
         debug_assert_eq!(capabilities.len(), CapabilityId::ALL.len());
         capabilities
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        let platform = PlatformKind::current();
-        CapabilityId::ALL
-            .into_iter()
-            .map(|id| CapabilityStatus::unsupported(id, platform))
-            .collect()
+        windows_capabilities()
     }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        unsupported_capabilities(PlatformKind::current())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn unsupported_capabilities(platform: PlatformKind) -> Vec<CapabilityStatus> {
+    CapabilityId::ALL
+        .into_iter()
+        .map(|id| CapabilityStatus::unsupported(id, platform))
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_capabilities() -> Vec<CapabilityStatus> {
+    let mut capabilities = unsupported_capabilities(PlatformKind::Windows);
+    replace_capability(
+        &mut capabilities,
+        CapabilityStatus {
+            id: CapabilityId::IpcTransport,
+            platform: PlatformKind::Windows,
+            backend: "named_pipe",
+            status: CapabilityStatusKind::Partial,
+            summary: "Named Pipe transport compiles but is not runtime-verified",
+            reason: "runtime_not_verified",
+            next_step: Some("Validate Named Pipe transport on Windows"),
+        },
+    );
+    capabilities
+}
+
+#[cfg(target_os = "windows")]
+fn replace_capability(capabilities: &mut [CapabilityStatus], replacement: CapabilityStatus) {
+    let existing = capabilities
+        .iter_mut()
+        .find(|capability| capability.id == replacement.id)
+        .expect("replacement capability id must exist in the base snapshot");
+    *existing = replacement;
 }
 
 #[cfg(target_os = "macos")]
@@ -260,7 +295,7 @@ static MACOS_CAPABILITIES: [CapabilityStatus; 18] = {
         CapabilityStatus::available(
             Id::DesktopActiveApp,
             "nsworkspace",
-            "NSWorkspace frontmost app lookup is available",
+            "NSWorkspace active app lookup is available",
         ),
         CapabilityStatus::available(
             Id::DesktopPermissions,

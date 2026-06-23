@@ -193,6 +193,13 @@ Phase 7a 先做文档化 PoC baseline，不写 backend：
 
 目标：验证 Wayland-first overlay 可用性。
 
+Phase 8a 先做文档化 PoC baseline，不写 backend：
+
+- 基于 Wayland core/xdg-shell、wlr layer-shell、KDE/GTK layer-shell 和 GNOME Mutter
+  公开资料确认 compositor 约束。
+- 把 wlroots/KDE/GNOME/X11 的实测 checklist 写入 `overlay.md`。
+- 不新增 Linux renderer 文件，不引入 Wayland crate，不改变 macOS overlay。
+
 范围：
 
 - 验证主流 GNOME/KDE Wayland 能力。

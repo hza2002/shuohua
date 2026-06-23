@@ -6,12 +6,12 @@
 
 ## 最近 commit
 
-HEAD: `docs: record windows overlay poc baseline`（Phase 7a 提交后）
+HEAD: `docs: record linux wayland overlay poc baseline`（Phase 8a 提交后）
 
 ## 当前 phase
 
-Phase 7a: Windows Overlay PoC Baseline 已完成并提交。下一步是在 Windows 环境做最小
-overlay PoC，或继续补 Linux Wayland PoC baseline。
+Phase 8a: Linux Wayland Overlay PoC Baseline 已完成并提交。下一步是在目标平台做最小
+overlay PoC，或先继续补 Tauri GUI PoC baseline。
 
 ## 已完成事项
 
@@ -104,6 +104,15 @@ overlay PoC，或继续补 Linux Wayland PoC baseline。
   - 更新 `docs/cross-platform/development-plan.md`，把 Phase 7 拆出 7a 文档化 baseline。
   - 更新 `docs/cross-platform/overview.md`，记录 Phase 7a 当前状态。
   - 未新增 Windows renderer 文件，未引入依赖，未修改 macOS overlay 或 daemon 热路径。
+- Phase 8a:
+  - 更新 `docs/cross-platform/overlay.md`，基于 Wayland core/xdg-shell、wlr layer-shell、
+    GTK Layer Shell、KDE LayerShellQt/KDE plasma shell protocol 和 GNOME Mutter issue
+    记录 Linux Wayland overlay PoC baseline。
+  - 记录 wlroots/KDE/GNOME/X11 的验证 checklist，并明确 GNOME Wayland 和普通 xdg-shell
+    不应假设支持任意置顶 overlay。
+  - 更新 `docs/cross-platform/development-plan.md`，把 Phase 8 拆出 8a 文档化 baseline。
+  - 更新 `docs/cross-platform/overview.md`，记录 Phase 8a 当前状态。
+  - 未新增 Linux renderer 文件，未引入 Wayland crate，未修改 macOS overlay 或 daemon 热路径。
 
 ## 验证结果
 
@@ -146,6 +155,9 @@ overlay PoC，或继续补 Linux Wayland PoC baseline。
   overlay renderer 骨架，也没有接入 TUI/GUI。
 - Phase 7a 只是 Microsoft 文档基线，不代表已在 Windows 11/10 真机验证。实际 topmost、
   no-activate、click-through、材质、capture exclusion 和性能数据仍需 PoC 记录。
+- Phase 8a 只是 Wayland/layer-shell 文档基线，不代表已在 wlroots/KDE/GNOME 真机验证。
+  实际 layer-shell availability、top layer、pointer passthrough、alpha、screen anchor 和性能
+  数据仍需 PoC 记录。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
   静态 `desktop.permissions=available` 误解为当前已授权。
 - `overlay::renderer::renderer_capabilities()` 同样是静态快照，不创建窗口、不 probe 当前
@@ -153,11 +165,12 @@ overlay PoC，或继续补 Linux Wayland PoC baseline。
 
 ## 下一步
 
-提交 Phase 7a 后，进入下一小步：
+提交 Phase 8a 后，进入下一小步：
 
 - Windows 环境可用时，按 `docs/cross-platform/overlay.md` 的 Phase 7a checklist 做最小
   overlay PoC，不写完整 backend。
-- 若当前环境不能跑 Windows PoC，可先做 Linux Wayland overlay PoC baseline 文档。
+- Linux Wayland 环境可用时，按 Phase 8a checklist 做 wlroots/KDE/GNOME 最小 overlay PoC。
+- 若当前环境仍不能跑目标平台 PoC，可先做 Tauri GUI PoC baseline 文档。
 
 建议下一 session prompt：
 
@@ -166,6 +179,6 @@ overlay PoC，或继续补 Linux Wayland PoC baseline。
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 7a Windows Overlay PoC Baseline 已实现；先查看最新 commit 和验证结果。
-下一步根据环境选择 Windows 最小 overlay PoC 或 Linux Wayland PoC baseline 文档。
+Phase 8a Linux Wayland Overlay PoC Baseline 已实现；先查看最新 commit 和验证结果。
+下一步根据环境选择 Windows/Linux 最小 overlay PoC 或 Tauri GUI PoC baseline 文档。
 ```

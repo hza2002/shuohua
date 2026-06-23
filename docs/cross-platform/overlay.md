@@ -99,6 +99,55 @@ Wayland renderer 目标：
 
 X11 backend 不作为第一阶段目标。
 
+### Linux Phase 8a PoC Baseline
+
+Phase 8a 先记录 Linux Wayland overlay 技术路线，不写 backend。当前依据 Wayland protocol
+文档、wlr layer-shell protocol、KDE/GTK layer-shell 项目文档和 GNOME Mutter 公开 issue 的判断：
+
+- Wayland core/xdg-shell 不提供普通 client 任意置顶、全局覆盖、鼠标穿透或前台窗口锚定能力。
+  Wayland renderer 不能假设可以复刻 macOS `NSPanel` 或 Windows topmost window。
+- 第一候选是 `wlr-layer-shell-unstable-v1`。该 protocol 为 desktop shell components 提供
+  layer surface role，可设置 layer、screen edge/corner anchor、exclusive zone、margin 和
+  keyboard interactivity。PoC 应优先验证 overlay/top layer、无 exclusive zone、固定屏幕锚定
+  和不请求 keyboard focus。
+- 支持矩阵必须实测。GTK Layer Shell 项目文档将 wlroots compositors、KDE Plasma Wayland 和
+  部分 Mir compositors列为支持，将 GNOME-on-Wayland 和 X11 列为不支持；GNOME Mutter 的
+  layer-shell issue 也表明 GNOME Shell/Mutter 对 wlr layer-shell 不是通用 client API。
+- KDE Plasma 可作为主流桌面验证目标之一，但 KDE 的 `org_kde_plasma_shell` 文档明确是 shell
+  内部实现细节，普通 client 不应依赖该私有 protocol。PoC 优先验证 wlr layer-shell 或
+  toolkit wrapper，不走 KDE 私有 shell protocol。
+- input passthrough 需要谨慎定义。layer-shell 能配置 keyboard interactivity，但鼠标穿透、
+  pointer focus 和 click-through 行为取决于 compositor/toolkit；Phase 8 PoC 必须把
+  `overlay.input_passthrough` 单独记录为 available/partial/unsupported。
+- window anchor 在 Wayland 上默认不可用。若没有安全的 foreign-toplevel/activation 路线，
+  Linux baseline 应先映射为 `screen_anchor` available、`window_anchor` unsupported/degraded。
+- material baseline 是 `solid` 或 `translucent`。不要把 compositor blur 当作必需能力；
+  blur/transparency 只有在具体 compositor/toolkit 可稳定验证后才上调。
+- X11 fallback 只作为后续决策点。若 Wayland GNOME 无法支持 overlay，而 X11 能以 override-redirect
+  或 EWMH route 工作，也要单独评估安全、焦点和维护成本，不能自动把 X11 作为第一 backend。
+
+Phase 8 PoC 验收数据应写回本节：
+
+- wlroots/Sway 或同类 compositor：layer-shell 是否可绑定、top/overlay layer 是否稳定、alpha
+  是否可用、click-through 是否可实现、CPU/GPU 空闲占用、show/hide 延迟。
+- KDE Plasma Wayland：wlr layer-shell/toolkit wrapper 是否可用，top layer、no focus、
+  alpha、click-through 和多显示器表现。
+- GNOME Wayland：记录 layer-shell 不可用时的 fallback 形态；若只能普通 xdg-shell window，
+  capability 应清楚标为 degraded/unsupported。
+- X11：只记录是否值得进入后续 PoC；不在 Phase 8a 承诺实现。
+- 结论必须映射回 capability：`overlay.renderer`、`overlay.material`、
+  `overlay.always_on_top`、`overlay.input_passthrough`、`overlay.window_anchor`。
+
+参考资料：
+
+- [Wayland core protocol](https://wayland.app/protocols/wayland)
+- [XDG shell protocol](https://wayland.app/protocols/xdg-shell)
+- [wlr layer shell protocol](https://wayland.app/protocols/wlr-layer-shell-unstable-v1)
+- [GTK Layer Shell supported desktops](https://github.com/wmww/gtk-layer-shell)
+- [KDE LayerShellQt](https://github.com/KDE/layer-shell-qt)
+- [KDE plasma shell protocol warning](https://wayland.app/protocols/kde-plasma-shell)
+- [GNOME Mutter layer-shell issue](https://gitlab.gnome.org/GNOME/mutter/-/issues/973)
+
 ## Capability 分级
 
 Renderer 启动时建议报告能力：

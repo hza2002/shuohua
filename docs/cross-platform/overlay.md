@@ -87,6 +87,18 @@ Phase 7 PoC 验收数据应写回本节：
 - [DWM_SYSTEMBACKDROP_TYPE enum](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwm_systembackdrop_type)
 - [SetWindowDisplayAffinity function](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowdisplayaffinity)
 
+### Windows Phase 7b Backend Skeleton
+
+Phase 7b 的下一步是实现最小 Windows overlay backend skeleton，而不是完整视觉效果：
+
+- 在 `overlay::renderer` 保持现有 facade，新增 Windows backend 文件和 cfg-gated 入口。
+- 第一版 Windows backend 可以先返回 structured unsupported/degraded 或只提供可编译 skeleton；
+  不引入 GUI/WebView，不改变 macOS AppKit renderer。
+- 若引入 `windows` crate，必须仅限 Windows cfg 依赖路径；root daemon hot path 和 macOS build 不应
+  链接 Windows-only API。
+- 验收重点是模块边界、capability reporting、编译门槛和 macOS 不回退；真实 Windows 视觉 PoC
+  需要在 Windows 11/10 机器上单独验证。
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。
@@ -147,6 +159,17 @@ Phase 8 PoC 验收数据应写回本节：
 - [KDE LayerShellQt](https://github.com/KDE/layer-shell-qt)
 - [KDE plasma shell protocol warning](https://wayland.app/protocols/kde-plasma-shell)
 - [GNOME Mutter layer-shell issue](https://gitlab.gnome.org/GNOME/mutter/-/issues/973)
+
+### Linux Phase 8b Backend Skeleton
+
+Phase 8b 的下一步是实现最小 Linux overlay backend skeleton，而不是承诺所有 compositor：
+
+- 在 `overlay::renderer` 保持现有 facade，新增 Linux backend 文件和 cfg-gated 入口。
+- 第一版 Linux backend 优先表达 Wayland capability/fallback，不急着绑定具体 layer-shell crate；
+  可先返回 structured unsupported/degraded，确保 TUI/daemon 在 Linux 上能明确诊断 overlay 能力。
+- 不把 GNOME/KDE/wlroots 的私有或不稳定假设写进共享层；真实 layer-shell / X11 backend 需要后续
+  PoC 和目标环境验证。
+- 验收重点是模块边界、capability reporting、非 macOS 编译路径和 macOS 不回退。
 
 ## Capability 分级
 

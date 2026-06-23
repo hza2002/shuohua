@@ -6,16 +6,15 @@
 
 ## 最近 commit
 
-HEAD: `feat: project gui stream data`
+HEAD: `docs: freeze gui poc and resume overlay`
 
 ## 当前 phase
 
-Phase 9al: GUI Event Stream First-Screen Data Projection 正在收口。
-用户验证 9ak 后确认 recording state 会变化，但很多字段仍只在 Refresh 后变化。当前阶段把既有
-`StatsChanged`、`Partial`、`Segment` 和 `HistoryAppended` 映射到同一个 Tauri event payload，
-frontend 自动更新现有 placeholder 的 live stats/text/latest record 字段。
-这仍不是完整 Status/History view；不新增 IPC event、不 bump `PROTO_VERSION`、不轮询、不新增 recording controls。
-不要直接做完整 GUI、reconnect runtime、service management、配置编辑器或 release 打包指标。
+GUI PoC 冻结，下一主线回到 overlay。
+Phase 9al 已证明 Tauri 独立 client、daemon IPC one-shot request、daemon event bridge 和 frontend
+listener 可以跑通，但 placeholder/debug UI 不作为最终 GUI 设计基线。用户明确要求：不要继续把 GUI
+做成半成品；完整 GUI 的登录、历史、状态、配置、onboarding 后续单独设计。
+当前 phase 应切回 Phase 7b/8b：Windows/Linux overlay backend skeleton 和非 macOS TUI/overlay 可用性。
 
 ## 已完成事项
 
@@ -851,6 +850,9 @@ frontend 自动更新现有 placeholder 的 live stats/text/latest record 字段
   daemon/TUI 行为、不新增 GUI recording controls。
 - Phase 9al 只把既有 `StatsChanged`、`Partial`、`Segment`、`HistoryAppended` 投影到现有
   placeholder 字段；不自动触发 Refresh、不建立完整 History view、不新增 IPC event 或 polling。
+- GUI PoC 冻结：`src-tauri/**` 和 `gui-dist/index.html` 只保留为未来 GUI 接口验证成果；不要继续
+  打磨 placeholder 页面，不实现 reconnect supervisor、recording controls、service management、
+  配置编辑器或 release/bundle 指标，除非重新进入 GUI 产品设计阶段。
 - `ipc::transport` 仍是 Unix-only，library client 只实际覆盖 macOS/Linux 当前 transport。
   Windows Named Pipe adapter 仍是后续 IPC transport backend 工作。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
@@ -860,19 +862,14 @@ frontend 自动更新现有 placeholder 的 live stats/text/latest record 字段
 
 ## 下一步
 
-Phase 9al 后，回到用户真实验证点：
+下一步转入 Phase 7b/8b overlay skeleton：
 
-- 用户在 macOS 上运行：
-  `cargo run --bin shuo -- daemon`
-- 另开终端运行：
-  `cargo run --manifest-path src-tauri/Cargo.toml`
-- 然后用现有热键开始/停止录音，观察 GUI 的 `Manual summary`、`Manual state`、`Manual latest`、
-  `Manual timing`、`Manual error`、`Status state` 是否随 daemon event 自动变化。Refresh 仍可作为
-  one-shot 对照。
-- 若这些字段自动变化，下一阶段再做首屏展示收敛或最小 reconnect 状态显示。若仍有字段不变，先判断
-  该字段是否有对应 daemon subscription event；没有的话需要设计新的 summary/event strategy，而不是
-  靠 Refresh 伪装实时。
-- 若目标平台环境可用，也可以先按 Phase 7a/8a checklist 做 Windows/Linux 最小 overlay PoC。
+- 先更新/确认 `docs/cross-platform/overlay.md`、`development-plan.md` 的 Windows/Linux backend
+  skeleton 范围。
+- 优先做不影响 macOS 的 renderer backend skeleton 和 capability reporting；不要引入 GUI/WebView。
+- 如果当前机器不是 Windows/Linux，先做 cfg-gated skeleton、架构测试和 macOS 验证；真实 Windows 11/10、
+  wlroots/KDE/GNOME 验证需要用户后续介入。
+- 不继续 GUI 产品化开发。
 
 建议下一 session prompt：
 
@@ -881,8 +878,8 @@ Phase 9al 后，回到用户真实验证点：
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、gui.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 9ai GUI Backend Daemon Event Stream Bridge 已实现；先查看最新 commit 和验证结果。
-下一步做 Phase 9aj frontend daemon event listener wiring：注册 Tauri event listener、显式启动
-`gui_start_daemon_event_stream`、把 event payload 投影到 `firstScreenViewModel` 和 DOM。
-不要实现 reconnect supervisor、service management、daemon auto-start 或 recording controls。
+Phase 9al 后 GUI PoC 已冻结；不要继续打磨 GUI placeholder。
+下一步做 Phase 7b/8b overlay backend skeleton：先读 overlay.md 的 Windows Phase 7b 和
+Linux Phase 8b，做 cfg-gated renderer backend skeleton / capability reporting / 架构测试。
+保持 macOS overlay 不回退，不引入 GUI/WebView，不实现完整 Windows/Linux 视觉效果。
 ```

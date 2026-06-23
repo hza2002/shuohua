@@ -205,6 +205,23 @@ structured dry-run status instead of falling through the generic unsupported bac
 Phase 10k 不调用 Task Scheduler、SCM、PowerShell 或 registry APIs，不写文件，不实现 smart fallback，
 也不声明 Windows service lifecycle runtime-ready。
 
+## Phase 10l Non-macOS Desktop Capability Truthfulness
+
+Linux/Windows desktop facade behavior is currently conservative and should be reflected explicitly in the
+static capability snapshot:
+
+- `desktop.hotkey` / `desktop.hotkey_suppression`：`unsupported`，backend `none`，reason
+  `backend_not_implemented`。The non-macOS hotkey provider returns an explicit error.
+- `desktop.clipboard` / `desktop.text_injection`：`unsupported`，backend `none`，reason
+  `backend_not_implemented`。Clipboard write and paste injection remain macOS-only.
+- `desktop.active_app`：`degraded`，backend `default_context`，reason `default_context_only`。The facade
+  returns an empty/default `AppContext` instead of probing the foreground app.
+- `desktop.permissions`：`unavailable`，backend `none`，reason `permission_probe_missing`。The facade has
+  no Linux/Windows permission probe yet.
+
+Phase 10l 只修正诊断 truthfulness，不实现 Linux/Windows hotkey、clipboard、text injection、
+active app 或 permission runtime。
+
 ## 设计约束
 
 - capability probe 不执行高风险动作。

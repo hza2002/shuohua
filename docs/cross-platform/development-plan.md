@@ -739,6 +739,14 @@ Phase 10k Windows Service Manager Dry-Run Status Skeleton:
 - Mark Windows `service.manager` as `partial/windows_user_dry_run/dry_run_status_only`.
 - This phase must not implement smart fallback, auto-start, elevated service management, or runtime claims.
 
+Phase 10l Non-macOS Desktop Capability Truthfulness:
+
+- Sync Linux/Windows static capability snapshots with the existing desktop facade behavior:
+  hotkey, hotkey suppression, clipboard, and text injection remain unsupported; active app is degraded
+  to default/empty context; desktop permissions are unavailable because no permission probe exists.
+- This phase must not implement Linux/Windows desktop APIs, hotkey capture, clipboard writes, text injection,
+  permission probes, or active-window lookup.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

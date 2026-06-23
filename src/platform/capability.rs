@@ -276,7 +276,10 @@ fn linux_capabilities() -> Vec<CapabilityStatus> {
             reason: "reveal_opens_parent_dir",
             next_step: Some("Validate xdg-open behavior across Linux desktops"),
         },
-    ] {
+    ]
+    .into_iter()
+    .chain(non_macos_desktop_capabilities(PlatformKind::Linux))
+    {
         replace_capability(&mut capabilities, replacement);
     }
     capabilities
@@ -331,10 +334,73 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
             reason: "runtime_not_verified",
             next_step: Some("Validate explorer.exe open/reveal behavior on Windows"),
         },
-    ] {
+    ]
+    .into_iter()
+    .chain(non_macos_desktop_capabilities(PlatformKind::Windows))
+    {
         replace_capability(&mut capabilities, replacement);
     }
     capabilities
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn non_macos_desktop_capabilities(platform: PlatformKind) -> [CapabilityStatus; 6] {
+    [
+        CapabilityStatus {
+            id: CapabilityId::DesktopHotkey,
+            platform,
+            backend: "none",
+            status: CapabilityStatusKind::Unsupported,
+            summary: "Desktop hotkey capture is not implemented for this platform",
+            reason: "backend_not_implemented",
+            next_step: Some("Choose and validate a desktop hotkey backend"),
+        },
+        CapabilityStatus {
+            id: CapabilityId::DesktopHotkeySuppression,
+            platform,
+            backend: "none",
+            status: CapabilityStatusKind::Unsupported,
+            summary: "Desktop hotkey suppression is not implemented for this platform",
+            reason: "backend_not_implemented",
+            next_step: Some("Validate key suppression semantics with the chosen hotkey backend"),
+        },
+        CapabilityStatus {
+            id: CapabilityId::DesktopClipboard,
+            platform,
+            backend: "none",
+            status: CapabilityStatusKind::Unsupported,
+            summary: "Clipboard writes are not implemented for this platform",
+            reason: "backend_not_implemented",
+            next_step: Some("Choose and validate a clipboard backend"),
+        },
+        CapabilityStatus {
+            id: CapabilityId::DesktopTextInjection,
+            platform,
+            backend: "none",
+            status: CapabilityStatusKind::Unsupported,
+            summary: "Text injection is not implemented for this platform",
+            reason: "backend_not_implemented",
+            next_step: Some("Choose and validate a text injection backend"),
+        },
+        CapabilityStatus {
+            id: CapabilityId::DesktopActiveApp,
+            platform,
+            backend: "default_context",
+            status: CapabilityStatusKind::Degraded,
+            summary: "Active app lookup falls back to an empty/default context",
+            reason: "default_context_only",
+            next_step: Some("Choose and validate active-window lookup for this platform"),
+        },
+        CapabilityStatus {
+            id: CapabilityId::DesktopPermissions,
+            platform,
+            backend: "none",
+            status: CapabilityStatusKind::Unavailable,
+            summary: "Desktop permission probes are not available for this platform",
+            reason: "permission_probe_missing",
+            next_step: Some("Design platform-specific permission diagnostics"),
+        },
+    ]
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]

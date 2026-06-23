@@ -6,7 +6,7 @@
 
 ## 最近 commit
 
-HEAD: `feat: add windows service dry-run status`
+HEAD: `test: sync non-macos desktop capabilities`
 
 ## 当前 phase
 
@@ -29,6 +29,9 @@ ACL/security descriptor hardening 或 runtime validation claims。
 Phase 10k Windows Service Manager Dry-Run Status Skeleton 已完成：Windows
 `platform::service` 增加 dry-run/status backend，`install` / `uninstall` / `start` / `stop` /
 `restart` 仍 unsupported，不调用 Task Scheduler、SCM、PowerShell 或 registry APIs。
+Phase 10l Non-macOS Desktop Capability Truthfulness 已完成：Linux/Windows
+desktop capability 静态快照同步现有 facade 行为；不实现 hotkey、clipboard、text injection、
+permission probe 或 active app runtime。
 
 ## 已完成事项
 
@@ -157,6 +160,15 @@ Phase 10k Windows Service Manager Dry-Run Status Skeleton 已完成：Windows
     `partial/windows_user_dry_run/dry_run_status_only`。
   - `install` / `uninstall` / `start` / `stop` / `restart` 继续返回明确 unsupported；该阶段不调用
     Task Scheduler、SCM、PowerShell 或 registry APIs，不写文件，不实现 smart fallback。
+- Phase 10l:
+  - 更新 `docs/cross-platform/platform-capabilities.md`、`docs/cross-platform/development-plan.md`
+    和 `docs/cross-platform/overview.md`，记录 Linux/Windows desktop capability truthfulness。
+  - `src/platform/capability.rs` 新增 `non_macos_desktop_capabilities()`，Linux/Windows 均显式标记：
+    `desktop.hotkey`、`desktop.hotkey_suppression`、`desktop.clipboard`、`desktop.text_injection`
+    为 `unsupported/backend_not_implemented`；`desktop.active_app` 为
+    `degraded/default_context/default_context_only`；`desktop.permissions` 为
+    `unavailable/permission_probe_missing`。
+  - 该阶段不实现 Linux/Windows hotkey、clipboard、text injection、active app 或 permission runtime。
 - Phase 4a:
   - 更新 `docs/cross-platform/ipc-service.md`，把 Phase 4 拆成 lock/process probe facade 和
     后续 service manager facade。
@@ -1174,8 +1186,7 @@ Phase 10k Windows Service Manager Dry-Run Status Skeleton 已完成：Windows
 - `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && make check-windows && make check-linux-cross`
   通过。
 - `make check-windows` / `make check-linux-cross` 仍输出既有非 macOS skeleton dead-code warnings；
-  Phase 10k 新增的 Windows service backend 只做 compile/dry-run status check，不代表 Windows runtime
-  已验证。
+  Phase 10l 只同步静态 capability truthfulness，不代表 Linux/Windows desktop runtime 已验证。
 
 下一步：
 
@@ -1183,7 +1194,7 @@ Phase 10k Windows Service Manager Dry-Run Status Skeleton 已完成：Windows
   skeleton 接入 doctor/TUI 诊断，或细化 Windows IPC/service runtime validation checklist。
 - 若继续 Linux service manager，可在真实 Linux/VM 前先做 install/status 设计细化；不要在 macOS
   上假装验证 `systemctl --user` runtime。
-- Phase 10k 已完成。下一步可继续把 Linux/Windows desktop/hotkey/overlay runtime gaps 细化到
+- Phase 10l 已完成。下一步可继续把 Linux/Windows desktop/hotkey/overlay runtime gaps 细化到
   capability/doctor/TUI；真正 runtime validation 需要 Windows/Linux 目标系统。
 - 若继续 overlay 视觉 PoC，则需要用户提供真实 Windows 11/10 或 Linux wlroots/KDE/GNOME 环境；
   在当前 macOS 主机上不要假装验证真实 topmost/click-through/layer-shell 行为。
@@ -1202,8 +1213,8 @@ Phase 7b/8b overlay backend skeleton、Phase 3b IPC transport cfg boundary、Pha
 cross-check baseline、Phase 10b TUI capability diagnostics、Phase 10c Docker/cross Linux
 check baseline、Phase 10d Linux compile-time capability sync、Phase 3c Windows Named Pipe
 transport compile backend、Windows IPC capability sync、Phase 10i audio convert facade、
-Phase 10j Windows lifecycle primitive compile backend 和 Phase 10k Windows service dry-run/status
-skeleton 已完成。先查看最新
+Phase 10j Windows lifecycle primitive compile backend、Phase 10k Windows service dry-run/status
+skeleton 和 Phase 10l non-macOS desktop capability truthfulness 已完成。先查看最新
 diff/commit 和验证结果。
 保持 macOS 不回退，不引入 GUI/WebView。不要把 Windows Named Pipe compile backend 当成实机
 runtime 验收。下一步优先考虑 Linux/Windows desktop/hotkey capability diagnostics、Windows IPC/service

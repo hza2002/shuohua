@@ -689,6 +689,41 @@ fn windows_service_manager_has_dry_run_status_skeleton() {
 }
 
 #[test]
+fn non_macos_desktop_capabilities_match_current_facade_behavior() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+
+    for token in [
+        "non_macos_desktop_capabilities",
+        "CapabilityId::DesktopHotkey",
+        "CapabilityId::DesktopHotkeySuppression",
+        "CapabilityId::DesktopClipboard",
+        "CapabilityId::DesktopTextInjection",
+        "CapabilityId::DesktopActiveApp",
+        "default_context",
+        "default_context_only",
+        "CapabilityId::DesktopPermissions",
+        "permission_probe_missing",
+    ] {
+        assert!(
+            capability.contains(token),
+            "Linux/Windows capability snapshots should explicitly model desktop facade token `{token}`"
+        );
+    }
+
+    let desktop = std::fs::read_to_string(root.join("src/platform/desktop.rs")).unwrap();
+    for token in [
+        "AppContext::default()",
+        "microphone_authorization() -> Option",
+    ] {
+        assert!(
+            desktop.contains(token),
+            "desktop facade current behavior should contain `{token}`"
+        );
+    }
+}
+
+#[test]
 fn desktop_capabilities_live_behind_platform_desktop_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 

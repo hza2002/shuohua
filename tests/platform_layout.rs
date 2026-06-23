@@ -2061,6 +2061,81 @@ fn gui_first_screen_refresh_error_projection_stays_catch_scoped() {
     );
 }
 
+#[test]
+fn gui_first_screen_refresh_success_clears_offline_display() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9ad",
+        "success clears offline display",
+        "清理必须只发生在 explicit refresh click 成功路径内",
+        "stale error",
+        "不新增 Tauri command",
+        "不启动 daemon/GUI",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9ad success clear token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "projectExplicitRefreshSummary",
+        "projectExplicitRefreshError",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should expose Phase 9ad success clear token `{token}`"
+        );
+    }
+
+    let success_projection_pos = frontend
+        .find("function projectExplicitRefreshSummary")
+        .expect("success projection function should be present");
+    let error_projection_pos = frontend
+        .find("function projectExplicitRefreshError")
+        .expect("error projection function should be present");
+    assert!(
+        success_projection_pos < error_projection_pos,
+        "success clear logic should stay in the success projection, not the error projection"
+    );
+    let success_projection = &frontend[success_projection_pos..error_projection_pos];
+    for token in [
+        "offline-problem-kind",
+        "connected",
+        "offline-recoverable",
+        "false",
+        "offline-retry-allowed",
+    ] {
+        assert!(
+            success_projection.contains(token),
+            "success projection should clear stale offline display token `{token}`"
+        );
+    }
+
+    for token in [
+        "setInterval",
+        "setTimeout",
+        "subscribe_events",
+        "client.send(&Command::Subscribe)",
+        "install_service",
+        "restart_service",
+    ] {
+        assert!(
+            !frontend.contains(token),
+            "Phase 9ad frontend must not subscribe, loop, or manage service token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    assert!(
+        !tauri_lib.contains("gui_first_screen_refresh_clear_offline"),
+        "Phase 9ad must not add a backend clear-offline command"
+    );
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

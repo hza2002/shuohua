@@ -294,6 +294,9 @@
         document.getElementById("readiness-ready").textContent = String(
           summary.summaryAvailable
         );
+        document.getElementById("offline-problem-kind").textContent = "connected";
+        document.getElementById("offline-recoverable").textContent = "false";
+        document.getElementById("offline-retry-allowed").textContent = "false";
         document.getElementById("request-plan-count").textContent =
           `${summary.history.pageRecordCount} history records`;
         document.getElementById("request-plan-kinds").textContent =

@@ -300,6 +300,14 @@ Phase 9k 记录最小 Tauri workspace 创建前验收清单，不写 GUI app：
 - 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime，不运行 Tauri build
   或 bundle。
 
+Phase 9l 记录 GUI daemon offline/reconnect 后台任务 ownership，不写 GUI app：
+
+- 明确后续 GUI backend 连接 supervisor task 的所有权、取消 owner、session generation、
+  recoverable problem 范围和 metrics ownership。
+- shared `client_api` 继续只提供纯状态/退避/event bridge/timing helper，不拥有 spawn、timer、
+  channel、Tauri event emission 或 metrics sink。
+- 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime，不实现 runtime loop。
+
 范围：
 
 - 建一个最小 Tauri app。

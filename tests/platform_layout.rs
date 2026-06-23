@@ -823,6 +823,66 @@ fn gui_tauri_workspace_pre_creation_acceptance_is_documented_without_workspace()
     }
 }
 
+#[test]
+fn gui_reconnect_supervisor_ownership_is_documented_without_runtime_loop() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9l",
+        "connection supervisor",
+        "GUI window/app lifecycle",
+        "session id/generation",
+        "connect failed",
+        "event stream closed",
+        "read failed",
+        "不能自动启动 daemon",
+        "不能安装或重启 service",
+        "timer、spawn、channel",
+        "Tauri event emission",
+        "FirstScreenTiming::from_marks",
+        "metrics sink",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9l reconnect supervisor token `{token}`"
+        );
+    }
+
+    for file in [
+        "src-tauri/tauri.conf.json",
+        "src-tauri/Cargo.toml",
+        "src-tauri/capabilities/default.json",
+        "gui/src-tauri/tauri.conf.json",
+        "gui/src-tauri/Cargo.toml",
+        "gui/src-tauri/capabilities/default.json",
+    ] {
+        assert!(
+            !root.join(file).exists(),
+            "Phase 9l should document reconnect ownership before creating Tauri workspace file {file}"
+        );
+    }
+
+    let client_api = std::fs::read_to_string(root.join("src/client_api.rs")).unwrap();
+    for token in [
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+        "std::time::Instant",
+        "connect_default().await",
+        "tauri",
+        "wry",
+        "webview",
+        "WebView",
+        "tao",
+    ] {
+        assert!(
+            !client_api.contains(token),
+            "Phase 9l must keep shared client_api pure and free of runtime/GUI token `{token}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

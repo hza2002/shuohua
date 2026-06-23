@@ -6,13 +6,12 @@
 
 ## 最近 commit
 
-HEAD: `docs: record tauri workspace acceptance checklist`
+HEAD: `docs: record gui reconnect supervisor ownership`
 
 ## 当前 phase
 
-Phase 9k: Tauri Workspace Pre-Creation Acceptance Checklist 已实现并完成自动验证。下一步可以继续
-GUI PoC 前置设计，例如 daemon offline/reconnect 后台任务设计，或开始一个严格最小的 Tauri
-workspace 骨架阶段；不要直接做完整 GUI。
+Phase 9l: GUI Reconnect Supervisor Ownership 已实现并完成自动验证。下一步可以开始一个严格
+最小的 Tauri workspace 骨架阶段，或继续做 Windows/Linux overlay PoC；不要直接做完整 GUI。
 
 ## 已完成事项
 
@@ -243,6 +242,18 @@ workspace 骨架阶段；不要直接做完整 GUI。
     进程。
   - `tests/platform_layout.rs` 增加文档/架构守卫，确认 workspace 前验收清单已记录，且仍无
     `src-tauri/**` workspace 文件或 Tauri/WRY/WebView runtime 依赖。
+- Phase 9l:
+  - 更新 `docs/cross-platform/gui.md`，记录后续 GUI backend 的 connection supervisor task
+    ownership：首次连接 daemon、发送 `first_screen_commands()`、订阅 daemon event、应用
+    `reconnecting_state()` 退避并通过 `GuiBackendEvent` 转发状态。
+  - 明确 supervisor 属于 GUI 进程，不进入 daemon、TUI 或 shared `client_api`；取消 owner 是
+    GUI window/app lifecycle，旧 task 的 late event 必须由 session id/generation 丢弃。
+  - 明确 reconnect 只处理 recoverable client-side 问题：connect failed、event stream closed、
+    read failed；不自动启动 daemon、不安装或重启 service、不修改配置。
+  - 明确 timer、spawn、channel、Tauri event emission、metrics sink 只属于后续 GUI backend；
+    shared `client_api` 继续只提供纯状态、退避、event bridge 和 timing helper。
+  - `tests/platform_layout.rs` 增加文档/架构守卫，确认 reconnect ownership 已记录，且
+    `src/client_api.rs` 仍无 runtime/GUI token。
 
 ## 验证结果
 
@@ -338,6 +349,12 @@ workspace 骨架阶段；不要直接做完整 GUI。
   通过。`cargo test` 覆盖：92 个 library unit tests、639 个 binary unit tests、
   5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
   tests、23 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests。
+- Phase 9l 已跑：`cargo test --test platform_layout gui_reconnect_supervisor_ownership_is_documented_without_runtime_loop`，
+  先红灯失败于缺少稳定 `connection supervisor` 和 `read failed` 文档 token，补文档后通过。
+- Phase 9l 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`，
+  通过。`cargo test` 覆盖：92 个 library unit tests、639 个 binary unit tests、
+  5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
+  tests、24 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -371,6 +388,8 @@ workspace 骨架阶段；不要直接做完整 GUI。
   capabilities JSON、frontend command binding 或打包验证。
 - Phase 9k 只记录创建 Tauri workspace 前的验收清单，没有创建真实 Tauri workspace、
   capabilities JSON、frontend command binding、release build 或打包验证。
+- Phase 9l 只记录 reconnect supervisor ownership/cancellation 语义，没有实现真实 runtime loop、
+  Tauri event emission、frontend view model 或 metrics sink。
 - `ipc::transport` 仍是 Unix-only，library client 只实际覆盖 macOS/Linux 当前 transport。
   Windows Named Pipe adapter 仍是后续 IPC transport backend 工作。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
@@ -380,12 +399,10 @@ workspace 骨架阶段；不要直接做完整 GUI。
 
 ## 下一步
 
-Phase 9k 后，进入下一小步：
+Phase 9l 后，进入下一小步：
 
 - 若准备创建 Tauri workspace，下一阶段只能做最小 GUI app 骨架、主 window/webview、
   capabilities 文件和 backend shell，且继续禁止 daemon 热路径引入 WebView。
-- 若继续 shared client API，可以设计 daemon offline/reconnect 后台任务的 ownership 和取消语义，
-  仍不新增 daemon protocol。
 - 若目标平台环境可用，也可以先按 Phase 7a/8a checklist 做 Windows/Linux 最小 overlay PoC。
 
 建议下一 session prompt：
@@ -395,7 +412,6 @@ Phase 9k 后，进入下一小步：
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 9k Tauri Workspace Pre-Creation Acceptance Checklist 已实现；先查看最新 commit 和验证结果。
-下一步在最小 Tauri workspace 骨架、daemon offline/reconnect 后台任务设计、
-或 Windows/Linux overlay PoC 之间做一个小步计划。
+Phase 9l GUI Reconnect Supervisor Ownership 已实现；先查看最新 commit 和验证结果。
+下一步在最小 Tauri workspace 骨架或 Windows/Linux overlay PoC 之间做一个小步计划。
 ```

@@ -189,6 +189,27 @@ Phase 9k 记录最小 Tauri workspace 创建前验收清单，仍不创建 Tauri
 - 这个阶段只记录验收清单，不新增 `src-tauri/**`、不新增 Tauri/WRY/WebView 依赖、不运行
   `tauri build` 或 `tauri bundle`。
 
+Phase 9l 记录 GUI daemon offline/reconnect 后台任务 ownership，仍不创建 Tauri workspace：
+
+- 后续 GUI backend 可以拥有一个 connection supervisor task，负责首次连接 daemon、发送
+  `first_screen_commands()`、订阅 daemon event、应用 `reconnecting_state()` 退避并通过
+  `GuiBackendEvent` 向 frontend 转发状态。这个 task 属于 GUI 进程，不能进入 daemon、TUI 或
+  shared `client_api`。
+- supervisor 的取消 owner 是 GUI window/app lifecycle。关闭主 window、退出 app 或切换到新的
+  connection session 时必须取消旧 task；旧 task 的 late event 必须被 session id/generation
+  丢弃，不能覆盖新连接状态。
+- reconnect 只处理 recoverable client-side 问题：connect failed、event stream closed、read failed。
+  它不能自动启动 daemon、不能安装或重启 service、不能修改配置，也不能把 daemon
+  offline 当成 fatal app error。
+- reconnect loop 的 timer、spawn、channel 和 Tauri event emission 只允许出现在后续 GUI backend
+  crate/模块。shared `client_api` 继续只提供纯状态、退避、event bridge 和首屏 readiness/timing
+  helper。
+- 首屏 metrics ownership：GUI backend 记录 `gui_started_ms`、`daemon_connected_ms`、
+  `first_daemon_event_ms` 和 `first_screen_ready_ms`，再调用 `FirstScreenTiming::from_marks()`；
+  metrics sink 和 frontend 展示都不进入 daemon protocol。
+- 这个阶段只记录 ownership/cancellation 语义，不新增 runtime loop、不新增 IPC command/event、
+  不创建 `src-tauri/**`、不新增 Tauri/WRY/WebView 依赖。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：
@@ -304,6 +325,13 @@ Phase 9k 验收：
   指标清单。
 - 仍无 `src-tauri/**` workspace 文件，`Cargo.toml` 不新增 Tauri/WRY/WebView 依赖。
 - 不运行 `tauri build` / `tauri bundle`，不启动 daemon/GUI，不新增 IPC command/event。
+
+Phase 9l 验收：
+
+- `gui.md` 明确 reconnect supervisor ownership、取消 owner、session generation、recoverable
+  problem 范围、metrics ownership 和 shared `client_api` 纯边界。
+- 仍无 `src-tauri/**` workspace 文件，`Cargo.toml` 不新增 Tauri/WRY/WebView 依赖。
+- 不实现 runtime loop，不启动 daemon/GUI，不新增 IPC command/event。
 
 参考资料：
 

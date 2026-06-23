@@ -179,6 +179,19 @@ command behind `platform::audio_convert`:
 该阶段不改变 retained audio 文件命名、history schema、recorder WAV 写入、`record_audio = "off"`，
 也不让 daemon 热路径引入外部转码依赖。
 
+## Phase 10j Windows Lifecycle Primitive Compile Backend
+
+Windows lifecycle no longer needs to be a pure unsupported placeholder for compile checks:
+
+- `daemon.single_instance`：`partial`，backend `named_mutex`。`platform::lifecycle` uses a
+  named Win32 mutex to model the daemon single-instance guard, but runtime behavior, namespace choice,
+  abandoned mutex handling, and security descriptor hardening still need Windows validation.
+- `process.probe`：`partial`，backend `open_process_probe`。`OpenProcess` is used as a compile backend
+  for process existence probing, but PID reuse and permission behavior still need Windows validation.
+
+Phase 10j 不实现 Windows service install/start/stop、smart fallback、daemon auto-start、Named Pipe ACL，
+也不声明 Windows daemon lifecycle runtime-ready。
+
 ## 设计约束
 
 - capability probe 不执行高风险动作。

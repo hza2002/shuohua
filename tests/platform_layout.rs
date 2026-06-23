@@ -476,6 +476,51 @@ fn windows_capability_snapshot_marks_named_pipe_transport_partial() {
 }
 
 #[test]
+fn windows_lifecycle_primitives_have_compile_backend() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let lifecycle = std::fs::read_to_string(root.join("src/platform/lifecycle.rs")).unwrap();
+    let windows_section = lifecycle
+        .split("#[cfg(windows)]")
+        .nth(1)
+        .expect("missing windows lifecycle cfg section");
+
+    for token in [
+        "CreateMutexW",
+        "WaitForSingleObject",
+        "ReleaseMutex",
+        "OpenProcess",
+        "CloseHandle",
+        "PROCESS_QUERY_LIMITED_INFORMATION",
+    ] {
+        assert!(
+            windows_section.contains(token),
+            "Windows lifecycle backend should contain Win32 token `{token}`"
+        );
+    }
+    assert!(
+        !windows_section.contains("Windows daemon lock is not implemented"),
+        "Windows daemon lock should no longer be a pure unsupported placeholder"
+    );
+    assert!(
+        !windows_section.contains("Windows process probing is not implemented"),
+        "Windows process probe should no longer be a pure unsupported placeholder"
+    );
+
+    let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+    for token in [
+        "CapabilityId::DaemonSingleInstance",
+        "named_mutex",
+        "CapabilityId::ProcessProbe",
+        "open_process_probe",
+    ] {
+        assert!(
+            capability.contains(token),
+            "Windows capability snapshot should reflect lifecycle compile backend token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn network_clients_use_rustls_for_cross_platform_checks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();

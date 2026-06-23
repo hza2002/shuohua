@@ -722,6 +722,14 @@ Phase 10i Audio Convert Facade:
 - This phase must not change retained audio path layout, history schema, recorder PCM/WAV writing, or
   `record_audio = "off"` behavior.
 
+Phase 10j Windows Lifecycle Primitive Compile Backend:
+
+- Replace the Windows-only `platform::lifecycle` placeholder with compile-checked Win32 primitives:
+  a named mutex for daemon single-instance and `OpenProcess` for process probing.
+- Mark Windows `daemon.single_instance` and `process.probe` as `partial/runtime_not_verified`.
+- This phase must not implement Windows service install/start/stop, smart fallback, ACL/security descriptor
+  hardening, daemon auto-start, or runtime validation claims.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

@@ -110,18 +110,132 @@ mod imp {
 
 #[cfg(windows)]
 mod imp {
-    use anyhow::Result;
+    use anyhow::{Context, Result};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, HANDLE, WAIT_ABANDONED,
+        WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    };
+    use windows_sys::Win32::System::Threading::{
+        CreateMutexW, OpenProcess, ReleaseMutex, WaitForSingleObject,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
 
     pub(crate) type Pid = u32;
 
-    pub(crate) struct DaemonLockGuard;
+    const LOCK_NAME: &str = "Local\\shuohua-daemon";
+
+    pub(crate) struct DaemonLockGuard(Handle);
 
     pub(crate) fn acquire_daemon_lock() -> Result<DaemonLockGuard> {
-        anyhow::bail!("Windows daemon lock is not implemented")
+        let name = wide_null(LOCK_NAME);
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("create Windows daemon mutex {LOCK_NAME}"));
+        }
+        let handle = Handle(handle);
+        match wait_for_mutex(handle.raw()) {
+            Ok(()) => Ok(DaemonLockGuard(handle)),
+            Err(error) => {
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    anyhow::bail!("another shuo daemon is already starting or running");
+                }
+                Err(error).context("acquire Windows daemon mutex")
+            }
+        }
     }
 
-    pub(crate) fn process_exists(_pid: Pid) -> Result<bool> {
-        anyhow::bail!("Windows process probing is not implemented")
+    fn wait_for_mutex(handle: HANDLE) -> std::io::Result<()> {
+        match unsafe { WaitForSingleObject(handle, 0) } {
+            WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(()),
+            WAIT_TIMEOUT => Err(std::io::Error::from(std::io::ErrorKind::WouldBlock)),
+            WAIT_FAILED => Err(std::io::Error::last_os_error()),
+            code => Err(std::io::Error::other(format!(
+                "unexpected WaitForSingleObject result {code}"
+            ))),
+        }
+    }
+
+    pub(crate) fn process_exists(pid: Pid) -> Result<bool> {
+        debug_assert!(pid > 0);
+        process_exists_with_open_result(open_process_for_probe(pid))
+    }
+
+    fn open_process_for_probe(pid: Pid) -> std::io::Result<Handle> {
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(Handle(handle))
+        }
+    }
+
+    fn process_exists_with_open_result(result: std::io::Result<Handle>) -> Result<bool> {
+        match result {
+            Ok(_) => Ok(true),
+            Err(error) => match error.raw_os_error().map(|code| code as u32) {
+                Some(ERROR_INVALID_PARAMETER) => Ok(false),
+                Some(ERROR_ACCESS_DENIED) => Ok(true),
+                _ => Err(error).context("check daemon process failed"),
+            },
+        }
+    }
+
+    impl Drop for DaemonLockGuard {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = ReleaseMutex(self.0.raw());
+            }
+        }
+    }
+
+    struct Handle(HANDLE);
+
+    impl Handle {
+        fn raw(&self) -> HANDLE {
+            self.0
+        }
+    }
+
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+
+    fn wide_null(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn lock_name_uses_user_session_namespace() {
+            assert_eq!(LOCK_NAME, "Local\\shuohua-daemon");
+        }
+
+        #[test]
+        fn process_probe_treats_invalid_pid_as_exited_and_access_denied_as_running() {
+            assert!(
+                !process_exists_with_open_result(Err(std::io::Error::from_raw_os_error(
+                    ERROR_INVALID_PARAMETER as i32
+                )))
+                .unwrap()
+            );
+            assert!(
+                process_exists_with_open_result(Err(std::io::Error::from_raw_os_error(
+                    ERROR_ACCESS_DENIED as i32
+                )))
+                .unwrap()
+            );
+            assert!(
+                process_exists_with_open_result(Err(std::io::Error::from_raw_os_error(5))).is_err()
+            );
+        }
     }
 }
 

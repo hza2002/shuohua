@@ -6,7 +6,7 @@
 
 ## 最近 commit
 
-HEAD: `feat: add audio convert facade` (`3cf864d`)
+HEAD: `feat: add windows lifecycle primitives`
 
 ## 当前 phase
 
@@ -22,6 +22,10 @@ Phase 10i Audio Convert Facade 已完成：retained audio conversion 从 `voice:
 Linux/Windows 暂时返回 explicit unsupported，直到选定 `ffmpeg`、`flac`/`lame`、纯 Rust encoder
 或其他 backend 并在目标系统验证。该阶段不改变 retained audio 文件命名、history schema、
 recorder WAV 写入或 `record_audio = "off"` 行为。
+Phase 10j Windows Lifecycle Primitive Compile Backend 已完成：Windows `platform::lifecycle`
+改为 Win32 named mutex / `OpenProcess` compile backend，capability 标记为
+`partial/runtime_not_verified`；不实现 Windows service、smart fallback、daemon auto-start、
+ACL/security descriptor hardening 或 runtime validation claims。
 
 ## 已完成事项
 
@@ -128,6 +132,18 @@ recorder WAV 写入或 `record_audio = "off"` 行为。
     路径改走 `platform::audio_convert::convert_retained_audio()`，原有 temp/final cleanup 语义保持。
   - 该阶段不改变 retained audio 文件命名、history schema、recorder WAV 写入或
     `record_audio = "off"` 行为。
+- Phase 10j:
+  - 更新 `docs/cross-platform/platform-capabilities.md`、`docs/cross-platform/development-plan.md`、
+    `docs/cross-platform/ipc-service.md` 和 `docs/cross-platform/overview.md`，记录 Windows lifecycle
+    primitive compile backend。
+  - `src/platform/lifecycle.rs` 的 Windows backend 从 pure unsupported placeholder 改为 Win32
+    named mutex daemon guard 和 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` process probe。
+  - Windows `daemon.single_instance` capability 标记为 `partial/named_mutex/runtime_not_verified`；
+    `process.probe` 标记为 `partial/open_process_probe/runtime_not_verified`。
+  - 新增 Windows-only `windows-sys` dependency，只启用 `Win32_Foundation` 和
+    `Win32_System_Threading` feature。
+  - 该阶段不实现 Windows service manager、smart fallback、daemon auto-start、Named Pipe ACL 或
+    runtime validation。
 - Phase 4a:
   - 更新 `docs/cross-platform/ipc-service.md`，把 Phase 4 拆成 lock/process probe facade 和
     后续 service manager facade。
@@ -1145,15 +1161,15 @@ recorder WAV 写入或 `record_audio = "off"` 行为。
 - `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && make check-windows && make check-linux-cross`
   通过。
 - `make check-windows` / `make check-linux-cross` 仍输出既有非 macOS skeleton dead-code warnings；
-  Phase 10i 引入的 cross-target `OsString` unused warning 已修复。
+  Phase 10j 新增的 Windows lifecycle backend 只做 compile check，不代表 Windows runtime 已验证。
 
 下一步：
 
-- 下一阶段若继续 Windows，可做 Windows daemon single-instance/process probe/smart fallback skeleton
-  收敛，或继续把 desktop/hotkey/service 的 Windows unsupported skeleton 接入 doctor/TUI 诊断。
+- 下一阶段若继续 Windows，可做 Windows service manager dry-run/status skeleton 或继续把
+  desktop/hotkey/service 的 Windows unsupported skeleton 接入 doctor/TUI 诊断。
 - 若继续 Linux service manager，可在真实 Linux/VM 前先做 install/status 设计细化；不要在 macOS
   上假装验证 `systemctl --user` runtime。
-- Phase 10i 已完成。下一步可继续把 Linux/Windows desktop/hotkey/overlay runtime gaps 细化到
+- Phase 10j 已完成。下一步可继续把 Linux/Windows desktop/hotkey/overlay runtime gaps 细化到
   capability/doctor/TUI，或转向 Windows lifecycle/smart fallback skeleton。
 - 若继续 overlay 视觉 PoC，则需要用户提供真实 Windows 11/10 或 Linux wlroots/KDE/GNOME 环境；
   在当前 macOS 主机上不要假装验证真实 topmost/click-through/layer-shell 行为。
@@ -1171,9 +1187,11 @@ Phase 9al 后 GUI PoC 已冻结；不要继续打磨 GUI placeholder。
 Phase 7b/8b overlay backend skeleton、Phase 3b IPC transport cfg boundary、Phase 10a
 cross-check baseline、Phase 10b TUI capability diagnostics、Phase 10c Docker/cross Linux
 check baseline、Phase 10d Linux compile-time capability sync、Phase 3c Windows Named Pipe
-transport compile backend，以及 Windows IPC capability sync 已完成一个最小阶段。先查看最新
+transport compile backend、Windows IPC capability sync、Phase 10i audio convert facade 和
+Phase 10j Windows lifecycle primitive compile backend 已完成。先查看最新
 diff/commit 和验证结果。
 保持 macOS 不回退，不引入 GUI/WebView。不要把 Windows Named Pipe compile backend 当成实机
-runtime 验收。下一步优先考虑 Linux service manager skeleton 或 Windows lifecycle/smart fallback
-诊断收敛；真实 overlay 视觉 PoC 需要用户提供目标系统。
+runtime 验收。下一步优先考虑 Windows service manager dry-run/status skeleton、Linux/Windows
+desktop/hotkey capability diagnostics，或继续 overlay skeleton 诊断收敛；真实 overlay 视觉 PoC
+需要用户提供目标系统。
 ```

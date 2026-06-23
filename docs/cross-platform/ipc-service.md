@@ -113,6 +113,14 @@ Phase 10e Linux systemd user dry-run/status skeleton:
   `RestartSec=2s`。真实 install 阶段再决定 XDG/systemd 目录创建、reload、enable、linger 和日志策略。
 - macOS launchd backend 的 plist、timeout、stop/restart/status 语义不得改变。
 
+Phase 10j Windows lifecycle primitive compile backend:
+
+- `platform::lifecycle` 的 Windows backend 使用 Win32 named mutex 表达 daemon single-instance
+  guard，使用 `OpenProcess` 表达 process probe。
+- 这只解除 Windows target 在 lifecycle primitive 上的 pure placeholder 状态。命名空间、ACL/security
+  descriptor、abandoned mutex、PID reuse、权限差异和多用户隔离仍需 Windows VM/实机验证。
+- Phase 10j 不实现 Windows service manager、smart fallback、daemon auto-start 或 Named Pipe ACL。
+
 ## Smart Fallback
 
 CLI/TUI/GUI 连接 daemon 时：

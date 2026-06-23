@@ -1,6 +1,11 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use shuohua::ipc::protocol::{Command, Event, WireState};
+use tauri::Emitter;
 
 type DaemonClient = shuohua::client_api::DaemonClient;
+static GUI_DAEMON_EVENT_STREAM_STARTED: AtomicBool = AtomicBool::new(false);
+const GUI_DAEMON_EVENT_NAME: &str = "shuohua://daemon-event";
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -227,6 +232,26 @@ struct GuiFirstScreenCommandPolicyEntry {
     requires_explicit_trigger: bool,
     opens_daemon_transport: bool,
     policy_reason: &'static str,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiDaemonEventStreamStarted {
+    started: bool,
+    already_running: bool,
+    event_name: &'static str,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiDaemonEventPayload {
+    kind: &'static str,
+    state_label: Option<&'static str>,
+    recording_id: Option<String>,
+    history_changed: bool,
+    error_kind: Option<String>,
+    error_message: Option<String>,
+    recoverable: bool,
 }
 
 #[tauri::command]
@@ -525,6 +550,52 @@ async fn gui_first_screen_summary_request_once(
     }
 }
 
+#[tauri::command]
+fn gui_start_daemon_event_stream(app: tauri::AppHandle) -> GuiDaemonEventStreamStarted {
+    let already_running = GUI_DAEMON_EVENT_STREAM_STARTED.swap(true, Ordering::SeqCst);
+    if !already_running {
+        tauri::async_runtime::spawn(run_gui_daemon_event_stream(app));
+    }
+
+    GuiDaemonEventStreamStarted {
+        started: !already_running,
+        already_running,
+        event_name: GUI_DAEMON_EVENT_NAME,
+    }
+}
+
+async fn run_gui_daemon_event_stream(app: tauri::AppHandle) {
+    if let Err(error) = stream_gui_daemon_events(&app).await {
+        let _ = app.emit(
+            GUI_DAEMON_EVENT_NAME,
+            GuiDaemonEventPayload::connection_problem("streamFailed", error.to_string()),
+        );
+    }
+    GUI_DAEMON_EVENT_STREAM_STARTED.store(false, Ordering::SeqCst);
+}
+
+async fn stream_gui_daemon_events(app: &tauri::AppHandle) -> Result<(), String> {
+    let mut client = DaemonClient::connect_default()
+        .await
+        .map_err(|error| error.to_string())?;
+    client
+        .send(&Command::Subscribe)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    while let Some(event) = client.recv().await.map_err(|error| error.to_string())? {
+        if shuohua::client_api::gui_backend_event_from_daemon_event(&event).is_some() {
+            let Some(payload) = gui_daemon_event_payload(&event) else {
+                continue;
+            };
+            app.emit(GUI_DAEMON_EVENT_NAME, payload)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
 fn elapsed_ms(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
@@ -739,6 +810,68 @@ fn gui_daemon_status_snapshot_from_event(event: &Event) -> Option<GuiDaemonStatu
     })
 }
 
+fn gui_daemon_event_payload(event: &Event) -> Option<GuiDaemonEventPayload> {
+    match event {
+        Event::Snapshot {
+            state, recording, ..
+        } => Some(GuiDaemonEventPayload {
+            kind: "snapshot",
+            state_label: Some(wire_state_label(*state)),
+            recording_id: recording.clone(),
+            history_changed: false,
+            error_kind: None,
+            error_message: None,
+            recoverable: true,
+        }),
+        Event::DaemonStatus {
+            state,
+            recording_id,
+            ..
+        } => Some(GuiDaemonEventPayload {
+            kind: "daemonStatus",
+            state_label: Some(wire_state_label(*state)),
+            recording_id: recording_id.clone(),
+            history_changed: false,
+            error_kind: None,
+            error_message: None,
+            recoverable: true,
+        }),
+        Event::HistoryChanged => Some(GuiDaemonEventPayload {
+            kind: "historyChanged",
+            state_label: None,
+            recording_id: None,
+            history_changed: true,
+            error_kind: None,
+            error_message: None,
+            recoverable: true,
+        }),
+        Event::Error { kind, msg, .. } => Some(GuiDaemonEventPayload {
+            kind: "daemonError",
+            state_label: None,
+            recording_id: None,
+            history_changed: false,
+            error_kind: Some(kind.clone()),
+            error_message: Some(msg.clone()),
+            recoverable: true,
+        }),
+        _ => None,
+    }
+}
+
+impl GuiDaemonEventPayload {
+    fn connection_problem(kind: &'static str, message: String) -> Self {
+        Self {
+            kind: "connectionProblem",
+            state_label: None,
+            recording_id: None,
+            history_changed: false,
+            error_kind: Some(kind.to_string()),
+            error_message: Some(message),
+            recoverable: true,
+        }
+    }
+}
+
 fn wire_state_label(state: WireState) -> &'static str {
     match state {
         WireState::Idle => "idle",
@@ -803,7 +936,8 @@ pub fn run() {
             gui_first_screen_command_policy_shape,
             gui_daemon_status_request_once,
             gui_history_summary_request_once,
-            gui_first_screen_summary_request_once
+            gui_first_screen_summary_request_once,
+            gui_start_daemon_event_stream
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Shuohua GUI");

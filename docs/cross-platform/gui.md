@@ -517,6 +517,18 @@ Phase 9ah 增加 frontend first-screen view model preflight，不新增订阅：
 - 这个 view model 是后续 Tauri event subscription 的前端落点预演，不是完整 Status/History
   view model；不新增 backend command、不新增 IPC command/event。
 
+Phase 9ai 增加 GUI backend daemon event stream start command，不实现 reconnect：
+
+- `src-tauri` 可以注册一个显式 `gui_start_daemon_event_stream` command。该 command 只由 frontend
+  调用后启动 GUI-owned background task：连接现有 daemon IPC、发送既有 `Command::Subscribe`，
+  读取 daemon events，并把可识别的 first-screen event 转成 Tauri event 发给 main window。
+- event stream task 只能属于 GUI 进程；不得进入 daemon、TUI、root runtime 或 shared `client_api`。
+  shared `client_api` 仍只提供纯 event classifier/bridge 类型。
+- 本阶段不实现 reconnect supervisor、retry backoff、service management、daemon auto-start 或
+  自动多 session cancellation。command 可以用一次性 started 标记避免重复启动；窗口关闭后的完整
+  cancellation 属后续阶段。
+- 不新增 IPC command/event，不 bump `PROTO_VERSION`。Tauri event name 和 payload 属 GUI 进程内桥接。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：

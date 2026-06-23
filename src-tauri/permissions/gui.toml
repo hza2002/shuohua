@@ -44,3 +44,8 @@ commands.allow = ["gui_first_screen_command_policy_shape"]
 identifier = "allow-gui-first-screen-summary-request-once"
 description = "Allows explicit one-shot first-screen summary refresh requests."
 commands.allow = ["gui_first_screen_summary_request_once"]
+
+[[permission]]
+identifier = "allow-gui-start-daemon-event-stream"
+description = "Allows the GUI placeholder to start its daemon event stream bridge."
+commands.allow = ["gui_start_daemon_event_stream"]

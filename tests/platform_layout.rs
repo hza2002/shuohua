@@ -2452,6 +2452,92 @@ fn gui_frontend_first_screen_view_model_is_local_preflight_only() {
     }
 }
 
+#[test]
+fn gui_backend_event_stream_start_is_tauri_owned_and_explicit() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9ai",
+        "gui_start_daemon_event_stream",
+        "GUI-owned background task",
+        "Command::Subscribe",
+        "Tauri event",
+        "不实现 reconnect supervisor",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9ai backend stream token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "GuiDaemonEventStreamStarted",
+        "GuiDaemonEventPayload",
+        "gui_start_daemon_event_stream",
+        "tauri::Emitter",
+        "tauri::async_runtime::spawn",
+        "DaemonClient::connect_default()",
+        ".send(&Command::Subscribe)",
+        ".recv().await",
+        "gui_backend_event_from_daemon_event",
+        "const GUI_DAEMON_EVENT_NAME: &str = \"shuohua://daemon-event\"",
+        ".emit(GUI_DAEMON_EVENT_NAME",
+        "AtomicBool",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should expose Phase 9ai backend stream token `{token}`"
+        );
+    }
+    for forbidden in [
+        "install_service",
+        "restart_service",
+        "Command::StartRecording",
+        "Command::StopRecording",
+        "Command::CancelRecording",
+        "next_reconnect_delay_ms",
+        "setInterval",
+        "setTimeout",
+    ] {
+        assert!(
+            !tauri_lib.contains(forbidden),
+            "Phase 9ai backend stream must not own service/recording/reconnect token `{forbidden}`"
+        );
+    }
+
+    let capability =
+        std::fs::read_to_string(root.join("src-tauri/capabilities/default.json")).unwrap();
+    assert!(
+        capability.contains("\"allow-gui-start-daemon-event-stream\""),
+        "src-tauri/capabilities/default.json should allow gui_start_daemon_event_stream"
+    );
+
+    let permissions = std::fs::read_to_string(root.join("src-tauri/permissions/gui.toml"))
+        .expect("GUI app command permissions should exist");
+    assert!(
+        permissions.contains("identifier = \"allow-gui-start-daemon-event-stream\"")
+            && permissions.contains("commands.allow = [\"gui_start_daemon_event_stream\"]"),
+        "src-tauri/permissions/gui.toml should define gui_start_daemon_event_stream permission"
+    );
+
+    for file in [
+        "src/client_api.rs",
+        "src/daemon/process.rs",
+        "src/tui/mod.rs",
+        "src/ipc/server.rs",
+    ] {
+        let body = std::fs::read_to_string(root.join(file)).unwrap();
+        for token in ["tauri::Emitter", "shuohua://daemon-event"] {
+            assert!(
+                !body.contains(token),
+                "{file} must not know GUI Tauri event bridge token `{token}`"
+            );
+        }
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

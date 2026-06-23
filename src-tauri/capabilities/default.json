@@ -13,6 +13,7 @@
     "allow-gui-first-screen-readiness-shape",
     "allow-gui-first-screen-offline-shape",
     "allow-gui-first-screen-command-policy-shape",
-    "allow-gui-first-screen-summary-request-once"
+    "allow-gui-first-screen-summary-request-once",
+    "allow-gui-start-daemon-event-stream"
   ]
 }

@@ -6,13 +6,15 @@
 
 ## 最近 commit
 
-HEAD: `feat: add gui manual refresh summary`
+HEAD: `feat: add gui first-screen view model preflight`
 
 ## 当前 phase
 
-Phase 9ah: GUI Frontend First-Screen View Model Preflight 已实现并完成自动验证，等待 commit。
-本阶段只在静态 HTML 内维护本地 `firstScreenViewModel`，让后续 Tauri event subscription 有明确前端落点。
-GUI 仍未订阅 daemon event，所以录音中页面不自动变化仍是预期缺口。
+Phase 9ai: GUI Backend Daemon Event Stream Bridge 正在收口。
+本阶段新增显式 `gui_start_daemon_event_stream` Tauri command，启动 GUI-owned background task：
+连接既有 daemon IPC、发送 `Command::Subscribe`，并把 first-screen daemon event 转成
+`shuohua://daemon-event` Tauri event。
+frontend 仍未注册 listener，也不会自动调用该 command；录音中页面不自动变化在 9ai 后仍是预期缺口。
 不要直接做完整 GUI、reconnect runtime、service management、配置编辑器或 release 打包指标。
 
 ## 已完成事项
@@ -713,6 +715,15 @@ GUI 仍未订阅 daemon event，所以录音中页面不自动变化仍是预期
   5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
   tests、46 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests；
   Tauri crate `cargo check` 通过。
+- Phase 9ai 已跑窄验证：
+  `cargo test --test platform_layout gui_backend_event_stream_start_is_tauri_owned_and_explicit`
+  先红灯失败于缺少 backend event stream command；补 Tauri-owned explicit stream command 后通过。
+- Phase 9ai 已跑 Tauri 验证：`cargo check --manifest-path src-tauri/Cargo.toml`，通过。
+- Phase 9ai 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo check --manifest-path src-tauri/Cargo.toml`，
+  通过。`cargo test` 覆盖：92 个 library unit tests、639 个 binary unit tests、
+  5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
+  tests、47 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests；
+  Tauri crate `cargo check` 通过。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -748,7 +759,7 @@ GUI 仍未订阅 daemon event，所以录音中页面不自动变化仍是预期
   capabilities JSON、frontend command binding、release build 或打包验证。
 - Phase 9l 只记录 reconnect supervisor ownership/cancellation 语义，没有实现真实 runtime loop、
   Tauri event emission、frontend view model 或 metrics sink。
-- Phase 9m/9n/9o/9p/9q/9r/9s/9t/9u/9v/9w/9x/9y/9z/9aa/9ab/9ac/9ad/9ae/9af/9ag/9ah 只创建最小 `src-tauri/**` skeleton、静态 placeholder、本地 metadata
+- Phase 9m/9n/9o/9p/9q/9r/9s/9t/9u/9v/9w/9x/9y/9z/9aa/9ab/9ac/9ad/9ae/9af/9ag/9ah/9ai 只创建最小 `src-tauri/**` skeleton、静态 placeholder、本地 metadata
   command、first-screen request plan command、daemon status snapshot shape command、纯 daemon
   status event mapper、显式 one-shot daemon status request command 和显式 one-shot history summary
   request command、显式 one-shot first-screen summary request command、first-screen summary 本地
@@ -756,7 +767,8 @@ GUI 仍未订阅 daemon event，所以录音中页面不自动变化仍是预期
   first-screen offline/error display shape、first-screen command invocation policy shape、
   first-screen explicit refresh affordance shape、placeholder explicit refresh click wiring 和
   click-scoped summary/error projection、success offline clear、application command ACL、初始化错误可见性和静态
-  frontend global Tauri API、手动 Refresh 可读摘要和本地 first-screen view model；
+  frontend global Tauri API、手动 Refresh 可读摘要、本地 first-screen view model 和显式 backend
+  daemon event stream bridge；
   尚未运行 `tauri dev` / `tauri build` / `tauri bundle`，也没有启动 GUI 或 daemon。后续需要
   单独决定何时运行 release build、如何记录 cold start/RSS/CPU/bundle 指标。
 - Phase 9n 的 `gui_shell_metadata` 只验证本地 command wiring，不连接 daemon、不读
@@ -803,6 +815,9 @@ GUI 仍未订阅 daemon event，所以录音中页面不自动变化仍是预期
   subscription、recording state streaming、reconnect supervisor 或自动首屏 one-shot。
 - Phase 9ah 只在静态 HTML 内维护本地 `firstScreenViewModel`；不实现 daemon event subscription、
   recording state streaming、reconnect supervisor 或自动首屏 one-shot。
+- Phase 9ai 只在 Tauri backend 暴露显式 `gui_start_daemon_event_stream` command 并启动
+  GUI-owned event stream task；frontend 尚未调用该 command、未注册 Tauri event listener、
+  未把 daemon event 投影到 DOM，也没有 reconnect supervisor。
 - `ipc::transport` 仍是 Unix-only，library client 只实际覆盖 macOS/Linux 当前 transport。
   Windows Named Pipe adapter 仍是后续 IPC transport backend 工作。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
@@ -812,11 +827,14 @@ GUI 仍未订阅 daemon event，所以录音中页面不自动变化仍是预期
 
 ## 下一步
 
-Phase 9ah 后，进入下一小步：
+Phase 9ai 后，进入下一小步：
 
-- 若继续 GUI，下一阶段可以做真实 daemon event subscription/reconnect 设计前的最小前端状态模型评审，
-  或先让手动 Refresh 的成功/错误展示更接近 Status/History 首屏；
-  继续禁止 daemon 热路径引入 WebView，且不要启动 daemon、GUI 或 release 打包。
+- 若继续 GUI，下一阶段应做 Phase 9aj：frontend 注册 `window.__TAURI__.event.listen("shuohua://daemon-event", ...)`，
+  初始化后显式调用 `gui_start_daemon_event_stream`，并把 incoming event payload 投影到
+  `firstScreenViewModel` / DOM。仍不实现 reconnect supervisor、service management、daemon auto-start、
+  start/stop/cancel recording controls 或 release 打包。
+- Phase 9aj 完成后需要用户介入真实 macOS 手动验证：同时运行 daemon 和 GUI，录音时确认 GUI
+  状态自动变化。
 - 若目标平台环境可用，也可以先按 Phase 7a/8a checklist 做 Windows/Linux 最小 overlay PoC。
 
 建议下一 session prompt：
@@ -826,7 +844,8 @@ Phase 9ah 后，进入下一小步：
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、gui.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 9ah GUI Frontend First-Screen View Model Preflight 已实现；先查看最新 commit 和验证结果。
-下一步在真实 daemon event subscription/reconnect 设计前的最小前端状态模型、手动 Refresh 展示收敛、
-或 Windows/Linux overlay PoC 之间做一个小步计划。
+Phase 9ai GUI Backend Daemon Event Stream Bridge 已实现；先查看最新 commit 和验证结果。
+下一步做 Phase 9aj frontend daemon event listener wiring：注册 Tauri event listener、显式启动
+`gui_start_daemon_event_stream`、把 event payload 投影到 `firstScreenViewModel` 和 DOM。
+不要实现 reconnect supervisor、service management、daemon auto-start 或 recording controls。
 ```

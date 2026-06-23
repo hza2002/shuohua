@@ -1292,6 +1292,71 @@ fn gui_daemon_status_one_shot_request_is_explicit_and_bounded() {
     );
 }
 
+#[test]
+fn gui_history_summary_one_shot_request_is_explicit_and_bounded() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9s",
+        "gui_history_summary_request_once",
+        "Command::GetHistory",
+        "Command::GetHistoryStats",
+        "Event::History",
+        "Event::HistoryStats",
+        "placeholder 当前不自动调用",
+        "recoverable",
+        "不订阅 daemon event stream",
+        "不启动 reconnect loop",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9s one-shot history summary token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "gui_history_summary_request_once",
+        "GuiHistorySummary",
+        "GuiHistoryRecordSummary",
+        "GuiHistoryAggregateStats",
+        "GuiHistorySummaryRequestError",
+        "DaemonClient::connect_default()",
+        ".send(&history_summary_page_command(",
+        ".send(&Command::GetHistoryStats)",
+        ".recv_until(",
+        "gui_history_summary_from_events",
+        "Event::History",
+        "Event::HistoryStats",
+        "tauri::generate_handler!",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should expose Phase 9s one-shot history summary token `{token}`"
+        );
+    }
+
+    for token in [
+        "client.send(&Command::Subscribe)",
+        "subscribe_events",
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+    ] {
+        assert!(
+            !tauri_lib.contains(token),
+            "Phase 9s one-shot history summary request must not subscribe, reconnect, or spawn token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    assert!(
+        !frontend.contains("gui_history_summary_request_once"),
+        "placeholder must not auto-call the one-shot history summary request"
+    );
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

@@ -64,6 +64,59 @@ struct GuiDaemonStatusRequestError {
     recoverable: bool,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiHistorySummary {
+    connected: bool,
+    transport_opened: bool,
+    summary_available: bool,
+    limit: usize,
+    page_record_count: usize,
+    matched: Option<u64>,
+    page_stats: Option<GuiHistoryAggregateStats>,
+    stats_status: Option<&'static str>,
+    total: Option<GuiHistoryAggregateStats>,
+    current_month: Option<GuiHistoryAggregateStats>,
+    today: Option<GuiHistoryAggregateStats>,
+    latest_record: Option<GuiHistoryRecordSummary>,
+    request: GuiHistorySummaryRequestSummary,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiHistoryRecordSummary {
+    id: String,
+    status: &'static str,
+    duration_ms: u64,
+    words: usize,
+    text_preview: String,
+}
+
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiHistoryAggregateStats {
+    records: u64,
+    words: u64,
+    duration_ms: u64,
+    asr_duration_ms: u64,
+    asr_audio_ms: u64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiHistorySummaryRequestSummary {
+    request_kind: &'static str,
+    requires_daemon_connection: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiHistorySummaryRequestError {
+    kind: &'static str,
+    message: String,
+    recoverable: bool,
+}
+
 #[tauri::command]
 fn gui_first_screen_request_plan(history_limit: Option<usize>) -> GuiFirstScreenRequestPlan {
     let history_limit = history_limit.unwrap_or(20);
@@ -124,6 +177,59 @@ async fn gui_daemon_status_request_once(
     }
 }
 
+#[tauri::command]
+async fn gui_history_summary_request_once(
+    history_limit: Option<usize>,
+) -> Result<GuiHistorySummary, GuiHistorySummaryRequestError> {
+    let history_limit = history_limit.unwrap_or(20);
+    let mut client = DaemonClient::connect_default()
+        .await
+        .map_err(|error| history_summary_request_error("connectFailed", error))?;
+
+    client
+        .send(&history_summary_page_command(history_limit))
+        .await
+        .map_err(|error| history_summary_request_error("writeFailed", error))?;
+    client
+        .send(&Command::GetHistoryStats)
+        .await
+        .map_err(|error| history_summary_request_error("writeFailed", error))?;
+
+    let mut history_event = None;
+    let mut stats_event = None;
+    match client
+        .recv_until(|event| {
+            match event {
+                Event::History { .. } => history_event = Some(event),
+                Event::HistoryStats { .. } => stats_event = Some(event),
+                Event::Error { kind, msg, .. } => {
+                    return Ok(std::ops::ControlFlow::Break(Err(
+                        history_summary_request_message("daemonError", format!("{kind}: {msg}")),
+                    )));
+                }
+                _ => {}
+            }
+
+            if let (Some(history), Some(stats)) = (&history_event, &stats_event) {
+                return Ok(std::ops::ControlFlow::Break(Ok(
+                    gui_history_summary_from_events(history, stats, history_limit)
+                        .expect("history summary events were pre-matched"),
+                )));
+            }
+
+            Ok(std::ops::ControlFlow::Continue(()))
+        })
+        .await
+        .map_err(|error| history_summary_request_error("readFailed", error))?
+    {
+        Some(result) => result,
+        None => Err(history_summary_request_message(
+            "daemonClosed",
+            "daemon closed IPC before history summary replies",
+        )),
+    }
+}
+
 fn empty_daemon_status_snapshot() -> GuiDaemonStatusSnapshot {
     GuiDaemonStatusSnapshot {
         connected: false,
@@ -155,6 +261,91 @@ fn daemon_status_request_message(
         kind,
         message: message.into(),
         recoverable: true,
+    }
+}
+
+fn history_summary_page_command(limit: usize) -> Command {
+    Command::GetHistory {
+        limit,
+        before: None,
+        before_id: None,
+        query: None,
+    }
+}
+
+fn history_summary_request_error(
+    kind: &'static str,
+    error: impl std::fmt::Display,
+) -> GuiHistorySummaryRequestError {
+    history_summary_request_message(kind, error.to_string())
+}
+
+fn history_summary_request_message(
+    kind: &'static str,
+    message: impl Into<String>,
+) -> GuiHistorySummaryRequestError {
+    GuiHistorySummaryRequestError {
+        kind,
+        message: message.into(),
+        recoverable: true,
+    }
+}
+
+#[allow(dead_code)]
+fn gui_history_summary_from_events(
+    history: &Event,
+    stats: &Event,
+    limit: usize,
+) -> Option<GuiHistorySummary> {
+    let Event::History {
+        records,
+        matched,
+        stats: page_stats,
+    } = history
+    else {
+        return None;
+    };
+    let Event::HistoryStats { snapshot } = stats else {
+        return None;
+    };
+
+    Some(GuiHistorySummary {
+        connected: true,
+        transport_opened: true,
+        summary_available: true,
+        limit,
+        page_record_count: records.len(),
+        matched: *matched,
+        page_stats: page_stats.map(gui_history_aggregate_stats),
+        stats_status: Some(history_stats_status_label(snapshot.status)),
+        total: Some(gui_history_aggregate_stats(snapshot.total)),
+        current_month: Some(gui_history_aggregate_stats(snapshot.current_month)),
+        today: Some(gui_history_aggregate_stats(snapshot.today)),
+        latest_record: records.first().map(gui_history_record_summary),
+        request: GuiHistorySummaryRequestSummary {
+            request_kind: history_summary_request_kind(&history_summary_page_command(limit)),
+            requires_daemon_connection: true,
+        },
+    })
+}
+
+fn gui_history_aggregate_stats(stats: shuohua::history::AggregateStats) -> GuiHistoryAggregateStats {
+    GuiHistoryAggregateStats {
+        records: stats.records,
+        words: stats.words,
+        duration_ms: stats.duration_ms,
+        asr_duration_ms: stats.asr_duration_ms,
+        asr_audio_ms: stats.asr_audio_ms,
+    }
+}
+
+fn gui_history_record_summary(record: &shuohua::history::HistoryRecord) -> GuiHistoryRecordSummary {
+    GuiHistoryRecordSummary {
+        id: record.id.clone(),
+        status: history_status_label(record.status),
+        duration_ms: record.duration_ms,
+        words: record.text_stats().words,
+        text_preview: record.text.chars().take(80).collect(),
     }
 }
 
@@ -194,6 +385,24 @@ fn wire_state_label(state: WireState) -> &'static str {
     }
 }
 
+fn history_status_label(status: shuohua::history::HistoryStatus) -> &'static str {
+    match status {
+        shuohua::history::HistoryStatus::Submitted => "submitted",
+        shuohua::history::HistoryStatus::Canceled => "canceled",
+        shuohua::history::HistoryStatus::Empty => "empty",
+        shuohua::history::HistoryStatus::Error => "error",
+        shuohua::history::HistoryStatus::Timeout => "timeout",
+    }
+}
+
+fn history_stats_status_label(status: shuohua::history::HistoryStatsStatus) -> &'static str {
+    match status {
+        shuohua::history::HistoryStatsStatus::Ready => "ready",
+        shuohua::history::HistoryStatsStatus::Stale => "stale",
+        shuohua::history::HistoryStatsStatus::Unavailable => "unavailable",
+    }
+}
+
 fn first_screen_command_kind(command: &Command) -> &'static str {
     match command {
         Command::Subscribe => "subscribe",
@@ -211,13 +420,21 @@ fn daemon_status_request_kind(command: &Command) -> &'static str {
     }
 }
 
+fn history_summary_request_kind(command: &Command) -> &'static str {
+    match command {
+        Command::GetHistory { .. } => "historySummary",
+        _ => "other",
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             gui_shell_metadata,
             gui_first_screen_request_plan,
             gui_daemon_status_snapshot,
-            gui_daemon_status_request_once
+            gui_daemon_status_request_once,
+            gui_history_summary_request_once
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Shuohua GUI");
@@ -226,6 +443,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shuohua::history::{
+        AggregateStats, HistoryRecord, HistoryStatsSnapshot, HistoryStatsStatus,
+    };
     use shuohua::ipc::protocol::{Event, WireState};
 
     #[test]
@@ -258,5 +478,101 @@ mod tests {
         assert_eq!(error.kind, "daemonClosed");
         assert_eq!(error.message, "closed before reply");
         assert!(error.recoverable);
+    }
+
+    #[test]
+    fn history_summary_events_map_to_compact_shape_without_ipc() {
+        let history = Event::History {
+            records: vec![sample_record("01HISTORY", "hello from gui history summary")],
+            matched: Some(7),
+            stats: Some(AggregateStats {
+                records: 2,
+                words: 9,
+                duration_ms: 1_000,
+                asr_duration_ms: 900,
+                asr_audio_ms: 800,
+            }),
+        };
+        let stats = Event::HistoryStats {
+            snapshot: HistoryStatsSnapshot {
+                status: HistoryStatsStatus::Ready,
+                total: AggregateStats {
+                    records: 10,
+                    words: 40,
+                    duration_ms: 4_000,
+                    asr_duration_ms: 3_000,
+                    asr_audio_ms: 2_000,
+                },
+                current_month: AggregateStats {
+                    records: 3,
+                    words: 12,
+                    duration_ms: 1_200,
+                    asr_duration_ms: 1_100,
+                    asr_audio_ms: 1_000,
+                },
+                today: AggregateStats {
+                    records: 1,
+                    words: 4,
+                    duration_ms: 400,
+                    asr_duration_ms: 300,
+                    asr_audio_ms: 200,
+                },
+                error: None,
+            },
+        };
+
+        let summary = gui_history_summary_from_events(&history, &stats, 20).unwrap();
+
+        assert!(summary.connected);
+        assert!(summary.transport_opened);
+        assert!(summary.summary_available);
+        assert_eq!(summary.limit, 20);
+        assert_eq!(summary.page_record_count, 1);
+        assert_eq!(summary.matched, Some(7));
+        assert_eq!(summary.page_stats.unwrap().records, 2);
+        assert_eq!(summary.stats_status, Some("ready"));
+        assert_eq!(summary.total.unwrap().records, 10);
+        assert_eq!(summary.current_month.unwrap().records, 3);
+        assert_eq!(summary.today.unwrap().records, 1);
+        let latest = summary.latest_record.unwrap();
+        assert_eq!(latest.id, "01HISTORY");
+        assert_eq!(latest.status, "submitted");
+        assert_eq!(latest.words, 5);
+        assert_eq!(latest.text_preview, "hello from gui history summary");
+        assert_eq!(summary.request.request_kind, "historySummary");
+        assert!(summary.request.requires_daemon_connection);
+        assert!(gui_history_summary_from_events(&Event::HistoryChanged, &stats, 20).is_none());
+        assert!(gui_history_summary_from_events(&history, &Event::HistoryChanged, 20).is_none());
+    }
+
+    #[test]
+    fn history_summary_request_error_is_recoverable_shape() {
+        let error = history_summary_request_message("daemonClosed", "closed before replies");
+
+        assert_eq!(error.kind, "daemonClosed");
+        assert_eq!(error.message, "closed before replies");
+        assert!(error.recoverable);
+    }
+
+    fn sample_record(id: &str, text: &str) -> HistoryRecord {
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "id": id,
+            "started_at": "2023-11-14T22:13:20Z",
+            "ended_at": "2023-11-14T22:13:20Z",
+            "duration_ms": 321,
+            "status": "submitted",
+            "app": "com.example.Editor",
+            "text": text,
+            "asr": {
+                "provider": "test",
+                "text": text,
+                "duration_ms": 321,
+                "audio_ms": 300,
+                "sessions": []
+            },
+            "pipeline": []
+        }))
+        .unwrap()
     }
 }

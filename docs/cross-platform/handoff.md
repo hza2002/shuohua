@@ -6,12 +6,12 @@
 
 ## 最近 commit
 
-HEAD: `docs: record tauri gui poc baseline`（Phase 9a 提交后）
+HEAD: `feat: add gui client api boundary`
 
 ## 当前 phase
 
-Phase 9a: Tauri GUI PoC Baseline 已完成并提交。下一步是在独立目录/任务分支做最小 GUI
-client PoC，或先评审 GUI client API 边界。
+Phase 9b: GUI Client API Boundary 已完成并提交。下一步是在独立目录/任务分支做最小 GUI
+client PoC，或先扩展 client API 的首屏 status/history snapshot 命令。
 
 ## 已完成事项
 
@@ -120,6 +120,16 @@ client PoC，或先评审 GUI client API 边界。
   - 更新 `docs/cross-platform/development-plan.md`，把 Phase 9 拆出 9a 文档化 baseline。
   - 更新 `docs/cross-platform/overview.md`，记录 Phase 9a 当前状态。
   - 未新增 Tauri workspace，未引入 WebView runtime，未修改 daemon/CLI/TUI。
+- Phase 9b:
+  - 更新 `docs/cross-platform/gui.md`，记录共享 daemon client API 边界：只封装现有
+    `ipc::protocol::Command` / `Event`，不新增 wire shape，不 bump `PROTO_VERSION`。
+  - 更新 `docs/cross-platform/development-plan.md` 和 `docs/cross-platform/overview.md`，
+    记录 Phase 9b 的范围和状态。
+  - 新增 `src/client_api.rs`，作为 TUI 和后续 GUI backend 复用的 daemon client 入口。
+  - `src/tui/mod.rs` 改为通过 `client_api::DaemonClient` 获取 client 类型，startup command
+    通过 `client_api::subscribe_command()` 构造；TUI 行为和 IPC protocol 不变。
+  - `tests/platform_layout.rs` 增加 GUI client API 边界测试，禁止 daemon/TUI/shared client
+    path 引入 Tauri、WRY、WebView 或 `tao` token，并确认 `Cargo.toml` 未新增相关依赖。
 
 ## 验证结果
 
@@ -148,6 +158,10 @@ client PoC，或先评审 GUI client API 边界。
   `cargo test` 覆盖：633 个 unit tests、5 个 `apple_helper_build` tests、
   1 个 `cli_runtime_boundary` test、2 个 `doc_consistency` tests、13 个 `platform_layout` tests、
   6 个 `theme_registry_build` tests。
+- Phase 9b 已跑：`cargo test --test platform_layout gui_client_api_boundary_stays_out_of_daemon_hot_path`，
+  先红灯失败于缺少 `src/client_api.rs`，实现后通过。
+- Phase 9b 已跑：`cargo test client_api::tests`，通过 1 个 client API 单元测试。
+- Phase 9b 已跑：`cargo clippy --all-targets -- -D warnings`，通过。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -167,6 +181,8 @@ client PoC，或先评审 GUI client API 边界。
   数据仍需 PoC 记录。
 - Phase 9a 只是 Tauri v2 文档基线，不代表已测 GUI 冷启动、内存、CPU、包体或三端打包。
   GUI PoC 仍需证明 daemon 未打开 GUI 时不加载 WebView，且 GUI 退出不影响 daemon。
+- Phase 9b 只建立最小 shared client API 边界，目前只封装 `DaemonClient` 类型和
+  `Subscribe` startup command；GUI 首屏需要的 daemon status/history summary helper 尚未实现。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
   静态 `desktop.permissions=available` 误解为当前已授权。
 - `overlay::renderer::renderer_capabilities()` 同样是静态快照，不创建窗口、不 probe 当前
@@ -174,10 +190,12 @@ client PoC，或先评审 GUI client API 边界。
 
 ## 下一步
 
-提交 Phase 9a 后，进入下一小步：
+提交 Phase 9b 后，进入下一小步：
 
-- 若进入 GUI PoC，先在独立小步创建最小 Tauri app，连接现有 daemon IPC，只展示 status
-  snapshot 和 history summary。
+- 若继续 GUI client API，先扩展 `src/client_api.rs` 的首屏命令/响应 helper，覆盖 daemon
+  status、history page 和 history stats，仍不新增 protocol。
+- 若进入 GUI PoC，先在独立小步创建最小 Tauri app，连接 `client_api`，只展示 status snapshot
+  和 history summary。
 - 若目标平台环境可用，也可以先按 Phase 7a/8a checklist 做 Windows/Linux 最小 overlay PoC。
 
 建议下一 session prompt：
@@ -187,6 +205,7 @@ client PoC，或先评审 GUI client API 边界。
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 9a Tauri GUI PoC Baseline 已实现；先查看最新 commit 和验证结果。
-下一步在最小 Tauri GUI client PoC 或 Windows/Linux overlay PoC 之间做一个小步计划。
+Phase 9b GUI Client API Boundary 已实现；先查看最新 commit 和验证结果。
+下一步在扩展 client_api 首屏 helper、最小 Tauri GUI client PoC、或 Windows/Linux overlay
+PoC 之间做一个小步计划。
 ```

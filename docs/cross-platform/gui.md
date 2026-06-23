@@ -48,6 +48,19 @@ frontend -> Tauri command -> shuohua client API -> daemon IPC
 daemon event -> shuohua client API -> Tauri event -> frontend
 ```
 
+Phase 9b 先建立共享 client API 边界，不创建 Tauri workspace：
+
+- client API 只封装 daemon 连接和既有 `ipc::protocol::Command` / `Event`，不新增 JSON-line
+  wire shape，不 bump `PROTO_VERSION`。
+- TUI 和后续 GUI backend 都应把它当作 daemon client 入口；GUI frontend 不能直接构造
+  transport、读写 socket 或读取 history/config 文件。
+- client API 可以提供 GUI 首屏需要的命令组，例如 daemon status、subscribe、history page 和
+  history stats，但这些命令必须映射到现有 IPC protocol。
+- client API 不依赖 Tauri、WRY、WebView、frontend build output 或 window runtime；daemon、
+  TUI 和 shared client API 都不得链接 Tauri/WebView。
+- Tauri command 只调用 client API，并把结果转换为前端 view model；view model 的本地化和展示
+  细节留在 GUI 层，不进入 daemon protocol。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：
@@ -91,6 +104,13 @@ Phase 9 PoC checklist：
   open GUI idle CPU、连接 daemon 首次数据时间。
 - 打包：记录 `tauri build` 和 `tauri bundle` 产物路径、bundle 类型和签名/未签名状态。
 - 回退：TUI 继续可用；GUI PoC 不改变 CLI/TUI 命令和 JSON-line IPC protocol。
+
+Phase 9b 验收：
+
+- 存在共享 daemon client API 边界，TUI 至少通过该边界获取 `IpcClient` 类型。
+- `Cargo.toml` 不新增 Tauri/WRY/WebView 依赖。
+- `src/daemon/**`、`src/tui/**` 和共享 client API 不出现 Tauri/WRY/WebView token。
+- IPC protocol round-trip 测试继续通过，`PROTO_VERSION` 不变。
 
 参考资料：
 

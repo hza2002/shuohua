@@ -223,6 +223,13 @@ Phase 9a 先做文档化 PoC baseline，不写 GUI app：
 - 把进程边界、IPC、安全权限、指标、打包和 TUI 回退 checklist 写入 `gui.md`。
 - 不新增 Tauri workspace，不引入 WebView runtime，不改变 daemon/CLI/TUI。
 
+Phase 9b 先做 GUI client API boundary，不写 GUI app：
+
+- 增加共享 daemon client API 边界，复用现有 JSON-line IPC command/event。
+- TUI 开始通过该边界引用 daemon client 类型，后续 GUI backend 也走同一入口。
+- 增加架构测试，禁止 daemon/TUI/shared client API 引入 Tauri、WRY 或 WebView 依赖/token。
+- 不新增 Tauri workspace，不新增 wire protocol，不改变 TUI 用户可见行为。
+
 范围：
 
 - 建一个最小 Tauri app。

@@ -378,6 +378,60 @@ fn overlay_renderer_capabilities_are_consumed_by_doctor_only() {
     );
 }
 
+#[test]
+fn gui_client_api_boundary_stays_out_of_daemon_hot_path() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    assert!(
+        root.join("src/client_api.rs").exists(),
+        "Phase 9b shared GUI/TUI daemon client API should live at src/client_api.rs"
+    );
+
+    let main_rs = std::fs::read_to_string(root.join("src/main.rs")).unwrap();
+    assert!(
+        main_rs.contains("mod client_api;"),
+        "src/main.rs must mount the shared daemon client API module"
+    );
+
+    let tui = std::fs::read_to_string(root.join("src/tui/mod.rs")).unwrap();
+    assert!(
+        tui.contains("crate::client_api::DaemonClient"),
+        "TUI should obtain its daemon client type through client_api so GUI can reuse the same boundary"
+    );
+    assert!(
+        !tui.contains("crate::ipc::client::IpcClient"),
+        "TUI should not depend directly on ipc::client::IpcClient after the shared client API exists"
+    );
+
+    let forbidden = ["tauri", "wry", "webview", "WebView", "tao"];
+    for file in rust_files_under(&root.join("src/daemon"))
+        .into_iter()
+        .chain(rust_files_under(&root.join("src/tui")))
+        .chain([root.join("src/client_api.rs")])
+    {
+        let body = std::fs::read_to_string(&file).unwrap();
+        let relative = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        for token in forbidden {
+            assert!(
+                !body.contains(token),
+                "{relative} must not pull GUI/WebView runtime token `{token}` into daemon/TUI/shared client path"
+            );
+        }
+    }
+
+    let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    for token in forbidden {
+        assert!(
+            !cargo.contains(token),
+            "Phase 9b must not add GUI/WebView dependency token `{token}` to Cargo.toml"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

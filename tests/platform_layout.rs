@@ -1107,6 +1107,95 @@ fn gui_first_screen_request_plan_reuses_client_api_without_sending_ipc() {
     }
 }
 
+#[test]
+fn gui_daemon_status_snapshot_shape_does_not_send_ipc() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9p",
+        "daemon status snapshot command",
+        "shape preflight",
+        "Command::DaemonStatus",
+        "不发送 IPC",
+        "不得调用 `send_command`",
+        "不得订阅 daemon event stream",
+        "不启动 reconnect loop",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9p daemon status shape token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "gui_daemon_status_snapshot",
+        "GuiDaemonStatusSnapshot",
+        "GuiDaemonStatusRequestSummary",
+        "Command::DaemonStatus",
+        "connected",
+        "transport_opened",
+        "snapshot_available",
+        "request_kind",
+        "state_label",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should expose Phase 9p daemon status shape token `{token}`"
+        );
+    }
+
+    for token in [
+        "connect_default",
+        "DaemonClient",
+        "send_command",
+        "subscribe_events",
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+    ] {
+        assert!(
+            !tauri_lib.contains(token),
+            "Phase 9p daemon status shape must not connect daemon or own runtime loop token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "gui_daemon_status_snapshot",
+        "status-connected",
+        "status-transport-opened",
+        "status-snapshot-available",
+        "status-request-kind",
+        "status-state-label",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should display daemon status shape token `{token}`"
+        );
+    }
+
+    for file in rust_files_under(&root.join("src/daemon"))
+        .into_iter()
+        .chain(rust_files_under(&root.join("src/tui")))
+        .chain([root.join("src/client_api.rs")])
+    {
+        let body = std::fs::read_to_string(&file).unwrap();
+        let relative = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        for token in ["tauri", "wry", "webview", "WebView", "tao"] {
+            assert!(
+                !body.contains(token),
+                "{relative} must not import GUI runtime token `{token}`"
+            );
+        }
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

@@ -67,6 +67,16 @@
         <dd id="request-plan-requires-daemon">true</dd>
         <dt>Transport opened</dt>
         <dd id="request-plan-transport-opened">false</dd>
+        <dt>Status connected</dt>
+        <dd id="status-connected">false</dd>
+        <dt>Status transport</dt>
+        <dd id="status-transport-opened">false</dd>
+        <dt>Status snapshot</dt>
+        <dd id="status-snapshot-available">false</dd>
+        <dt>Status request</dt>
+        <dd id="status-request-kind">daemonStatus</dd>
+        <dt>Status state</dt>
+        <dd id="status-state-label">disconnected</dd>
       </dl>
     </main>
     <script>
@@ -96,6 +106,21 @@
           String(requestPlan.requiresDaemonConnection);
         document.getElementById("request-plan-transport-opened").textContent =
           String(requestPlan.transportOpened);
+
+        const statusSnapshot = await invoke("gui_daemon_status_snapshot");
+        document.getElementById("status-connected").textContent = String(
+          statusSnapshot.connected
+        );
+        document.getElementById("status-transport-opened").textContent = String(
+          statusSnapshot.transportOpened
+        );
+        document.getElementById("status-snapshot-available").textContent = String(
+          statusSnapshot.snapshotAvailable
+        );
+        document.getElementById("status-request-kind").textContent =
+          statusSnapshot.request.requestKind;
+        document.getElementById("status-state-label").textContent =
+          statusSnapshot.stateLabel;
       }
 
       loadShellMetadata().catch(() => {});

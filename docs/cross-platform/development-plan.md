@@ -334,6 +334,18 @@ Phase 9o 增加 GUI first-screen request plan command，不发送 IPC：
 - frontend placeholder 可以展示该 plan，但不得实现 Status/History/Diagnostics view model。
 - 不新增 IPC protocol，不运行 Tauri dev/build/bundle，不启动 daemon/GUI，不实现 reconnect loop。
 
+Phase 9p 增加 GUI daemon status snapshot shape command，不发送 IPC：
+
+- `src-tauri` 可以注册一个 daemon status snapshot command，用于固定后续真实 status view 的
+  response shape。该 command 只能描述当前 GUI backend 未连接 daemon、transport 未打开，以及
+  后续需要发送既有 `Command::DaemonStatus`。
+- command 返回静态字段和 request summary，不创建 `DaemonClient`、不调用 `connect_default()`、
+  不发送 IPC、不读取 daemon status event、不启动 reconnect loop。
+- frontend placeholder 可以展示 status snapshot shape，但不得实现真实 Status/History/Diagnostics
+  view model，不读 config/history 文件，不直接访问 IPC transport。
+- 不新增 IPC protocol，不运行 Tauri dev/build/bundle，不启动 daemon/GUI，不实现 service
+  management。
+
 范围：
 
 - 建一个最小 Tauri app。

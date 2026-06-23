@@ -256,6 +256,22 @@ Phase 9o 增加 GUI first-screen request plan command，不发送 IPC：
 - 这个阶段不新增 IPC command/event，不 bump `PROTO_VERSION`，不改变 TUI/CLI 行为，不运行
   `tauri dev`、`tauri build` 或 `tauri bundle`，不启动 daemon/GUI。
 
+Phase 9p 增加 GUI daemon status snapshot shape command，不发送 IPC：
+
+- `src-tauri` 可以注册一个 daemon status snapshot command，但当前只固定 GUI backend 到 frontend
+  的 response shape。它描述 GUI backend 当前没有 daemon 连接、没有打开 transport、没有真实
+  status event，并标记后续真实快照需要发送既有 `Command::DaemonStatus`。
+- 该 command 是“shape preflight”，不是 status client：不得创建 `DaemonClient`、不得调用
+  `connect_default()`、不得调用 `send_command`、不得订阅 daemon event stream、不得启动
+  reconnect loop 或 timer。
+- 返回字段保持前端可直接展示但不承担本地化：`connected`、`transportOpened`、
+  `snapshotAvailable`、`requestKind` 和 `stateLabel`。真实 `Event::DaemonStatus` 到 view model 的
+  映射留给后续连接阶段。
+- frontend placeholder 可以展示这个静态 status snapshot shape；仍不得实现真实
+  Status/History/Diagnostics view model，不读取 config/history 文件，不直接访问 IPC transport。
+- 这个阶段不新增 IPC command/event，不 bump `PROTO_VERSION`，不改变 TUI/CLI 行为，不运行
+  `tauri dev`、`tauri build` 或 `tauri bundle`，不启动 daemon/GUI。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：

@@ -6,14 +6,13 @@
 
 ## 最近 commit
 
-HEAD: `feat: add gui first-screen summary timing`
+HEAD: `feat: add gui first-screen refresh shape`
 
 ## 当前 phase
 
-Phase 9u: GUI First-Screen Summary Request Timing 已实现并完成自动验证。下一步可以继续做
-GUI 显式 refresh shape、首屏 readiness/timing 展示接入的一个窄切片，或回到 Windows/Linux
-overlay PoC；不要直接做完整 GUI、reconnect runtime、service management、配置编辑器或 release
-打包指标。
+Phase 9v: GUI First-Screen Explicit Refresh Shape 已实现并完成自动验证。下一步可以继续做首屏
+readiness/timing 展示接入的一个窄切片，或回到 Windows/Linux overlay PoC；不要直接做完整 GUI、
+reconnect runtime、service management、配置编辑器或 release 打包指标。
 
 ## 已完成事项
 
@@ -596,6 +595,15 @@ overlay PoC；不要直接做完整 GUI、reconnect runtime、service management
   5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
   tests、33 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests；
   Tauri crate 单测覆盖 2 个 first-screen summary tests。
+- Phase 9v 已跑窄验证：
+  `cargo test --test platform_layout gui_first_screen_refresh_shape_is_static_and_explicit` 先红灯失败于缺少
+  `gui_first_screen_refresh_shape`，实现后通过；`cargo test --manifest-path src-tauri/Cargo.toml first_screen_refresh_shape`
+  通过 1 个 Tauri crate 单元测试。
+- Phase 9v 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo check --manifest-path src-tauri/Cargo.toml && cargo test --manifest-path src-tauri/Cargo.toml first_screen_refresh_shape`，
+  通过。`cargo test` 覆盖：92 个 library unit tests、639 个 binary unit tests、
+  5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
+  tests、34 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests；
+  Tauri crate 单测覆盖 1 个 first-screen refresh shape test。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -631,11 +639,11 @@ overlay PoC；不要直接做完整 GUI、reconnect runtime、service management
   capabilities JSON、frontend command binding、release build 或打包验证。
 - Phase 9l 只记录 reconnect supervisor ownership/cancellation 语义，没有实现真实 runtime loop、
   Tauri event emission、frontend view model 或 metrics sink。
-- Phase 9m/9n/9o/9p/9q/9r/9s/9t/9u 只创建最小 `src-tauri/**` skeleton、静态 placeholder、本地 metadata
+- Phase 9m/9n/9o/9p/9q/9r/9s/9t/9u/9v 只创建最小 `src-tauri/**` skeleton、静态 placeholder、本地 metadata
   command、first-screen request plan command、daemon status snapshot shape command、纯 daemon
   status event mapper、显式 one-shot daemon status request command 和显式 one-shot history summary
-  request command、显式 one-shot first-screen summary request command 和 first-screen summary 本地
-  timing 字段；
+  request command、显式 one-shot first-screen summary request command、first-screen summary 本地
+  timing 字段和 first-screen explicit refresh shape；
   尚未运行 `tauri dev` / `tauri build` / `tauri bundle`，也没有启动 GUI 或 daemon。后续需要
   单独决定何时运行 release build、如何记录 cold start/RSS/CPU/bundle 指标。
 - Phase 9n 的 `gui_shell_metadata` 只验证本地 command wiring，不连接 daemon、不读
@@ -654,6 +662,8 @@ overlay PoC；不要直接做完整 GUI、reconnect runtime、service management
   不订阅、不重连、不启动 daemon、不提供 frontend Status/History view model。
 - Phase 9u 的 first-screen summary timing 只描述本次显式 request 的 GUI backend 本地耗时；
   不代表 daemon 内部状态，不写入 protocol/history/trace。
+- Phase 9v 的 `gui_first_screen_refresh_shape` 只描述后续前端手动刷新入口的静态 shape；
+  placeholder 不自动调用 `gui_first_screen_summary_request_once`，也不实现 loading/retry UI。
 - `ipc::transport` 仍是 Unix-only，library client 只实际覆盖 macOS/Linux 当前 transport。
   Windows Named Pipe adapter 仍是后续 IPC transport backend 工作。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
@@ -663,10 +673,10 @@ overlay PoC；不要直接做完整 GUI、reconnect runtime、service management
 
 ## 下一步
 
-Phase 9u 后，进入下一小步：
+Phase 9v 后，进入下一小步：
 
-- 若继续 GUI，下一阶段可以做 GUI 显式 refresh shape 或首屏 readiness/timing 展示接入的一个
-  窄切片；继续禁止 daemon 热路径引入 WebView，且不要启动 daemon、GUI 或 release 打包。
+- 若继续 GUI，下一阶段可以做首屏 readiness/timing 展示接入的一个窄切片；继续禁止 daemon
+  热路径引入 WebView，且不要启动 daemon、GUI 或 release 打包。
 - 若目标平台环境可用，也可以先按 Phase 7a/8a checklist 做 Windows/Linux 最小 overlay PoC。
 
 建议下一 session prompt：
@@ -676,6 +686,6 @@ Phase 9u 后，进入下一小步：
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、gui.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 9u GUI First-Screen Summary Request Timing 已实现；先查看最新 commit 和验证结果。
-下一步在 GUI 显式 refresh shape、首屏 readiness/timing 展示接入或 Windows/Linux overlay PoC 之间做一个小步计划。
+Phase 9v GUI First-Screen Explicit Refresh Shape 已实现；先查看最新 commit 和验证结果。
+下一步在首屏 readiness/timing 展示接入或 Windows/Linux overlay PoC 之间做一个小步计划。
 ```

@@ -1421,7 +1421,8 @@ fn gui_first_screen_summary_one_shot_request_is_explicit_and_bounded() {
 
     let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
     assert!(
-        !frontend.contains("gui_first_screen_summary_request_once"),
+        !frontend.contains("invoke(\"gui_first_screen_summary_request_once\"")
+            && !frontend.contains("invoke('gui_first_screen_summary_request_once'"),
         "placeholder must not auto-call the one-shot first-screen summary request"
     );
 }
@@ -1478,6 +1479,76 @@ fn gui_first_screen_summary_timing_stays_local_to_one_shot_request() {
             "Phase 9u timing must not subscribe, reconnect, spawn, or own timer token `{token}`"
         );
     }
+}
+
+#[test]
+fn gui_first_screen_refresh_shape_is_static_and_explicit() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9v",
+        "gui_first_screen_refresh_shape",
+        "refresh preflight",
+        "gui_first_screen_summary_request_once",
+        "不得调用 `gui_first_screen_summary_request_once`",
+        "不得订阅 daemon",
+        "不启动 reconnect loop",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9v refresh shape token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "gui_first_screen_refresh_shape",
+        "GuiFirstScreenRefreshShape",
+        "explicit_trigger_required",
+        "default_history_limit",
+        "requires_daemon_connection",
+        "transport_opened",
+        "invoke_target",
+        "gui_first_screen_summary_request_once",
+        "tauri::generate_handler!",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should expose Phase 9v refresh shape token `{token}`"
+        );
+    }
+
+    for token in [
+        "client.send(&Command::Subscribe)",
+        "subscribe_events",
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+    ] {
+        assert!(
+            !tauri_lib.contains(token),
+            "Phase 9v refresh shape must not subscribe, reconnect, spawn, or own timer token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "gui_first_screen_refresh_shape",
+        "refresh-explicit-trigger",
+        "refresh-default-history-limit",
+        "refresh-invoke-target",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should display refresh shape token `{token}`"
+        );
+    }
+    assert!(
+        !frontend.contains("invoke(\"gui_first_screen_summary_request_once\"")
+            && !frontend.contains("invoke('gui_first_screen_summary_request_once'"),
+        "placeholder must not auto-call the one-shot first-screen summary request"
+    );
 }
 
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {

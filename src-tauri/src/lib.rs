@@ -154,6 +154,16 @@ struct GuiFirstScreenSummaryRequestError {
     recoverable: bool,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiFirstScreenRefreshShape {
+    explicit_trigger_required: bool,
+    default_history_limit: usize,
+    requires_daemon_connection: bool,
+    transport_opened: bool,
+    invoke_target: &'static str,
+}
+
 #[tauri::command]
 fn gui_first_screen_request_plan(history_limit: Option<usize>) -> GuiFirstScreenRequestPlan {
     let history_limit = history_limit.unwrap_or(20);
@@ -175,6 +185,17 @@ fn gui_first_screen_request_plan(history_limit: Option<usize>) -> GuiFirstScreen
 #[tauri::command]
 fn gui_daemon_status_snapshot() -> GuiDaemonStatusSnapshot {
     empty_daemon_status_snapshot()
+}
+
+#[tauri::command]
+fn gui_first_screen_refresh_shape(history_limit: Option<usize>) -> GuiFirstScreenRefreshShape {
+    GuiFirstScreenRefreshShape {
+        explicit_trigger_required: true,
+        default_history_limit: history_limit.unwrap_or(20),
+        requires_daemon_connection: true,
+        transport_opened: false,
+        invoke_target: "gui_first_screen_summary_request_once",
+    }
 }
 
 #[tauri::command]
@@ -627,6 +648,7 @@ pub fn run() {
             gui_shell_metadata,
             gui_first_screen_request_plan,
             gui_daemon_status_snapshot,
+            gui_first_screen_refresh_shape,
             gui_daemon_status_request_once,
             gui_history_summary_request_once,
             gui_first_screen_summary_request_once
@@ -826,6 +848,20 @@ mod tests {
         assert_eq!(error.kind, "daemonClosed");
         assert_eq!(error.message, "closed before summaries");
         assert!(error.recoverable);
+    }
+
+    #[test]
+    fn first_screen_refresh_shape_is_static_and_explicit() {
+        let shape = gui_first_screen_refresh_shape(Some(12));
+
+        assert!(shape.explicit_trigger_required);
+        assert_eq!(shape.default_history_limit, 12);
+        assert!(shape.requires_daemon_connection);
+        assert!(!shape.transport_opened);
+        assert_eq!(
+            shape.invoke_target,
+            "gui_first_screen_summary_request_once"
+        );
     }
 
     fn sample_record(id: &str, text: &str) -> HistoryRecord {

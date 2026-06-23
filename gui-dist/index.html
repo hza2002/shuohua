@@ -77,6 +77,12 @@
         <dd id="status-request-kind">daemonStatus</dd>
         <dt>Status state</dt>
         <dd id="status-state-label">disconnected</dd>
+        <dt>Refresh explicit</dt>
+        <dd id="refresh-explicit-trigger">true</dd>
+        <dt>Refresh limit</dt>
+        <dd id="refresh-default-history-limit">20</dd>
+        <dt>Refresh target</dt>
+        <dd id="refresh-invoke-target">gui_first_screen_summary_request_once</dd>
       </dl>
     </main>
     <script>
@@ -121,6 +127,18 @@
           statusSnapshot.request.requestKind;
         document.getElementById("status-state-label").textContent =
           statusSnapshot.stateLabel;
+
+        const refreshShape = await invoke("gui_first_screen_refresh_shape", {
+          historyLimit: 20,
+        });
+        document.getElementById("refresh-explicit-trigger").textContent = String(
+          refreshShape.explicitTriggerRequired
+        );
+        document.getElementById("refresh-default-history-limit").textContent = String(
+          refreshShape.defaultHistoryLimit
+        );
+        document.getElementById("refresh-invoke-target").textContent =
+          refreshShape.invokeTarget;
       }
 
       loadShellMetadata().catch(() => {});

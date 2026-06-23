@@ -3364,6 +3364,53 @@ fn app_data_ownership_separates_product_data_from_package_private_data() {
 }
 
 #[test]
+fn app_paths_facade_owns_config_and_state_roots() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let paths = std::fs::read_to_string(root.join("src/paths.rs")).unwrap();
+    for token in [
+        "pub struct AppPaths",
+        "pub fn discover() -> Self",
+        "pub fn config_root(&self)",
+        "pub fn state_root(&self)",
+        "pub fn main_config(&self)",
+        "pub fn profile_dir(&self)",
+        "pub fn asr_provider(&self",
+        "pub fn post_dir(&self)",
+        "pub fn cache(&self)",
+        "StateDirs::from_app_paths",
+        "FOLDERID_RoamingAppData",
+        "FOLDERID_LocalAppData",
+        "SHGetKnownFolderPath",
+        "CoTaskMemFree",
+    ] {
+        assert!(
+            paths.contains(token),
+            "src/paths.rs should centralize product path token `{token}`"
+        );
+    }
+
+    let config_paths = std::fs::read_to_string(root.join("src/config/paths.rs")).unwrap();
+    assert!(
+        config_paths.contains("crate::paths::AppPaths::discover()"),
+        "config paths should resolve through AppPaths"
+    );
+    for forbidden in ["std::env::var", "XDG_CONFIG_HOME", "join(\".config\")"] {
+        assert!(
+            !config_paths.contains(forbidden),
+            "config paths should not read `{forbidden}` directly after AppPaths facade"
+        );
+    }
+
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    for token in ["Win32_System_Com", "Win32_UI_Shell"] {
+        assert!(
+            manifest.contains(token),
+            "Cargo.toml should enable Windows known-folder dependency feature `{token}`"
+        );
+    }
+}
+
+#[test]
 fn windows_runtime_validation_checklist_stays_bottom_up() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let readme = std::fs::read_to_string(root.join("docs/cross-platform/README.md")).unwrap();

@@ -79,8 +79,10 @@ Recommended mapping:
 
 Implementation notes:
 
-- `src/paths.rs` currently uses XDG/HOME behavior. Windows support must add a Windows backend before runtime
-  validation.
+- `src/paths.rs` now owns an `AppPaths` facade for product config/state/cache roots. Config path helpers and
+  `StateDirs` should route through this facade instead of reading environment variables directly.
+- Windows builds resolve `%APPDATA%` and `%LOCALAPPDATA%` through known-folder APIs first, with environment
+  fallback only for development/error fallback.
 - Windows unpackaged desktop builds should resolve known folders through Windows APIs when possible, with
   `%APPDATA%` / `%LOCALAPPDATA%` environment fallback only as a development fallback.
 - Packaged-app `ApplicationData` or MSIX package-local data is app-private by default. It may store GUI window
@@ -94,8 +96,9 @@ Implementation notes:
   for normal application folders.
 - Config backup/sync behavior is intentionally limited to the user-editable config directory. History, retained
   audio, traces, and logs stay local because they may be large or sensitive.
-- Future path implementation should converge behind an `AppPaths`-style facade so business modules do not read
-  `%APPDATA%`, `%LOCALAPPDATA%`, package paths, or install paths directly.
+- Business modules must not read `%APPDATA%`, `%LOCALAPPDATA%`, package paths, or install paths directly.
+- Current status is compile-checked only. Real Windows known-folder behavior, directory creation timing, package
+  redirection, and elevated/non-elevated consistency still need Windows runtime validation.
 
 Initial path validation checklist:
 

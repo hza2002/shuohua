@@ -1,28 +1,25 @@
 use std::path::PathBuf;
 
 pub fn config_home() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(xdg);
-    }
-    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config")
-}
-
-pub fn root_dir() -> PathBuf {
-    config_home().join("shuohua")
+    crate::paths::AppPaths::discover()
+        .config_root()
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_default()
 }
 
 pub fn main_config() -> PathBuf {
-    root_dir().join("config.toml")
+    crate::paths::AppPaths::discover().main_config()
 }
 
 pub fn profile_dir() -> PathBuf {
-    root_dir().join("profile")
+    crate::paths::AppPaths::discover().profile_dir()
 }
 
 pub fn asr_provider(provider: &str) -> PathBuf {
-    root_dir().join("asr").join(format!("{provider}.toml"))
+    crate::paths::AppPaths::discover().asr_provider(provider)
 }
 
 pub fn post_dir() -> PathBuf {
-    root_dir().join("post")
+    crate::paths::AppPaths::discover().post_dir()
 }

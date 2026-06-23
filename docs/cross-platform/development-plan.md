@@ -770,12 +770,16 @@ Phase 10n Windows Runtime Validation Checklist:
 
 Phase 10o Windows Path/Config/State Backend:
 
-- Start converging path discovery behind an `AppPaths`-style product path facade, then replace Unix-only state
-  discovery in `src/paths.rs` with a Windows backend using per-user known folders: config under
-  `%APPDATA%\Shuohua`, state/history/audio/logs/traces under `%LOCALAPPDATA%\Shuohua`.
-- Prefer Windows known-folder APIs; allow environment fallback only when documented as development fallback.
-- Add tests that protect Windows from using Unix dotfile/XDG/HOME paths.
-- This phase must not change macOS path layout or config schema.
+- Add an `AppPaths` product path facade in `src/paths.rs`.
+- Route config path helpers and `StateDirs` through `AppPaths`.
+- Add a Windows backend using known-folder APIs first: config under `%APPDATA%\Shuohua`,
+  state/history/audio/logs/traces/cache under `%LOCALAPPDATA%\Shuohua`.
+- Keep macOS/Linux terminal-friendly config behavior: XDG or `~/.config/shuohua`; do not migrate macOS paths.
+- Add tests that protect Windows from using Unix dotfile/XDG/HOME paths and protect package-private data from
+  becoming the product data root.
+- This phase must not change config schema, history schema, IPC protocol, or directory creation timing.
+- Passing `make check-windows` proves compile/cfg boundaries only. Product path behavior still needs the
+  Windows runtime checklist.
 
 Phase 10p Windows CI Artifact Build:
 

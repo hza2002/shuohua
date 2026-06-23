@@ -6,7 +6,7 @@
 
 ## 最近 commit
 
-HEAD: `docs: add windows runtime checklist`
+HEAD: `feat: add product app paths facade`
 
 ## 当前 phase
 
@@ -24,6 +24,11 @@ package/app-private data 只保存 GUI/runtime 私有状态。macOS 配置可继
 product data paths、daemon/client IPC、single instance、service dry-run 和 Explorer open/reveal；
 不验证 audio/overlay/hotkey/clipboard/paste。下一步不要继续打磨 GUI placeholder；优先做
 Windows path/config/state backend 和 Windows artifact/CI。
+Phase 10o Windows Path/Config/State Backend 已完成：`src/paths.rs` 新增 `AppPaths` product path
+facade，config path helpers 和 `StateDirs` 改走该 facade；Windows target 使用 known-folder API
+优先解析 Roaming/Local AppData，环境变量仅作为 fallback。该阶段仍只证明 compile/cfg 边界，
+真实目录解析、package redirection、目录创建时机和 elevated/non-elevated 行为需要 Windows runtime
+checklist。
 Windows IPC capability 诊断已与 Phase 3c 同步：Windows target 使用 Tokio Named Pipe transport
 编译通过，`ipc.transport` 静态 capability 报 `partial/named_pipe/runtime_not_verified`；runtime/ACL/
 smart fallback 仍需 Windows 实机或 VM 验证。
@@ -1206,11 +1211,7 @@ permission probe 或 active app runtime。
 - Phase 10n：写 Windows runtime validation checklist，第一版只覆盖 version/doctor/config path、
   state/history/log path、Named Pipe daemon status、single-instance smoke、service dry-run、Explorer
   open/reveal。不要把 audio/overlay/hotkey/paste 塞进第一版，等可测 artifact/backend 后再加。
-- Phase 10o：实现 Windows path/config/state backend。`src/paths.rs` 当前仍是 Unix/XDG/HOME 路线；
-  先按 `docs/cross-platform/app-data.md` 收敛 `AppPaths`-style product path facade，再做 Windows
-  known-folder/AppData backend：config -> `%APPDATA%\Shuohua`，state/history/audio/logs/traces ->
-  `%LOCALAPPDATA%\Shuohua`。先补测试保护 Windows 不走 dotfile/XDG/HOME，也保护 package-private
-  data 不会成为 product data truth source。
+- Phase 10p：做 Windows CI artifact build，优先让用户测试下载的 `shuo.exe`，不要要求用户反复在 Windows 上手动构建。
 - Phase 10p：做 Windows CI artifact build，优先让用户测试下载的 `shuo.exe`，不要要求用户反复在
   Windows 上手动构建。
 - Phase 10q 之后才做 Named Pipe endpoint scoping/security descriptor 和 Windows runtime smoke；

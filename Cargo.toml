@@ -96,7 +96,12 @@ objc2-foundation = { version = "0.3", features = [
 objc2-quartz-core = { version = "0.3", features = ["CAAnimation", "CAGradientLayer", "CALayer", "CAMediaTiming", "CAShapeLayer", "objc2-core-graphics"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+] }
 
 [dev-dependencies]
 proptest = "1"

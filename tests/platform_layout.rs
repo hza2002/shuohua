@@ -382,7 +382,11 @@ fn overlay_renderer_capabilities_are_consumed_by_doctor_only() {
             .replace('\\', "/");
         if matches!(
             relative.as_str(),
-            "src/overlay/mod.rs" | "src/overlay/renderer.rs" | "src/cli/doctor.rs"
+            "src/overlay/mod.rs"
+                | "src/overlay/renderer.rs"
+                | "src/overlay/windows.rs"
+                | "src/overlay/linux.rs"
+                | "src/cli/doctor.rs"
         ) {
             continue;
         }
@@ -399,6 +403,61 @@ fn overlay_renderer_capabilities_are_consumed_by_doctor_only() {
         "overlay renderer capability snapshot should only feed doctor until GUI/TUI consumption is designed:\n{}",
         offenders.join("\n")
     );
+}
+
+#[test]
+fn overlay_windows_linux_backend_skeletons_are_cfg_gated_and_gui_free() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    for file in ["src/overlay/windows.rs", "src/overlay/linux.rs"] {
+        assert!(
+            root.join(file).exists(),
+            "Phase 7b/8b overlay backend skeleton should exist at {file}"
+        );
+    }
+
+    let renderer = std::fs::read_to_string(root.join("src/overlay/renderer.rs")).unwrap();
+    for token in [
+        "#[cfg(target_os = \"windows\")]",
+        "#[cfg(target_os = \"linux\")]",
+        "windows::run",
+        "linux::run",
+        "windows::renderer_capabilities",
+        "linux::renderer_capabilities",
+    ] {
+        assert!(
+            renderer.contains(token),
+            "overlay::renderer should cfg-dispatch backend skeleton token `{token}`"
+        );
+    }
+
+    let overlay_mod = std::fs::read_to_string(root.join("src/overlay/mod.rs")).unwrap();
+    for token in [
+        "#[cfg(target_os = \"windows\")]",
+        "mod windows;",
+        "#[cfg(target_os = \"linux\")]",
+        "mod linux;",
+    ] {
+        assert!(
+            overlay_mod.contains(token),
+            "src/overlay/mod.rs should cfg-gate backend module token `{token}`"
+        );
+    }
+
+    for file in rust_files_under(&root.join("src/overlay")) {
+        let body = std::fs::read_to_string(&file).unwrap();
+        let relative = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        for token in ["tauri", "wry", "webview", "WebView", "tao"] {
+            assert!(
+                !body.contains(token),
+                "{relative} must not import GUI/WebView runtime token `{token}` into overlay"
+            );
+        }
+    }
 }
 
 #[test]

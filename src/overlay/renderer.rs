@@ -39,7 +39,15 @@ pub(crate) fn renderer_capabilities() -> Vec<CapabilityStatus> {
     {
         macos_renderer_capabilities().to_vec()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        super::windows::renderer_capabilities().to_vec()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        super::linux::renderer_capabilities().to_vec()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let platform = PlatformKind::current();
         OVERLAY_CAPABILITY_IDS
@@ -59,7 +67,25 @@ pub(super) fn run(
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub(super) fn run(
+    rx: OverlayReceiver,
+    cfg: crate::config::theme::EffectiveOverlayCfg,
+) -> Result<()> {
+    debug_assert_eq!(renderer_capabilities().len(), OVERLAY_CAPABILITY_IDS.len());
+    super::windows::run(rx, cfg)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn run(
+    rx: OverlayReceiver,
+    cfg: crate::config::theme::EffectiveOverlayCfg,
+) -> Result<()> {
+    debug_assert_eq!(renderer_capabilities().len(), OVERLAY_CAPABILITY_IDS.len());
+    super::linux::run(rx, cfg)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub(super) fn run(
     _rx: OverlayReceiver,
     _cfg: crate::config::theme::EffectiveOverlayCfg,
@@ -68,7 +94,7 @@ pub(super) fn run(
     anyhow::bail!("overlay is not implemented on this platform")
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 fn unsupported(id: CapabilityId, platform: PlatformKind) -> CapabilityStatus {
     CapabilityStatus {
         id,

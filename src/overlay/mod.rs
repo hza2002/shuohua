@@ -9,8 +9,12 @@ pub use command::{OverlayCmd, OverlayHandle, OverlayReceiver, OverlayState, Text
 pub use model::OverlayModel;
 pub(crate) use renderer::renderer_capabilities;
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
 pub fn run(
     rx: OverlayReceiver,

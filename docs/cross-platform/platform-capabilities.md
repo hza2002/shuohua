@@ -155,6 +155,18 @@ macOS `open` 命令：
 该阶段不改变 TUI 的路径安全检查，不改变 `$VISUAL` / `$EDITOR` 优先级，不把 path open/reveal
 放进 daemon 常驻路径。
 
+## Phase 10h Windows Path Open/Reveal Compile Backend
+
+Windows `platform::path` backend 可先使用 `explorer.exe` 的命令行能力，作为 TUI open/reveal 的
+compile backend：
+
+- `open_path(path)`：`explorer.exe <path>`。
+- `reveal_path(path)`：`explorer.exe /select,<path>`。
+- `path.open_reveal`：`partial`，backend `explorer`，reason `runtime_not_verified`。
+
+真实 Windows shell 行为、路径 quoting、UNC 路径、焦点和多用户会话仍需 Windows VM/实机验证。
+Phase 10h 不引入 COM Shell API，也不实现 Windows daemon lifecycle、desktop injection 或 overlay。
+
 ## 设计约束
 
 - capability probe 不执行高风险动作。

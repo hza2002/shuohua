@@ -129,7 +129,9 @@ fn path_open_reveal_lives_behind_platform_facade() {
         "pub(crate) fn reveal_path(",
         "#[cfg(target_os = \"macos\")]",
         "#[cfg(target_os = \"linux\")]",
+        "#[cfg(target_os = \"windows\")]",
         "xdg-open",
+        "explorer.exe",
     ] {
         assert!(
             facade.contains(token),
@@ -162,6 +164,24 @@ fn linux_path_open_reveal_capability_reports_xdg_open_partial() {
         assert!(
             capability.contains(token),
             "Linux path.open_reveal capability should report xdg-open partial token `{token}`"
+        );
+    }
+}
+
+#[test]
+fn windows_path_open_reveal_capability_reports_explorer_partial() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+
+    for token in [
+        "CapabilityId::PathOpenReveal",
+        "explorer",
+        "CapabilityStatusKind::Partial",
+        "Validate explorer.exe open/reveal behavior on Windows",
+    ] {
+        assert!(
+            capability.contains(token),
+            "Windows path.open_reveal capability should report explorer partial token `{token}`"
         );
     }
 }

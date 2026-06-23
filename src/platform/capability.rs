@@ -285,8 +285,7 @@ fn linux_capabilities() -> Vec<CapabilityStatus> {
 #[cfg(target_os = "windows")]
 fn windows_capabilities() -> Vec<CapabilityStatus> {
     let mut capabilities = unsupported_capabilities(PlatformKind::Windows);
-    replace_capability(
-        &mut capabilities,
+    for replacement in [
         CapabilityStatus {
             id: CapabilityId::IpcTransport,
             platform: PlatformKind::Windows,
@@ -296,7 +295,18 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
             reason: "runtime_not_verified",
             next_step: Some("Validate Named Pipe transport on Windows"),
         },
-    );
+        CapabilityStatus {
+            id: CapabilityId::PathOpenReveal,
+            platform: PlatformKind::Windows,
+            backend: "explorer",
+            status: CapabilityStatusKind::Partial,
+            summary: "explorer.exe path open/reveal backend compiles but is not runtime-verified",
+            reason: "runtime_not_verified",
+            next_step: Some("Validate explorer.exe open/reveal behavior on Windows"),
+        },
+    ] {
+        replace_capability(&mut capabilities, replacement);
+    }
     capabilities
 }
 

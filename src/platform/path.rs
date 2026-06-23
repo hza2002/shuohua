@@ -1,7 +1,6 @@
 use std::path::Path;
-use std::process::Command;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 pub(crate) fn open_path(path: &Path) -> Result<()> {
     imp::open_path(path)
@@ -14,6 +13,8 @@ pub(crate) fn reveal_path(path: &Path) -> Result<()> {
 #[cfg(target_os = "macos")]
 mod imp {
     use super::*;
+    use anyhow::Context;
+    use std::process::Command;
 
     pub(super) fn open_path(path: &Path) -> Result<()> {
         Command::new("open")
@@ -36,6 +37,8 @@ mod imp {
 #[cfg(target_os = "linux")]
 mod imp {
     use super::*;
+    use anyhow::Context;
+    use std::process::Command;
 
     pub(super) fn open_path(path: &Path) -> Result<()> {
         xdg_open(path)
@@ -59,7 +62,30 @@ mod imp {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+mod imp {
+    use super::*;
+    use anyhow::Context;
+    use std::process::Command;
+
+    pub(super) fn open_path(path: &Path) -> Result<()> {
+        Command::new("explorer.exe")
+            .arg(path)
+            .spawn()
+            .with_context(|| format!("explorer.exe {}", path.display()))?;
+        Ok(())
+    }
+
+    pub(super) fn reveal_path(path: &Path) -> Result<()> {
+        Command::new("explorer.exe")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()
+            .with_context(|| format!("explorer.exe /select,{}", path.display()))?;
+        Ok(())
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 mod imp {
     use super::*;
 

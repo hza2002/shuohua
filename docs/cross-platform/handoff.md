@@ -6,7 +6,7 @@
 
 ## 最近 commit
 
-HEAD: `feat: add path open reveal facade`
+HEAD: `feat: add windows path open reveal backend`
 
 ## 当前 phase
 
@@ -17,9 +17,10 @@ smart fallback 仍需 Windows 实机或 VM 验证。
 Phase 10c Docker/cross Linux check baseline 已完成：macOS 主机使用 Docker/cross 负责 Linux
 sysroot 和 C toolchain，`make check-linux-cross` 可通过；这只证明 Linux compile/cfg 边界，
 不代表 Linux runtime 可用。
-当前正在收敛 Phase 10g Path Open/Reveal Facade：TUI config/audio open/reveal 入口改走
-`platform::path`；macOS 保持 `open` / `open -R`，Linux 使用 `xdg-open`，reveal file 降级为打开
-父目录。该阶段不改变 TUI 路径安全检查，不进入 daemon 热路径，也不声明 Linux 桌面 runtime 已实机验证。
+当前正在收敛 Phase 10h Windows Path Open/Reveal Compile Backend：Windows `platform::path` 使用
+`explorer.exe` / `/select,` 作为 compile backend，并把 `path.open_reveal` 标记为
+`partial/explorer/runtime_not_verified`。该阶段不实现 Windows daemon lifecycle、hotkey、clipboard、
+text injection、overlay runtime 或 COM Shell API，也不声明 Windows shell runtime 已验证。
 
 ## 已完成事项
 
@@ -109,6 +110,14 @@ sysroot 和 C toolchain，`make check-linux-cross` 可通过；这只证明 Linu
   - `src/tui/audio.rs` 和 `src/tui/config_actions.rs` 不再直接调用 macOS `open` 命令；既有 audio
     path safety、config reveal 选择、`$VISUAL` / `$EDITOR` 优先级不变。
   - Linux `path.open_reveal` 静态 capability 同步为 `partial/xdg_open/reveal_opens_parent_dir`。
+- Phase 10h:
+  - 更新 `docs/cross-platform/platform-capabilities.md`、`docs/cross-platform/development-plan.md`
+    和 `docs/cross-platform/overview.md`，记录 Windows path open/reveal compile backend。
+  - `src/platform/path.rs` 新增 Windows backend：`open_path()` 使用 `explorer.exe <path>`，
+    `reveal_path()` 使用 `explorer.exe /select,<path>`。
+  - Windows `path.open_reveal` 静态 capability 同步为 `partial/explorer/runtime_not_verified`。
+  - 该阶段只证明 Windows target 编译边界；真实 explorer 行为、路径 quoting、UNC、焦点和会话
+    仍需 Windows VM/实机验证。
 - Phase 4a:
   - 更新 `docs/cross-platform/ipc-service.md`，把 Phase 4 拆成 lock/process probe facade 和
     后续 service manager facade。
@@ -993,6 +1002,17 @@ sysroot 和 C toolchain，`make check-linux-cross` 可通过；这只证明 Linu
   0 个 doctests。
 - Phase 10g 已跑：`make check-linux-cross`，exit 0；仍有非 macOS skeleton/dead-code warnings，
   但未声明 Linux desktop runtime 可用。
+- Phase 10h 已跑窄验证：
+  `cargo test --test platform_layout path_open_reveal_lives_behind_platform_facade`，通过。
+- Phase 10h 已跑窄验证：
+  `cargo test --test platform_layout windows_path_open_reveal_capability_reports_explorer_partial`，通过。
+- Phase 10h 已跑：`make check-windows`，exit 0；仍有非 macOS skeleton/dead-code warnings，
+  但 `platform::path` 的 Windows backend 编译通过。
+- Phase 10h 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`，
+  通过。`cargo test` 覆盖：92 个 library unit tests、641 个 binary unit tests、
+  5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency` tests、
+  63 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests。
+- Phase 10h 已跑：`make check-linux-cross`，exit 0；仍有非 macOS skeleton/dead-code warnings。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -1116,7 +1136,7 @@ Windows IPC capability 诊断已与 Phase 3c 同步。下一步：
   收敛，或继续把 desktop/hotkey/service 的 Windows unsupported skeleton 接入 doctor/TUI 诊断。
 - 若继续 Linux service manager，可在真实 Linux/VM 前先做 install/status 设计细化；不要在 macOS
   上假装验证 `systemctl --user` runtime。
-- Phase 10g 已完成。下一步可继续把 Linux desktop/hotkey/overlay runtime gaps 细化到
+- Phase 10h 已完成。下一步可继续把 Linux/Windows desktop/hotkey/overlay runtime gaps 细化到
   capability/doctor/TUI，或转向 Windows lifecycle/smart fallback skeleton。
 - 若继续 overlay 视觉 PoC，则需要用户提供真实 Windows 11/10 或 Linux wlroots/KDE/GNOME 环境；
   在当前 macOS 主机上不要假装验证真实 topmost/click-through/layer-shell 行为。

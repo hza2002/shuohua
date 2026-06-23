@@ -704,6 +704,15 @@ Phase 10g Path Open/Reveal Facade:
 - This phase must not change history/audio path safety checks, config editor `$VISUAL`/`$EDITOR` behavior,
   or daemon hot paths.
 
+Phase 10h Windows Path Open/Reveal Compile Backend:
+
+- Add a Windows `platform::path` backend that uses `explorer.exe` for open/reveal and compiles under
+  `x86_64-pc-windows-msvc`.
+- Mark Windows `path.open_reveal` as `partial/explorer/runtime_not_verified` because shell behavior still
+  needs a Windows VM or real machine.
+- This phase must not implement Windows daemon lifecycle, hotkey, clipboard, text injection, overlay runtime,
+  or shell API COM integration.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

@@ -609,6 +609,18 @@ Phase 9al 后冻结 GUI 产品化开发：
 
 选择 Linux first 是为了更快复用 Unix socket 和 CI；Windows 设计约束必须在接口评审时同时考虑。
 
+Phase 10a cross-check baseline:
+
+- Shared network clients use target-specific TLS features. Linux uses Rustls to avoid OpenSSL sysroot
+  coupling during cross-check: `reqwest` uses `rustls-tls` and `tokio-tungstenite` uses
+  `rustls-tls-webpki-roots`. Non-Linux targets keep native TLS for now to avoid introducing `ring`
+  MSVC sysroot requirements into the Windows check path.
+- `make check-windows` runs `cargo check --target x86_64-pc-windows-msvc`.
+- `make check-linux` runs `cargo check --target x86_64-unknown-linux-gnu`.
+- On macOS, Windows check can validate cfg/type boundaries but still does not prove Windows runtime behavior.
+- On macOS, Linux check currently needs a Linux C cross compiler/sysroot for native build scripts such as `ring`;
+  Docker/cross/CI or a Linux VM should provide that environment.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

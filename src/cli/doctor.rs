@@ -722,7 +722,12 @@ fn print_platform_capabilities() {
 }
 
 fn platform_capability_summary_lines() -> Vec<String> {
-    let capabilities = merged_platform_capabilities();
+    platform_capability_summary_lines_from(merged_platform_capabilities())
+}
+
+fn platform_capability_summary_lines_from(
+    capabilities: Vec<crate::platform::capability::CapabilityStatus>,
+) -> Vec<String> {
     let platform = capabilities
         .first()
         .map(|status| status.platform.as_str())
@@ -736,29 +741,27 @@ fn platform_capability_summary_lines() -> Vec<String> {
 
     let mut degraded_details = Vec::new();
     let mut partial_details = Vec::new();
+    let mut unavailable_details = Vec::new();
+    let mut unsupported_details = Vec::new();
 
     for capability in &capabilities {
         match capability.status {
             crate::platform::capability::CapabilityStatusKind::Available => available += 1,
-            crate::platform::capability::CapabilityStatusKind::Unsupported => unsupported += 1,
-            crate::platform::capability::CapabilityStatusKind::Unavailable => unavailable += 1,
+            crate::platform::capability::CapabilityStatusKind::Unsupported => {
+                unsupported += 1;
+                unsupported_details.push(capability_detail(capability));
+            }
+            crate::platform::capability::CapabilityStatusKind::Unavailable => {
+                unavailable += 1;
+                unavailable_details.push(capability_detail(capability));
+            }
             crate::platform::capability::CapabilityStatusKind::Partial => {
                 partial += 1;
-                partial_details.push(format!(
-                    "{}={} reason={}",
-                    capability.id.as_str(),
-                    capability.status.as_str(),
-                    capability.reason
-                ));
+                partial_details.push(capability_detail(capability));
             }
             crate::platform::capability::CapabilityStatusKind::Degraded => {
                 degraded += 1;
-                degraded_details.push(format!(
-                    "{}={} reason={}",
-                    capability.id.as_str(),
-                    capability.status.as_str(),
-                    capability.reason
-                ));
+                degraded_details.push(capability_detail(capability));
             }
             crate::platform::capability::CapabilityStatusKind::Unknown => unknown += 1,
         }
@@ -779,7 +782,34 @@ fn platform_capability_summary_lines() -> Vec<String> {
             partial_details.join(", ")
         ));
     }
+    if !unsupported_details.is_empty() {
+        lines.push(format!(
+            "platform.capabilities.unsupported: {}",
+            unsupported_details.join(", ")
+        ));
+    }
+    if !unavailable_details.is_empty() {
+        lines.push(format!(
+            "platform.capabilities.unavailable: {}",
+            unavailable_details.join(", ")
+        ));
+    }
     lines
+}
+
+fn capability_detail(capability: &crate::platform::capability::CapabilityStatus) -> String {
+    let mut detail = format!(
+        "{}={} backend={} reason={}",
+        capability.id.as_str(),
+        capability.status.as_str(),
+        capability.backend,
+        capability.reason
+    );
+    if let Some(next_step) = capability.next_step {
+        detail.push_str(" next=");
+        detail.push_str(next_step);
+    }
+    detail
 }
 
 fn merged_platform_capabilities() -> Vec<crate::platform::capability::CapabilityStatus> {
@@ -882,6 +912,39 @@ mod tests {
             lines.iter().any(|line| line.contains("partial=")),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn platform_capability_summary_lists_unsupported_and_unavailable_details() {
+        use crate::platform::capability::{
+            CapabilityId, CapabilityStatus, CapabilityStatusKind, PlatformKind,
+        };
+
+        let lines = super::platform_capability_summary_lines_from(vec![
+            CapabilityStatus {
+                id: CapabilityId::IpcTransport,
+                platform: PlatformKind::Windows,
+                backend: "named_pipe_skeleton",
+                status: CapabilityStatusKind::Unsupported,
+                summary: "Named Pipe backend is not implemented",
+                reason: "backend_skeleton_only",
+                next_step: Some("Implement Windows Named Pipe transport"),
+            },
+            CapabilityStatus {
+                id: CapabilityId::DesktopPermissions,
+                platform: PlatformKind::Windows,
+                backend: "windows_permissions",
+                status: CapabilityStatusKind::Unavailable,
+                summary: "Desktop permissions are unavailable",
+                reason: "permission_probe_missing",
+                next_step: None,
+            },
+        ]);
+
+        assert!(lines.iter().any(|line| line
+            .contains("platform.capabilities.unsupported: ipc.transport=unsupported backend=named_pipe_skeleton reason=backend_skeleton_only next=Implement Windows Named Pipe transport")));
+        assert!(lines.iter().any(|line| line
+            .contains("platform.capabilities.unavailable: desktop.permissions=unavailable backend=windows_permissions reason=permission_probe_missing")));
     }
 
     #[test]

@@ -20,7 +20,6 @@ hound           = "3"
 os_pipe         = "1"
 tokio           = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process"] }
 tokio-util      = { version = "0.7", features = ["rt"] }
-tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
 futures-util    = { version = "0.3", default-features = false, features = ["sink", "std"] }
 serde           = { version = "1", features = ["derive"] }
 serde_json      = "1"
@@ -33,7 +32,6 @@ async-trait     = "0.1"
 thiserror       = "2"
 uuid            = { version = "1", features = ["v4"] }
 ulid            = "1"
-reqwest         = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 notify          = "8"
 ratatui         = "0.30"
 crossterm       = "0.29"
@@ -45,6 +43,14 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "time", "registry"] }
 tracing-appender = "0.2"
 audioadapter-buffers = "3.0.0"
 rubato = "3.0.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+reqwest         = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+reqwest         = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics   = "0.25"

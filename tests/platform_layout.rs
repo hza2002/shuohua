@@ -217,6 +217,40 @@ fn ipc_transport_backends_are_cfg_gated() {
 }
 
 #[test]
+fn network_clients_use_rustls_for_cross_platform_checks() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+
+    for token in [
+        "[target.'cfg(target_os = \"linux\")'.dependencies]",
+        "reqwest         = { version = \"0.12\", default-features = false, features = [\"json\", \"rustls-tls\"] }",
+        "tokio-tungstenite = { version = \"0.29\", default-features = false, features = [\"connect\", \"rustls-tls-webpki-roots\"] }",
+        "[target.'cfg(not(target_os = \"linux\"))'.dependencies]",
+        "reqwest         = { version = \"0.12\", default-features = false, features = [\"json\", \"native-tls\"] }",
+        "tokio-tungstenite = { version = \"0.29\", features = [\"native-tls\"] }",
+    ] {
+        assert!(
+            cargo.contains(token),
+            "Cargo.toml should keep target-specific network TLS token `{token}`"
+        );
+    }
+
+    let linux_section = cargo
+        .split("[target.'cfg(target_os = \"linux\")'.dependencies]")
+        .nth(1)
+        .and_then(|section| {
+            section
+                .split("[target.'cfg(not(target_os = \"linux\"))'.dependencies]")
+                .next()
+        })
+        .expect("missing linux dependency section");
+    assert!(
+        !linux_section.contains("native-tls"),
+        "Linux dependencies must not use OpenSSL-backed native TLS"
+    );
+}
+
+#[test]
 fn daemon_lifecycle_primitives_live_behind_platform_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 

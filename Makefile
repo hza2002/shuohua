@@ -29,6 +29,8 @@ help:
 	@echo "  make status          Show daemon status via PATH shuo"
 	@echo "  make doctor          Run doctor via PATH shuo"
 	@echo "  make check           fmt check, clippy -D warnings, test"
+	@echo "  make check-windows   cargo check for x86_64-pc-windows-msvc"
+	@echo "  make check-linux     cargo check for x86_64-unknown-linux-gnu"
 	@echo "  make fmt             Format Rust code"
 
 .PHONY: debug
@@ -105,3 +107,11 @@ test:
 
 .PHONY: check
 check: fmt-check clippy test
+
+.PHONY: check-windows
+check-windows:
+	$(CARGO) check --target x86_64-pc-windows-msvc
+
+.PHONY: check-linux
+check-linux:
+	$(CARGO) check --target x86_64-unknown-linux-gnu

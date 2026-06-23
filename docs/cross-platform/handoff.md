@@ -6,14 +6,13 @@
 
 ## 最近 commit
 
-HEAD: `feat: gate ipc transport backends`
+HEAD: `build: add cross-platform check baseline`
 
 ## 当前 phase
 
 GUI PoC 冻结，当前主线回到非 macOS 可用性。
-Phase 7b/8b overlay backend skeleton 已完成一个最小阶段。Phase 3b IPC transport 编译边界已完成：
-把 Unix-only UDS/lifecycle/fallback 代码隔离到 cfg backend，Windows 先提供 unsupported skeleton，
-不实现 Named Pipe。
+Phase 10a cross-check baseline 已完成一个最小阶段：Windows target check 在 macOS 主机上可跑通，
+Linux target check 已越过 OpenSSL/native-tls 阻断，当前阻断是本机缺 Linux C cross compiler/sysroot。
 
 ## 已完成事项
 
@@ -409,6 +408,13 @@ Phase 7b/8b overlay backend skeleton 已完成一个最小阶段。Phase 3b IPC 
     shared `client_api`、history、trace 或 metrics sink。
   - 未使用 `tokio::time`，未启动 timer task，未订阅 event stream，未实现 reconnect loop、
     loading/retry UI 或 frontend view model。
+- Phase 10a:
+  - `Makefile` 新增 `make check-windows` 和 `make check-linux`，作为跨平台 cfg/type 边界检查入口。
+  - shared network clients 改为 target-specific TLS：Linux 使用 Rustls，非 Linux 保持 native TLS。
+  - `shuo doctor` 的 platform capability summary 增加 unsupported/unavailable detail 行，包含
+    backend、reason 和可选 next step，方便 skeleton 阶段诊断。
+  - `tests/platform_layout.rs` 增加 network TLS 配置守护测试，避免 Linux check 路径重新引入
+    OpenSSL-backed native TLS。
 
 ## 验证结果
 
@@ -770,18 +776,29 @@ Phase 7b/8b overlay backend skeleton 已完成一个最小阶段。Phase 3b IPC 
   通过。`cargo test` 覆盖：92 个 library unit tests、639 个 binary unit tests、
   5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
   tests、52 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests。
+- Phase 10a 已跑：`cargo test cli::doctor::tests`，通过。
+- Phase 10a 已跑：`cargo test --test platform_layout network_clients_use_rustls_for_cross_platform_checks`，
+  通过。
+- Phase 10a 已跑：`cargo fmt --check`，通过。
+- Phase 10a 已跑：`cargo clippy --all-targets -- -D warnings`，通过。
+- Phase 10a 已跑：`cargo test`，通过。`cargo test` 覆盖：92 个 library unit tests、
+  640 个 binary unit tests、5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、
+  2 个 `doc_consistency` tests、53 个 `platform_layout` tests、6 个 `theme_registry_build` tests、
+  0 个 doctests。
+- Phase 10a 已跑：`make check-windows`，exit 0；仍有大量 dead-code/unused warning，原因是
+  Windows backend 多数仍是 unsupported skeleton，不能等同于 Windows 可运行。
+- Phase 10a 已跑：`make check-linux`，失败于缺少 `x86_64-linux-gnu-gcc` / Linux sysroot；
+  已越过 OpenSSL/native-tls 阻断，当前是本机 cross toolchain 环境问题。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
 ## 已知风险
 
-- `src/daemon/fallback.rs` 仍用 `std::os::unix::net::UnixStream` 做 smart fallback endpoint probe；
-  这是后续 smart fallback lifecycle 目标，不在 Phase 4 抽。
 - `src/cli/doctor.rs` 仍有 launchd-centric 诊断输出；service manager facade 后应通过
   capability/status 和 service manager 模型收敛。
 - Phase 5b 只抽 hotkey provider 启动边界，没有实现 Linux/Windows global hotkey backend。
-- Phase 6c 只把 renderer capability snapshot 接入 doctor summary，没有实现 Windows/Linux
-  overlay renderer 骨架，也没有接入 TUI/GUI。
+- Phase 6c 只把 renderer capability snapshot 接入 doctor summary；Phase 7b/8b 已有
+  Windows/Linux overlay backend skeleton，但还没有真实 renderer 实现，也没有接入 TUI。
 - Phase 7a 只是 Microsoft 文档基线，不代表已在 Windows 11/10 真机验证。实际 topmost、
   no-activate、click-through、材质、capture exclusion 和性能数据仍需 PoC 记录。
 - Phase 8a 只是 Wayland/layer-shell 文档基线，不代表已在 wlroots/KDE/GNOME 真机验证。
@@ -889,13 +906,15 @@ Phase 7b/8b overlay backend skeleton 已完成一个最小阶段。Phase 3b IPC 
 
 ## 下一步
 
-Phase 3b IPC transport cfg boundary 已完成一个最小阶段。下一步：
+Phase 10a cross-check baseline 已完成一个最小阶段。下一步：
 
+- 优先做 TUI capability/diagnostics summary，把已有 platform capability snapshot 和 renderer
+  capability detail 展示到 TUI/doctor 可消费的非 GUI 路径；这部分可在 macOS 主机自行开发和自动验证。
 - 下一阶段若继续 Windows，可实现真实 Named Pipe backend，或继续把 desktop/hotkey/service 的
   Windows unsupported skeleton 接入 doctor/TUI 诊断。
 - 若继续 overlay 视觉 PoC，则需要用户提供真实 Windows 11/10 或 Linux wlroots/KDE/GNOME 环境；
   在当前 macOS 主机上不要假装验证真实 topmost/click-through/layer-shell 行为。
-- Linux cross target check 还需要配置 OpenSSL sysroot 或改依赖 TLS 策略，单独成阶段处理。
+- Linux cross target check 还需要配置 Linux C cross compiler/sysroot，或改用 Docker/cross/CI。
 - 真实 Windows 11/10、wlroots/KDE/GNOME overlay 视觉验证需要用户后续提供目标系统环境。
 - 不继续 GUI 产品化开发。
 
@@ -907,7 +926,8 @@ Phase 3b IPC transport cfg boundary 已完成一个最小阶段。下一步：
 development-plan.md、gui.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
 Phase 9al 后 GUI PoC 已冻结；不要继续打磨 GUI placeholder。
-Phase 7b/8b overlay backend skeleton 已完成一个最小阶段；Phase 3b IPC transport cfg boundary
-正在收口。先查看最新 diff/commit 和验证结果；若未提交，提交 `feat: gate ipc transport backends`。
+Phase 7b/8b overlay backend skeleton、Phase 3b IPC transport cfg boundary、Phase 10a
+cross-check baseline 已完成一个最小阶段。先查看最新 diff/commit 和验证结果。
 保持 macOS 不回退，不引入 GUI/WebView。不要把 Windows transport skeleton 当作 Named Pipe 实现。
+下一步优先做 TUI capability/diagnostics summary，除非用户明确要求转去 Windows/Linux 实机 overlay PoC。
 ```

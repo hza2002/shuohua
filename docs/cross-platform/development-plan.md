@@ -291,6 +291,15 @@ Phase 9j 记录 Tauri permissions/capabilities preflight，不写 GUI app：
 - 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime，不生成 frontend
   view model。
 
+Phase 9k 记录最小 Tauri workspace 创建前验收清单，不写 GUI app：
+
+- 明确下一阶段创建 workspace 时允许新增的最小文件范围、禁止的 scope creep、自动验收和
+  release 指标采集清单。
+- 基于 Tauri v2 build/bundle 文档记录 PoC 指标必须来自 release build 和 bundle 产物，而不是
+  dev server。
+- 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime，不运行 Tauri build
+  或 bundle。
+
 范围：
 
 - 建一个最小 Tauri app。

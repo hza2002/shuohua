@@ -169,6 +169,26 @@ Phase 9j 记录 Tauri permissions/capabilities preflight，仍不创建 Tauri wo
 - 这个阶段只记录权限边界和验收，不新增 `src-tauri/**`、不新增 Tauri/WRY/WebView 依赖、不生成
   frontend view model。
 
+Phase 9k 记录最小 Tauri workspace 创建前验收清单，仍不创建 Tauri workspace：
+
+- 创建 workspace 的下一阶段必须是可回滚的小步，只允许新增最小 GUI app 骨架、主
+  window/webview、最小 capabilities 文件和调用 shared `client_api` 的 backend shell；不得同时
+  实现完整页面、onboarding、配置编辑器或 service management。
+- 允许出现的新增路径必须在实现阶段前列清：`src-tauri/tauri.conf.json`、
+  `src-tauri/Cargo.toml`、`src-tauri/capabilities/*.json`、最小 frontend 入口和 GUI backend
+  glue。任何 sidecar、installer asset、plugin 宽权限、复制 IPC 类型或 daemon runtime 依赖都应
+  被视为 scope creep。
+- 首个 workspace commit 的自动验收必须确认：daemon/CLI/TUI 不依赖 Tauri/WRY/WebView；
+  `PROTO_VERSION` 不变；GUI backend 只通过 `shuohua::client_api` 和 existing IPC client
+  surface 通信；TUI fallback 继续可用。
+- PoC 指标必须基于 release build 记录。Tauri v2 `tauri build` 会执行 release build 并生成
+  bundles/installers，使用 `tauri.conf.json` 的 `build.frontendDist` 和 build hooks；
+  `tauri bundle` 面向已构建 app 生成 bundle。指标清单至少包含 bundle path/type、unsigned 或
+  signed 状态、cold start、首屏 ready、open GUI idle RSS/CPU、关闭 GUI 后 daemon 存活。
+  进程边界必须单独记录：daemon 未打开 GUI 时无 WebView/Tauri 进程。
+- 这个阶段只记录验收清单，不新增 `src-tauri/**`、不新增 Tauri/WRY/WebView 依赖、不运行
+  `tauri build` 或 `tauri bundle`。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：
@@ -277,6 +297,13 @@ Phase 9j 验收：
   command 权限、scopes 评审和宽权限禁用默认策略。
 - 仍无 `src-tauri/**` workspace 文件，`Cargo.toml` 不新增 Tauri/WRY/WebView 依赖。
 - 不新增 IPC command/event，不改变 TUI/CLI 行为，不启动 daemon/GUI。
+
+Phase 9k 验收：
+
+- `gui.md` 明确最小 workspace 创建前的允许新增路径、禁止 scope creep、自动验收和 release
+  指标清单。
+- 仍无 `src-tauri/**` workspace 文件，`Cargo.toml` 不新增 Tauri/WRY/WebView 依赖。
+- 不运行 `tauri build` / `tauri bundle`，不启动 daemon/GUI，不新增 IPC command/event。
 
 参考资料：
 

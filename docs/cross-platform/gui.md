@@ -117,6 +117,18 @@ Phase 9f 做最小 library split，仍不创建 Tauri workspace：
 - `ipc::transport` 仍是 Unix-only；因此 Phase 9f 的 library client 只承诺 macOS/Linux 当前
   transport 可编译。Windows Named Pipe 仍由后续 IPC transport backend 阶段处理。
 
+Phase 9g 增加 GUI client 连接状态骨架，仍不创建 Tauri workspace：
+
+- shared `client_api` 可以公开 GUI backend 可复用的 daemon connection state、recoverable
+  problem kind 和 retry delay helper，用于表达 daemon offline、event stream closed、read
+  failure 和 reconnecting 状态。
+- 这些类型只描述 client 侧状态和退避策略，不新增 daemon command/event，不 bump
+  `PROTO_VERSION`，不改变 JSON-line IPC。
+- 这个阶段不实现后台 reconnect task，不改变 TUI 连接行为，不自动启动 daemon，不读写配置或
+  history 文件。Tauri command/event 层后续可以把这些状态转换成 frontend view model。
+- retry delay 必须是有上限的短序列，避免 GUI daemon-offline 首屏 busy-loop；实际 timer 和
+  cancellation ownership 留给 GUI backend。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：
@@ -198,6 +210,12 @@ Phase 9f 验收：
 - library surface 不公开 `daemon`、`cli`、`tui`、`overlay`、`platform`、`voice`、
   `hotkey`、`config`、`reload` 或 `ipc::server`。
 - 仍无 Tauri workspace 或 GUI runtime 依赖，daemon/TUI 用户可见行为不变。
+
+Phase 9g 验收：
+
+- `client_api` 公开 daemon connection state、recoverable problem kind 和 retry delay helper。
+- helper 是纯函数，不连接 IPC、不启动 daemon、不读取配置/history。
+- `PROTO_VERSION` 仍为 2；不新增 IPC command/event，不新增 Tauri/WRY/WebView 依赖。
 
 参考资料：
 

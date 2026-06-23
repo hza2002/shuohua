@@ -593,6 +593,59 @@ fn gui_minimal_library_split_exposes_only_client_protocol_surface() {
     }
 }
 
+#[test]
+fn gui_reconnect_state_skeleton_lives_in_client_api_without_runtime_loop() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let client_api = std::fs::read_to_string(root.join("src/client_api.rs")).unwrap();
+
+    for token in [
+        "pub enum DaemonConnectionState",
+        "pub enum DaemonConnectionProblemKind",
+        "pub struct DaemonConnectionProblem",
+        "pub const DEFAULT_RECONNECT_DELAYS_MS",
+        "pub fn next_reconnect_delay_ms",
+        "pub fn reconnecting_state",
+        "pub fn daemon_connect_failed_problem",
+        "pub fn daemon_event_stream_closed_problem",
+        "pub fn daemon_read_failed_problem",
+    ] {
+        assert!(
+            client_api.contains(token),
+            "src/client_api.rs should expose GUI reconnect skeleton token `{token}`"
+        );
+    }
+
+    for token in [
+        "tokio::spawn",
+        "tokio::time::sleep",
+        "connect_default().await",
+        "PROTO_VERSION =",
+    ] {
+        assert!(
+            !client_api.contains(token),
+            "GUI reconnect skeleton should stay pure and not own runtime/protocol behavior token `{token}`"
+        );
+    }
+
+    for file in rust_files_under(&root.join("src/daemon"))
+        .into_iter()
+        .chain(rust_files_under(&root.join("src/tui")))
+    {
+        let body = std::fs::read_to_string(&file).unwrap();
+        let relative = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(
+            !body.contains("DaemonConnectionState")
+                && !body.contains("DaemonConnectionProblem")
+                && !body.contains("next_reconnect_delay_ms"),
+            "{relative} should not consume GUI reconnect skeleton until TUI/daemon behavior is designed"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

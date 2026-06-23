@@ -47,6 +47,73 @@ pub fn classify_first_screen_event(event: &Event) -> Option<FirstScreenEvent<'_>
     }
 }
 
+pub const DEFAULT_RECONNECT_DELAYS_MS: &[u64] = &[250, 500, 1_000, 2_000, 5_000];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DaemonConnectionState {
+    Disconnected,
+    Connecting,
+    Connected,
+    Reconnecting { attempt: u32, next_delay_ms: u64 },
+    Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonConnectionProblemKind {
+    ConnectFailed,
+    EventStreamClosed,
+    ReadFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonConnectionProblem {
+    pub kind: DaemonConnectionProblemKind,
+    pub message: String,
+    pub recoverable: bool,
+}
+
+pub fn next_reconnect_delay_ms(attempt_index: usize) -> u64 {
+    DEFAULT_RECONNECT_DELAYS_MS
+        .get(attempt_index)
+        .copied()
+        .unwrap_or_else(|| {
+            *DEFAULT_RECONNECT_DELAYS_MS
+                .last()
+                .expect("reconnect delays must not be empty")
+        })
+}
+
+pub fn reconnecting_state(attempt_index: usize) -> DaemonConnectionState {
+    DaemonConnectionState::Reconnecting {
+        attempt: u32::try_from(attempt_index.saturating_add(1)).unwrap_or(u32::MAX),
+        next_delay_ms: next_reconnect_delay_ms(attempt_index),
+    }
+}
+
+pub fn daemon_connect_failed_problem(message: impl Into<String>) -> DaemonConnectionProblem {
+    DaemonConnectionProblem {
+        kind: DaemonConnectionProblemKind::ConnectFailed,
+        message: message.into(),
+        recoverable: true,
+    }
+}
+
+pub fn daemon_event_stream_closed_problem() -> DaemonConnectionProblem {
+    DaemonConnectionProblem {
+        kind: DaemonConnectionProblemKind::EventStreamClosed,
+        message: "daemon event stream closed".to_string(),
+        recoverable: true,
+    }
+}
+
+pub fn daemon_read_failed_problem(message: impl Into<String>) -> DaemonConnectionProblem {
+    DaemonConnectionProblem {
+        kind: DaemonConnectionProblemKind::ReadFailed,
+        message: message.into(),
+        recoverable: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +180,41 @@ mod tests {
             classify_first_screen_event(&Event::HistoryChanged),
             Some(FirstScreenEvent::HistoryChanged)
         );
+    }
+
+    #[test]
+    fn daemon_connection_state_models_bounded_reconnect_without_protocol_changes() {
+        assert_eq!(PROTO_VERSION, 2);
+        assert_eq!(
+            DEFAULT_RECONNECT_DELAYS_MS,
+            &[250, 500, 1_000, 2_000, 5_000]
+        );
+        assert_eq!(next_reconnect_delay_ms(0), DEFAULT_RECONNECT_DELAYS_MS[0]);
+        assert_eq!(
+            next_reconnect_delay_ms(99),
+            *DEFAULT_RECONNECT_DELAYS_MS.last().unwrap()
+        );
+        assert_eq!(
+            reconnecting_state(2),
+            DaemonConnectionState::Reconnecting {
+                attempt: 3,
+                next_delay_ms: 1_000,
+            }
+        );
+        assert_eq!(
+            reconnecting_state(usize::MAX),
+            DaemonConnectionState::Reconnecting {
+                attempt: u32::MAX,
+                next_delay_ms: 5_000,
+            }
+        );
+
+        let offline = daemon_connect_failed_problem("connect IPC /tmp/shuohua.sock");
+        assert_eq!(offline.kind, DaemonConnectionProblemKind::ConnectFailed);
+        assert!(offline.recoverable);
+
+        let closed = daemon_event_stream_closed_problem();
+        assert_eq!(closed.kind, DaemonConnectionProblemKind::EventStreamClosed);
+        assert!(closed.recoverable);
     }
 }

@@ -258,6 +258,13 @@ Phase 9f 做最小 library split，不写 GUI app：
   和 IPC server。
 - 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime，不抽 Windows Named Pipe。
 
+Phase 9g 增加 GUI client 连接状态骨架，不写 GUI app：
+
+- 在 shared `client_api` 中增加 daemon connection state、recoverable problem kind 和有上限的
+  retry delay helper。
+- 不实现后台 reconnect task，不改变 TUI 行为，不自动启动 daemon。
+- 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime。
+
 范围：
 
 - 建一个最小 Tauri app。

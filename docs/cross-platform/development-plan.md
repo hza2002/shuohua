@@ -237,6 +237,12 @@ Phase 9c 扩展 GUI 首屏 client helper，不写 GUI app：
 - 增加 response classifier，把现有 daemon `Event` 分类为 GUI backend 可消费的首屏输入。
 - 不新增 IPC command/event，不新增 Tauri workspace，不读取 history/config 文件。
 
+Phase 9d 记录 GUI library boundary 前置条件，不写 GUI app：
+
+- 明确当前 crate 只有 binary target，`client_api` 不是外部 crate 可复用的 library API。
+- 记录创建 Tauri workspace 前必须先做 library split 评审。
+- 增加架构测试，防止当前阶段误加 `src/lib.rs`、Tauri workspace 或 WebView runtime 依赖。
+
 范围：
 
 - 建一个最小 Tauri app。

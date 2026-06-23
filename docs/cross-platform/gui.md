@@ -71,6 +71,19 @@ Phase 9c 扩展 GUI 首屏 helper，仍不创建 Tauri workspace：
 - GUI backend 后续可以把这些 summary input 转成 Tauri event 或 command response；frontend
   仍不得直接访问 IPC transport。
 
+Phase 9d 先记录 GUI 复用边界的当前限制，不做 crate 拆分：
+
+- 当前 crate 只有 `[[bin]] shuo`，没有 `src/lib.rs`。Phase 9b/9c 的 `client_api` 是
+  binary crate 内的共享边界，能约束 TUI 和未来 GUI backend 的 API 形状，但还不能被独立
+  Tauri crate 作为 Rust library 依赖。
+- 真正创建 Tauri workspace 前，需要单独做 library split 评审：优先只把 `client_api`、
+  `ipc::client`、`ipc::protocol`、`ipc::transport` 以及必要的数据模型移到可复用 library surface；
+  不把 daemon runtime、hotkey、overlay、voice、AppKit 或 TUI 拉进 GUI backend 依赖树。
+- library split 必须单独成阶段，并先用架构测试证明 daemon 热路径不依赖 GUI runtime，GUI
+  backend 不依赖 daemon implementation modules。
+- 在 library split 之前，不创建 Tauri app/workspace，避免 PoC 通过 path hacks、复制 IPC 类型或
+  直接依赖 binary internals 形成错误基线。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：
@@ -128,6 +141,12 @@ Phase 9c 验收：
   history stats。
 - request helper 和 response classifier 都只使用既有 `ipc::protocol::Command` / `Event`。
 - `PROTO_VERSION` 仍为 2；不新增 Tauri/WRY/WebView 依赖，不启动 daemon/GUI。
+
+Phase 9d 验收：
+
+- 文档明确当前 `client_api` 仍在 binary crate 内，尚不是外部 GUI crate 可依赖的 library API。
+- 架构测试保护当前状态：没有 `src/lib.rs`、没有 Tauri workspace、没有 GUI runtime 依赖。
+- 后续 library split 的最小候选 surface 和禁止依赖方向有明确记录。
 
 参考资料：
 

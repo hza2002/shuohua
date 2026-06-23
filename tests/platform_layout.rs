@@ -467,6 +467,45 @@ fn gui_first_screen_helpers_live_in_client_api_without_gui_runtime() {
     }
 }
 
+#[test]
+fn gui_library_boundary_is_not_split_before_design_review() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    assert!(
+        !root.join("src/lib.rs").exists(),
+        "GUI library split must be a dedicated phase; do not add src/lib.rs as part of GUI PoC setup"
+    );
+
+    for file in [
+        "src-tauri/tauri.conf.json",
+        "src-tauri/Cargo.toml",
+        "gui/src-tauri/tauri.conf.json",
+        "gui/src-tauri/Cargo.toml",
+    ] {
+        assert!(
+            !root.join(file).exists(),
+            "Tauri workspace/app file {file} should not exist before library boundary review"
+        );
+    }
+
+    let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    assert!(
+        cargo.contains("[[bin]]") && cargo.contains("name = \"shuo\""),
+        "current package should still expose the existing shuo binary target"
+    );
+    assert!(
+        !cargo.contains("[lib]"),
+        "library target should be introduced only in the dedicated library split phase"
+    );
+
+    for token in ["tauri", "wry", "webview", "WebView", "tao"] {
+        assert!(
+            !cargo.contains(token),
+            "GUI library boundary review must happen before adding GUI runtime dependency token `{token}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

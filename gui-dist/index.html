@@ -91,6 +91,16 @@
         <dd id="readiness-timing">pending</dd>
         <dt>Readiness source</dt>
         <dd id="readiness-source">placeholder</dd>
+        <dt>Offline problem</dt>
+        <dd id="offline-problem-kind">daemonOffline</dd>
+        <dt>Offline recoverable</dt>
+        <dd id="offline-recoverable">true</dd>
+        <dt>Offline retry</dt>
+        <dd id="offline-retry-allowed">true</dd>
+        <dt>Offline auto-start</dt>
+        <dd id="offline-auto-start">false</dd>
+        <dt>Offline service</dt>
+        <dd id="offline-service-management">false</dd>
       </dl>
     </main>
     <script>
@@ -162,6 +172,22 @@
           `ready:${readinessShape.timing.readyMs ?? "pending"}`;
         document.getElementById("readiness-source").textContent =
           readinessShape.source;
+
+        const offlineShape = await invoke("gui_first_screen_offline_shape");
+        document.getElementById("offline-problem-kind").textContent =
+          offlineShape.problemKind;
+        document.getElementById("offline-recoverable").textContent = String(
+          offlineShape.recoverable
+        );
+        document.getElementById("offline-retry-allowed").textContent = String(
+          offlineShape.retryAllowed
+        );
+        document.getElementById("offline-auto-start").textContent = String(
+          offlineShape.autoStartAllowed
+        );
+        document.getElementById("offline-service-management").textContent = String(
+          offlineShape.serviceManagementAllowed
+        );
       }
 
       loadShellMetadata().catch(() => {});

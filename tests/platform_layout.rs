@@ -1627,6 +1627,82 @@ fn gui_first_screen_readiness_shape_is_static_display_preflight() {
     );
 }
 
+#[test]
+fn gui_first_screen_offline_shape_is_static_display_preflight() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9x",
+        "gui_first_screen_offline_shape",
+        "offline/error display preflight",
+        "recoverable",
+        "不允许自动启动 daemon",
+        "不得安装/重启 service",
+        "不得启动 timer/reconnect loop",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9x offline display token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "gui_first_screen_offline_shape",
+        "GuiFirstScreenOfflineShape",
+        "connected",
+        "problem_kind",
+        "recoverable",
+        "retry_allowed",
+        "auto_start_allowed",
+        "service_management_allowed",
+        "source",
+        "placeholder",
+        "tauri::generate_handler!",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should expose Phase 9x offline display token `{token}`"
+        );
+    }
+
+    for token in [
+        "client.send(&Command::Subscribe)",
+        "subscribe_events",
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+        "install_service",
+        "restart_service",
+    ] {
+        assert!(
+            !tauri_lib.contains(token),
+            "Phase 9x offline shape must not subscribe, reconnect, spawn, or manage service token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "gui_first_screen_offline_shape",
+        "offline-problem-kind",
+        "offline-recoverable",
+        "offline-retry-allowed",
+        "offline-auto-start",
+        "offline-service-management",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should display offline shape token `{token}`"
+        );
+    }
+    assert!(
+        !frontend.contains("invoke(\"gui_first_screen_summary_request_once\"")
+            && !frontend.contains("invoke('gui_first_screen_summary_request_once'"),
+        "placeholder must not auto-call the one-shot first-screen summary request"
+    );
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

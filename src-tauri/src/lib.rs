@@ -189,6 +189,18 @@ struct GuiFirstScreenReadinessTimingShape {
     ready_ms: Option<u64>,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiFirstScreenOfflineShape {
+    connected: bool,
+    problem_kind: &'static str,
+    recoverable: bool,
+    retry_allowed: bool,
+    auto_start_allowed: bool,
+    service_management_allowed: bool,
+    source: &'static str,
+}
+
 #[tauri::command]
 fn gui_first_screen_request_plan(history_limit: Option<usize>) -> GuiFirstScreenRequestPlan {
     let history_limit = history_limit.unwrap_or(20);
@@ -237,6 +249,19 @@ fn gui_first_screen_readiness_shape() -> GuiFirstScreenReadinessShape {
             first_event_ms: None,
             ready_ms: None,
         },
+        source: "placeholder",
+    }
+}
+
+#[tauri::command]
+fn gui_first_screen_offline_shape() -> GuiFirstScreenOfflineShape {
+    GuiFirstScreenOfflineShape {
+        connected: false,
+        problem_kind: "daemonOffline",
+        recoverable: true,
+        retry_allowed: true,
+        auto_start_allowed: false,
+        service_management_allowed: false,
         source: "placeholder",
     }
 }
@@ -693,6 +718,7 @@ pub fn run() {
             gui_daemon_status_snapshot,
             gui_first_screen_refresh_shape,
             gui_first_screen_readiness_shape,
+            gui_first_screen_offline_shape,
             gui_daemon_status_request_once,
             gui_history_summary_request_once,
             gui_first_screen_summary_request_once
@@ -919,6 +945,19 @@ mod tests {
         assert_eq!(shape.timing.connect_duration_ms, None);
         assert_eq!(shape.timing.first_event_ms, None);
         assert_eq!(shape.timing.ready_ms, None);
+        assert_eq!(shape.source, "placeholder");
+    }
+
+    #[test]
+    fn first_screen_offline_shape_is_static_placeholder() {
+        let shape = gui_first_screen_offline_shape();
+
+        assert!(!shape.connected);
+        assert_eq!(shape.problem_kind, "daemonOffline");
+        assert!(shape.recoverable);
+        assert!(shape.retry_allowed);
+        assert!(!shape.auto_start_allowed);
+        assert!(!shape.service_management_allowed);
         assert_eq!(shape.source, "placeholder");
     }
 

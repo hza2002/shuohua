@@ -538,6 +538,16 @@ Phase 9ai 增加 GUI backend daemon event stream start command，不实现 recon
   cancellation；可用一次性 started 标记避免重复启动。
 - 不新增 IPC command/event，不 bump `PROTO_VERSION`，不改变 TUI/CLI 行为。
 
+Phase 9aj 增加 frontend daemon event listener wiring，不实现 reconnect：
+
+- `gui-dist/index.html` 可以在初始化期间注册 `window.__TAURI__.event.listen("shuohua://daemon-event", ...)`，
+  然后显式调用 `gui_start_daemon_event_stream` 启动 9ai backend bridge。
+- incoming event payload 只能投影到现有 `firstScreenViewModel` 和 DOM 字段，用于显示 recording
+  state、history changed 和 recoverable problem；不得新增 recording controls 或完整 Status/History view。
+- 不实现 reconnect supervisor、retry timer、service management、daemon auto-start、start/stop/cancel
+  recording command 或 release build/bundle。
+- 不新增 backend command，不新增 IPC command/event，不 bump `PROTO_VERSION`，不改变 TUI/CLI 行为。
+
 范围：
 
 - 建一个最小 Tauri app。

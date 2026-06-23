@@ -2538,6 +2538,64 @@ fn gui_backend_event_stream_start_is_tauri_owned_and_explicit() {
     }
 }
 
+#[test]
+fn gui_frontend_daemon_event_listener_wiring_is_event_only() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9aj",
+        "window.__TAURI__.event.listen",
+        "shuohua://daemon-event",
+        "gui_start_daemon_event_stream",
+        "firstScreenViewModel",
+        "不实现 reconnect supervisor",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9aj frontend listener token `{token}`"
+        );
+    }
+
+    let html = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "window.__TAURI__?.event?.listen",
+        "\"shuohua://daemon-event\"",
+        "gui_start_daemon_event_stream",
+        "handleDaemonEvent",
+        "updateViewModelFromDaemonEvent",
+        "projectDaemonEvent",
+        "firstScreenViewModel.eventStreamStatus",
+        "history stale",
+    ] {
+        assert!(
+            html.contains(token),
+            "gui-dist/index.html should wire Phase 9aj frontend event token `{token}`"
+        );
+    }
+    for forbidden in [
+        "Command::StartRecording",
+        "Command::StopRecording",
+        "Command::CancelRecording",
+        "setInterval(",
+        "setTimeout(",
+        "install_service",
+        "restart_service",
+        "start_service",
+    ] {
+        assert!(
+            !html.contains(forbidden),
+            "Phase 9aj frontend listener must not own service/recording/reconnect token `{forbidden}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    assert!(
+        tauri_lib.contains("gui_start_daemon_event_stream"),
+        "Phase 9aj frontend should use the Phase 9ai backend stream command"
+    );
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

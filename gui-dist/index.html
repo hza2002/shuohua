@@ -146,6 +146,7 @@
         latestPreview: "pending",
         requestDurationMs: null,
         errorMessage: "none",
+        eventStreamStatus: "not started",
       };
 
       function bindRefreshAction() {
@@ -161,8 +162,17 @@
         return invoke;
       }
 
+      function requireTauriEventListen() {
+        const listen = window.__TAURI__?.event?.listen;
+        if (!listen) {
+          throw new Error("tauri-event-api-missing");
+        }
+        return listen;
+      }
+
       async function loadShellMetadata() {
         const invoke = requireTauriInvoke();
+        await startDaemonEventStream(invoke).catch(handleDaemonEventStreamStartError);
         const metadata = await invoke("gui_shell_metadata");
         document.getElementById("phase").textContent = metadata.phase;
         document.getElementById("daemon-connected").textContent = String(
@@ -273,6 +283,95 @@
           `${explicitCommands.length} commands`;
         document.getElementById("policy-one-shot-commands").textContent =
           explicitCommands.map((command) => command.commandName).join(", ");
+      }
+
+      async function startDaemonEventStream(invoke) {
+        const listen = requireTauriEventListen();
+        await listen("shuohua://daemon-event", handleDaemonEvent);
+        const stream = await invoke("gui_start_daemon_event_stream");
+        firstScreenViewModel.eventStreamStatus = stream.alreadyRunning
+          ? "already running"
+          : "started";
+        projectFirstScreenViewModel();
+      }
+
+      function handleDaemonEvent(event) {
+        updateViewModelFromDaemonEvent(event.payload);
+        projectDaemonEvent(event.payload);
+        projectFirstScreenViewModel();
+      }
+
+      function handleDaemonEventStreamStartError(error) {
+        const payload = {
+          kind: "connectionProblem",
+          errorKind: "streamStartFailed",
+          errorMessage: String(error?.message ?? error),
+          recoverable: true,
+        };
+        updateViewModelFromDaemonEvent(payload);
+        projectDaemonEvent(payload);
+        projectFirstScreenViewModel();
+      }
+
+      function updateViewModelFromDaemonEvent(payload) {
+        firstScreenViewModel.eventStreamStatus = "event received";
+        firstScreenViewModel.requestDurationMs = null;
+
+        if (payload.kind === "snapshot" || payload.kind === "daemonStatus") {
+          firstScreenViewModel.lastRefreshStatus = "streaming";
+          firstScreenViewModel.connected = true;
+          firstScreenViewModel.stateLabel = payload.stateLabel ?? "unknown";
+          firstScreenViewModel.errorMessage = "none";
+          return;
+        }
+
+        if (payload.kind === "historyChanged") {
+          firstScreenViewModel.lastRefreshStatus = "history stale";
+          firstScreenViewModel.latestPreview = "history stale";
+          return;
+        }
+
+        if (payload.kind === "daemonError" || payload.kind === "connectionProblem") {
+          firstScreenViewModel.lastRefreshStatus = "stream error";
+          firstScreenViewModel.connected = false;
+          firstScreenViewModel.stateLabel = "disconnected";
+          firstScreenViewModel.errorMessage =
+            payload.errorMessage ?? payload.errorKind ?? "stream error";
+        }
+      }
+
+      function projectDaemonEvent(payload) {
+        if (payload.kind === "snapshot" || payload.kind === "daemonStatus") {
+          document.getElementById("daemon-connected").textContent = "true";
+          document.getElementById("status-connected").textContent = "true";
+          document.getElementById("status-transport-opened").textContent = "true";
+          document.getElementById("status-snapshot-available").textContent = "true";
+          document.getElementById("status-state-label").textContent =
+            payload.stateLabel ?? "unknown";
+          document.getElementById("offline-problem-kind").textContent = "connected";
+          document.getElementById("offline-recoverable").textContent = "false";
+          document.getElementById("offline-retry-allowed").textContent = "false";
+          return;
+        }
+
+        if (payload.kind === "historyChanged") {
+          document.getElementById("request-plan-kinds").textContent = "history stale";
+          return;
+        }
+
+        if (payload.kind === "daemonError" || payload.kind === "connectionProblem") {
+          document.getElementById("daemon-connected").textContent = "false";
+          document.getElementById("status-connected").textContent = "false";
+          document.getElementById("status-state-label").textContent = "disconnected";
+          document.getElementById("offline-problem-kind").textContent =
+            payload.errorKind ?? payload.kind;
+          document.getElementById("offline-recoverable").textContent = String(
+            payload.recoverable
+          );
+          document.getElementById("offline-retry-allowed").textContent = String(
+            payload.recoverable
+          );
+        }
       }
 
       function projectInitializationError(error) {
@@ -403,7 +502,9 @@
             ? "unavailable"
             : `${firstScreenViewModel.requestDurationMs} ms`;
         document.getElementById("manual-summary-error").textContent =
-          firstScreenViewModel.errorMessage;
+          firstScreenViewModel.errorMessage === "none"
+            ? firstScreenViewModel.eventStreamStatus
+            : firstScreenViewModel.errorMessage;
       }
 
       bindRefreshAction();

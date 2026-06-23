@@ -529,6 +529,18 @@ Phase 9ai 增加 GUI backend daemon event stream start command，不实现 recon
   cancellation 属后续阶段。
 - 不新增 IPC command/event，不 bump `PROTO_VERSION`。Tauri event name 和 payload 属 GUI 进程内桥接。
 
+Phase 9aj 增加 frontend daemon event listener wiring，不实现 reconnect：
+
+- placeholder 可以在 initialization 期间通过 `window.__TAURI__.event.listen("shuohua://daemon-event", ...)`
+  注册 Tauri event listener，再显式调用 `gui_start_daemon_event_stream` 启动 9ai backend bridge。
+- listener 只把 incoming payload 投影到现有 `firstScreenViewModel` 和 DOM 字段。`snapshot` /
+  `daemonStatus` 更新 connection/state，`historyChanged` 标记 history stale，`daemonError` /
+  `connectionProblem` 更新 recoverable error display。
+- 本阶段不实现 reconnect supervisor、retry timer、service management、daemon auto-start、window close
+  cancellation 或 recording controls。没有 daemon 时可以显示 recoverable problem，但不得尝试启动服务。
+- 不新增 backend command、不新增 IPC command/event、不 bump `PROTO_VERSION`、不建立完整
+  Status/History view model。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：

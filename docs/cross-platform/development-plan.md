@@ -216,6 +216,13 @@ Phase 8a 先做文档化 PoC baseline，不写 backend：
 
 目标：验证 GUI 作为独立 client 的开销和集成成本。
 
+Phase 9a 先做文档化 PoC baseline，不写 GUI app：
+
+- 基于 Tauri v2 文档确认 command/event、permissions/capabilities、sidecar、
+  build/bundle 和 release 指标采集边界。
+- 把进程边界、IPC、安全权限、指标、打包和 TUI 回退 checklist 写入 `gui.md`。
+- 不新增 Tauri workspace，不引入 WebView runtime，不改变 daemon/CLI/TUI。
+
 范围：
 
 - 建一个最小 Tauri app。

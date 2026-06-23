@@ -6,12 +6,12 @@
 
 ## 最近 commit
 
-HEAD: `docs: record linux wayland overlay poc baseline`（Phase 8a 提交后）
+HEAD: `docs: record tauri gui poc baseline`（Phase 9a 提交后）
 
 ## 当前 phase
 
-Phase 8a: Linux Wayland Overlay PoC Baseline 已完成并提交。下一步是在目标平台做最小
-overlay PoC，或先继续补 Tauri GUI PoC baseline。
+Phase 9a: Tauri GUI PoC Baseline 已完成并提交。下一步是在独立目录/任务分支做最小 GUI
+client PoC，或先评审 GUI client API 边界。
 
 ## 已完成事项
 
@@ -113,6 +113,13 @@ overlay PoC，或先继续补 Tauri GUI PoC baseline。
   - 更新 `docs/cross-platform/development-plan.md`，把 Phase 8 拆出 8a 文档化 baseline。
   - 更新 `docs/cross-platform/overview.md`，记录 Phase 8a 当前状态。
   - 未新增 Linux renderer 文件，未引入 Wayland crate，未修改 macOS overlay 或 daemon 热路径。
+- Phase 9a:
+  - 更新 `docs/cross-platform/gui.md`，基于 Tauri v2 文档记录 GUI PoC baseline：
+    独立按需 client、command/event 桥接、permissions/capabilities、sidecar 非默认路线、
+    release build/bundle 指标和 TUI 回退。
+  - 更新 `docs/cross-platform/development-plan.md`，把 Phase 9 拆出 9a 文档化 baseline。
+  - 更新 `docs/cross-platform/overview.md`，记录 Phase 9a 当前状态。
+  - 未新增 Tauri workspace，未引入 WebView runtime，未修改 daemon/CLI/TUI。
 
 ## 验证结果
 
@@ -158,6 +165,8 @@ overlay PoC，或先继续补 Tauri GUI PoC baseline。
 - Phase 8a 只是 Wayland/layer-shell 文档基线，不代表已在 wlroots/KDE/GNOME 真机验证。
   实际 layer-shell availability、top layer、pointer passthrough、alpha、screen anchor 和性能
   数据仍需 PoC 记录。
+- Phase 9a 只是 Tauri v2 文档基线，不代表已测 GUI 冷启动、内存、CPU、包体或三端打包。
+  GUI PoC 仍需证明 daemon 未打开 GUI 时不加载 WebView，且 GUI 退出不影响 daemon。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
   静态 `desktop.permissions=available` 误解为当前已授权。
 - `overlay::renderer::renderer_capabilities()` 同样是静态快照，不创建窗口、不 probe 当前
@@ -165,12 +174,11 @@ overlay PoC，或先继续补 Tauri GUI PoC baseline。
 
 ## 下一步
 
-提交 Phase 8a 后，进入下一小步：
+提交 Phase 9a 后，进入下一小步：
 
-- Windows 环境可用时，按 `docs/cross-platform/overlay.md` 的 Phase 7a checklist 做最小
-  overlay PoC，不写完整 backend。
-- Linux Wayland 环境可用时，按 Phase 8a checklist 做 wlroots/KDE/GNOME 最小 overlay PoC。
-- 若当前环境仍不能跑目标平台 PoC，可先做 Tauri GUI PoC baseline 文档。
+- 若进入 GUI PoC，先在独立小步创建最小 Tauri app，连接现有 daemon IPC，只展示 status
+  snapshot 和 history summary。
+- 若目标平台环境可用，也可以先按 Phase 7a/8a checklist 做 Windows/Linux 最小 overlay PoC。
 
 建议下一 session prompt：
 
@@ -179,6 +187,6 @@ overlay PoC，或先继续补 Tauri GUI PoC baseline。
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 8a Linux Wayland Overlay PoC Baseline 已实现；先查看最新 commit 和验证结果。
-下一步根据环境选择 Windows/Linux 最小 overlay PoC 或 Tauri GUI PoC baseline 文档。
+Phase 9a Tauri GUI PoC Baseline 已实现；先查看最新 commit 和验证结果。
+下一步在最小 Tauri GUI client PoC 或 Windows/Linux overlay PoC 之间做一个小步计划。
 ```

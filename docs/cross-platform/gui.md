@@ -129,6 +129,17 @@ Phase 9g 增加 GUI client 连接状态骨架，仍不创建 Tauri workspace：
 - retry delay 必须是有上限的短序列，避免 GUI daemon-offline 首屏 busy-loop；实际 timer 和
   cancellation ownership 留给 GUI backend。
 
+Phase 9h 增加 GUI backend event bridge 骨架，仍不创建 Tauri workspace：
+
+- shared `client_api` 可以公开 GUI backend event 类型，把既有 daemon `Event`、9g 的 connection
+  state 和 recoverable connection problem 统一成 GUI backend 可转发的事件形状。
+- bridge 只做引用级分类和封装，不 clone 大型 history payload，不做本地化，不生成 frontend
+  view model，不调用 Tauri event API。
+- daemon event 分类必须继续复用 Phase 9c 的 `FirstScreenEvent`，避免 GUI backend 绕过既有首屏
+  helper 自己解释 IPC event。
+- 这个阶段不新增 IPC command/event，不 bump `PROTO_VERSION`，不改变 TUI/CLI 行为，不创建
+  Tauri workspace。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：
@@ -215,6 +226,13 @@ Phase 9g 验收：
 
 - `client_api` 公开 daemon connection state、recoverable problem kind 和 retry delay helper。
 - helper 是纯函数，不连接 IPC、不启动 daemon、不读取配置/history。
+- `PROTO_VERSION` 仍为 2；不新增 IPC command/event，不新增 Tauri/WRY/WebView 依赖。
+
+Phase 9h 验收：
+
+- `client_api` 公开 GUI backend event 类型和纯 bridge helper。
+- daemon event bridge 复用 `classify_first_screen_event()`；连接状态/problem bridge 不连接 IPC、
+  不启动 daemon、不读配置/history。
 - `PROTO_VERSION` 仍为 2；不新增 IPC command/event，不新增 Tauri/WRY/WebView 依赖。
 
 参考资料：

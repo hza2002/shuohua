@@ -646,6 +646,44 @@ fn gui_reconnect_state_skeleton_lives_in_client_api_without_runtime_loop() {
     }
 }
 
+#[test]
+fn gui_backend_event_bridge_lives_in_client_api_without_gui_runtime() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let client_api = std::fs::read_to_string(root.join("src/client_api.rs")).unwrap();
+
+    for token in [
+        "pub enum GuiBackendEvent",
+        "Daemon(FirstScreenEvent",
+        "ConnectionState(&'a DaemonConnectionState)",
+        "ConnectionProblem(&'a DaemonConnectionProblem)",
+        "pub fn gui_backend_event_from_daemon_event",
+        "pub fn gui_backend_event_from_connection_state",
+        "pub fn gui_backend_event_from_connection_problem",
+        "classify_first_screen_event(event).map(GuiBackendEvent::Daemon)",
+    ] {
+        assert!(
+            client_api.contains(token),
+            "src/client_api.rs should expose GUI backend event bridge token `{token}`"
+        );
+    }
+
+    for token in [
+        "tauri",
+        "wry",
+        "webview",
+        "WebView",
+        "tao",
+        "tokio::spawn",
+        "connect_default().await",
+        "PROTO_VERSION =",
+    ] {
+        assert!(
+            !client_api.contains(token),
+            "GUI backend event bridge must not own GUI/runtime/protocol token `{token}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

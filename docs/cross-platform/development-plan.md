@@ -265,6 +265,14 @@ Phase 9g 增加 GUI client 连接状态骨架，不写 GUI app：
 - 不实现后台 reconnect task，不改变 TUI 行为，不自动启动 daemon。
 - 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime。
 
+Phase 9h 增加 GUI backend event bridge 骨架，不写 GUI app：
+
+- 在 shared `client_api` 中增加 GUI backend event 类型，把 daemon event、connection state 和
+  recoverable connection problem 统一成可转发事件。
+- bridge 只做纯分类和封装，复用既有首屏 event classifier。
+- 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime，不生成 frontend
+  view model。
+
 范围：
 
 - 建一个最小 Tauri app。

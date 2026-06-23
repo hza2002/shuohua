@@ -114,6 +114,29 @@ pub fn daemon_read_failed_problem(message: impl Into<String>) -> DaemonConnectio
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GuiBackendEvent<'a> {
+    Daemon(FirstScreenEvent<'a>),
+    ConnectionState(&'a DaemonConnectionState),
+    ConnectionProblem(&'a DaemonConnectionProblem),
+}
+
+pub fn gui_backend_event_from_daemon_event(event: &Event) -> Option<GuiBackendEvent<'_>> {
+    classify_first_screen_event(event).map(GuiBackendEvent::Daemon)
+}
+
+pub fn gui_backend_event_from_connection_state(
+    state: &DaemonConnectionState,
+) -> GuiBackendEvent<'_> {
+    GuiBackendEvent::ConnectionState(state)
+}
+
+pub fn gui_backend_event_from_connection_problem(
+    problem: &DaemonConnectionProblem,
+) -> GuiBackendEvent<'_> {
+    GuiBackendEvent::ConnectionProblem(problem)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +239,40 @@ mod tests {
         let closed = daemon_event_stream_closed_problem();
         assert_eq!(closed.kind, DaemonConnectionProblemKind::EventStreamClosed);
         assert!(closed.recoverable);
+    }
+
+    #[test]
+    fn gui_backend_event_bridge_wraps_existing_client_api_shapes() {
+        assert_eq!(PROTO_VERSION, 2);
+
+        let daemon = Event::DaemonStatus {
+            pid: 42,
+            uptime_ms: 1000,
+            state: WireState::Idle,
+            recording_id: None,
+        };
+        assert_eq!(
+            gui_backend_event_from_daemon_event(&daemon),
+            Some(GuiBackendEvent::Daemon(FirstScreenEvent::DaemonStatus(
+                &daemon
+            )))
+        );
+
+        let ignored = Event::ConfigReloaded {
+            path: "/tmp/config.toml".to_string(),
+        };
+        assert_eq!(gui_backend_event_from_daemon_event(&ignored), None);
+
+        let state = DaemonConnectionState::Connected;
+        assert_eq!(
+            gui_backend_event_from_connection_state(&state),
+            GuiBackendEvent::ConnectionState(&state)
+        );
+
+        let problem = daemon_read_failed_problem("read IPC event");
+        assert_eq!(
+            gui_backend_event_from_connection_problem(&problem),
+            GuiBackendEvent::ConnectionProblem(&problem)
+        );
     }
 }

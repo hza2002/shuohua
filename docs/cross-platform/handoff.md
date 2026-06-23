@@ -6,11 +6,11 @@
 
 ## 最近 commit
 
-HEAD: `feat: add gui first-screen refresh click`
+HEAD: `feat: add gui first-screen refresh projection`
 
 ## 当前 phase
 
-Phase 9aa: GUI First-Screen Explicit Refresh Click Wiring 已实现并完成自动验证。下一步可以继续做
+Phase 9ab: GUI First-Screen Explicit Refresh Result Projection 已实现并完成自动验证。下一步可以继续做
 更真实的手动 refresh UI 接线评审，或回到 Windows/Linux overlay PoC；不要直接做完整 GUI、
 reconnect runtime、service management、配置编辑器或 release 打包指标。
 
@@ -652,6 +652,14 @@ reconnect runtime、service management、配置编辑器或 release 打包指标
   5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
   tests、39 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests；
   Tauri crate `cargo check` 通过。
+- Phase 9ab 已跑窄验证：
+  `cargo test --test platform_layout gui_first_screen_refresh_result_projection_stays_click_scoped`
+  先红灯失败于缺少 `projectExplicitRefreshSummary`，实现后通过。
+- Phase 9ab 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo check --manifest-path src-tauri/Cargo.toml`，
+  通过。`cargo test` 覆盖：92 个 library unit tests、639 个 binary unit tests、
+  5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
+  tests、40 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests；
+  Tauri crate `cargo check` 通过。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -687,13 +695,14 @@ reconnect runtime、service management、配置编辑器或 release 打包指标
   capabilities JSON、frontend command binding、release build 或打包验证。
 - Phase 9l 只记录 reconnect supervisor ownership/cancellation 语义，没有实现真实 runtime loop、
   Tauri event emission、frontend view model 或 metrics sink。
-- Phase 9m/9n/9o/9p/9q/9r/9s/9t/9u/9v/9w/9x/9y/9z/9aa 只创建最小 `src-tauri/**` skeleton、静态 placeholder、本地 metadata
+- Phase 9m/9n/9o/9p/9q/9r/9s/9t/9u/9v/9w/9x/9y/9z/9aa/9ab 只创建最小 `src-tauri/**` skeleton、静态 placeholder、本地 metadata
   command、first-screen request plan command、daemon status snapshot shape command、纯 daemon
   status event mapper、显式 one-shot daemon status request command 和显式 one-shot history summary
   request command、显式 one-shot first-screen summary request command、first-screen summary 本地
   timing 字段、first-screen explicit refresh shape、first-screen readiness/timing display shape 和
   first-screen offline/error display shape、first-screen command invocation policy shape、
-  first-screen explicit refresh affordance shape、placeholder explicit refresh click wiring；
+  first-screen explicit refresh affordance shape、placeholder explicit refresh click wiring 和
+  click-scoped summary projection；
   尚未运行 `tauri dev` / `tauri build` / `tauri bundle`，也没有启动 GUI 或 daemon。后续需要
   单独决定何时运行 release build、如何记录 cold start/RSS/CPU/bundle 指标。
 - Phase 9n 的 `gui_shell_metadata` 只验证本地 command wiring，不连接 daemon、不读
@@ -724,6 +733,8 @@ reconnect runtime、service management、配置编辑器或 release 打包指标
   静态展示字段；不注册真实 click handler，不自动调用 one-shot request。
 - Phase 9aa 的 placeholder refresh button 只在用户 click 后调用既有
   `gui_first_screen_summary_request_once`；初始加载不自动请求，不订阅、不重连、不启动 daemon。
+- Phase 9ab 的 `projectExplicitRefreshSummary` 只在 explicit refresh click 成功路径内把 summary
+  投影到现有 placeholder 文本字段；不新增 backend command，不建立完整 view model。
 - `ipc::transport` 仍是 Unix-only，library client 只实际覆盖 macOS/Linux 当前 transport。
   Windows Named Pipe adapter 仍是后续 IPC transport backend 工作。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
@@ -733,7 +744,7 @@ reconnect runtime、service management、配置编辑器或 release 打包指标
 
 ## 下一步
 
-Phase 9aa 后，进入下一小步：
+Phase 9ab 后，进入下一小步：
 
 - 若继续 GUI，下一阶段可以做更真实的手动 refresh UI 接线评审或继续收敛首屏展示 shape；
   继续禁止 daemon 热路径引入 WebView，且不要启动 daemon、GUI 或 release 打包。
@@ -746,6 +757,6 @@ Phase 9aa 后，进入下一小步：
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、gui.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 9aa GUI First-Screen Explicit Refresh Click Wiring 已实现；先查看最新 commit 和验证结果。
+Phase 9ab GUI First-Screen Explicit Refresh Result Projection 已实现；先查看最新 commit 和验证结果。
 下一步在更真实的手动 refresh UI 接线评审、继续收敛首屏展示 shape 或 Windows/Linux overlay PoC 之间做一个小步计划。
 ```

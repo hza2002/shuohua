@@ -262,6 +262,7 @@
           const summary = await invoke("gui_first_screen_summary_request_once", {
             historyLimit: 20,
           });
+          projectExplicitRefreshSummary(summary);
           status.textContent = "loaded";
           result.textContent =
             `connected:${summary.connected}, ` +
@@ -272,6 +273,30 @@
         } finally {
           button.disabled = false;
         }
+      }
+
+      function projectExplicitRefreshSummary(summary) {
+        document.getElementById("daemon-connected").textContent = String(
+          summary.connected
+        );
+        document.getElementById("status-connected").textContent = String(
+          summary.status.connected
+        );
+        document.getElementById("status-transport-opened").textContent = String(
+          summary.status.transportOpened
+        );
+        document.getElementById("status-snapshot-available").textContent = String(
+          summary.status.snapshotAvailable
+        );
+        document.getElementById("status-state-label").textContent =
+          summary.status.stateLabel;
+        document.getElementById("readiness-ready").textContent = String(
+          summary.summaryAvailable
+        );
+        document.getElementById("request-plan-count").textContent =
+          `${summary.history.pageRecordCount} history records`;
+        document.getElementById("request-plan-kinds").textContent =
+          `status:${summary.status.stateLabel}, history:${summary.history.pageRecordCount}`;
       }
 
       loadShellMetadata().catch(() => {});

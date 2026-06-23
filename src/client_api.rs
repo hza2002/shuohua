@@ -137,9 +137,69 @@ pub fn gui_backend_event_from_connection_problem(
     GuiBackendEvent::ConnectionProblem(problem)
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FirstScreenReadiness {
+    pub daemon_status: bool,
+    pub history_page: bool,
+    pub history_stats: bool,
+}
+
+impl FirstScreenReadiness {
+    pub fn record_event(&mut self, event: FirstScreenEvent<'_>) {
+        match event {
+            FirstScreenEvent::DaemonStatus(_) => self.daemon_status = true,
+            FirstScreenEvent::HistoryPage(_) => self.history_page = true,
+            FirstScreenEvent::HistoryStats(_) => self.history_stats = true,
+            FirstScreenEvent::Snapshot(_)
+            | FirstScreenEvent::HistoryChanged
+            | FirstScreenEvent::RecoverableError(_) => {}
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.daemon_status && self.history_page && self.history_stats
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FirstScreenTimingMarks {
+    pub gui_started_ms: u64,
+    pub daemon_connected_ms: Option<u64>,
+    pub first_daemon_event_ms: Option<u64>,
+    pub first_screen_ready_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FirstScreenTiming {
+    pub connect_ms: Option<u64>,
+    pub first_daemon_event_ms: Option<u64>,
+    pub first_screen_ready_ms: Option<u64>,
+}
+
+impl FirstScreenTiming {
+    pub fn from_marks(marks: FirstScreenTimingMarks) -> Self {
+        Self {
+            connect_ms: elapsed_since_start(marks.gui_started_ms, marks.daemon_connected_ms),
+            first_daemon_event_ms: elapsed_since_start(
+                marks.gui_started_ms,
+                marks.first_daemon_event_ms,
+            ),
+            first_screen_ready_ms: elapsed_since_start(
+                marks.gui_started_ms,
+                marks.first_screen_ready_ms,
+            ),
+        }
+    }
+}
+
+fn elapsed_since_start(start_ms: u64, mark_ms: Option<u64>) -> Option<u64> {
+    mark_ms.map(|mark_ms| mark_ms.saturating_sub(start_ms))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::history::{AggregateStats, HistoryStatsSnapshot, HistoryStatsStatus};
     use crate::ipc::protocol::{Event, WireState, PROTO_VERSION};
 
     #[test]
@@ -274,5 +334,60 @@ mod tests {
             gui_backend_event_from_connection_problem(&problem),
             GuiBackendEvent::ConnectionProblem(&problem)
         );
+    }
+
+    #[test]
+    fn first_screen_timing_models_readiness_without_runtime_or_protocol_changes() {
+        assert_eq!(PROTO_VERSION, 2);
+
+        let mut readiness = FirstScreenReadiness::default();
+        let status = Event::DaemonStatus {
+            pid: 42,
+            uptime_ms: 1000,
+            state: WireState::Idle,
+            recording_id: None,
+        };
+        readiness.record_event(FirstScreenEvent::DaemonStatus(&status));
+        assert!(!readiness.is_ready());
+
+        let history = Event::History {
+            records: Vec::new(),
+            matched: Some(0),
+            stats: None,
+        };
+        readiness.record_event(FirstScreenEvent::HistoryPage(&history));
+        assert!(!readiness.is_ready());
+
+        let stats = Event::HistoryStats {
+            snapshot: HistoryStatsSnapshot {
+                status: HistoryStatsStatus::Ready,
+                total: AggregateStats::default(),
+                current_month: AggregateStats::default(),
+                today: AggregateStats::default(),
+                error: None,
+            },
+        };
+        readiness.record_event(FirstScreenEvent::HistoryStats(&stats));
+        assert!(readiness.is_ready());
+
+        let timing = FirstScreenTiming::from_marks(FirstScreenTimingMarks {
+            gui_started_ms: 100,
+            daemon_connected_ms: Some(250),
+            first_daemon_event_ms: Some(275),
+            first_screen_ready_ms: Some(475),
+        });
+        assert_eq!(timing.connect_ms, Some(150));
+        assert_eq!(timing.first_daemon_event_ms, Some(175));
+        assert_eq!(timing.first_screen_ready_ms, Some(375));
+
+        let saturated = FirstScreenTiming::from_marks(FirstScreenTimingMarks {
+            gui_started_ms: 500,
+            daemon_connected_ms: Some(250),
+            first_daemon_event_ms: Some(275),
+            first_screen_ready_ms: Some(475),
+        });
+        assert_eq!(saturated.connect_ms, Some(0));
+        assert_eq!(saturated.first_daemon_event_ms, Some(0));
+        assert_eq!(saturated.first_screen_ready_ms, Some(0));
     }
 }

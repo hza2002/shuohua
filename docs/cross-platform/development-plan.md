@@ -273,6 +273,15 @@ Phase 9h 增加 GUI backend event bridge 骨架，不写 GUI app：
 - 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime，不生成 frontend
   view model。
 
+Phase 9i 增加 GUI 首屏 metrics/timing 纯模型，不写 GUI app：
+
+- 在 shared `client_api` 中增加首屏 timing/readiness 类型，用于后续 GUI backend 采集 GUI
+  启动、daemon connect、首个 daemon event 和首屏 ready 耗时。
+- helper 只使用调用方传入的毫秒时间戳和既有 `FirstScreenEvent`，不读系统时间、不启动
+  runtime、不连接 IPC、不写 metrics sink。
+- 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime，不生成 frontend
+  view model。
+
 范围：
 
 - 建一个最小 Tauri app。

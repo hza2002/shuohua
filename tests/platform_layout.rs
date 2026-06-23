@@ -684,6 +684,49 @@ fn gui_backend_event_bridge_lives_in_client_api_without_gui_runtime() {
     }
 }
 
+#[test]
+fn gui_first_screen_metrics_timing_stays_pure_client_api() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let client_api = std::fs::read_to_string(root.join("src/client_api.rs")).unwrap();
+
+    for token in [
+        "pub struct FirstScreenReadiness",
+        "pub struct FirstScreenTimingMarks",
+        "pub struct FirstScreenTiming",
+        "pub fn record_event",
+        "pub fn is_ready",
+        "pub fn from_marks",
+        "saturating_sub",
+        "FirstScreenEvent::DaemonStatus",
+        "FirstScreenEvent::HistoryPage",
+        "FirstScreenEvent::HistoryStats",
+    ] {
+        assert!(
+            client_api.contains(token),
+            "src/client_api.rs should expose GUI first-screen timing token `{token}`"
+        );
+    }
+
+    for token in [
+        "tauri",
+        "wry",
+        "webview",
+        "WebView",
+        "tao",
+        "tokio::spawn",
+        "tokio::time",
+        "std::time::Instant",
+        "Instant::now",
+        "connect_default().await",
+        "PROTO_VERSION =",
+    ] {
+        assert!(
+            !client_api.contains(token),
+            "GUI first-screen metrics timing must stay pure and not own runtime/protocol token `{token}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

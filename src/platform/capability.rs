@@ -200,7 +200,11 @@ pub(crate) fn current_platform_capabilities() -> Vec<CapabilityStatus> {
     {
         windows_capabilities()
     }
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_capabilities()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         unsupported_capabilities(PlatformKind::current())
     }
@@ -212,6 +216,61 @@ fn unsupported_capabilities(platform: PlatformKind) -> Vec<CapabilityStatus> {
         .into_iter()
         .map(|id| CapabilityStatus::unsupported(id, platform))
         .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_capabilities() -> Vec<CapabilityStatus> {
+    let mut capabilities = unsupported_capabilities(PlatformKind::Linux);
+    for replacement in [
+        CapabilityStatus {
+            id: CapabilityId::IpcTransport,
+            platform: PlatformKind::Linux,
+            backend: "unix_domain_socket",
+            status: CapabilityStatusKind::Available,
+            summary: "Unix domain socket transport compiles for Linux",
+            reason: "compile_checked",
+            next_step: Some("Validate daemon/client IPC on Linux"),
+        },
+        CapabilityStatus {
+            id: CapabilityId::DaemonSingleInstance,
+            platform: PlatformKind::Linux,
+            backend: "lock_file",
+            status: CapabilityStatusKind::Available,
+            summary: "Unix lock file single-instance guard compiles for Linux",
+            reason: "compile_checked",
+            next_step: Some("Validate daemon lock behavior on Linux"),
+        },
+        CapabilityStatus {
+            id: CapabilityId::ProcessProbe,
+            platform: PlatformKind::Linux,
+            backend: "unix_process_probe",
+            status: CapabilityStatusKind::Available,
+            summary: "Unix process probing compiles for Linux",
+            reason: "compile_checked",
+            next_step: Some("Validate process probing on Linux"),
+        },
+        CapabilityStatus {
+            id: CapabilityId::ServiceManager,
+            platform: PlatformKind::Linux,
+            backend: "systemd_user_skeleton",
+            status: CapabilityStatusKind::Unsupported,
+            summary: "systemd user service management is not implemented",
+            reason: "backend_not_implemented",
+            next_step: Some("Implement systemd user service manager"),
+        },
+        CapabilityStatus {
+            id: CapabilityId::AudioCapture,
+            platform: PlatformKind::Linux,
+            backend: "cpal_alsa",
+            status: CapabilityStatusKind::Partial,
+            summary: "ALSA audio capture compiles but is not runtime-verified",
+            reason: "compile_checked",
+            next_step: Some("Validate audio device enumeration and recording on Linux"),
+        },
+    ] {
+        replace_capability(&mut capabilities, replacement);
+    }
+    capabilities
 }
 
 #[cfg(target_os = "windows")]
@@ -232,7 +291,7 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
     capabilities
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn replace_capability(capabilities: &mut [CapabilityStatus], replacement: CapabilityStatus) {
     let existing = capabilities
         .iter_mut()
@@ -460,7 +519,43 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_snapshot_marks_compile_checked_unix_primitives() {
+        let statuses = current_platform_capabilities();
+        assert_status(
+            &statuses,
+            CapabilityId::IpcTransport,
+            CapabilityStatusKind::Available,
+            "unix_domain_socket",
+        );
+        assert_status(
+            &statuses,
+            CapabilityId::DaemonSingleInstance,
+            CapabilityStatusKind::Available,
+            "lock_file",
+        );
+        assert_status(
+            &statuses,
+            CapabilityId::ProcessProbe,
+            CapabilityStatusKind::Available,
+            "unix_process_probe",
+        );
+        assert_status(
+            &statuses,
+            CapabilityId::ServiceManager,
+            CapabilityStatusKind::Unsupported,
+            "systemd_user_skeleton",
+        );
+        assert_status(
+            &statuses,
+            CapabilityId::AudioCapture,
+            CapabilityStatusKind::Partial,
+            "cpal_alsa",
+        );
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     #[test]
     fn non_macos_snapshot_is_structured_unsupported() {
         for status in current_platform_capabilities() {
@@ -469,7 +564,6 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
     fn assert_status(
         statuses: &[CapabilityStatus],
         id: CapabilityId,

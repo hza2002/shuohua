@@ -6,7 +6,7 @@
 
 ## 最近 commit
 
-HEAD: `docs: mark windows ipc capability partial`
+HEAD: `feat: sync linux compile capabilities`
 
 ## 当前 phase
 
@@ -17,6 +17,9 @@ smart fallback 仍需 Windows 实机或 VM 验证。
 Phase 10c Docker/cross Linux check baseline 已完成：macOS 主机使用 Docker/cross 负责 Linux
 sysroot 和 C toolchain，`make check-linux-cross` 可通过；这只证明 Linux compile/cfg 边界，
 不代表 Linux runtime 可用。
+当前正在收敛 Phase 10d Linux compile-time capability sync：把 Linux 已通过 compile check 的
+UDS、lock file、process probe 和 ALSA audio capture 如实写入静态 capability snapshot；不实现
+systemd service manager，也不声明 Linux runtime 可用。
 
 ## 已完成事项
 
@@ -71,6 +74,15 @@ sysroot 和 C toolchain，`make check-linux-cross` 可通过；这只证明 Linu
     `27.5.1 linux/aarch64`，Rust host 为 `aarch64-apple-darwin`。
   - 当前本机已安装 `stable-x86_64-unknown-linux-gnu --force-non-host`；`cross check` 已进入 Docker
     编译路径。
+- Phase 10d:
+  - 更新 `docs/cross-platform/platform-capabilities.md` 和
+    `docs/cross-platform/development-plan.md`，记录 Linux compile-time capability sync 范围。
+  - `current_platform_capabilities()` 在 Linux target 下不再全量返回 generic unsupported：
+    `ipc.transport`、`daemon.single_instance`、`process.probe` 标记为 `available/compile_checked`；
+    `audio.capture` 标记为 `partial/cpal_alsa/compile_checked`；`service.manager` 保持
+    `unsupported/systemd_user_skeleton/backend_not_implemented`。
+  - 该阶段不实现 systemd user service，不启动 Linux daemon，不验证 Linux audio device/permission，
+    不实现 desktop hotkey/clipboard/text injection。
 - Phase 4a:
   - 更新 `docs/cross-platform/ipc-service.md`，把 Phase 4 拆成 lock/process probe facade 和
     后续 service manager facade。
@@ -908,6 +920,11 @@ sysroot 和 C toolchain，`make check-linux-cross` 可通过；这只证明 Linu
   通过。`cargo test` 覆盖：92 个 library unit tests、641 个 binary unit tests、
   5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency` tests、
   57 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests。
+- Phase 10d 已跑窄验证：
+  `cargo test --test platform_layout linux_capability_snapshot_marks_compile_checked_unix_primitives`
+  先红灯失败于缺少 `fn linux_capabilities()`，实现 Linux capability override 后通过。
+- Phase 10d 已跑：`cargo test platform::capability::tests`，macOS target 下 6 个 capability tests 通过。
+- Phase 10d 已跑：`make check-linux-cross`，exit 0；仍有非 macOS skeleton/dead-code warnings。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -1030,8 +1047,8 @@ Windows IPC capability 诊断已与 Phase 3c 同步。下一步：
 - 下一阶段若继续 Windows，可做 Windows daemon single-instance/process probe/smart fallback skeleton
   收敛，或继续把 desktop/hotkey/service 的 Windows unsupported skeleton 接入 doctor/TUI 诊断。
 - 若继续 Linux build baseline，应优先配置 Linux C cross compiler/sysroot，或改用 Docker/cross/CI。
-- Phase 10c 已完成。下一步可继续 Linux runtime boundary：把 Linux service/desktop/hotkey/overlay
-  unsupported 或 degraded 状态进一步接入 doctor/TUI，或开始 Linux service manager skeleton。
+- Phase 10d 已完成。下一步可开始 Linux service manager skeleton（systemd user dry-run/status
+  shape），或继续把 Linux desktop/hotkey/overlay runtime gaps 细化到 capability/doctor/TUI。
 - 若继续 overlay 视觉 PoC，则需要用户提供真实 Windows 11/10 或 Linux wlroots/KDE/GNOME 环境；
   在当前 macOS 主机上不要假装验证真实 topmost/click-through/layer-shell 行为。
 - 真实 Windows 11/10、wlroots/KDE/GNOME overlay 视觉验证需要用户后续提供目标系统环境。
@@ -1046,10 +1063,11 @@ development-plan.md、gui.md、overlay.md、platform-capabilities.md、macos-bas
 handoff.md。
 Phase 9al 后 GUI PoC 已冻结；不要继续打磨 GUI placeholder。
 Phase 7b/8b overlay backend skeleton、Phase 3b IPC transport cfg boundary、Phase 10a
-cross-check baseline、Phase 10b TUI capability diagnostics、Phase 3c Windows Named Pipe
+cross-check baseline、Phase 10b TUI capability diagnostics、Phase 10c Docker/cross Linux
+check baseline、Phase 10d Linux compile-time capability sync、Phase 3c Windows Named Pipe
 transport compile backend，以及 Windows IPC capability sync 已完成一个最小阶段。先查看最新
 diff/commit 和验证结果。
 保持 macOS 不回退，不引入 GUI/WebView。不要把 Windows Named Pipe compile backend 当成实机
-runtime 验收。下一步优先考虑 Windows lifecycle/smart fallback 诊断收敛或 Linux Docker/cross
-build baseline；真实 overlay 视觉 PoC 需要用户提供目标系统。
+runtime 验收。下一步优先考虑 Linux service manager skeleton 或 Windows lifecycle/smart fallback
+诊断收敛；真实 overlay 视觉 PoC 需要用户提供目标系统。
 ```

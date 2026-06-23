@@ -63,6 +63,33 @@ fn linux_cross_check_does_not_download_vad_runtime_at_build_time() {
 }
 
 #[test]
+fn linux_capability_snapshot_marks_compile_checked_unix_primitives() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+
+    for token in [
+        "fn linux_capabilities()",
+        "PlatformKind::Linux",
+        "CapabilityId::IpcTransport",
+        "unix_domain_socket",
+        "CapabilityId::DaemonSingleInstance",
+        "lock_file",
+        "CapabilityId::ProcessProbe",
+        "unix_process_probe",
+        "CapabilityId::ServiceManager",
+        "systemd_user_skeleton",
+        "CapabilityId::AudioCapture",
+        "cpal_alsa",
+        "compile_checked",
+    ] {
+        assert!(
+            capability.contains(token),
+            "Linux capability snapshot should document compile-checked primitive token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn shared_macos_adapters_live_under_platform_module() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for file in [

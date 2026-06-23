@@ -662,6 +662,19 @@ Phase 10c Docker/cross Linux check baseline:
 - Passing this check proves Linux compile/cfg boundaries only. It does not prove Linux service lifecycle,
   desktop permissions, hotkey capture, overlay compositor behavior, or runtime IPC behavior.
 
+Phase 10d Linux compile-time capability sync:
+
+- `current_platform_capabilities()` should map Linux compile-checked primitives instead of reporting every
+  capability as generic `backend_not_implemented`.
+- Linux `ipc.transport`, `daemon.single_instance`, and `process.probe` are `available` because they use
+  existing Unix implementations and compile under Docker/cross.
+- Linux `audio.capture` is `partial/cpal_alsa/compile_checked` because ALSA sysroot compilation passes but
+  real device enumeration and permissions are not verified.
+- Linux `service.manager` remains `unsupported/systemd_user_skeleton/backend_not_implemented`; Phase 10d
+  does not implement systemd user service management.
+- This is diagnostics truthfulness only. It does not start daemon on Linux, install service files, implement
+  hotkey/clipboard/text injection, or validate overlay runtime behavior.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

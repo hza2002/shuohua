@@ -109,6 +109,27 @@ platform 按编译目标设置为 Linux/Windows/Unknown，reason 使用 `backend
   这表示 Tokio Named Pipe transport 已通过 Windows target compile check，但 connect/bind/accept、
   ACL/security descriptor、multi-user 隔离和 pipe busy 行为仍需 Windows 实机/VM 验证。
 
+## Phase 10d Linux Compile-Time Capability Sync
+
+Phase 10d 只同步 Linux target 已经具备编译边界的静态 capability，不实现新的 runtime backend：
+
+- `ipc.transport`：`available`，backend `unix_domain_socket`。Linux 复用 Unix domain socket
+  transport；当前只通过 Docker/cross compile check，不代表真实 Linux daemon/client runtime
+  已验证。
+- `daemon.single_instance`：`available`，backend `lock_file`。Linux 复用 Unix lock file + `flock`
+  lifecycle primitive；当前只代表编译边界已存在。
+- `process.probe`：`available`，backend `unix_process_probe`。Linux 复用 `kill(pid, 0)` probe；
+  当前未在 Linux 实机验证权限和 pid namespace 行为。
+- `service.manager`：`unsupported`，backend `systemd_user_skeleton`，reason `backend_not_implemented`。
+  Phase 10d 不实现 systemd user install/start/stop/status。
+- `audio.capture`：`partial`，backend `cpal_alsa`，reason `compile_checked`。Docker/cross 已通过
+  ALSA sysroot 编译检查；真实 input device enumeration、permission、default device selection
+  仍需 Linux 实机验证。
+- `audio.convert`：`unsupported`，backend `none`。当前 retained audio conversion 仍依赖 macOS
+  `afconvert` 路径，Linux conversion backend 后续再设计。
+
+其他 Linux desktop、overlay、path open/reveal capability 继续按对应 skeleton/unsupported 阶段推进。
+
 ## 设计约束
 
 - capability probe 不执行高风险动作。

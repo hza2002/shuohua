@@ -584,10 +584,7 @@ async fn stream_gui_daemon_events(app: &tauri::AppHandle) -> Result<(), String> 
         .map_err(|error| error.to_string())?;
 
     while let Some(event) = client.recv().await.map_err(|error| error.to_string())? {
-        if shuohua::client_api::gui_backend_event_from_daemon_event(&event).is_some() {
-            let Some(payload) = gui_daemon_event_payload(&event) else {
-                continue;
-            };
+        if let Some(payload) = gui_daemon_event_payload(&event) {
             app.emit(GUI_DAEMON_EVENT_NAME, payload)
                 .map_err(|error| error.to_string())?;
         }
@@ -824,6 +821,19 @@ fn gui_daemon_event_payload(event: &Event) -> Option<GuiDaemonEventPayload> {
             recoverable: true,
         }),
         Event::DaemonStatus {
+            state,
+            recording_id,
+            ..
+        } => Some(GuiDaemonEventPayload {
+            kind: "daemonStatus",
+            state_label: Some(wire_state_label(*state)),
+            recording_id: recording_id.clone(),
+            history_changed: false,
+            error_kind: None,
+            error_message: None,
+            recoverable: true,
+        }),
+        Event::StateChanged {
             state,
             recording_id,
             ..

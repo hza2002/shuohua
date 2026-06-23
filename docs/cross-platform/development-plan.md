@@ -548,6 +548,17 @@ Phase 9aj 增加 frontend daemon event listener wiring，不实现 reconnect：
   recording command 或 release build/bundle。
 - 不新增 backend command，不新增 IPC command/event，不 bump `PROTO_VERSION`，不改变 TUI/CLI 行为。
 
+Phase 9ak 修复 GUI event stream state forwarding，不新增 IPC：
+
+- 9ai/9aj 验证发现不点 Refresh 时 GUI 不变化，因为 backend stream 只转发了 `Snapshot` /
+  `DaemonStatus` / `HistoryChanged` / `Error`，但录音开始/停止来自既有 `StateChanged` event。
+- `src-tauri` 可以把既有 `Event::StateChanged` 映射为当前 frontend 已消费的 `daemonStatus`
+  payload；不新增 Tauri event name、不新增 IPC event、不 bump `PROTO_VERSION`。
+- stream loop 不得先用 shared first-screen classifier 过滤再调用 payload mapper，否则 `StateChanged`
+  会在进入 mapper 前被丢弃。
+- 不新增 recording controls、reconnect supervisor、service management、daemon auto-start 或 release
+  build/bundle。
+
 范围：
 
 - 建一个最小 Tauri app。

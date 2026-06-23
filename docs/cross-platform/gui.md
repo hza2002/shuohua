@@ -541,6 +541,16 @@ Phase 9aj 增加 frontend daemon event listener wiring，不实现 reconnect：
 - 不新增 backend command、不新增 IPC command/event、不 bump `PROTO_VERSION`、不建立完整
   Status/History view model。
 
+Phase 9ak 修复 GUI event stream state forwarding，不新增 IPC：
+
+- GUI backend event stream 必须把既有 daemon `StateChanged` event 映射成 `daemonStatus`
+  payload，否则录音开始/停止只更新 TUI/IPC subscriber，GUI listener 不会自动变化。
+- stream loop 不得先用 shared `gui_backend_event_from_daemon_event()` 过滤再调用 payload mapper，
+  因为该 shared first-screen classifier 不包含 `StateChanged`。
+- 该修复只扩展 9ai 的 payload mapper；不新增 IPC event、不 bump `PROTO_VERSION`、不新增 recording
+  control command，不改变 daemon/TUI 行为。
+- frontend 继续消费同一个 `shuohua://daemon-event` 和既有 `daemonStatus` payload。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：

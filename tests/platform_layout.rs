@@ -2481,7 +2481,7 @@ fn gui_backend_event_stream_start_is_tauri_owned_and_explicit() {
         "DaemonClient::connect_default()",
         ".send(&Command::Subscribe)",
         ".recv().await",
-        "gui_backend_event_from_daemon_event",
+        "gui_daemon_event_payload(&event)",
         "const GUI_DAEMON_EVENT_NAME: &str = \"shuohua://daemon-event\"",
         ".emit(GUI_DAEMON_EVENT_NAME",
         "AtomicBool",
@@ -2594,6 +2594,52 @@ fn gui_frontend_daemon_event_listener_wiring_is_event_only() {
         tauri_lib.contains("gui_start_daemon_event_stream"),
         "Phase 9aj frontend should use the Phase 9ai backend stream command"
     );
+}
+
+#[test]
+fn gui_backend_event_stream_forwards_recording_state_changes() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+    for token in [
+        "Phase 9ak",
+        "StateChanged",
+        "daemonStatus",
+        "不新增 IPC event",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9ak state forwarding token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "Event::StateChanged",
+        "kind: \"daemonStatus\"",
+        "state_label: Some(wire_state_label(*state))",
+        "recording_id: recording_id.clone()",
+        "if let Some(payload) = gui_daemon_event_payload(&event)",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should map subscribed state changes for GUI token `{token}`"
+        );
+    }
+
+    for forbidden in [
+        "Command::StartRecording",
+        "Command::StopRecording",
+        "Command::CancelRecording",
+        "PROTO_VERSION = 3",
+        "setInterval(",
+        "setTimeout(",
+        "gui_backend_event_from_daemon_event(&event).is_some()",
+    ] {
+        assert!(
+            !tauri_lib.contains(forbidden),
+            "Phase 9ak state forwarding must not add controls/protocol/reconnect token `{forbidden}`"
+        );
+    }
 }
 
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {

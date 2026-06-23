@@ -92,6 +92,54 @@ fn status_header_includes_colored_asr_metadata() {
 }
 
 #[test]
+fn platform_capability_lines_include_problem_details() {
+    use crate::platform::capability::{
+        CapabilityId, CapabilityStatus, CapabilityStatusKind, PlatformKind,
+    };
+
+    let theme = TuiTheme::default();
+    let lines = platform_capability_lines_from(
+        &[
+            CapabilityStatus {
+                id: CapabilityId::IpcTransport,
+                platform: PlatformKind::Windows,
+                backend: "named_pipe_skeleton",
+                status: CapabilityStatusKind::Unsupported,
+                summary: "Named Pipe backend is not implemented",
+                reason: "backend_skeleton_only",
+                next_step: Some("Implement Windows Named Pipe transport"),
+            },
+            CapabilityStatus {
+                id: CapabilityId::OverlayWindowAnchor,
+                platform: PlatformKind::Windows,
+                backend: "win32_overlay_skeleton",
+                status: CapabilityStatusKind::Degraded,
+                summary: "Window anchoring is degraded",
+                reason: "focused_window_probe_missing",
+                next_step: None,
+            },
+        ],
+        &theme,
+        4,
+    );
+    let text = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+    assert!(text.contains(
+        "platform windows available=0 unsupported=1 unavailable=0 partial=0 degraded=1 unknown=0"
+    ));
+    assert!(text.contains(
+        "ipc.transport unsupported backend=named_pipe_skeleton reason=backend_skeleton_only next=Implement Windows Named Pipe transport"
+    ));
+    assert!(text.contains(
+        "overlay.window_anchor degraded backend=win32_overlay_skeleton reason=focused_window_probe_missing"
+    ));
+}
+
+#[test]
 fn ignores_events_for_stale_recordings() {
     let mut page = StatusPage::new();
     page.recording_id = Some("current".to_string());

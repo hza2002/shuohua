@@ -444,7 +444,7 @@ fn overlay_renderer_capabilities_live_with_renderer_facade() {
 }
 
 #[test]
-fn overlay_renderer_capabilities_are_consumed_by_doctor_only() {
+fn overlay_renderer_capabilities_are_consumed_by_doctor_and_tui_only() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut offenders = Vec::new();
 
@@ -461,6 +461,7 @@ fn overlay_renderer_capabilities_are_consumed_by_doctor_only() {
                 | "src/overlay/windows.rs"
                 | "src/overlay/linux.rs"
                 | "src/cli/doctor.rs"
+                | "src/tui/status/render.rs"
         ) {
             continue;
         }
@@ -474,9 +475,43 @@ fn overlay_renderer_capabilities_are_consumed_by_doctor_only() {
 
     assert!(
         offenders.is_empty(),
-        "overlay renderer capability snapshot should only feed doctor until GUI/TUI consumption is designed:\n{}",
+        "overlay renderer capability snapshot should only feed doctor and TUI status diagnostics:\n{}",
         offenders.join("\n")
     );
+}
+
+#[test]
+fn tui_status_consumes_capability_snapshots_without_gui_or_ipc() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let status_render = std::fs::read_to_string(root.join("src/tui/status/render.rs")).unwrap();
+
+    for token in [
+        "crate::platform::capability::current_platform_capabilities()",
+        "crate::overlay::renderer_capabilities()",
+        "platform_capability_lines",
+    ] {
+        assert!(
+            status_render.contains(token),
+            "TUI status should expose platform capability summary token `{token}`"
+        );
+    }
+
+    for forbidden in [
+        "tauri",
+        "wry",
+        "webview",
+        "DaemonClient",
+        "connect_default",
+        "send_command",
+        "subscribe_events",
+        "tokio::spawn",
+        "std::thread::spawn",
+    ] {
+        assert!(
+            !status_render.contains(forbidden),
+            "TUI status capability summary must stay read-only and avoid `{forbidden}`"
+        );
+    }
 }
 
 #[test]

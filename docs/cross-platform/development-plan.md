@@ -621,6 +621,16 @@ Phase 10a cross-check baseline:
 - On macOS, Linux check currently needs a Linux C cross compiler/sysroot for native build scripts such as `ring`;
   Docker/cross/CI or a Linux VM should provide that environment.
 
+Phase 10b TUI capability diagnostics:
+
+- Add a read-only platform capability summary to the existing TUI Status page.
+- The TUI must consume the same static platform/renderer capability snapshots as doctor; it must not probe
+  permissions, create overlay windows, open IPC transports, or start background tasks.
+- The summary should show counts for available/unsupported/unavailable/partial/degraded/unknown and list
+  non-available capability details with backend/reason/next step.
+- This is a diagnostics visibility step only; it does not implement Windows/Linux overlay, hotkey, clipboard,
+  service, or IPC backends.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

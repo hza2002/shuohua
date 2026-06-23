@@ -6,6 +6,7 @@ use ratatui::Frame;
 
 use crate::config::theme::TuiTheme;
 use crate::ipc::protocol::WireState;
+use crate::platform::capability::{CapabilityStatus, CapabilityStatusKind, PlatformKind};
 use crate::state::{AudioMeter, SessionPhase};
 use crate::tui::status::StatusPage;
 use crate::tui::ui;
@@ -14,6 +15,7 @@ pub(super) fn render_status(frame: &mut Frame, page: &StatusPage, area: Rect, th
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(6),
             Constraint::Length(6),
             Constraint::Length(6),
             Constraint::Min(5),
@@ -70,11 +72,22 @@ pub(super) fn render_status(frame: &mut Frame, page: &StatusPage, area: Rect, th
     );
 
     frame.render_widget(
+        Paragraph::new(platform_capability_lines(
+            &crate::overlay::renderer_capabilities(),
+            theme,
+            chunks[2].height.saturating_sub(2) as usize,
+        ))
+        .wrap(Wrap { trim: false })
+        .block(Block::default().title("Platform").borders(Borders::ALL)),
+        chunks[2],
+    );
+
+    frame.render_widget(
         Paragraph::new(live_speech_lines(
             page,
             theme,
-            chunks[2].width.saturating_sub(2) as usize,
-            chunks[2].height.saturating_sub(2) as usize,
+            chunks[3].width.saturating_sub(2) as usize,
+            chunks[3].height.saturating_sub(2) as usize,
         ))
         .wrap(Wrap { trim: false })
         .block(
@@ -82,7 +95,7 @@ pub(super) fn render_status(frame: &mut Frame, page: &StatusPage, area: Rect, th
                 .title(crate::t!("tui.live_speech"))
                 .borders(Borders::ALL),
         ),
-        chunks[2],
+        chunks[3],
     );
 }
 
@@ -165,6 +178,148 @@ pub(super) fn meter_lines(page: &StatusPage, theme: &TuiTheme, width: usize) -> 
             vad_spans(meters, theme),
         ]),
     ]
+}
+
+pub(super) fn platform_capability_lines(
+    renderer_capabilities: &[CapabilityStatus],
+    theme: &TuiTheme,
+    max_lines: usize,
+) -> Vec<Line<'static>> {
+    let capabilities = merged_platform_capabilities(renderer_capabilities);
+    platform_capability_lines_from(&capabilities, theme, max_lines)
+}
+
+pub(super) fn platform_capability_lines_from(
+    capabilities: &[CapabilityStatus],
+    theme: &TuiTheme,
+    max_lines: usize,
+) -> Vec<Line<'static>> {
+    let platform = capabilities
+        .first()
+        .map(|status| status.platform)
+        .unwrap_or_else(PlatformKind::current);
+    let counts = capability_counts(capabilities);
+
+    let mut lines = vec![Line::from(vec![
+        label_span("platform ", theme),
+        value_span(platform.as_str().to_string(), ui::info(theme)),
+        label_span(" available=", theme),
+        value_span(counts.available.to_string(), ui::success(theme)),
+        label_span(" unsupported=", theme),
+        value_span(
+            counts.unsupported.to_string(),
+            status_count_color(counts.unsupported, theme),
+        ),
+        label_span(" unavailable=", theme),
+        value_span(
+            counts.unavailable.to_string(),
+            status_count_color(counts.unavailable, theme),
+        ),
+        label_span(" partial=", theme),
+        value_span(
+            counts.partial.to_string(),
+            status_count_color(counts.partial, theme),
+        ),
+        label_span(" degraded=", theme),
+        value_span(
+            counts.degraded.to_string(),
+            status_count_color(counts.degraded, theme),
+        ),
+        label_span(" unknown=", theme),
+        value_span(
+            counts.unknown.to_string(),
+            status_count_color(counts.unknown, theme),
+        ),
+    ])];
+
+    lines.extend(
+        capabilities
+            .iter()
+            .filter(|capability| capability.status != CapabilityStatusKind::Available)
+            .map(|capability| capability_detail_line(capability, theme)),
+    );
+
+    lines.truncate(max_lines.max(1));
+    lines
+}
+
+fn merged_platform_capabilities(
+    renderer_capabilities: &[CapabilityStatus],
+) -> Vec<CapabilityStatus> {
+    let mut capabilities = crate::platform::capability::current_platform_capabilities();
+    for renderer_capability in renderer_capabilities {
+        if let Some(existing) = capabilities
+            .iter_mut()
+            .find(|capability| capability.id == renderer_capability.id)
+        {
+            *existing = renderer_capability.clone();
+        } else {
+            capabilities.push(renderer_capability.clone());
+        }
+    }
+    capabilities
+}
+
+#[derive(Default)]
+struct CapabilityCounts {
+    available: usize,
+    unsupported: usize,
+    unavailable: usize,
+    partial: usize,
+    degraded: usize,
+    unknown: usize,
+}
+
+fn capability_counts(capabilities: &[CapabilityStatus]) -> CapabilityCounts {
+    let mut counts = CapabilityCounts::default();
+    for capability in capabilities {
+        match capability.status {
+            CapabilityStatusKind::Available => counts.available += 1,
+            CapabilityStatusKind::Unsupported => counts.unsupported += 1,
+            CapabilityStatusKind::Unavailable => counts.unavailable += 1,
+            CapabilityStatusKind::Partial => counts.partial += 1,
+            CapabilityStatusKind::Degraded => counts.degraded += 1,
+            CapabilityStatusKind::Unknown => counts.unknown += 1,
+        }
+    }
+    counts
+}
+
+fn capability_detail_line(capability: &CapabilityStatus, theme: &TuiTheme) -> Line<'static> {
+    let mut spans = vec![
+        value_span(capability.id.as_str().to_string(), ui::accent(theme)),
+        label_span(" ", theme),
+        value_span(
+            capability.status.as_str().to_string(),
+            capability_status_color(capability.status, theme),
+        ),
+        label_span(" backend=", theme),
+        value_span(capability.backend.to_string(), ui::info(theme)),
+        label_span(" reason=", theme),
+        value_span(capability.reason.to_string(), ui::muted(theme)),
+    ];
+    if let Some(next_step) = capability.next_step {
+        spans.push(label_span(" next=", theme));
+        spans.push(value_span(next_step.to_string(), ui::warning(theme)));
+    }
+    Line::from(spans)
+}
+
+fn capability_status_color(status: CapabilityStatusKind, theme: &TuiTheme) -> Color {
+    match status {
+        CapabilityStatusKind::Available => ui::success(theme),
+        CapabilityStatusKind::Unsupported | CapabilityStatusKind::Unavailable => ui::error(theme),
+        CapabilityStatusKind::Partial | CapabilityStatusKind::Degraded => ui::warning(theme),
+        CapabilityStatusKind::Unknown => ui::muted(theme),
+    }
+}
+
+fn status_count_color(count: usize, theme: &TuiTheme) -> Color {
+    if count == 0 {
+        ui::success(theme)
+    } else {
+        ui::warning(theme)
+    }
 }
 
 pub(super) fn live_speech_lines(

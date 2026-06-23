@@ -6,13 +6,13 @@
 
 ## 最近 commit
 
-HEAD: `feat: add gui first screen timing model`
+HEAD: `docs: record tauri permissions preflight`
 
 ## 当前 phase
 
-Phase 9i: GUI First Screen Metrics Timing Model 已实现并完成自动验证。下一步可以继续
-GUI PoC 前置设计，例如 Tauri permissions/capabilities 文档和最小 PoC 验收，或 daemon
-offline/reconnect 后台任务设计；不要直接做完整 GUI。
+Phase 9j: Tauri Permissions Capabilities Preflight 已实现并完成自动验证。下一步可以继续
+GUI PoC 前置设计，例如 daemon offline/reconnect 后台任务设计、最小 Tauri workspace 创建前
+的指标/验收清单收口，或 Windows/Linux overlay PoC；不要直接做完整 GUI。
 
 ## 已完成事项
 
@@ -219,6 +219,19 @@ offline/reconnect 后台任务设计；不要直接做完整 GUI。
     history changed 和 recoverable error 不会单独让首屏 ready。
   - helper 不调用系统时间、timer、IPC、Tauri event API 或 metrics sink；未新增 IPC
     command/event，未 bump `PROTO_VERSION`，未创建 Tauri workspace，未改变 TUI 连接行为。
+- Phase 9j:
+  - 基于 Tauri v2 文档更新 `docs/cross-platform/gui.md`，记录 capabilities/permissions
+    preflight：capabilities 将 permissions 授权给指定 windows/webviews，permissions 显式开启
+    frontend 可访问 command/plugin，并可包含 scopes。
+  - 明确 GUI PoC 只给主 window/webview 绑定最小 capability，只暴露 shuohua GUI backend 自有
+    command；frontend 不直接访问 IPC transport、history/config 文件或 daemon implementation。
+  - 明确 PoC 不默认启用 shell、filesystem、http、process、global shortcut、updater、sidecar
+    管理等宽权限；`core:default` 不作为默认授权策略，创建 workspace 时需先列出实际所需
+    permission。
+  - 更新 `docs/cross-platform/development-plan.md` 和 `docs/cross-platform/overview.md`，记录
+    Phase 9j 状态。
+  - `tests/platform_layout.rs` 增加文档/架构守卫，确认权限 preflight 已记录，且仍无
+    `src-tauri/**` workspace 文件或 Tauri/WRY/WebView runtime 依赖。
 
 ## 验证结果
 
@@ -302,6 +315,12 @@ offline/reconnect 后台任务设计；不要直接做完整 GUI。
   通过。`cargo test` 覆盖：92 个 library unit tests、639 个 binary unit tests、
   5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
   tests、21 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests。
+- Phase 9j 已跑：`cargo test --test platform_layout gui_tauri_permissions_preflight_is_documented_without_workspace`，
+  通过。
+- Phase 9j 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`，
+  通过。`cargo test` 覆盖：92 个 library unit tests、639 个 binary unit tests、
+  5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
+  tests、22 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -331,6 +350,8 @@ offline/reconnect 后台任务设计；不要直接做完整 GUI。
   frontend view model 或后台 reconnect loop。
 - Phase 9i 只提供首屏 metrics/timing 纯模型，没有实现真实 metrics sink、Tauri event
   emission、前端展示、后台 reconnect loop 或打包指标采集。
+- Phase 9j 只记录 Tauri permissions/capabilities preflight，没有创建真实 Tauri workspace、
+  capabilities JSON、frontend command binding 或打包验证。
 - `ipc::transport` 仍是 Unix-only，library client 只实际覆盖 macOS/Linux 当前 transport。
   Windows Named Pipe adapter 仍是后续 IPC transport backend 工作。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
@@ -340,7 +361,7 @@ offline/reconnect 后台任务设计；不要直接做完整 GUI。
 
 ## 下一步
 
-Phase 9i 后，进入下一小步：
+Phase 9j 后，进入下一小步：
 
 - 若准备创建 Tauri workspace，先把权限/capabilities、首屏指标采集、daemon offline/reconnect
   行为写入 `gui.md`，再做最小 PoC。
@@ -355,7 +376,7 @@ Phase 9i 后，进入下一小步：
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 9i GUI First Screen Metrics Timing Model 已实现；先查看最新 commit 和验证结果。
-下一步在 Tauri permissions/capabilities PoC 设计、daemon offline/reconnect 后台任务设计、
+Phase 9j Tauri Permissions Capabilities Preflight 已实现；先查看最新 commit 和验证结果。
+下一步在最小 Tauri workspace 创建前验收清单、daemon offline/reconnect 后台任务设计、
 或 Windows/Linux overlay PoC 之间做一个小步计划。
 ```

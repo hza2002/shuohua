@@ -727,6 +727,53 @@ fn gui_first_screen_metrics_timing_stays_pure_client_api() {
     }
 }
 
+#[test]
+fn gui_tauri_permissions_preflight_is_documented_without_workspace() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9j",
+        "capabilities",
+        "permissions",
+        "windows/webviews",
+        "主 window/webview",
+        "scopes",
+        "shell",
+        "filesystem",
+        "http",
+        "sidecar",
+        "core:default",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9j Tauri permissions preflight token `{token}`"
+        );
+    }
+
+    for file in [
+        "src-tauri/tauri.conf.json",
+        "src-tauri/Cargo.toml",
+        "src-tauri/capabilities/default.json",
+        "gui/src-tauri/tauri.conf.json",
+        "gui/src-tauri/Cargo.toml",
+        "gui/src-tauri/capabilities/default.json",
+    ] {
+        assert!(
+            !root.join(file).exists(),
+            "Phase 9j should document permissions preflight before creating Tauri workspace file {file}"
+        );
+    }
+
+    let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    for token in ["tauri", "wry", "webview", "WebView", "tao"] {
+        assert!(
+            !cargo.contains(token),
+            "Phase 9j must not add GUI runtime dependency token `{token}` to Cargo.toml"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

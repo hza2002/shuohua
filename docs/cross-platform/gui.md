@@ -152,6 +152,23 @@ Phase 9i 增加 GUI 首屏 metrics/timing 纯模型，仍不创建 Tauri workspa
 - 这个阶段不新增 IPC command/event，不 bump `PROTO_VERSION`，不改变 TUI/CLI 行为，不创建
   Tauri workspace。
 
+Phase 9j 记录 Tauri permissions/capabilities preflight，仍不创建 Tauri workspace：
+
+- Tauri v2 capabilities 是把 permissions 授权给指定 windows/webviews 的边界；PoC 只能给主
+  window/webview 绑定最小 capability，不给隐藏窗口、未来 onboarding window 或任意 webview
+  预授权。
+- permissions 是前端可访问 command/plugin 的显式权限描述，可以包含 allow/deny 和 scopes。
+  GUI PoC 的第一版只暴露 shuohua GUI backend 自有 command：首屏 snapshot、connect/reconnect
+  状态、metrics readout。command 再调用 shared `client_api`；frontend 不直接访问 IPC
+  transport、history/config 文件或 daemon implementation。
+- PoC 不默认启用 shell、filesystem、http、process、global shortcut、updater、sidecar 管理等
+  宽权限。需要打开配置目录或外部链接时，必须先单独评审 scope，并优先通过既有 CLI/client
+  语义承载。
+- `core:default` 可以降低样板，但 PoC preflight 不把它当作默认授权策略；创建 workspace 时应
+  先列出实际需要的 core/plugin permission，再决定是否使用 default group。
+- 这个阶段只记录权限边界和验收，不新增 `src-tauri/**`、不新增 Tauri/WRY/WebView 依赖、不生成
+  frontend view model。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：
@@ -253,6 +270,13 @@ Phase 9i 验收：
 - helper 只接收调用方提供的毫秒时间戳和既有 `FirstScreenEvent`，不读系统时间、不启动
   runtime、不连接 IPC、不写 metrics sink。
 - `PROTO_VERSION` 仍为 2；不新增 IPC command/event，不新增 Tauri/WRY/WebView 依赖。
+
+Phase 9j 验收：
+
+- `gui.md` 明确 Tauri capabilities/permissions 的 PoC 授权边界：主 window/webview、最小
+  command 权限、scopes 评审和宽权限禁用默认策略。
+- 仍无 `src-tauri/**` workspace 文件，`Cargo.toml` 不新增 Tauri/WRY/WebView 依赖。
+- 不新增 IPC command/event，不改变 TUI/CLI 行为，不启动 daemon/GUI。
 
 参考资料：
 

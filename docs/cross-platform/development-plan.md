@@ -282,6 +282,15 @@ Phase 9i 增加 GUI 首屏 metrics/timing 纯模型，不写 GUI app：
 - 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime，不生成 frontend
   view model。
 
+Phase 9j 记录 Tauri permissions/capabilities preflight，不写 GUI app：
+
+- 基于 Tauri v2 文档记录 capabilities/permissions 如何限制 windows/webviews 可访问的
+  command/plugin。
+- 明确 PoC 只允许主 window/webview 使用最小 shuohua GUI backend command，不默认开启
+  shell/filesystem/http/process/global shortcut/updater/sidecar 等宽权限。
+- 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime，不生成 frontend
+  view model。
+
 范围：
 
 - 建一个最小 Tauri app。

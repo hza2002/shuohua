@@ -1,5 +1,7 @@
 use shuohua::ipc::protocol::{Command, Event, WireState};
 
+type DaemonClient = shuohua::client_api::DaemonClient;
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GuiShellMetadata {
@@ -54,6 +56,14 @@ struct GuiDaemonStatusRequestSummary {
     requires_daemon_connection: bool,
 }
 
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiDaemonStatusRequestError {
+    kind: &'static str,
+    message: String,
+    recoverable: bool,
+}
+
 #[tauri::command]
 fn gui_first_screen_request_plan(history_limit: Option<usize>) -> GuiFirstScreenRequestPlan {
     let history_limit = history_limit.unwrap_or(20);
@@ -77,6 +87,43 @@ fn gui_daemon_status_snapshot() -> GuiDaemonStatusSnapshot {
     empty_daemon_status_snapshot()
 }
 
+#[tauri::command]
+async fn gui_daemon_status_request_once(
+) -> Result<GuiDaemonStatusSnapshot, GuiDaemonStatusRequestError> {
+    let mut client = DaemonClient::connect_default()
+        .await
+        .map_err(|error| daemon_status_request_error("connectFailed", error))?;
+
+    client
+        .send(&Command::DaemonStatus)
+        .await
+        .map_err(|error| daemon_status_request_error("writeFailed", error))?;
+
+    match client
+        .recv_until(|event| {
+            if let Some(snapshot) = gui_daemon_status_snapshot_from_event(&event) {
+                return Ok(std::ops::ControlFlow::Break(Ok(snapshot)));
+            }
+
+            if let Event::Error { kind, msg, .. } = event {
+                return Ok(std::ops::ControlFlow::Break(Err(
+                    daemon_status_request_message("daemonError", format!("{kind}: {msg}")),
+                )));
+            }
+
+            Ok(std::ops::ControlFlow::Continue(()))
+        })
+        .await
+        .map_err(|error| daemon_status_request_error("readFailed", error))?
+    {
+        Some(result) => result,
+        None => Err(daemon_status_request_message(
+            "daemonClosed",
+            "daemon closed IPC before status reply",
+        )),
+    }
+}
+
 fn empty_daemon_status_snapshot() -> GuiDaemonStatusSnapshot {
     GuiDaemonStatusSnapshot {
         connected: false,
@@ -90,6 +137,24 @@ fn empty_daemon_status_snapshot() -> GuiDaemonStatusSnapshot {
             request_kind: daemon_status_request_kind(&Command::DaemonStatus),
             requires_daemon_connection: true,
         },
+    }
+}
+
+fn daemon_status_request_error(
+    kind: &'static str,
+    error: impl std::fmt::Display,
+) -> GuiDaemonStatusRequestError {
+    daemon_status_request_message(kind, error.to_string())
+}
+
+fn daemon_status_request_message(
+    kind: &'static str,
+    message: impl Into<String>,
+) -> GuiDaemonStatusRequestError {
+    GuiDaemonStatusRequestError {
+        kind,
+        message: message.into(),
+        recoverable: true,
     }
 }
 
@@ -151,7 +216,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             gui_shell_metadata,
             gui_first_screen_request_plan,
-            gui_daemon_status_snapshot
+            gui_daemon_status_snapshot,
+            gui_daemon_status_request_once
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Shuohua GUI");
@@ -183,5 +249,14 @@ mod tests {
         assert_eq!(snapshot.request.request_kind, "daemonStatus");
         assert!(snapshot.request.requires_daemon_connection);
         assert!(gui_daemon_status_snapshot_from_event(&Event::HistoryChanged).is_none());
+    }
+
+    #[test]
+    fn daemon_status_request_error_is_recoverable_shape() {
+        let error = daemon_status_request_message("daemonClosed", "closed before reply");
+
+        assert_eq!(error.kind, "daemonClosed");
+        assert_eq!(error.message, "closed before reply");
+        assert!(error.recoverable);
     }
 }

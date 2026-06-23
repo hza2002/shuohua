@@ -956,14 +956,7 @@ fn gui_backend_shell_placeholder_stays_local_to_tauri_app() {
         );
     }
 
-    for token in [
-        "connect_default",
-        "DaemonClient",
-        "ipc::client",
-        "tokio::spawn",
-        "tokio::time",
-        "std::thread::spawn",
-    ] {
+    for token in ["tokio::spawn", "tokio::time", "std::thread::spawn"] {
         assert!(
             !tauri_lib.contains(token),
             "Phase 9n GUI shell must not connect daemon or own runtime loop token `{token}`"
@@ -1057,9 +1050,6 @@ fn gui_first_screen_request_plan_reuses_client_api_without_sending_ipc() {
     }
 
     for token in [
-        "connect_default",
-        "DaemonClient",
-        "send_command",
         "subscribe_events",
         "tokio::spawn",
         "tokio::time",
@@ -1146,9 +1136,6 @@ fn gui_daemon_status_snapshot_shape_does_not_send_ipc() {
     }
 
     for token in [
-        "connect_default",
-        "DaemonClient",
-        "send_command",
         "subscribe_events",
         "tokio::spawn",
         "tokio::time",
@@ -1235,9 +1222,6 @@ fn gui_daemon_status_event_mapper_is_pure_and_local_to_tauri_app() {
     }
 
     for token in [
-        "connect_default",
-        "DaemonClient",
-        "send_command",
         "subscribe_events",
         "tokio::spawn",
         "tokio::time",
@@ -1248,6 +1232,64 @@ fn gui_daemon_status_event_mapper_is_pure_and_local_to_tauri_app() {
             "Phase 9q daemon status mapper must not connect daemon or own runtime loop token `{token}`"
         );
     }
+}
+
+#[test]
+fn gui_daemon_status_one_shot_request_is_explicit_and_bounded() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9r",
+        "gui_daemon_status_request_once",
+        "Command::DaemonStatus",
+        "Event::DaemonStatus",
+        "placeholder 当前不自动调用",
+        "recoverable",
+        "不订阅 daemon event stream",
+        "不启动 reconnect loop",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9r one-shot status token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "gui_daemon_status_request_once",
+        "GuiDaemonStatusRequestError",
+        "DaemonClient::connect_default()",
+        ".await",
+        ".send(&Command::DaemonStatus)",
+        ".recv_until(",
+        "gui_daemon_status_snapshot_from_event",
+        "tauri::generate_handler!",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should expose Phase 9r one-shot status token `{token}`"
+        );
+    }
+
+    for token in [
+        "client.send(&Command::Subscribe)",
+        "subscribe_events",
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+    ] {
+        assert!(
+            !tauri_lib.contains(token),
+            "Phase 9r one-shot status request must not subscribe, reconnect, or spawn token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    assert!(
+        !frontend.contains("gui_daemon_status_request_once"),
+        "placeholder must not auto-call the one-shot daemon status request"
+    );
 }
 
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {

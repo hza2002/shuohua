@@ -357,6 +357,18 @@ Phase 9q 增加 GUI daemon status event mapper，不发送 IPC：
 - 不新增 IPC protocol，不运行 Tauri dev/build/bundle，不启动 daemon/GUI，不实现 service
   management 或 frontend view model。
 
+Phase 9r 增加 GUI daemon status one-shot request command，不订阅、不重连：
+
+- `src-tauri` 可以注册一个 one-shot daemon status request command：连接现有 daemon IPC，
+  发送既有 `Command::DaemonStatus`，等待一个既有 `Event::DaemonStatus`，并复用 Phase 9q mapper
+  返回 status snapshot shape。
+- command 只允许在用户/前端显式调用时运行；placeholder 不自动调用它，避免打开 GUI 时默认
+  连接 daemon。
+- 连接失败、读写失败、daemon 返回 `Event::Error` 或连接提前关闭时，返回 recoverable
+  request error shape；不得自动启动 daemon、不得安装/重启 service。
+- 不订阅 daemon event stream，不启动 reconnect loop/timer，不新增 IPC protocol，不运行
+  Tauri dev/build/bundle，不启动 daemon/GUI，不实现 frontend Status view model。
+
 范围：
 
 - 建一个最小 Tauri app。

@@ -142,6 +142,19 @@ Phase 10e 后，Linux service backend 已经有 dry-run/status skeleton，因此
 Phase 10f 仍不实现 service install/start/stop/restart，不写 unit 文件，不调用 `systemctl --user`，
 不声明 Linux service runtime 可用。
 
+## Phase 10g Path Open/Reveal Facade
+
+TUI 中的 config/audio open/reveal 是用户会话能力，应走 platform facade，而不是业务层直接写
+macOS `open` 命令：
+
+- macOS：继续使用 `open` 和 `open -R`，行为不变。
+- Linux：使用 `xdg-open` 打开文件或目录；reveal file fallback 到打开父目录，因此
+  `path.open_reveal` 应标记为 `partial`，backend `xdg_open`，reason `reveal_opens_parent_dir`。
+- Windows：本阶段不实现 shell open/reveal。
+
+该阶段不改变 TUI 的路径安全检查，不改变 `$VISUAL` / `$EDITOR` 优先级，不把 path open/reveal
+放进 daemon 常驻路径。
+
 ## 设计约束
 
 - capability probe 不执行高风险动作。

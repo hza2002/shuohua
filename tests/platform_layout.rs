@@ -109,6 +109,64 @@ fn linux_service_manager_capability_reports_dry_run_skeleton() {
 }
 
 #[test]
+fn path_open_reveal_lives_behind_platform_facade() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let platform_path = root.join("src/platform/path.rs");
+    assert!(
+        platform_path.exists(),
+        "Phase 10g path open/reveal facade should live at src/platform/path.rs"
+    );
+
+    let platform_mod = std::fs::read_to_string(root.join("src/platform/mod.rs")).unwrap();
+    assert!(
+        platform_mod.contains("pub(crate) mod path;"),
+        "src/platform/mod.rs must expose the path facade"
+    );
+
+    let facade = std::fs::read_to_string(platform_path).unwrap();
+    for token in [
+        "pub(crate) fn open_path(",
+        "pub(crate) fn reveal_path(",
+        "#[cfg(target_os = \"macos\")]",
+        "#[cfg(target_os = \"linux\")]",
+        "xdg-open",
+    ] {
+        assert!(
+            facade.contains(token),
+            "platform path facade should contain token `{token}`"
+        );
+    }
+
+    for file in ["src/tui/audio.rs", "src/tui/config_actions.rs"] {
+        let body = std::fs::read_to_string(root.join(file)).unwrap();
+        for forbidden in ["Command::new(\"open\")", "Command::new(\"/usr/bin/open\")"] {
+            assert!(
+                !body.contains(forbidden),
+                "{file} should use platform::path instead of direct `{forbidden}`"
+            );
+        }
+    }
+}
+
+#[test]
+fn linux_path_open_reveal_capability_reports_xdg_open_partial() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+
+    for token in [
+        "CapabilityId::PathOpenReveal",
+        "xdg_open",
+        "CapabilityStatusKind::Partial",
+        "reveal_opens_parent_dir",
+    ] {
+        assert!(
+            capability.contains(token),
+            "Linux path.open_reveal capability should report xdg-open partial token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn shared_macos_adapters_live_under_platform_module() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for file in [

@@ -694,6 +694,16 @@ Phase 10f Linux service manager capability sync:
 - This is diagnostics truthfulness only. It must not implement install/start/stop/restart, write unit files,
   call `systemctl --user`, or declare Linux service management runtime-ready.
 
+Phase 10g Path Open/Reveal Facade:
+
+- Move TUI config/audio open/reveal commands behind a small `platform::path` facade.
+- macOS keeps current `open` / `open -R` behavior.
+- Linux may use `xdg-open` for open directory/file and reveal fallback; it must be reported as
+  `partial/xdg_open` because Linux file managers do not share a reliable reveal-file contract.
+- Windows remains unsupported in this phase unless a separate Windows shell-open design is added.
+- This phase must not change history/audio path safety checks, config editor `$VISUAL`/`$EDITOR` behavior,
+  or daemon hot paths.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

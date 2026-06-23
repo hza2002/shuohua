@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
 use std::time::SystemTime;
 
 use anyhow::{bail, Context, Result};
@@ -91,20 +90,12 @@ pub fn audio_info_for_path(path: PathBuf) -> AudioInfo {
 
 pub fn open_audio_path(path: &Path) -> Result<()> {
     ensure_existing_audio(path)?;
-    open_with_args(&[path.as_os_str()])
+    crate::platform::path::open_path(path)
 }
 
 pub fn reveal_audio_path(path: &Path) -> Result<()> {
     ensure_existing_audio(path)?;
-    open_with_args(&[std::ffi::OsStr::new("-R"), path.as_os_str()])
-}
-
-fn open_with_args(args: &[&std::ffi::OsStr]) -> Result<()> {
-    ProcessCommand::new("/usr/bin/open")
-        .args(args)
-        .spawn()
-        .context("launch open")?;
-    Ok(())
+    crate::platform::path::reveal_path(path)
 }
 
 fn ensure_existing_audio(path: &Path) -> Result<()> {

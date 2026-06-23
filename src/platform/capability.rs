@@ -267,6 +267,15 @@ fn linux_capabilities() -> Vec<CapabilityStatus> {
             reason: "compile_checked",
             next_step: Some("Validate audio device enumeration and recording on Linux"),
         },
+        CapabilityStatus {
+            id: CapabilityId::PathOpenReveal,
+            platform: PlatformKind::Linux,
+            backend: "xdg_open",
+            status: CapabilityStatusKind::Partial,
+            summary: "xdg-open can open paths; reveal falls back to opening the parent directory",
+            reason: "reveal_opens_parent_dir",
+            next_step: Some("Validate xdg-open behavior across Linux desktops"),
+        },
     ] {
         replace_capability(&mut capabilities, replacement);
     }

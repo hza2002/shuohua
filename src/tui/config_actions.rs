@@ -31,7 +31,7 @@ pub fn open_in_editor(path: &Path) -> Result<()> {
                 .spawn()
                 .with_context(|| format!("launch editor command {command:?}"))?;
         }
-        EditorLaunch::MacOpen { path } => mac_open(&path)?,
+        EditorLaunch::MacOpen { path } => crate::platform::path::open_path(Path::new(&path))?,
     }
     Ok(())
 }
@@ -39,28 +39,15 @@ pub fn open_in_editor(path: &Path) -> Result<()> {
 pub fn reveal_in_finder(path: &Path) -> Result<()> {
     match reveal_launch_for(path) {
         Some(RevealLaunch::RevealFile(path)) => {
-            std::process::Command::new("open")
-                .arg("-R")
-                .arg(&path)
-                .spawn()
+            crate::platform::path::reveal_path(&path)
                 .with_context(|| format!("reveal config file {}", path.display()))?;
         }
         Some(RevealLaunch::OpenDir(path)) => {
-            std::process::Command::new("open")
-                .arg(&path)
-                .spawn()
+            crate::platform::path::open_path(&path)
                 .with_context(|| format!("open config directory {}", path.display()))?;
         }
         None => anyhow::bail!("config path and parent do not exist: {}", path.display()),
     }
-    Ok(())
-}
-
-fn mac_open(path: &str) -> Result<()> {
-    std::process::Command::new("open")
-        .arg(path)
-        .spawn()
-        .with_context(|| format!("open {path}"))?;
     Ok(())
 }
 

@@ -675,6 +675,16 @@ Phase 10d Linux compile-time capability sync:
 - This is diagnostics truthfulness only. It does not start daemon on Linux, install service files, implement
   hotkey/clipboard/text injection, or validate overlay runtime behavior.
 
+Phase 10e Linux systemd user dry-run/status skeleton:
+
+- Add a Linux-only service manager backend that can build the systemd user unit path/body and print
+  dry-run status information.
+- `shuo service status` may show daemon IPC status plus `systemd.user: dry-run unit ...`; it must not call
+  `systemctl --user`.
+- `install`, `uninstall`, `start`, `stop`, and `restart` remain unsupported on Linux until the runtime
+  behavior is validated on a Linux machine.
+- This phase does not add service CLI flags, does not write unit files, and does not implement smart fallback.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

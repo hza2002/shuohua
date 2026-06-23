@@ -426,6 +426,38 @@ fn service_manager_lives_behind_platform_facade() {
 }
 
 #[test]
+fn linux_service_manager_has_systemd_user_dry_run_skeleton() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let service = std::fs::read_to_string(root.join("src/platform/service.rs")).unwrap();
+
+    for token in [
+        "#[cfg(target_os = \"linux\")]",
+        "fn unit_name()",
+        "fn unit_path()",
+        "fn unit_body(",
+        "systemd.user: dry-run",
+        "Restart=on-failure",
+        "systemctl --user is intentionally not called",
+    ] {
+        assert!(
+            service.contains(token),
+            "Linux service manager skeleton should contain `{token}`"
+        );
+    }
+
+    let linux_cfg = service
+        .find("#[cfg(target_os = \"linux\")]")
+        .expect("missing linux service cfg");
+    let fallback_cfg = service
+        .find("#[cfg(not(any(target_os = \"macos\", target_os = \"linux\")))]")
+        .expect("missing non-linux fallback cfg");
+    assert!(
+        linux_cfg < fallback_cfg,
+        "Linux service backend should be explicit, not folded into generic unsupported fallback"
+    );
+}
+
+#[test]
 fn desktop_capabilities_live_behind_platform_desktop_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 

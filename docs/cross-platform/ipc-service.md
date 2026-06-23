@@ -101,6 +101,18 @@ Phase 4b 的 facade 边界：
 - `doctor` 暂时可以继续调用 `cli::service::launchd_status()` 兼容入口，后续诊断阶段再改成通用
   service status 模型。
 
+Phase 10e Linux systemd user dry-run/status skeleton:
+
+- Linux backend 可以生成 systemd user unit path 和 unit body，但不得写入文件、不得调用
+  `systemctl --user`、不得 enable/start/stop daemon。
+- `shuo service status` 在 Linux 上可以打印 daemon IPC status（如果能连上）和 systemd user unit
+  dry-run 信息：unit path、unit name、install/start unsupported。
+- `install` / `uninstall` / `start` / `stop` / `restart` 仍返回明确 unsupported。Phase 10e 不改变
+  CLI command shape，不新增 `--dry-run` 参数。
+- systemd unit baseline 使用当前 executable + `--daemon`，`Restart=on-failure`，
+  `RestartSec=2s`。真实 install 阶段再决定 XDG/systemd 目录创建、reload、enable、linger 和日志策略。
+- macOS launchd backend 的 plist、timeout、stop/restart/status 语义不得改变。
+
 ## Smart Fallback
 
 CLI/TUI/GUI 连接 daemon 时：

@@ -603,7 +603,122 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+mod imp {
+    use std::path::PathBuf;
+
+    use anyhow::Result;
+
+    const UNIT_NAME: &str = "shuohua.service";
+
+    pub fn launchd_status() -> super::LaunchdStatus {
+        super::LaunchdStatus::Unsupported
+    }
+
+    pub fn install() -> Result<()> {
+        unsupported()
+    }
+
+    pub fn uninstall() -> Result<()> {
+        unsupported()
+    }
+
+    pub fn start() -> Result<()> {
+        unsupported()
+    }
+
+    pub async fn stop() -> Result<()> {
+        unsupported()
+    }
+
+    pub async fn restart() -> Result<()> {
+        unsupported()
+    }
+
+    pub async fn status() -> Result<()> {
+        let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("shuo"));
+        let unit_body = unit_body(&exe);
+        let exec_line = unit_body
+            .lines()
+            .find(|line| line.starts_with("ExecStart="))
+            .unwrap_or("ExecStart=shuo --daemon");
+        println!(
+            "daemon: {}",
+            crate::i18n::tr("cli.service.not_running", &[])
+        );
+        println!(
+            "systemd.user: dry-run unit={} path={} {} install_start=unsupported",
+            unit_name(),
+            unit_path().display(),
+            exec_line
+        );
+        Ok(())
+    }
+
+    fn unit_name() -> &'static str {
+        UNIT_NAME
+    }
+
+    fn unit_path() -> PathBuf {
+        let config_home = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+            .unwrap_or_else(|| PathBuf::from(".config"));
+        config_home.join("systemd/user").join(UNIT_NAME)
+    }
+
+    fn unit_body(exe: &std::path::Path) -> String {
+        format!(
+            r#"[Unit]
+Description=Shuohua voice input daemon
+
+[Service]
+ExecStart={} --daemon
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=default.target
+"#,
+            systemd_escape_arg(&exe.display().to_string())
+        )
+    }
+
+    fn systemd_escape_arg(value: &str) -> String {
+        value.replace('\\', "\\\\").replace(' ', "\\x20")
+    }
+
+    fn unsupported<T>() -> Result<T> {
+        // systemctl --user is intentionally not called in the dry-run skeleton.
+        anyhow::bail!("systemd user service management is not implemented yet")
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn unit_path_uses_xdg_config_home() {
+            std::env::set_var("XDG_CONFIG_HOME", "/tmp/shuohua-config");
+            assert_eq!(
+                unit_path(),
+                PathBuf::from("/tmp/shuohua-config/systemd/user/shuohua.service")
+            );
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+
+        #[test]
+        fn unit_body_runs_current_binary_as_daemon_with_restart_policy() {
+            let body = unit_body(std::path::Path::new("/usr/local/bin/shuo"));
+            assert!(body.contains("ExecStart=/usr/local/bin/shuo --daemon"));
+            assert!(body.contains("Restart=on-failure"));
+            assert!(body.contains("RestartSec=2s"));
+            assert!(body.contains("WantedBy=default.target"));
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod imp {
     use anyhow::Result;
 

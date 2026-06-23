@@ -1357,6 +1357,75 @@ fn gui_history_summary_one_shot_request_is_explicit_and_bounded() {
     );
 }
 
+#[test]
+fn gui_first_screen_summary_one_shot_request_is_explicit_and_bounded() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9t",
+        "gui_first_screen_summary_request_once",
+        "Command::DaemonStatus",
+        "Command::GetHistory",
+        "Command::GetHistoryStats",
+        "Event::DaemonStatus",
+        "Event::History",
+        "Event::HistoryStats",
+        "placeholder 当前不自动调用",
+        "recoverable",
+        "不订阅 daemon event stream",
+        "不启动 reconnect loop",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9t first-screen summary token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "gui_first_screen_summary_request_once",
+        "GuiFirstScreenSummary",
+        "GuiFirstScreenSummaryRequestSummary",
+        "GuiFirstScreenSummaryRequestError",
+        "DaemonClient::connect_default()",
+        ".send(&Command::DaemonStatus)",
+        ".send(&history_summary_page_command(",
+        ".send(&Command::GetHistoryStats)",
+        ".recv_until(",
+        "gui_daemon_status_snapshot_from_event",
+        "gui_history_summary_from_events",
+        "Event::DaemonStatus",
+        "Event::History",
+        "Event::HistoryStats",
+        "tauri::generate_handler!",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should expose Phase 9t first-screen summary token `{token}`"
+        );
+    }
+
+    for token in [
+        "client.send(&Command::Subscribe)",
+        "subscribe_events",
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+    ] {
+        assert!(
+            !tauri_lib.contains(token),
+            "Phase 9t one-shot first-screen summary must not subscribe, reconnect, or spawn token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    assert!(
+        !frontend.contains("gui_first_screen_summary_request_once"),
+        "placeholder must not auto-call the one-shot first-screen summary request"
+    );
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

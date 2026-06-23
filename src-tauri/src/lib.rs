@@ -117,6 +117,33 @@ struct GuiHistorySummaryRequestError {
     recoverable: bool,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiFirstScreenSummary {
+    connected: bool,
+    transport_opened: bool,
+    summary_available: bool,
+    history_limit: usize,
+    status: GuiDaemonStatusSnapshot,
+    history: GuiHistorySummary,
+    request: GuiFirstScreenSummaryRequestSummary,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiFirstScreenSummaryRequestSummary {
+    request_kind: &'static str,
+    requires_daemon_connection: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiFirstScreenSummaryRequestError {
+    kind: &'static str,
+    message: String,
+    recoverable: bool,
+}
+
 #[tauri::command]
 fn gui_first_screen_request_plan(history_limit: Option<usize>) -> GuiFirstScreenRequestPlan {
     let history_limit = history_limit.unwrap_or(20);
@@ -230,6 +257,70 @@ async fn gui_history_summary_request_once(
     }
 }
 
+#[tauri::command]
+async fn gui_first_screen_summary_request_once(
+    history_limit: Option<usize>,
+) -> Result<GuiFirstScreenSummary, GuiFirstScreenSummaryRequestError> {
+    let history_limit = history_limit.unwrap_or(20);
+    let mut client = DaemonClient::connect_default()
+        .await
+        .map_err(|error| first_screen_summary_request_error("connectFailed", error))?;
+
+    client
+        .send(&Command::DaemonStatus)
+        .await
+        .map_err(|error| first_screen_summary_request_error("writeFailed", error))?;
+    client
+        .send(&history_summary_page_command(history_limit))
+        .await
+        .map_err(|error| first_screen_summary_request_error("writeFailed", error))?;
+    client
+        .send(&Command::GetHistoryStats)
+        .await
+        .map_err(|error| first_screen_summary_request_error("writeFailed", error))?;
+
+    let mut status_event = None;
+    let mut history_event = None;
+    let mut stats_event = None;
+    match client
+        .recv_until(|event| {
+            match event {
+                Event::DaemonStatus { .. } => status_event = Some(event),
+                Event::History { .. } => history_event = Some(event),
+                Event::HistoryStats { .. } => stats_event = Some(event),
+                Event::Error { kind, msg, .. } => {
+                    return Ok(std::ops::ControlFlow::Break(Err(
+                        first_screen_summary_request_message(
+                            "daemonError",
+                            format!("{kind}: {msg}"),
+                        ),
+                    )));
+                }
+                _ => {}
+            }
+
+            if let (Some(status), Some(history), Some(stats)) =
+                (&status_event, &history_event, &stats_event)
+            {
+                return Ok(std::ops::ControlFlow::Break(Ok(
+                    gui_first_screen_summary_from_events(status, history, stats, history_limit)
+                        .expect("first-screen summary events were pre-matched"),
+                )));
+            }
+
+            Ok(std::ops::ControlFlow::Continue(()))
+        })
+        .await
+        .map_err(|error| first_screen_summary_request_error("readFailed", error))?
+    {
+        Some(result) => result,
+        None => Err(first_screen_summary_request_message(
+            "daemonClosed",
+            "daemon closed IPC before first-screen summary replies",
+        )),
+    }
+}
+
 fn empty_daemon_status_snapshot() -> GuiDaemonStatusSnapshot {
     GuiDaemonStatusSnapshot {
         connected: false,
@@ -289,6 +380,48 @@ fn history_summary_request_message(
         message: message.into(),
         recoverable: true,
     }
+}
+
+fn first_screen_summary_request_error(
+    kind: &'static str,
+    error: impl std::fmt::Display,
+) -> GuiFirstScreenSummaryRequestError {
+    first_screen_summary_request_message(kind, error.to_string())
+}
+
+fn first_screen_summary_request_message(
+    kind: &'static str,
+    message: impl Into<String>,
+) -> GuiFirstScreenSummaryRequestError {
+    GuiFirstScreenSummaryRequestError {
+        kind,
+        message: message.into(),
+        recoverable: true,
+    }
+}
+
+#[allow(dead_code)]
+fn gui_first_screen_summary_from_events(
+    status: &Event,
+    history: &Event,
+    stats: &Event,
+    history_limit: usize,
+) -> Option<GuiFirstScreenSummary> {
+    let status = gui_daemon_status_snapshot_from_event(status)?;
+    let history = gui_history_summary_from_events(history, stats, history_limit)?;
+
+    Some(GuiFirstScreenSummary {
+        connected: true,
+        transport_opened: true,
+        summary_available: true,
+        history_limit,
+        status,
+        history,
+        request: GuiFirstScreenSummaryRequestSummary {
+            request_kind: "firstScreenSummary",
+            requires_daemon_connection: true,
+        },
+    })
 }
 
 #[allow(dead_code)]
@@ -434,7 +567,8 @@ pub fn run() {
             gui_first_screen_request_plan,
             gui_daemon_status_snapshot,
             gui_daemon_status_request_once,
-            gui_history_summary_request_once
+            gui_history_summary_request_once,
+            gui_first_screen_summary_request_once
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Shuohua GUI");
@@ -551,6 +685,81 @@ mod tests {
 
         assert_eq!(error.kind, "daemonClosed");
         assert_eq!(error.message, "closed before replies");
+        assert!(error.recoverable);
+    }
+
+    #[test]
+    fn first_screen_summary_events_map_to_combined_shape_without_ipc() {
+        let status = Event::DaemonStatus {
+            pid: 99,
+            uptime_ms: 54_321,
+            state: WireState::Idle,
+            recording_id: None,
+        };
+        let history = Event::History {
+            records: vec![sample_record("01FIRST", "first screen summary")],
+            matched: Some(1),
+            stats: None,
+        };
+        let stats = Event::HistoryStats {
+            snapshot: HistoryStatsSnapshot {
+                status: HistoryStatsStatus::Ready,
+                total: AggregateStats {
+                    records: 1,
+                    words: 3,
+                    duration_ms: 333,
+                    asr_duration_ms: 222,
+                    asr_audio_ms: 111,
+                },
+                current_month: AggregateStats::default(),
+                today: AggregateStats::default(),
+                error: None,
+            },
+        };
+
+        let summary =
+            gui_first_screen_summary_from_events(&status, &history, &stats, 20).unwrap();
+
+        assert!(summary.connected);
+        assert!(summary.transport_opened);
+        assert!(summary.summary_available);
+        assert_eq!(summary.history_limit, 20);
+        assert_eq!(summary.status.state_label, "idle");
+        assert_eq!(summary.status.pid, Some(99));
+        assert_eq!(summary.history.page_record_count, 1);
+        assert_eq!(
+            summary.history.latest_record.as_ref().map(|record| record.id.as_str()),
+            Some("01FIRST")
+        );
+        assert_eq!(summary.request.request_kind, "firstScreenSummary");
+        assert!(summary.request.requires_daemon_connection);
+        assert!(
+            gui_first_screen_summary_from_events(&Event::HistoryChanged, &history, &stats, 20)
+                .is_none()
+        );
+        assert!(gui_first_screen_summary_from_events(
+            &status,
+            &Event::HistoryChanged,
+            &stats,
+            20
+        )
+        .is_none());
+        assert!(gui_first_screen_summary_from_events(
+            &status,
+            &history,
+            &Event::HistoryChanged,
+            20
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn first_screen_summary_request_error_is_recoverable_shape() {
+        let error =
+            first_screen_summary_request_message("daemonClosed", "closed before summaries");
+
+        assert_eq!(error.kind, "daemonClosed");
+        assert_eq!(error.message, "closed before summaries");
         assert!(error.recoverable);
     }
 

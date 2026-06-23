@@ -1,5 +1,24 @@
 use std::path::{Path, PathBuf};
 
+fn assert_first_screen_summary_invoke_is_explicit(frontend: &str) {
+    let Some(one_shot_invoke_pos) =
+        frontend.find("invoke(\"gui_first_screen_summary_request_once\"")
+    else {
+        return;
+    };
+    let click_handler_pos = frontend
+        .find("function handleExplicitRefresh")
+        .expect("one-shot summary invoke should only exist with explicit refresh handler");
+    assert!(
+        one_shot_invoke_pos > click_handler_pos,
+        "one-shot summary invoke must stay inside the explicit click handler"
+    );
+    assert!(
+        !frontend.contains("invoke('gui_first_screen_summary_request_once'"),
+        "placeholder should not use alternate one-shot summary invoke outside the audited explicit handler"
+    );
+}
+
 #[test]
 fn shared_macos_adapters_live_under_platform_module() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -1420,11 +1439,7 @@ fn gui_first_screen_summary_one_shot_request_is_explicit_and_bounded() {
     }
 
     let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
-    assert!(
-        !frontend.contains("invoke(\"gui_first_screen_summary_request_once\"")
-            && !frontend.contains("invoke('gui_first_screen_summary_request_once'"),
-        "placeholder must not auto-call the one-shot first-screen summary request"
-    );
+    assert_first_screen_summary_invoke_is_explicit(&frontend);
 }
 
 #[test]
@@ -1544,11 +1559,7 @@ fn gui_first_screen_refresh_shape_is_static_and_explicit() {
             "gui-dist/index.html should display refresh shape token `{token}`"
         );
     }
-    assert!(
-        !frontend.contains("invoke(\"gui_first_screen_summary_request_once\"")
-            && !frontend.contains("invoke('gui_first_screen_summary_request_once'"),
-        "placeholder must not auto-call the one-shot first-screen summary request"
-    );
+    assert_first_screen_summary_invoke_is_explicit(&frontend);
 }
 
 #[test]
@@ -1620,11 +1631,7 @@ fn gui_first_screen_readiness_shape_is_static_display_preflight() {
             "gui-dist/index.html should display readiness shape token `{token}`"
         );
     }
-    assert!(
-        !frontend.contains("invoke(\"gui_first_screen_summary_request_once\"")
-            && !frontend.contains("invoke('gui_first_screen_summary_request_once'"),
-        "placeholder must not auto-call the one-shot first-screen summary request"
-    );
+    assert_first_screen_summary_invoke_is_explicit(&frontend);
 }
 
 #[test]
@@ -1696,11 +1703,7 @@ fn gui_first_screen_offline_shape_is_static_display_preflight() {
             "gui-dist/index.html should display offline shape token `{token}`"
         );
     }
-    assert!(
-        !frontend.contains("invoke(\"gui_first_screen_summary_request_once\"")
-            && !frontend.contains("invoke('gui_first_screen_summary_request_once'"),
-        "placeholder must not auto-call the one-shot first-screen summary request"
-    );
+    assert_first_screen_summary_invoke_is_explicit(&frontend);
 }
 
 #[test]
@@ -1768,11 +1771,7 @@ fn gui_first_screen_command_policy_shape_keeps_one_shots_explicit() {
             "gui-dist/index.html should display command policy token `{token}`"
         );
     }
-    assert!(
-        !frontend.contains("invoke(\"gui_first_screen_summary_request_once\"")
-            && !frontend.contains("invoke('gui_first_screen_summary_request_once'"),
-        "placeholder must not auto-call the one-shot first-screen summary request"
-    );
+    assert_first_screen_summary_invoke_is_explicit(&frontend);
 }
 
 #[test]
@@ -1841,16 +1840,86 @@ fn gui_first_screen_refresh_affordance_shape_stays_static() {
         );
     }
     assert!(
-        !frontend.contains("addEventListener(\"click\"")
-            && !frontend.contains("addEventListener('click'")
-            && !frontend.contains("onclick="),
-        "placeholder must not register a real refresh click handler"
+        !frontend.contains("onclick="),
+        "placeholder must not register inline refresh click handlers"
     );
+    assert_first_screen_summary_invoke_is_explicit(&frontend);
+}
+
+#[test]
+fn gui_first_screen_refresh_click_wiring_is_explicit_only() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9aa",
+        "explicit refresh click wiring",
+        "只在用户显式点击后调用",
+        "初始加载仍不得自动调用该 one-shot command",
+        "不得订阅 daemon event stream",
+        "不得启动 timer/reconnect loop",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9aa click wiring token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "refresh-action-button",
+        "refresh-action-status",
+        "refresh-action-result",
+        "handleExplicitRefresh",
+        "addEventListener(\"click\", handleExplicitRefresh)",
+        "gui_first_screen_summary_request_once",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should expose explicit refresh click token `{token}`"
+        );
+    }
+
+    let one_shot_invoke_pos = frontend
+        .find("invoke(\"gui_first_screen_summary_request_once\"")
+        .expect("explicit refresh target should be present");
+    let click_handler_pos = frontend
+        .find("function handleExplicitRefresh")
+        .expect("explicit refresh handler should be present");
     assert!(
-        !frontend.contains("invoke(\"gui_first_screen_summary_request_once\"")
-            && !frontend.contains("invoke('gui_first_screen_summary_request_once'"),
-        "placeholder must not auto-call the one-shot first-screen summary request"
+        one_shot_invoke_pos > click_handler_pos,
+        "one-shot summary invoke must stay inside the explicit click handler"
     );
+
+    for token in [
+        "setInterval",
+        "setTimeout",
+        "subscribe_events",
+        "client.send(&Command::Subscribe)",
+        "install_service",
+        "restart_service",
+    ] {
+        assert!(
+            !frontend.contains(token),
+            "Phase 9aa frontend must not subscribe, loop, or manage service token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "client.send(&Command::Subscribe)",
+        "subscribe_events",
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+        "install_service",
+        "restart_service",
+    ] {
+        assert!(
+            !tauri_lib.contains(token),
+            "Phase 9aa must not add backend subscription, reconnect, spawn, timer, or service token `{token}`"
+        );
+    }
 }
 
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {

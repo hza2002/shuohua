@@ -91,6 +91,14 @@
         <dd id="refresh-affordance-loading">false</dd>
         <dt>Affordance source</dt>
         <dd id="refresh-affordance-source">placeholder</dd>
+        <dt>Refresh action</dt>
+        <dd>
+          <button id="refresh-action-button" type="button">Refresh</button>
+        </dd>
+        <dt>Action status</dt>
+        <dd id="refresh-action-status">idle</dd>
+        <dt>Action result</dt>
+        <dd id="refresh-action-result">pending</dd>
         <dt>Readiness ready</dt>
         <dd id="readiness-ready">false</dd>
         <dt>Readiness inputs</dt>
@@ -176,6 +184,7 @@
           "gui_first_screen_refresh_affordance_shape",
           { historyLimit: 20 }
         );
+        const refreshButton = document.getElementById("refresh-action-button");
         document.getElementById("refresh-affordance-label").textContent =
           refreshAffordance.buttonLabel;
         document.getElementById("refresh-affordance-enabled").textContent = String(
@@ -186,6 +195,9 @@
         );
         document.getElementById("refresh-affordance-source").textContent =
           refreshAffordance.source;
+        refreshButton.textContent = refreshAffordance.buttonLabel;
+        refreshButton.disabled = !refreshAffordance.enabled;
+        refreshButton.addEventListener("click", handleExplicitRefresh);
 
         const readinessShape = await invoke("gui_first_screen_readiness_shape");
         document.getElementById("readiness-ready").textContent = String(
@@ -231,6 +243,35 @@
           `${explicitCommands.length} commands`;
         document.getElementById("policy-one-shot-commands").textContent =
           explicitCommands.map((command) => command.commandName).join(", ");
+      }
+
+      async function handleExplicitRefresh() {
+        const invoke = window.__TAURI__?.core?.invoke;
+        if (!invoke) {
+          return;
+        }
+
+        const status = document.getElementById("refresh-action-status");
+        const result = document.getElementById("refresh-action-result");
+        const button = document.getElementById("refresh-action-button");
+        button.disabled = true;
+        status.textContent = "loading";
+        result.textContent = "pending";
+
+        try {
+          const summary = await invoke("gui_first_screen_summary_request_once", {
+            historyLimit: 20,
+          });
+          status.textContent = "loaded";
+          result.textContent =
+            `connected:${summary.connected}, ` +
+            `history:${summary.history.pageRecordCount}`;
+        } catch (error) {
+          status.textContent = "error";
+          result.textContent = String(error?.message ?? error);
+        } finally {
+          button.disabled = false;
+        }
       }
 
       loadShellMetadata().catch(() => {});

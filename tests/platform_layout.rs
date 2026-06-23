@@ -2378,6 +2378,80 @@ fn gui_manual_refresh_summary_is_readable_and_click_scoped() {
     }
 }
 
+#[test]
+fn gui_frontend_first_screen_view_model_is_local_preflight_only() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9ah",
+        "firstScreenViewModel",
+        "initialization 和 explicit Refresh success/catch",
+        "后续 Tauri event subscription 的前端落点预演",
+        "不新增 backend command",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9ah frontend view model token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "const firstScreenViewModel",
+        "lastRefreshStatus",
+        "connected",
+        "stateLabel",
+        "historyRecordCount",
+        "latestPreview",
+        "requestDurationMs",
+        "errorMessage",
+        "projectFirstScreenViewModel",
+        "updateViewModelFromSummary",
+        "updateViewModelFromError",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should expose Phase 9ah view model token `{token}`"
+        );
+    }
+
+    let summary_update_pos = frontend
+        .find("updateViewModelFromSummary(summary)")
+        .expect("summary should update frontend view model");
+    let success_projection_pos = frontend
+        .find("projectExplicitRefreshSummary(summary)")
+        .expect("explicit success projection should exist");
+    let error_update_pos = frontend
+        .find("updateViewModelFromError(error)")
+        .expect("error should update frontend view model");
+    let catch_pos = frontend
+        .find("catch (error)")
+        .expect("explicit refresh catch path should exist");
+    assert!(
+        summary_update_pos > success_projection_pos,
+        "summary view model update should stay in explicit refresh success path"
+    );
+    assert!(
+        error_update_pos > catch_pos,
+        "error view model update should stay in explicit refresh catch path"
+    );
+
+    for token in [
+        "setInterval",
+        "setTimeout",
+        "subscribe_events",
+        "client.send(&Command::Subscribe)",
+        "install_service",
+        "restart_service",
+    ] {
+        assert!(
+            !frontend.contains(token),
+            "Phase 9ah frontend must not subscribe, loop, or manage service token `{token}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

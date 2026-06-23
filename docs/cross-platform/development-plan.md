@@ -520,6 +520,14 @@ Phase 9ag 增加手动 Refresh 的可读首屏摘要，不新增订阅：
   one-shot，不得订阅 daemon event stream，不得启动 reconnect loop、timer、daemon 或 service management。
 - 不新增 backend command，不新增 IPC command/event，不建立完整 Status/History view model。
 
+Phase 9ah 增加 frontend first-screen view model preflight，不新增订阅：
+
+- `gui-dist/index.html` 可以维护本地 `firstScreenViewModel`，聚合 connected/state/history/latest/
+  timing/error/last refresh status，并投影到现有 manual summary 字段。
+- view model 只能由 initialization 和 explicit Refresh success/catch 更新；不得订阅 daemon event
+  stream，不得调用 `Subscribe`，不得启动 reconnect loop、timer、daemon 或 service management。
+- 不新增 backend command，不新增 IPC command/event，不建立完整 Status/History view model。
+
 范围：
 
 - 建一个最小 Tauri app。

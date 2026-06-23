@@ -508,6 +508,15 @@ Phase 9ag 增加手动 Refresh 的可读首屏摘要，不新增订阅：
 - 本阶段不新增 backend command、不新增 IPC command/event、不建立完整 Status/History view model。
   它只是让下一次用户手动验证能看懂 Refresh 是否成功。
 
+Phase 9ah 增加 frontend first-screen view model preflight，不新增订阅：
+
+- placeholder 可以在静态 HTML 内维护一个小型 `firstScreenViewModel`，聚合当前页面已展示的
+  connected、state、history count、latest preview、timing、error、last refresh status。
+- 当前阶段 view model 只能由 initialization 和 explicit Refresh success/catch 更新，再投影到现有
+  DOM 字段；不得连接 daemon event stream、不得调用 `Subscribe`、不得启动 reconnect loop 或 timer。
+- 这个 view model 是后续 Tauri event subscription 的前端落点预演，不是完整 Status/History
+  view model；不新增 backend command、不新增 IPC command/event。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：

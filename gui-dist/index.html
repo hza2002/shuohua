@@ -138,6 +138,16 @@
       </dl>
     </main>
     <script>
+      const firstScreenViewModel = {
+        lastRefreshStatus: "idle",
+        connected: false,
+        stateLabel: "disconnected",
+        historyRecordCount: 0,
+        latestPreview: "pending",
+        requestDurationMs: null,
+        errorMessage: "none",
+      };
+
       function bindRefreshAction() {
         const refreshButton = document.getElementById("refresh-action-button");
         refreshButton.addEventListener("click", handleExplicitRefresh);
@@ -286,6 +296,7 @@
             historyLimit: 20,
           });
           projectExplicitRefreshSummary(summary);
+          updateViewModelFromSummary(summary);
           projectManualRefreshSummary(summary);
           status.textContent = "loaded";
           result.textContent =
@@ -293,6 +304,7 @@
             `history:${summary.history.pageRecordCount}`;
         } catch (error) {
           projectExplicitRefreshError(error);
+          updateViewModelFromError(error);
           projectManualRefreshError(error);
           status.textContent = "error";
           result.textContent = String(error?.message ?? error);
@@ -330,18 +342,19 @@
 
       function projectManualRefreshSummary(summary) {
         const latestRecord = summary.history.latestRecord;
-        document.getElementById("manual-summary-status").textContent =
-          summary.connected ? "connected" : "disconnected";
-        document.getElementById("manual-summary-state").textContent =
-          summary.status.stateLabel;
-        document.getElementById("manual-summary-history").textContent =
-          `${summary.history.pageRecordCount} records`;
-        document.getElementById("manual-summary-latest").textContent = latestRecord
+        firstScreenViewModel.latestPreview = latestRecord
           ? `${latestRecord.status}: ${latestRecord.textPreview}`
           : "none";
-        document.getElementById("manual-summary-timing").textContent =
-          `${summary.timing.requestDurationMs} ms`;
-        document.getElementById("manual-summary-error").textContent = "none";
+        projectFirstScreenViewModel();
+      }
+
+      function updateViewModelFromSummary(summary) {
+        firstScreenViewModel.lastRefreshStatus = "loaded";
+        firstScreenViewModel.connected = summary.connected;
+        firstScreenViewModel.stateLabel = summary.status.stateLabel;
+        firstScreenViewModel.historyRecordCount = summary.history.pageRecordCount;
+        firstScreenViewModel.requestDurationMs = summary.timing.requestDurationMs;
+        firstScreenViewModel.errorMessage = "none";
       }
 
       function projectExplicitRefreshError(error) {
@@ -360,15 +373,37 @@
       }
 
       function projectManualRefreshError(error) {
-        document.getElementById("manual-summary-status").textContent = "error";
+        firstScreenViewModel.latestPreview = "unavailable";
+        projectFirstScreenViewModel();
+      }
+
+      function updateViewModelFromError(error) {
+        firstScreenViewModel.lastRefreshStatus = "error";
+        firstScreenViewModel.connected = false;
+        firstScreenViewModel.stateLabel = "disconnected";
+        firstScreenViewModel.historyRecordCount = 0;
+        firstScreenViewModel.requestDurationMs = null;
+        firstScreenViewModel.errorMessage = String(error?.message ?? error);
+      }
+
+      function projectFirstScreenViewModel() {
+        document.getElementById("manual-summary-status").textContent =
+          firstScreenViewModel.lastRefreshStatus === "loaded" &&
+          firstScreenViewModel.connected
+            ? "connected"
+            : firstScreenViewModel.lastRefreshStatus;
         document.getElementById("manual-summary-state").textContent =
-          "disconnected";
-        document.getElementById("manual-summary-history").textContent = "unavailable";
-        document.getElementById("manual-summary-latest").textContent = "unavailable";
-        document.getElementById("manual-summary-timing").textContent = "unavailable";
-        document.getElementById("manual-summary-error").textContent = String(
-          error?.message ?? error
-        );
+          firstScreenViewModel.stateLabel;
+        document.getElementById("manual-summary-history").textContent =
+          `${firstScreenViewModel.historyRecordCount} records`;
+        document.getElementById("manual-summary-latest").textContent =
+          firstScreenViewModel.latestPreview;
+        document.getElementById("manual-summary-timing").textContent =
+          firstScreenViewModel.requestDurationMs === null
+            ? "unavailable"
+            : `${firstScreenViewModel.requestDurationMs} ms`;
+        document.getElementById("manual-summary-error").textContent =
+          firstScreenViewModel.errorMessage;
       }
 
       bindRefreshAction();

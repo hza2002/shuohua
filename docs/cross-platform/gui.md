@@ -477,6 +477,17 @@ Phase 9ad 增加 GUI first-screen explicit refresh success clears offline displa
   Status/History/error view model，不写 history，不做 metrics sink，不改变 TUI/CLI 行为。
 - 这个阶段不运行 `tauri dev`、`tauri build` 或 `tauri bundle`，不启动 daemon/GUI。
 
+Phase 9ae 增加 GUI command permission 和初始化失败可见性，不新增订阅：
+
+- Tauri v2 capability 必须显式授权 placeholder 前端实际调用的 application command。应用内
+  command permission 使用不带 plugin 前缀的 `allow-<command-name-kebab-case>` 名称；主 window
+  只授权当前首屏需要的 command，不启用 shell/filesystem/http/process/global shortcut 等宽权限。
+- placeholder 的 refresh click handler 必须在任何 awaited initialization invoke 之前绑定。如果
+  初始化阶段某个静态 command 被 ACL 或 backend error 拒绝，页面必须把错误投影到现有
+  `refresh-action-status` / `refresh-action-result`，不能静默吞掉后让 Refresh 看起来无反应。
+- 本阶段仍不实现 daemon event subscription、recording state streaming、reconnect supervisor、
+  service management 或自动首屏 one-shot。用户录音时 GUI 不自动变化是当前 placeholder 的已知缺口。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：

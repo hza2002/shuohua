@@ -3,5 +3,16 @@
   "identifier": "main",
   "description": "Minimal main window capability for the Shuohua GUI skeleton.",
   "windows": ["main"],
-  "permissions": ["core:event:default"]
+  "permissions": [
+    "core:event:default",
+    "allow-gui-shell-metadata",
+    "allow-gui-first-screen-request-plan",
+    "allow-gui-daemon-status-snapshot",
+    "allow-gui-first-screen-refresh-shape",
+    "allow-gui-first-screen-refresh-affordance-shape",
+    "allow-gui-first-screen-readiness-shape",
+    "allow-gui-first-screen-offline-shape",
+    "allow-gui-first-screen-command-policy-shape",
+    "allow-gui-first-screen-summary-request-once"
+  ]
 }

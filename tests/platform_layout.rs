@@ -19,6 +19,10 @@ fn assert_first_screen_summary_invoke_is_explicit(frontend: &str) {
     );
 }
 
+fn tauri_application_command_permission(command_name: &str) -> String {
+    format!("allow-{}", command_name.replace('_', "-"))
+}
+
 #[test]
 fn shared_macos_adapters_live_under_platform_module() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -2134,6 +2138,117 @@ fn gui_first_screen_refresh_success_clears_offline_display() {
         !tauri_lib.contains("gui_first_screen_refresh_clear_offline"),
         "Phase 9ad must not add a backend clear-offline command"
     );
+}
+
+#[test]
+fn gui_frontend_invokes_are_authorized_and_init_errors_are_visible() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9ae",
+        "application command",
+        "allow-<command-name-kebab-case>",
+        "refresh click handler 必须在任何 awaited initialization invoke 之前绑定",
+        "不能静默吞掉",
+        "recording state streaming",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9ae init/permission token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    let capability =
+        std::fs::read_to_string(root.join("src-tauri/capabilities/default.json")).unwrap();
+    let permissions = std::fs::read_to_string(root.join("src-tauri/permissions/gui.toml"))
+        .expect("Phase 9ae should define app command permissions");
+
+    let invoked_commands = [
+        "gui_shell_metadata",
+        "gui_first_screen_request_plan",
+        "gui_daemon_status_snapshot",
+        "gui_first_screen_refresh_shape",
+        "gui_first_screen_refresh_affordance_shape",
+        "gui_first_screen_readiness_shape",
+        "gui_first_screen_offline_shape",
+        "gui_first_screen_command_policy_shape",
+        "gui_first_screen_summary_request_once",
+    ];
+    for command in invoked_commands {
+        assert!(
+            frontend.contains(&format!("\"{command}\"")),
+            "gui-dist/index.html should invoke audited command `{command}`"
+        );
+        let permission = tauri_application_command_permission(command);
+        assert!(
+            capability.contains(&format!("\"{permission}\"")),
+            "src-tauri/capabilities/default.json should authorize frontend command `{command}` with `{permission}`"
+        );
+        assert!(
+            permissions.contains(&format!("identifier = \"{permission}\""))
+                && permissions.contains(&format!("commands.allow = [\"{command}\"]")),
+            "src-tauri/permissions/gui.toml should define `{permission}` for `{command}`"
+        );
+    }
+
+    for forbidden in [
+        "shell:",
+        "fs:",
+        "http:",
+        "process:",
+        "global-shortcut:",
+        "\"core:default\"",
+    ] {
+        assert!(
+            !capability.contains(forbidden),
+            "Phase 9ae capability must not enable broad permission token `{forbidden}`"
+        );
+    }
+
+    let bind_pos = frontend
+        .find("addEventListener(\"click\", handleExplicitRefresh)")
+        .expect("refresh click handler should be bound");
+    let first_invoke_pos = frontend
+        .find("await invoke(")
+        .expect("frontend should await initialization invokes");
+    assert!(
+        bind_pos < first_invoke_pos,
+        "refresh click handler must be registered before awaited initialization invokes can fail"
+    );
+
+    for token in [
+        "projectInitializationError",
+        "projectInitializationError(error)",
+        "refresh-action-status",
+        "init-error",
+        "refresh-action-result",
+        "String(error?.message ?? error)",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should expose visible initialization error token `{token}`"
+        );
+    }
+    assert!(
+        !frontend.contains("loadShellMetadata().catch(() => {})"),
+        "initialization failures must not be swallowed silently"
+    );
+
+    for token in [
+        "setInterval",
+        "setTimeout",
+        "subscribe_events",
+        "client.send(&Command::Subscribe)",
+        "install_service",
+        "restart_service",
+    ] {
+        assert!(
+            !frontend.contains(token),
+            "Phase 9ae frontend must not subscribe, loop, or manage service token `{token}`"
+        );
+    }
 }
 
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {

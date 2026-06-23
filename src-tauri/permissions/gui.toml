@@ -1,0 +1,46 @@
+"$schema" = "../gen/schemas/schema.json"
+
+[[permission]]
+identifier = "allow-gui-shell-metadata"
+description = "Allows the GUI placeholder to read static shell metadata."
+commands.allow = ["gui_shell_metadata"]
+
+[[permission]]
+identifier = "allow-gui-first-screen-request-plan"
+description = "Allows the GUI placeholder to inspect the first-screen request plan."
+commands.allow = ["gui_first_screen_request_plan"]
+
+[[permission]]
+identifier = "allow-gui-daemon-status-snapshot"
+description = "Allows the GUI placeholder to read the static daemon status snapshot shape."
+commands.allow = ["gui_daemon_status_snapshot"]
+
+[[permission]]
+identifier = "allow-gui-first-screen-refresh-shape"
+description = "Allows the GUI placeholder to read the static refresh shape."
+commands.allow = ["gui_first_screen_refresh_shape"]
+
+[[permission]]
+identifier = "allow-gui-first-screen-refresh-affordance-shape"
+description = "Allows the GUI placeholder to read the static refresh affordance shape."
+commands.allow = ["gui_first_screen_refresh_affordance_shape"]
+
+[[permission]]
+identifier = "allow-gui-first-screen-readiness-shape"
+description = "Allows the GUI placeholder to read the static readiness shape."
+commands.allow = ["gui_first_screen_readiness_shape"]
+
+[[permission]]
+identifier = "allow-gui-first-screen-offline-shape"
+description = "Allows the GUI placeholder to read the static offline shape."
+commands.allow = ["gui_first_screen_offline_shape"]
+
+[[permission]]
+identifier = "allow-gui-first-screen-command-policy-shape"
+description = "Allows the GUI placeholder to read the static command policy shape."
+commands.allow = ["gui_first_screen_command_policy_shape"]
+
+[[permission]]
+identifier = "allow-gui-first-screen-summary-request-once"
+description = "Allows explicit one-shot first-screen summary refresh requests."
+commands.allow = ["gui_first_screen_summary_request_once"]

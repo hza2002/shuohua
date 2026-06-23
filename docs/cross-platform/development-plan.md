@@ -503,6 +503,15 @@ Phase 9ad 增加 GUI first-screen explicit refresh success clears offline displa
   不保存 history，不改变 TUI/CLI 行为。
 - 不运行 Tauri dev/build/bundle，不启动 daemon/GUI。
 
+Phase 9ae 增加 GUI command permission 和初始化失败可见性，不新增订阅：
+
+- `src-tauri/capabilities/default.json` 必须显式授权当前 placeholder frontend invoke 的 application
+  commands，权限保持主 window 最小范围，不开启 shell/filesystem/http/process/global shortcut。
+- `gui-dist/index.html` 必须在 initialization await 前绑定 refresh click handler；初始化错误必须显示在
+  现有 action status/result 字段，不能静默吞掉。
+- 不实现 daemon event subscription、recording state streaming、reconnect supervisor、service
+  management 或自动首屏 one-shot。
+
 范围：
 
 - 建一个最小 Tauri app。

@@ -126,6 +126,11 @@
       </dl>
     </main>
     <script>
+      function bindRefreshAction() {
+        const refreshButton = document.getElementById("refresh-action-button");
+        refreshButton.addEventListener("click", handleExplicitRefresh);
+      }
+
       async function loadShellMetadata() {
         const invoke = window.__TAURI__?.core?.invoke;
         if (!invoke) {
@@ -197,7 +202,6 @@
           refreshAffordance.source;
         refreshButton.textContent = refreshAffordance.buttonLabel;
         refreshButton.disabled = !refreshAffordance.enabled;
-        refreshButton.addEventListener("click", handleExplicitRefresh);
 
         const readinessShape = await invoke("gui_first_screen_readiness_shape");
         document.getElementById("readiness-ready").textContent = String(
@@ -243,6 +247,13 @@
           `${explicitCommands.length} commands`;
         document.getElementById("policy-one-shot-commands").textContent =
           explicitCommands.map((command) => command.commandName).join(", ");
+      }
+
+      function projectInitializationError(error) {
+        document.getElementById("refresh-action-status").textContent = "init-error";
+        document.getElementById("refresh-action-result").textContent = String(
+          error?.message ?? error
+        );
       }
 
       async function handleExplicitRefresh() {
@@ -318,7 +329,10 @@
         document.getElementById("daemon-connected").textContent = "false";
       }
 
-      loadShellMetadata().catch(() => {});
+      bindRefreshAction();
+      loadShellMetadata().catch((error) => {
+        projectInitializationError(error);
+      });
     </script>
   </body>
 </html>

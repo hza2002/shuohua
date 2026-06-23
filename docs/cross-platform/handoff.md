@@ -10,9 +10,9 @@ HEAD: `feat: add gui first-screen refresh success clear`
 
 ## 当前 phase
 
-Phase 9ad: GUI First-Screen Explicit Refresh Success Clears Offline Display 已实现并完成自动验证。下一步可以继续做
-更真实的手动 refresh UI 接线评审，或回到 Windows/Linux overlay PoC；不要直接做完整 GUI、
-reconnect runtime、service management、配置编辑器或 release 打包指标。
+Phase 9ae: GUI Command Permission And Init Error Visibility 已实现并完成自动验证，等待 commit。
+本阶段只修 Tauri command ACL 与初始化错误可见性；GUI 仍未订阅 daemon event，所以录音中页面不自动变化
+仍是预期缺口。不要直接做完整 GUI、reconnect runtime、service management、配置编辑器或 release 打包指标。
 
 ## 已完成事项
 
@@ -676,6 +676,17 @@ reconnect runtime、service management、配置编辑器或 release 打包指标
   5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
   tests、42 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests；
   Tauri crate `cargo check` 通过。
+- Phase 9ae 已跑窄验证：
+  `cargo test --test platform_layout gui_frontend_invokes_are_authorized_and_init_errors_are_visible`
+  先红灯失败于 `allow-gui-shell-metadata` 未授权；补 `src-tauri/permissions/gui.toml`、capability
+  allow 列表和初始化错误投影后通过。
+- Phase 9ae 已跑 Tauri 验证：`cargo check --manifest-path src-tauri/Cargo.toml`，先红灯失败于
+  application permission 文件缺失，补 `src-tauri/permissions/gui.toml` 后通过。
+- Phase 9ae 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo check --manifest-path src-tauri/Cargo.toml`，
+  通过。`cargo test` 覆盖：92 个 library unit tests、639 个 binary unit tests、
+  5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
+  tests、43 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests；
+  Tauri crate `cargo check` 通过。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -711,14 +722,14 @@ reconnect runtime、service management、配置编辑器或 release 打包指标
   capabilities JSON、frontend command binding、release build 或打包验证。
 - Phase 9l 只记录 reconnect supervisor ownership/cancellation 语义，没有实现真实 runtime loop、
   Tauri event emission、frontend view model 或 metrics sink。
-- Phase 9m/9n/9o/9p/9q/9r/9s/9t/9u/9v/9w/9x/9y/9z/9aa/9ab/9ac/9ad 只创建最小 `src-tauri/**` skeleton、静态 placeholder、本地 metadata
+- Phase 9m/9n/9o/9p/9q/9r/9s/9t/9u/9v/9w/9x/9y/9z/9aa/9ab/9ac/9ad/9ae 只创建最小 `src-tauri/**` skeleton、静态 placeholder、本地 metadata
   command、first-screen request plan command、daemon status snapshot shape command、纯 daemon
   status event mapper、显式 one-shot daemon status request command 和显式 one-shot history summary
   request command、显式 one-shot first-screen summary request command、first-screen summary 本地
   timing 字段、first-screen explicit refresh shape、first-screen readiness/timing display shape 和
   first-screen offline/error display shape、first-screen command invocation policy shape、
   first-screen explicit refresh affordance shape、placeholder explicit refresh click wiring 和
-  click-scoped summary/error projection、success offline clear；
+  click-scoped summary/error projection、success offline clear、application command ACL 和初始化错误可见性；
   尚未运行 `tauri dev` / `tauri build` / `tauri bundle`，也没有启动 GUI 或 daemon。后续需要
   单独决定何时运行 release build、如何记录 cold start/RSS/CPU/bundle 指标。
 - Phase 9n 的 `gui_shell_metadata` 只验证本地 command wiring，不连接 daemon、不读
@@ -755,6 +766,9 @@ reconnect runtime、service management、配置编辑器或 release 打包指标
   error 投影到现有 placeholder 文本字段；不新增 backend command，不实现 retry loop。
 - Phase 9ad 的 `projectExplicitRefreshSummary` 只在 explicit refresh click success 路径内清理
   stale offline/error 文本；不新增 backend command，不新增请求。
+- Phase 9ae 只保证当前 placeholder frontend invoke 的 Tauri application commands 被 capability
+  授权，并且初始化失败不再静默吞掉；不实现 daemon event subscription、recording state streaming、
+  reconnect supervisor 或自动首屏 one-shot。
 - `ipc::transport` 仍是 Unix-only，library client 只实际覆盖 macOS/Linux 当前 transport。
   Windows Named Pipe adapter 仍是后续 IPC transport backend 工作。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
@@ -764,9 +778,10 @@ reconnect runtime、service management、配置编辑器或 release 打包指标
 
 ## 下一步
 
-Phase 9ad 后，进入下一小步：
+Phase 9ae 后，进入下一小步：
 
-- 若继续 GUI，下一阶段可以做更真实的手动 refresh UI 接线评审或继续收敛首屏展示 shape；
+- 若继续 GUI，下一阶段可以做真实 daemon event subscription/reconnect 设计前的最小前端状态模型评审，
+  或先让手动 Refresh 的成功/错误展示更接近 Status/History 首屏；
   继续禁止 daemon 热路径引入 WebView，且不要启动 daemon、GUI 或 release 打包。
 - 若目标平台环境可用，也可以先按 Phase 7a/8a checklist 做 Windows/Linux 最小 overlay PoC。
 
@@ -777,6 +792,7 @@ Phase 9ad 后，进入下一小步：
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、gui.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 9ad GUI First-Screen Explicit Refresh Success Clears Offline Display 已实现；先查看最新 commit 和验证结果。
-下一步在更真实的手动 refresh UI 接线评审、继续收敛首屏展示 shape 或 Windows/Linux overlay PoC 之间做一个小步计划。
+Phase 9ae GUI Command Permission And Init Error Visibility 已实现；先查看最新 commit 和验证结果。
+下一步在真实 daemon event subscription/reconnect 设计前的最小前端状态模型、手动 Refresh 展示收敛、
+或 Windows/Linux overlay PoC 之间做一个小步计划。
 ```

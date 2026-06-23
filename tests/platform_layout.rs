@@ -636,12 +636,56 @@ fn linux_service_manager_has_systemd_user_dry_run_skeleton() {
         .find("#[cfg(target_os = \"linux\")]")
         .expect("missing linux service cfg");
     let fallback_cfg = service
-        .find("#[cfg(not(any(target_os = \"macos\", target_os = \"linux\")))]")
+        .find("#[cfg(not(any(target_os = \"macos\", target_os = \"linux\", target_os = \"windows\")))]")
         .expect("missing non-linux fallback cfg");
     assert!(
         linux_cfg < fallback_cfg,
         "Linux service backend should be explicit, not folded into generic unsupported fallback"
     );
+}
+
+#[test]
+fn windows_service_manager_has_dry_run_status_skeleton() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let service = std::fs::read_to_string(root.join("src/platform/service.rs")).unwrap();
+
+    for token in [
+        "#[cfg(target_os = \"windows\")]",
+        "fn service_strategy()",
+        "fn daemon_command(",
+        "windows.user: dry-run",
+        "install_start=unsupported",
+        "Task Scheduler, SCM, PowerShell, and registry APIs are intentionally not called",
+    ] {
+        assert!(
+            service.contains(token),
+            "Windows service manager skeleton should contain `{token}`"
+        );
+    }
+
+    let windows_cfg = service
+        .find("#[cfg(target_os = \"windows\")]")
+        .expect("missing windows service cfg");
+    let fallback_cfg = service
+        .find("#[cfg(not(any(target_os = \"macos\", target_os = \"linux\", target_os = \"windows\")))]")
+        .expect("missing non-windows fallback cfg");
+    assert!(
+        windows_cfg < fallback_cfg,
+        "Windows service backend should be explicit, not folded into generic unsupported fallback"
+    );
+
+    let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+    for token in [
+        "CapabilityId::ServiceManager",
+        "windows_user_dry_run",
+        "dry_run_status_only",
+        "Validate Windows user service install/start/stop strategy",
+    ] {
+        assert!(
+            capability.contains(token),
+            "Windows capability snapshot should reflect service dry-run token `{token}`"
+        );
+    }
 }
 
 #[test]

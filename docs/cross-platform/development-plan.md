@@ -730,6 +730,15 @@ Phase 10j Windows Lifecycle Primitive Compile Backend:
 - This phase must not implement Windows service install/start/stop, smart fallback, ACL/security descriptor
   hardening, daemon auto-start, or runtime validation claims.
 
+Phase 10k Windows Service Manager Dry-Run Status Skeleton:
+
+- Add a Windows-only service manager backend that can print dry-run status information for a future
+  per-user service/logon task strategy.
+- `install`, `uninstall`, `start`, `stop`, and `restart` remain unsupported; no registry, Task Scheduler,
+  SCM, PowerShell, or file writes are allowed.
+- Mark Windows `service.manager` as `partial/windows_user_dry_run/dry_run_status_only`.
+- This phase must not implement smart fallback, auto-start, elevated service management, or runtime claims.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

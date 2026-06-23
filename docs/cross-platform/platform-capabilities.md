@@ -192,6 +192,19 @@ Windows lifecycle no longer needs to be a pure unsupported placeholder for compi
 Phase 10j 不实现 Windows service install/start/stop、smart fallback、daemon auto-start、Named Pipe ACL，
 也不声明 Windows daemon lifecycle runtime-ready。
 
+## Phase 10k Windows Service Manager Dry-Run Status Skeleton
+
+Windows service manager support remains a design/runtime validation item, but the CLI can report a
+structured dry-run status instead of falling through the generic unsupported backend:
+
+- `service.manager`：`partial`，backend `windows_user_dry_run`，reason `dry_run_status_only`。
+- `shuo service status` on Windows may print daemon-not-running plus a dry-run line that names the future
+  user-session strategy and daemon command.
+- `install` / `uninstall` / `start` / `stop` / `restart` still return unsupported.
+
+Phase 10k 不调用 Task Scheduler、SCM、PowerShell 或 registry APIs，不写文件，不实现 smart fallback，
+也不声明 Windows service lifecycle runtime-ready。
+
 ## 设计约束
 
 - capability probe 不执行高风险动作。

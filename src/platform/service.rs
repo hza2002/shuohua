@@ -718,7 +718,95 @@ WantedBy=default.target
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+mod imp {
+    use std::path::PathBuf;
+
+    use anyhow::Result;
+
+    pub fn launchd_status() -> super::LaunchdStatus {
+        super::LaunchdStatus::Unsupported
+    }
+
+    pub fn install() -> Result<()> {
+        unsupported()
+    }
+
+    pub fn uninstall() -> Result<()> {
+        unsupported()
+    }
+
+    pub fn start() -> Result<()> {
+        unsupported()
+    }
+
+    pub async fn stop() -> Result<()> {
+        unsupported()
+    }
+
+    pub async fn restart() -> Result<()> {
+        unsupported()
+    }
+
+    pub async fn status() -> Result<()> {
+        let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("shuo"));
+        println!(
+            "daemon: {}",
+            crate::i18n::tr("cli.service.not_running", &[])
+        );
+        println!(
+            "windows.user: dry-run strategy={} command={} install_start=unsupported",
+            service_strategy(),
+            daemon_command(&exe)
+        );
+        Ok(())
+    }
+
+    fn service_strategy() -> &'static str {
+        "user_session_logon_task"
+    }
+
+    fn daemon_command(exe: &std::path::Path) -> String {
+        format!("{} --daemon", quote_arg(&exe.display().to_string()))
+    }
+
+    fn quote_arg(value: &str) -> String {
+        if value.contains(' ') {
+            format!("\"{}\"", value.replace('"', "\\\""))
+        } else {
+            value.to_string()
+        }
+    }
+
+    fn unsupported<T>() -> Result<T> {
+        // Task Scheduler, SCM, PowerShell, and registry APIs are intentionally not called.
+        anyhow::bail!("Windows service management is not implemented yet")
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn service_strategy_is_user_session_scoped() {
+            assert_eq!(service_strategy(), "user_session_logon_task");
+        }
+
+        #[test]
+        fn daemon_command_quotes_paths_with_spaces() {
+            assert_eq!(
+                daemon_command(std::path::Path::new("C:\\Program Files\\Shuo\\shuo.exe")),
+                "\"C:\\Program Files\\Shuo\\shuo.exe\" --daemon"
+            );
+            assert_eq!(
+                daemon_command(std::path::Path::new("C:\\Shuo\\shuo.exe")),
+                "C:\\Shuo\\shuo.exe --daemon"
+            );
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 mod imp {
     use anyhow::Result;
 

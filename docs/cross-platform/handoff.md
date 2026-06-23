@@ -6,7 +6,7 @@
 
 ## 最近 commit
 
-HEAD: `feat: add windows lifecycle primitives`
+HEAD: `feat: add windows service dry-run status`
 
 ## 当前 phase
 
@@ -26,6 +26,9 @@ Phase 10j Windows Lifecycle Primitive Compile Backend 已完成：Windows `platf
 改为 Win32 named mutex / `OpenProcess` compile backend，capability 标记为
 `partial/runtime_not_verified`；不实现 Windows service、smart fallback、daemon auto-start、
 ACL/security descriptor hardening 或 runtime validation claims。
+Phase 10k Windows Service Manager Dry-Run Status Skeleton 已完成：Windows
+`platform::service` 增加 dry-run/status backend，`install` / `uninstall` / `start` / `stop` /
+`restart` 仍 unsupported，不调用 Task Scheduler、SCM、PowerShell 或 registry APIs。
 
 ## 已完成事项
 
@@ -144,6 +147,16 @@ ACL/security descriptor hardening 或 runtime validation claims。
     `Win32_System_Threading` feature。
   - 该阶段不实现 Windows service manager、smart fallback、daemon auto-start、Named Pipe ACL 或
     runtime validation。
+- Phase 10k:
+  - 更新 `docs/cross-platform/platform-capabilities.md`、`docs/cross-platform/development-plan.md`、
+    `docs/cross-platform/ipc-service.md` 和 `docs/cross-platform/overview.md`，记录 Windows service
+    manager dry-run/status skeleton。
+  - `src/platform/service.rs` 新增 Windows backend：`status()` 打印 daemon not running 和
+    `windows.user: dry-run strategy=user_session_logon_task command=... install_start=unsupported`。
+  - Windows `service.manager` capability 标记为
+    `partial/windows_user_dry_run/dry_run_status_only`。
+  - `install` / `uninstall` / `start` / `stop` / `restart` 继续返回明确 unsupported；该阶段不调用
+    Task Scheduler、SCM、PowerShell 或 registry APIs，不写文件，不实现 smart fallback。
 - Phase 4a:
   - 更新 `docs/cross-platform/ipc-service.md`，把 Phase 4 拆成 lock/process probe facade 和
     后续 service manager facade。
@@ -1161,16 +1174,17 @@ ACL/security descriptor hardening 或 runtime validation claims。
 - `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && make check-windows && make check-linux-cross`
   通过。
 - `make check-windows` / `make check-linux-cross` 仍输出既有非 macOS skeleton dead-code warnings；
-  Phase 10j 新增的 Windows lifecycle backend 只做 compile check，不代表 Windows runtime 已验证。
+  Phase 10k 新增的 Windows service backend 只做 compile/dry-run status check，不代表 Windows runtime
+  已验证。
 
 下一步：
 
-- 下一阶段若继续 Windows，可做 Windows service manager dry-run/status skeleton 或继续把
-  desktop/hotkey/service 的 Windows unsupported skeleton 接入 doctor/TUI 诊断。
+- 下一阶段若继续 Windows，可继续把 desktop/hotkey/clipboard/text-injection 的 Windows unsupported
+  skeleton 接入 doctor/TUI 诊断，或细化 Windows IPC/service runtime validation checklist。
 - 若继续 Linux service manager，可在真实 Linux/VM 前先做 install/status 设计细化；不要在 macOS
   上假装验证 `systemctl --user` runtime。
-- Phase 10j 已完成。下一步可继续把 Linux/Windows desktop/hotkey/overlay runtime gaps 细化到
-  capability/doctor/TUI，或转向 Windows lifecycle/smart fallback skeleton。
+- Phase 10k 已完成。下一步可继续把 Linux/Windows desktop/hotkey/overlay runtime gaps 细化到
+  capability/doctor/TUI；真正 runtime validation 需要 Windows/Linux 目标系统。
 - 若继续 overlay 视觉 PoC，则需要用户提供真实 Windows 11/10 或 Linux wlroots/KDE/GNOME 环境；
   在当前 macOS 主机上不要假装验证真实 topmost/click-through/layer-shell 行为。
 - 真实 Windows 11/10、wlroots/KDE/GNOME overlay 视觉验证需要用户后续提供目标系统环境。
@@ -1187,11 +1201,12 @@ Phase 9al 后 GUI PoC 已冻结；不要继续打磨 GUI placeholder。
 Phase 7b/8b overlay backend skeleton、Phase 3b IPC transport cfg boundary、Phase 10a
 cross-check baseline、Phase 10b TUI capability diagnostics、Phase 10c Docker/cross Linux
 check baseline、Phase 10d Linux compile-time capability sync、Phase 3c Windows Named Pipe
-transport compile backend、Windows IPC capability sync、Phase 10i audio convert facade 和
-Phase 10j Windows lifecycle primitive compile backend 已完成。先查看最新
+transport compile backend、Windows IPC capability sync、Phase 10i audio convert facade、
+Phase 10j Windows lifecycle primitive compile backend 和 Phase 10k Windows service dry-run/status
+skeleton 已完成。先查看最新
 diff/commit 和验证结果。
 保持 macOS 不回退，不引入 GUI/WebView。不要把 Windows Named Pipe compile backend 当成实机
-runtime 验收。下一步优先考虑 Windows service manager dry-run/status skeleton、Linux/Windows
-desktop/hotkey capability diagnostics，或继续 overlay skeleton 诊断收敛；真实 overlay 视觉 PoC
-需要用户提供目标系统。
+runtime 验收。下一步优先考虑 Linux/Windows desktop/hotkey capability diagnostics、Windows IPC/service
+runtime validation checklist，或继续 overlay skeleton 诊断收敛；真实 overlay 视觉 PoC 需要用户
+提供目标系统。
 ```

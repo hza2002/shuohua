@@ -121,6 +121,13 @@ Phase 10j Windows lifecycle primitive compile backend:
   descriptor、abandoned mutex、PID reuse、权限差异和多用户隔离仍需 Windows VM/实机验证。
 - Phase 10j 不实现 Windows service manager、smart fallback、daemon auto-start 或 Named Pipe ACL。
 
+Phase 10k Windows service manager dry-run/status skeleton:
+
+- Windows backend 可以打印未来 user-session service/logon-task 策略的 dry-run status，但不得创建、
+  注册、启动或停止任何服务。
+- `install` / `uninstall` / `start` / `stop` / `restart` 仍返回明确 unsupported。
+- Phase 10k 不调用 Task Scheduler、SCM、PowerShell 或 registry APIs，不写文件，不实现 smart fallback。
+
 ## Smart Fallback
 
 CLI/TUI/GUI 连接 daemon 时：

@@ -314,6 +314,15 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
             next_step: Some("Validate Windows process probing semantics"),
         },
         CapabilityStatus {
+            id: CapabilityId::ServiceManager,
+            platform: PlatformKind::Windows,
+            backend: "windows_user_dry_run",
+            status: CapabilityStatusKind::Partial,
+            summary: "Windows user service status can report dry-run strategy information",
+            reason: "dry_run_status_only",
+            next_step: Some("Validate Windows user service install/start/stop strategy"),
+        },
+        CapabilityStatus {
             id: CapabilityId::PathOpenReveal,
             platform: PlatformKind::Windows,
             backend: "explorer",

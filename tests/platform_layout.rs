@@ -432,6 +432,41 @@ fn gui_client_api_boundary_stays_out_of_daemon_hot_path() {
     }
 }
 
+#[test]
+fn gui_first_screen_helpers_live_in_client_api_without_gui_runtime() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let client_api = std::fs::read_to_string(root.join("src/client_api.rs")).unwrap();
+
+    for token in [
+        "pub fn first_screen_commands",
+        "pub enum FirstScreenEvent",
+        "pub fn classify_first_screen_event",
+        "Command::DaemonStatus",
+        "Command::GetHistory",
+        "Command::GetHistoryStats",
+        "Event::DaemonStatus",
+        "Event::History",
+        "Event::HistoryStats",
+    ] {
+        assert!(
+            client_api.contains(token),
+            "src/client_api.rs should expose first-screen helper token `{token}`"
+        );
+    }
+
+    assert!(
+        !client_api.contains("PROTO_VERSION ="),
+        "client_api helpers must not own or bump the IPC protocol version"
+    );
+
+    for token in ["tauri", "wry", "webview", "WebView", "tao"] {
+        assert!(
+            !client_api.contains(token),
+            "src/client_api.rs must not pull GUI/WebView runtime token `{token}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

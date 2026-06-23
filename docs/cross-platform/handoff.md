@@ -6,12 +6,12 @@
 
 ## 最近 commit
 
-HEAD: `feat: add gui client api boundary`
+HEAD: `feat: add gui client api boundary`（Phase 9c 提交前）
 
 ## 当前 phase
 
-Phase 9b: GUI Client API Boundary 已完成并提交。下一步是在独立目录/任务分支做最小 GUI
-client PoC，或先扩展 client API 的首屏 status/history snapshot 命令。
+Phase 9c: GUI First Screen Client Helpers 已实现，提交前验证中。下一步是在独立目录/任务分支
+做最小 GUI client PoC，或继续把首屏 helper 接入一个真实 GUI backend PoC。
 
 ## 已完成事项
 
@@ -130,6 +130,21 @@ client PoC，或先扩展 client API 的首屏 status/history snapshot 命令。
     通过 `client_api::subscribe_command()` 构造；TUI 行为和 IPC protocol 不变。
   - `tests/platform_layout.rs` 增加 GUI client API 边界测试，禁止 daemon/TUI/shared client
     path 引入 Tauri、WRY、WebView 或 `tao` token，并确认 `Cargo.toml` 未新增相关依赖。
+- Phase 9c:
+  - 更新 `docs/cross-platform/gui.md`，记录 GUI 首屏 helper 边界：request helper 只返回
+    现有 `Command`，response classifier 只分类现有 `Event`，不做本地化、不读取
+    config/history 文件、不生成 frontend view model。
+  - 更新 `docs/cross-platform/development-plan.md` 和 `docs/cross-platform/overview.md`，
+    记录 Phase 9c 的范围和状态。
+  - `src/client_api.rs` 增加 `first_screen_commands(history_limit)`，映射到
+    `Subscribe`、`DaemonStatus`、`GetHistory` 和 `GetHistoryStats`。
+  - `src/client_api.rs` 增加 `FirstScreenEvent` 和 `classify_first_screen_event()`，把
+    `Snapshot`、`DaemonStatus`、`History`、`HistoryStats`、`HistoryChanged` 和 `Error`
+    分类为 GUI backend 可消费的首屏输入。
+  - `src/main.rs` 将 `client_api` 公开为 crate 边界，供后续 GUI backend 复用；未新增
+    Tauri workspace 或 GUI runtime 依赖。
+  - `tests/platform_layout.rs` 增加首屏 helper 架构测试，确认 helper 仍位于 `client_api`，
+    不拥有 protocol version，也不引入 Tauri/WRY/WebView/`tao` token。
 
 ## 验证结果
 
@@ -162,6 +177,13 @@ client PoC，或先扩展 client API 的首屏 status/history snapshot 命令。
   先红灯失败于缺少 `src/client_api.rs`，实现后通过。
 - Phase 9b 已跑：`cargo test client_api::tests`，通过 1 个 client API 单元测试。
 - Phase 9b 已跑：`cargo clippy --all-targets -- -D warnings`，通过。
+- Phase 9c 已跑：`cargo test client_api::tests`，先红灯失败于缺少
+  `first_screen_commands`、`classify_first_screen_event` 和 `FirstScreenEvent`，实现后通过
+  3 个 client API 单元测试。
+- Phase 9c 已跑：`cargo test --test platform_layout gui_first_screen_helpers_live_in_client_api_without_gui_runtime`，
+  通过。
+- Phase 9c 已跑：`cargo test --test platform_layout`，通过 15 个测试。
+- Phase 9c 已跑：`cargo clippy --all-targets -- -D warnings`，通过。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -181,8 +203,8 @@ client PoC，或先扩展 client API 的首屏 status/history snapshot 命令。
   数据仍需 PoC 记录。
 - Phase 9a 只是 Tauri v2 文档基线，不代表已测 GUI 冷启动、内存、CPU、包体或三端打包。
   GUI PoC 仍需证明 daemon 未打开 GUI 时不加载 WebView，且 GUI 退出不影响 daemon。
-- Phase 9b 只建立最小 shared client API 边界，目前只封装 `DaemonClient` 类型和
-  `Subscribe` startup command；GUI 首屏需要的 daemon status/history summary helper 尚未实现。
+- Phase 9c 只提供首屏 command helper 和 event classifier；尚未实现真实 Tauri GUI app、
+  frontend view model、重连策略、指标采集或打包验证。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
   静态 `desktop.permissions=available` 误解为当前已授权。
 - `overlay::renderer::renderer_capabilities()` 同样是静态快照，不创建窗口、不 probe 当前
@@ -190,12 +212,11 @@ client PoC，或先扩展 client API 的首屏 status/history snapshot 命令。
 
 ## 下一步
 
-提交 Phase 9b 后，进入下一小步：
+提交 Phase 9c 后，进入下一小步：
 
-- 若继续 GUI client API，先扩展 `src/client_api.rs` 的首屏命令/响应 helper，覆盖 daemon
-  status、history page 和 history stats，仍不新增 protocol。
 - 若进入 GUI PoC，先在独立小步创建最小 Tauri app，连接 `client_api`，只展示 status snapshot
-  和 history summary。
+  和 history summary，并记录 bundle/cold-start/RSS/CPU 指标。
+- 若继续 shared client API，先设计可恢复连接错误和重连状态，不新增 daemon protocol。
 - 若目标平台环境可用，也可以先按 Phase 7a/8a checklist 做 Windows/Linux 最小 overlay PoC。
 
 建议下一 session prompt：
@@ -205,7 +226,7 @@ client PoC，或先扩展 client API 的首屏 status/history snapshot 命令。
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 9b GUI Client API Boundary 已实现；先查看最新 commit 和验证结果。
-下一步在扩展 client_api 首屏 helper、最小 Tauri GUI client PoC、或 Windows/Linux overlay
-PoC 之间做一个小步计划。
+Phase 9c GUI First Screen Client Helpers 已实现；先查看最新 commit 和验证结果。
+下一步在最小 Tauri GUI client PoC、client_api 重连状态设计、或 Windows/Linux overlay PoC
+之间做一个小步计划。
 ```

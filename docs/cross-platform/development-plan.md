@@ -230,6 +230,13 @@ Phase 9b 先做 GUI client API boundary，不写 GUI app：
 - 增加架构测试，禁止 daemon/TUI/shared client API 引入 Tauri、WRY 或 WebView 依赖/token。
 - 不新增 Tauri workspace，不新增 wire protocol，不改变 TUI 用户可见行为。
 
+Phase 9c 扩展 GUI 首屏 client helper，不写 GUI app：
+
+- 在 shared client API 中增加首屏 request helper：subscribe、daemon status、history page、
+  history stats。
+- 增加 response classifier，把现有 daemon `Event` 分类为 GUI backend 可消费的首屏输入。
+- 不新增 IPC command/event，不新增 Tauri workspace，不读取 history/config 文件。
+
 范围：
 
 - 建一个最小 Tauri app。

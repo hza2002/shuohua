@@ -61,6 +61,16 @@ Phase 9b 先建立共享 client API 边界，不创建 Tauri workspace：
 - Tauri command 只调用 client API，并把结果转换为前端 view model；view model 的本地化和展示
   细节留在 GUI 层，不进入 daemon protocol。
 
+Phase 9c 扩展 GUI 首屏 helper，仍不创建 Tauri workspace：
+
+- client API 可以暴露首屏 request helper，用于 daemon status、subscribe、history page 和
+  history stats；helper 必须返回现有 `Command`，不能新增 IPC command。
+- 首屏 response helper 只把现有 `Event` 分类成 GUI backend 可消费的 summary input，例如
+  daemon status、snapshot、history page、history stats 和 recoverable error；不做本地化、不读
+  config/history 文件、不生成前端组件 view model。
+- GUI backend 后续可以把这些 summary input 转成 Tauri event 或 command response；frontend
+  仍不得直接访问 IPC transport。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：
@@ -111,6 +121,13 @@ Phase 9b 验收：
 - `Cargo.toml` 不新增 Tauri/WRY/WebView 依赖。
 - `src/daemon/**`、`src/tui/**` 和共享 client API 不出现 Tauri/WRY/WebView token。
 - IPC protocol round-trip 测试继续通过，`PROTO_VERSION` 不变。
+
+Phase 9c 验收：
+
+- client API 提供首屏 request helper，覆盖 subscribe、daemon status、history page、
+  history stats。
+- request helper 和 response classifier 都只使用既有 `ipc::protocol::Command` / `Event`。
+- `PROTO_VERSION` 仍为 2；不新增 Tauri/WRY/WebView 依赖，不启动 daemon/GUI。
 
 参考资料：
 

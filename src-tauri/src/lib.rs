@@ -126,7 +126,17 @@ struct GuiFirstScreenSummary {
     history_limit: usize,
     status: GuiDaemonStatusSnapshot,
     history: GuiHistorySummary,
+    timing: GuiFirstScreenSummaryTiming,
     request: GuiFirstScreenSummaryRequestSummary,
+}
+
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiFirstScreenSummaryTiming {
+    connect_duration_ms: u64,
+    first_event_ms: u64,
+    ready_ms: u64,
+    request_duration_ms: u64,
 }
 
 #[derive(serde::Serialize)]
@@ -262,9 +272,11 @@ async fn gui_first_screen_summary_request_once(
     history_limit: Option<usize>,
 ) -> Result<GuiFirstScreenSummary, GuiFirstScreenSummaryRequestError> {
     let history_limit = history_limit.unwrap_or(20);
+    let request_started = std::time::Instant::now();
     let mut client = DaemonClient::connect_default()
         .await
         .map_err(|error| first_screen_summary_request_error("connectFailed", error))?;
+    let connect_duration_ms = elapsed_ms(request_started.elapsed());
 
     client
         .send(&Command::DaemonStatus)
@@ -282,8 +294,18 @@ async fn gui_first_screen_summary_request_once(
     let mut status_event = None;
     let mut history_event = None;
     let mut stats_event = None;
+    let mut first_event_ms = None;
     match client
         .recv_until(|event| {
+            if first_event_ms.is_none()
+                && matches!(
+                    event,
+                    Event::DaemonStatus { .. } | Event::History { .. } | Event::HistoryStats { .. }
+                )
+            {
+                first_event_ms = Some(elapsed_ms(request_started.elapsed()));
+            }
+
             match event {
                 Event::DaemonStatus { .. } => status_event = Some(event),
                 Event::History { .. } => history_event = Some(event),
@@ -302,8 +324,21 @@ async fn gui_first_screen_summary_request_once(
             if let (Some(status), Some(history), Some(stats)) =
                 (&status_event, &history_event, &stats_event)
             {
+                let ready_ms = elapsed_ms(request_started.elapsed());
+                let timing = GuiFirstScreenSummaryTiming {
+                    connect_duration_ms,
+                    first_event_ms: first_event_ms.unwrap_or(ready_ms),
+                    ready_ms,
+                    request_duration_ms: ready_ms,
+                };
                 return Ok(std::ops::ControlFlow::Break(Ok(
-                    gui_first_screen_summary_from_events(status, history, stats, history_limit)
+                    gui_first_screen_summary_from_parts(
+                        status,
+                        history,
+                        stats,
+                        history_limit,
+                        timing,
+                    )
                         .expect("first-screen summary events were pre-matched"),
                 )));
             }
@@ -319,6 +354,10 @@ async fn gui_first_screen_summary_request_once(
             "daemon closed IPC before first-screen summary replies",
         )),
     }
+}
+
+fn elapsed_ms(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn empty_daemon_status_snapshot() -> GuiDaemonStatusSnapshot {
@@ -407,6 +446,27 @@ fn gui_first_screen_summary_from_events(
     stats: &Event,
     history_limit: usize,
 ) -> Option<GuiFirstScreenSummary> {
+    gui_first_screen_summary_from_parts(
+        status,
+        history,
+        stats,
+        history_limit,
+        GuiFirstScreenSummaryTiming {
+            connect_duration_ms: 0,
+            first_event_ms: 0,
+            ready_ms: 0,
+            request_duration_ms: 0,
+        },
+    )
+}
+
+fn gui_first_screen_summary_from_parts(
+    status: &Event,
+    history: &Event,
+    stats: &Event,
+    history_limit: usize,
+    timing: GuiFirstScreenSummaryTiming,
+) -> Option<GuiFirstScreenSummary> {
     let status = gui_daemon_status_snapshot_from_event(status)?;
     let history = gui_history_summary_from_events(history, stats, history_limit)?;
 
@@ -417,6 +477,7 @@ fn gui_first_screen_summary_from_events(
         history_limit,
         status,
         history,
+        timing,
         request: GuiFirstScreenSummaryRequestSummary {
             request_kind: "firstScreenSummary",
             requires_daemon_connection: true,
@@ -724,6 +785,10 @@ mod tests {
         assert!(summary.transport_opened);
         assert!(summary.summary_available);
         assert_eq!(summary.history_limit, 20);
+        assert_eq!(summary.timing.connect_duration_ms, 0);
+        assert_eq!(summary.timing.first_event_ms, 0);
+        assert_eq!(summary.timing.ready_ms, 0);
+        assert_eq!(summary.timing.request_duration_ms, 0);
         assert_eq!(summary.status.state_label, "idle");
         assert_eq!(summary.status.pid, Some(99));
         assert_eq!(summary.history.page_record_count, 1);

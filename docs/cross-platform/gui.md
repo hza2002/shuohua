@@ -342,6 +342,21 @@ Phase 9t 增加 GUI first-screen summary one-shot request command，不订阅、
 - 这个阶段不新增 IPC command/event，不 bump `PROTO_VERSION`，不改变 TUI/CLI 行为，不运行
   `tauri dev`、`tauri build` 或 `tauri bundle`，不启动 daemon/GUI。
 
+Phase 9u 增加 GUI first-screen summary request timing，不订阅、不重连：
+
+- `gui_first_screen_summary_request_once` 可以在 GUI backend 本地记录本次显式 request 的 timing：
+  `connectDurationMs`、`firstEventMs`、`readyMs` 和 `requestDurationMs`。这些字段只描述一次
+  foreground command invocation，不写入 daemon protocol、history、trace 或 shared `client_api`。
+- timing 由 `src-tauri` command 使用 `std::time::Instant` 计算；允许记录 request start、
+  connect completed、first matched daemon event 和 summary ready 的 elapsed milliseconds。
+  不使用 `tokio::time`、不启动 timer task、不创建 metrics sink、不做 Tauri event emission。
+- timing 只附着在 9t 的 first-screen summary shape 上；9r status one-shot 和 9s history summary
+  one-shot 的 response shape 暂不扩展，避免多个 command 同时改动。
+- 该阶段不订阅 daemon event stream，不调用 `Subscribe`，不启动 reconnect loop/timer，不做
+  frontend loading/retry UI，不实现真实 Status/History/Diagnostics view model。
+- 这个阶段不新增 IPC command/event，不 bump `PROTO_VERSION`，不改变 TUI/CLI 行为，不运行
+  `tauri dev`、`tauri build` 或 `tauri bundle`，不启动 daemon/GUI。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：

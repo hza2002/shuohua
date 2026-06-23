@@ -1426,6 +1426,60 @@ fn gui_first_screen_summary_one_shot_request_is_explicit_and_bounded() {
     );
 }
 
+#[test]
+fn gui_first_screen_summary_timing_stays_local_to_one_shot_request() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9u",
+        "connectDurationMs",
+        "firstEventMs",
+        "readyMs",
+        "requestDurationMs",
+        "std::time::Instant",
+        "不使用 `tokio::time`",
+        "不启动 timer task",
+        "不进入 daemon protocol",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9u timing token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "GuiFirstScreenSummaryTiming",
+        "timing: GuiFirstScreenSummaryTiming",
+        "std::time::Instant::now()",
+        "connect_duration_ms",
+        "first_event_ms",
+        "ready_ms",
+        "request_duration_ms",
+        "gui_first_screen_summary_from_parts",
+        "gui_first_screen_summary_from_events(",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should expose Phase 9u timing token `{token}`"
+        );
+    }
+
+    for token in [
+        "client.send(&Command::Subscribe)",
+        "subscribe_events",
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+    ] {
+        assert!(
+            !tauri_lib.contains(token),
+            "Phase 9u timing must not subscribe, reconnect, spawn, or own timer token `{token}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

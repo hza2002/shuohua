@@ -468,31 +468,23 @@ fn gui_first_screen_helpers_live_in_client_api_without_gui_runtime() {
 }
 
 #[test]
-fn gui_library_boundary_does_not_create_tauri_workspace_or_runtime() {
+fn gui_library_boundary_keeps_root_runtime_free_after_workspace_creation() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-
-    for file in [
-        "src-tauri/tauri.conf.json",
-        "src-tauri/Cargo.toml",
-        "gui/src-tauri/tauri.conf.json",
-        "gui/src-tauri/Cargo.toml",
-    ] {
-        assert!(
-            !root.join(file).exists(),
-            "Tauri workspace/app file {file} should not exist before library boundary review"
-        );
-    }
 
     let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
     assert!(
         cargo.contains("[[bin]]") && cargo.contains("name = \"shuo\""),
-        "package should still expose the existing shuo binary target"
+        "root package should still expose the existing shuo binary target"
+    );
+    assert!(
+        cargo.contains("[lib]") || root.join("src/lib.rs").exists(),
+        "root package should keep the reviewed library surface for GUI backend reuse"
     );
 
     for token in ["tauri", "wry", "webview", "WebView", "tao"] {
         assert!(
             !cargo.contains(token),
-            "GUI library split must happen before adding GUI runtime dependency token `{token}`"
+            "root Cargo.toml must not add GUI runtime dependency token `{token}`"
         );
     }
 }
@@ -728,7 +720,7 @@ fn gui_first_screen_metrics_timing_stays_pure_client_api() {
 }
 
 #[test]
-fn gui_tauri_permissions_preflight_is_documented_without_workspace() {
+fn gui_tauri_permissions_preflight_is_documented_without_root_runtime() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
 
@@ -751,20 +743,6 @@ fn gui_tauri_permissions_preflight_is_documented_without_workspace() {
         );
     }
 
-    for file in [
-        "src-tauri/tauri.conf.json",
-        "src-tauri/Cargo.toml",
-        "src-tauri/capabilities/default.json",
-        "gui/src-tauri/tauri.conf.json",
-        "gui/src-tauri/Cargo.toml",
-        "gui/src-tauri/capabilities/default.json",
-    ] {
-        assert!(
-            !root.join(file).exists(),
-            "Phase 9j should document permissions preflight before creating Tauri workspace file {file}"
-        );
-    }
-
     let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
     for token in ["tauri", "wry", "webview", "WebView", "tao"] {
         assert!(
@@ -775,7 +753,7 @@ fn gui_tauri_permissions_preflight_is_documented_without_workspace() {
 }
 
 #[test]
-fn gui_tauri_workspace_pre_creation_acceptance_is_documented_without_workspace() {
+fn gui_tauri_workspace_pre_creation_acceptance_is_documented_without_root_runtime() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
 
@@ -800,20 +778,6 @@ fn gui_tauri_workspace_pre_creation_acceptance_is_documented_without_workspace()
         );
     }
 
-    for file in [
-        "src-tauri/tauri.conf.json",
-        "src-tauri/Cargo.toml",
-        "src-tauri/capabilities/default.json",
-        "gui/src-tauri/tauri.conf.json",
-        "gui/src-tauri/Cargo.toml",
-        "gui/src-tauri/capabilities/default.json",
-    ] {
-        assert!(
-            !root.join(file).exists(),
-            "Phase 9k should define the acceptance checklist before creating Tauri workspace file {file}"
-        );
-    }
-
     let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
     for token in ["tauri", "wry", "webview", "WebView", "tao"] {
         assert!(
@@ -824,7 +788,7 @@ fn gui_tauri_workspace_pre_creation_acceptance_is_documented_without_workspace()
 }
 
 #[test]
-fn gui_reconnect_supervisor_ownership_is_documented_without_runtime_loop() {
+fn gui_reconnect_supervisor_ownership_is_documented_without_root_runtime_loop() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
 
@@ -849,20 +813,6 @@ fn gui_reconnect_supervisor_ownership_is_documented_without_runtime_loop() {
         );
     }
 
-    for file in [
-        "src-tauri/tauri.conf.json",
-        "src-tauri/Cargo.toml",
-        "src-tauri/capabilities/default.json",
-        "gui/src-tauri/tauri.conf.json",
-        "gui/src-tauri/Cargo.toml",
-        "gui/src-tauri/capabilities/default.json",
-    ] {
-        assert!(
-            !root.join(file).exists(),
-            "Phase 9l should document reconnect ownership before creating Tauri workspace file {file}"
-        );
-    }
-
     let client_api = std::fs::read_to_string(root.join("src/client_api.rs")).unwrap();
     for token in [
         "tokio::spawn",
@@ -880,6 +830,93 @@ fn gui_reconnect_supervisor_ownership_is_documented_without_runtime_loop() {
             !client_api.contains(token),
             "Phase 9l must keep shared client_api pure and free of runtime/GUI token `{token}`"
         );
+    }
+}
+
+#[test]
+fn gui_minimal_tauri_workspace_skeleton_is_isolated_from_root_runtime() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    for file in [
+        "src-tauri/Cargo.toml",
+        "src-tauri/tauri.conf.json",
+        "src-tauri/build.rs",
+        "src-tauri/src/main.rs",
+        "src-tauri/src/lib.rs",
+        "src-tauri/capabilities/default.json",
+    ] {
+        assert!(
+            root.join(file).exists(),
+            "Phase 9m should create minimal Tauri skeleton file {file}"
+        );
+    }
+
+    let tauri_cargo = std::fs::read_to_string(root.join("src-tauri/Cargo.toml")).unwrap();
+    for token in [
+        "name = \"shuohua-gui\"",
+        "tauri = { version = \"2\"",
+        "tauri-build = { version = \"2\"",
+        "shuohua = { path = \"..\" }",
+    ] {
+        assert!(
+            tauri_cargo.contains(token),
+            "src-tauri/Cargo.toml should contain minimal GUI skeleton token `{token}`"
+        );
+    }
+
+    let tauri_conf = std::fs::read_to_string(root.join("src-tauri/tauri.conf.json")).unwrap();
+    for token in [
+        "\"productName\": \"Shuohua\"",
+        "\"identifier\": \"dev.shuohua.app\"",
+        "\"frontendDist\": \"../gui-dist\"",
+        "\"label\": \"main\"",
+        "\"title\": \"Shuohua\"",
+    ] {
+        assert!(
+            tauri_conf.contains(token),
+            "src-tauri/tauri.conf.json should contain minimal app config token `{token}`"
+        );
+    }
+
+    let capability =
+        std::fs::read_to_string(root.join("src-tauri/capabilities/default.json")).unwrap();
+    for token in [
+        "\"identifier\": \"main\"",
+        "\"windows\": [\"main\"]",
+        "\"permissions\"",
+        "\"core:event:default\"",
+    ] {
+        assert!(
+            capability.contains(token),
+            "src-tauri/capabilities/default.json should contain minimal capability token `{token}`"
+        );
+    }
+
+    let root_cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    for token in ["tauri", "wry", "webview", "WebView", "tao"] {
+        assert!(
+            !root_cargo.contains(token),
+            "root Cargo.toml must not depend on GUI runtime token `{token}`"
+        );
+    }
+
+    for file in rust_files_under(&root.join("src/daemon"))
+        .into_iter()
+        .chain(rust_files_under(&root.join("src/tui")))
+        .chain([root.join("src/client_api.rs")])
+    {
+        let body = std::fs::read_to_string(&file).unwrap();
+        let relative = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        for token in ["tauri", "wry", "webview", "WebView", "tao"] {
+            assert!(
+                !body.contains(token),
+                "{relative} must not import GUI runtime token `{token}`"
+            );
+        }
     }
 }
 

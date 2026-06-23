@@ -308,6 +308,14 @@ Phase 9l 记录 GUI daemon offline/reconnect 后台任务 ownership，不写 GUI
   channel、Tauri event emission 或 metrics sink。
 - 不新增 IPC protocol，不创建 Tauri workspace，不新增 WebView runtime，不实现 runtime loop。
 
+Phase 9m 创建最小 Tauri workspace skeleton，不接 daemon、不实现页面：
+
+- 新增 `src-tauri/**` 最小标准骨架和主 window capability，让后续 GUI backend 有独立 crate。
+- Tauri/WRY/WebView runtime 只允许出现在 `src-tauri/**`；root crate、daemon、TUI 和
+  shared `client_api` 不引入 GUI runtime。
+- 不新增 IPC protocol，不运行 Tauri dev/build/bundle，不启动 daemon/GUI，不实现 reconnect loop
+  或 frontend view model。
+
 范围：
 
 - 建一个最小 Tauri app。

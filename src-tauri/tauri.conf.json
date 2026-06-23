@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Shuohua",
+  "version": "0.1.2",
+  "identifier": "dev.shuohua.app",
+  "build": {
+    "frontendDist": "../gui-dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Shuohua",
+        "width": 1080,
+        "height": 720,
+        "minWidth": 860,
+        "minHeight": 560
+      }
+    ]
+  }
+}

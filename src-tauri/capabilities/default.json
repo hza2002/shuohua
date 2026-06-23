@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Minimal main window capability for the Shuohua GUI skeleton.",
+  "windows": ["main"],
+  "permissions": ["core:event:default"]
+}

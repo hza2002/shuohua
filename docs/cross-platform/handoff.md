@@ -6,7 +6,7 @@
 
 ## 最近 commit
 
-HEAD: `feat: add windows path open reveal backend`
+HEAD: `feat: add audio convert facade` (`3cf864d`)
 
 ## 当前 phase
 
@@ -17,10 +17,11 @@ smart fallback 仍需 Windows 实机或 VM 验证。
 Phase 10c Docker/cross Linux check baseline 已完成：macOS 主机使用 Docker/cross 负责 Linux
 sysroot 和 C toolchain，`make check-linux-cross` 可通过；这只证明 Linux compile/cfg 边界，
 不代表 Linux runtime 可用。
-当前正在收敛 Phase 10h Windows Path Open/Reveal Compile Backend：Windows `platform::path` 使用
-`explorer.exe` / `/select,` 作为 compile backend，并把 `path.open_reveal` 标记为
-`partial/explorer/runtime_not_verified`。该阶段不实现 Windows daemon lifecycle、hotkey、clipboard、
-text injection、overlay runtime 或 COM Shell API，也不声明 Windows shell runtime 已验证。
+Phase 10i Audio Convert Facade 已完成：retained audio conversion 从 `voice::audio`
+移动到 `platform::audio_convert` facade。macOS 保持 `/usr/bin/afconvert` 参数和 cleanup 语义；
+Linux/Windows 暂时返回 explicit unsupported，直到选定 `ffmpeg`、`flac`/`lame`、纯 Rust encoder
+或其他 backend 并在目标系统验证。该阶段不改变 retained audio 文件命名、history schema、
+recorder WAV 写入或 `record_audio = "off"` 行为。
 
 ## 已完成事项
 
@@ -118,6 +119,15 @@ text injection、overlay runtime 或 COM Shell API，也不声明 Windows shell 
   - Windows `path.open_reveal` 静态 capability 同步为 `partial/explorer/runtime_not_verified`。
   - 该阶段只证明 Windows target 编译边界；真实 explorer 行为、路径 quoting、UNC、焦点和会话
     仍需 Windows VM/实机验证。
+- Phase 10i:
+  - 更新 `docs/cross-platform/platform-capabilities.md`、`docs/cross-platform/development-plan.md`
+    和 `docs/cross-platform/overview.md`，记录 retained audio conversion facade。
+  - 新增 `src/platform/audio_convert.rs`，集中 retained audio 转换：
+    macOS 继续使用 `/usr/bin/afconvert`，Linux/Windows 返回明确 unsupported。
+  - `src/voice/audio.rs` 不再直接持有 `afconvert` 命令、参数或 `std::process::Command`，finish
+    路径改走 `platform::audio_convert::convert_retained_audio()`，原有 temp/final cleanup 语义保持。
+  - 该阶段不改变 retained audio 文件命名、history schema、recorder WAV 写入或
+    `record_audio = "off"` 行为。
 - Phase 4a:
   - 更新 `docs/cross-platform/ipc-service.md`，把 Phase 4 拆成 lock/process probe facade 和
     后续 service manager facade。
@@ -1130,13 +1140,20 @@ text injection、overlay runtime 或 COM Shell API，也不声明 Windows shell 
 
 ## 下一步
 
-Windows IPC capability 诊断已与 Phase 3c 同步。下一步：
+最新验证结果：
+
+- `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && make check-windows && make check-linux-cross`
+  通过。
+- `make check-windows` / `make check-linux-cross` 仍输出既有非 macOS skeleton dead-code warnings；
+  Phase 10i 引入的 cross-target `OsString` unused warning 已修复。
+
+下一步：
 
 - 下一阶段若继续 Windows，可做 Windows daemon single-instance/process probe/smart fallback skeleton
   收敛，或继续把 desktop/hotkey/service 的 Windows unsupported skeleton 接入 doctor/TUI 诊断。
 - 若继续 Linux service manager，可在真实 Linux/VM 前先做 install/status 设计细化；不要在 macOS
   上假装验证 `systemctl --user` runtime。
-- Phase 10h 已完成。下一步可继续把 Linux/Windows desktop/hotkey/overlay runtime gaps 细化到
+- Phase 10i 已完成。下一步可继续把 Linux/Windows desktop/hotkey/overlay runtime gaps 细化到
   capability/doctor/TUI，或转向 Windows lifecycle/smart fallback skeleton。
 - 若继续 overlay 视觉 PoC，则需要用户提供真实 Windows 11/10 或 Linux wlroots/KDE/GNOME 环境；
   在当前 macOS 主机上不要假装验证真实 topmost/click-through/layer-shell 行为。

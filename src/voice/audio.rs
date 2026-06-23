@@ -1,8 +1,6 @@
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 
 use crate::config::RecordAudioMode;
 
@@ -47,25 +45,16 @@ pub(crate) fn prepare_in_dir(
 
 impl AudioOutput {
     pub(crate) fn finish(self) -> Result<PathBuf> {
-        self.finish_with("/usr/bin/afconvert")
+        self.finish_with(crate::platform::audio_convert::convert_retained_audio)
     }
 
-    fn finish_with(self, program: &str) -> Result<PathBuf> {
-        let args = afconvert_args(self.mode, &self.wav_path, &self.temp_path);
-        let output = Command::new(program).args(&args).output();
+    fn finish_with(
+        self,
+        convert: impl FnOnce(RecordAudioMode, &Path, &Path) -> Result<()>,
+    ) -> Result<PathBuf> {
         let mut published = false;
         let result = (|| -> Result<PathBuf> {
-            let output = match output {
-                Ok(output) => output,
-                Err(error) => return Err(error).context("run /usr/bin/afconvert"),
-            };
-            if !output.status.success() {
-                bail!(
-                    "afconvert failed with status {}: {}",
-                    output.status,
-                    String::from_utf8_lossy(&output.stderr).trim()
-                );
-            }
+            convert(self.mode, &self.wav_path, &self.temp_path)?;
             std::fs::rename(&self.temp_path, &self.final_path).with_context(|| {
                 format!(
                     "publish retained audio {} -> {}",
@@ -94,20 +83,6 @@ impl AudioOutput {
         remove_if_exists(&self.wav_path);
         remove_if_exists(&self.final_path);
     }
-}
-
-fn afconvert_args(mode: RecordAudioMode, input: &Path, output: &Path) -> Vec<OsString> {
-    let mut args = vec![input.as_os_str().to_owned(), output.as_os_str().to_owned()];
-    match mode {
-        RecordAudioMode::Off => unreachable!(),
-        RecordAudioMode::Lossless => {
-            args.extend(["-f", "flac", "-d", "flac"].map(OsString::from));
-        }
-        RecordAudioMode::Compact => {
-            args.extend(["-f", "m4af", "-d", "aac", "-b", "32000"].map(OsString::from));
-        }
-    }
-    args
 }
 
 fn remove_if_exists(path: &Path) {
@@ -193,33 +168,6 @@ mod tests {
     }
 
     #[test]
-    fn compact_afconvert_args_use_aac_32_kbps() {
-        let args = afconvert_args(
-            RecordAudioMode::Compact,
-            Path::new("input.wav"),
-            Path::new("output.m4a"),
-        );
-        let args = args
-            .iter()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            args,
-            [
-                "input.wav",
-                "output.m4a",
-                "-f",
-                "m4af",
-                "-d",
-                "aac",
-                "-b",
-                "32000"
-            ]
-        );
-    }
-
-    #[test]
     fn failed_conversion_removes_temporary_files() {
         let dir = std::env::temp_dir().join(format!("shuohua-audio-{}", ulid::Ulid::new()));
         let output = prepare_in_dir(&dir, "01HXYZ", RecordAudioMode::Lossless)
@@ -230,7 +178,16 @@ mod tests {
         let wav = output.wav_path.clone();
         let temp = output.temp_path.clone();
 
-        assert!(output.finish_with("/usr/bin/false").is_err());
+        assert!(output
+            .finish_with(|mode, input, output| {
+                crate::platform::audio_convert::convert_retained_audio_with_program(
+                    "/usr/bin/false",
+                    mode,
+                    input,
+                    output,
+                )
+            })
+            .is_err());
         assert!(!wav.exists());
         assert!(!temp.exists());
 

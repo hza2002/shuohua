@@ -187,6 +187,51 @@ fn windows_path_open_reveal_capability_reports_explorer_partial() {
 }
 
 #[test]
+fn audio_conversion_lives_behind_platform_facade() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let audio_convert_path = root.join("src/platform/audio_convert.rs");
+    assert!(
+        audio_convert_path.exists(),
+        "Phase 10i retained audio conversion facade should live at src/platform/audio_convert.rs"
+    );
+
+    let platform_mod = std::fs::read_to_string(root.join("src/platform/mod.rs")).unwrap();
+    assert!(
+        platform_mod.contains("pub(crate) mod audio_convert;"),
+        "src/platform/mod.rs must expose the audio conversion facade"
+    );
+
+    let facade = std::fs::read_to_string(audio_convert_path).unwrap();
+    for token in [
+        "pub(crate) fn convert_retained_audio(",
+        "#[cfg(target_os = \"macos\")]",
+        "/usr/bin/afconvert",
+        "afconvert_args",
+    ] {
+        assert!(
+            facade.contains(token),
+            "platform audio conversion facade should contain token `{token}`"
+        );
+    }
+
+    let voice_audio = std::fs::read_to_string(root.join("src/voice/audio.rs")).unwrap();
+    for forbidden in [
+        "/usr/bin/afconvert",
+        "afconvert_args",
+        "std::process::Command",
+    ] {
+        assert!(
+            !voice_audio.contains(forbidden),
+            "voice audio code should use platform::audio_convert instead of `{forbidden}`"
+        );
+    }
+    assert!(
+        voice_audio.contains("crate::platform::audio_convert::convert_retained_audio"),
+        "voice audio finish path should call platform::audio_convert"
+    );
+}
+
+#[test]
 fn shared_macos_adapters_live_under_platform_module() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for file in [

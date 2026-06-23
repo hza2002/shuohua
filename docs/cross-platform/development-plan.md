@@ -713,6 +713,15 @@ Phase 10h Windows Path Open/Reveal Compile Backend:
 - This phase must not implement Windows daemon lifecycle, hotkey, clipboard, text injection, overlay runtime,
   or shell API COM integration.
 
+Phase 10i Audio Convert Facade:
+
+- Move retained audio conversion behind a small `platform::audio_convert` facade.
+- macOS keeps the current `/usr/bin/afconvert` arguments and cleanup behavior.
+- Linux/Windows return explicit unsupported for retained audio conversion until a converter backend is chosen
+  and runtime-tested.
+- This phase must not change retained audio path layout, history schema, recorder PCM/WAV writing, or
+  `record_audio = "off"` behavior.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

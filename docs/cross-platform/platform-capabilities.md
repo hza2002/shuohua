@@ -167,6 +167,18 @@ compile backend：
 真实 Windows shell 行为、路径 quoting、UNC 路径、焦点和多用户会话仍需 Windows VM/实机验证。
 Phase 10h 不引入 COM Shell API，也不实现 Windows daemon lifecycle、desktop injection 或 overlay。
 
+## Phase 10i Audio Convert Facade
+
+Retained audio conversion currently uses macOS `afconvert` directly from voice code. Phase 10i moves that
+command behind `platform::audio_convert`:
+
+- macOS：继续使用 `/usr/bin/afconvert`，参数和 cleanup 语义不变。
+- Linux/Windows：暂时返回 unsupported；`audio.convert` capability 继续保持 unsupported，直到选定
+  `ffmpeg`、`flac`/`lame`、纯 Rust encoder 或其他 backend，并在目标系统验证。
+
+该阶段不改变 retained audio 文件命名、history schema、recorder WAV 写入、`record_audio = "off"`，
+也不让 daemon 热路径引入外部转码依赖。
+
 ## 设计约束
 
 - capability probe 不执行高风险动作。

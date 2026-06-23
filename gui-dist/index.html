@@ -325,6 +325,31 @@
           return;
         }
 
+        if (payload.kind === "streamStats") {
+          firstScreenViewModel.lastRefreshStatus = "stream update";
+          firstScreenViewModel.requestDurationMs = payload.durationMs ?? null;
+          if (payload.wordCount !== null && payload.wordCount !== undefined) {
+            firstScreenViewModel.latestPreview = `${payload.wordCount} words`;
+          }
+          return;
+        }
+
+        if (payload.kind === "liveText") {
+          firstScreenViewModel.lastRefreshStatus = "stream update";
+          firstScreenViewModel.latestPreview = payload.liveText ?? "live text";
+          return;
+        }
+
+        if (payload.kind === "historyAppended") {
+          firstScreenViewModel.lastRefreshStatus = "stream update";
+          firstScreenViewModel.historyRecordCount +=
+            payload.historyRecordCountDelta ?? 0;
+          firstScreenViewModel.latestPreview =
+            payload.latestPreview ?? "history appended";
+          firstScreenViewModel.requestDurationMs = payload.durationMs ?? null;
+          return;
+        }
+
         if (payload.kind === "historyChanged") {
           firstScreenViewModel.lastRefreshStatus = "history stale";
           firstScreenViewModel.latestPreview = "history stale";
@@ -356,6 +381,28 @@
 
         if (payload.kind === "historyChanged") {
           document.getElementById("request-plan-kinds").textContent = "history stale";
+          return;
+        }
+
+        if (payload.kind === "streamStats") {
+          document.getElementById("request-plan-count").textContent =
+            `${payload.wordCount ?? 0} words`;
+          document.getElementById("request-plan-kinds").textContent =
+            `duration:${payload.durationMs ?? 0} ms`;
+          return;
+        }
+
+        if (payload.kind === "liveText") {
+          document.getElementById("request-plan-kinds").textContent =
+            payload.liveText ?? "live text";
+          return;
+        }
+
+        if (payload.kind === "historyAppended") {
+          document.getElementById("request-plan-count").textContent =
+            `${payload.historyRecordCountDelta ?? 0} new history record`;
+          document.getElementById("request-plan-kinds").textContent =
+            payload.latestPreview ?? "history appended";
           return;
         }
 

@@ -559,6 +559,15 @@ Phase 9ak 修复 GUI event stream state forwarding，不新增 IPC：
 - 不新增 recording controls、reconnect supervisor、service management、daemon auto-start 或 release
   build/bundle。
 
+Phase 9al 增加 GUI event stream first-screen data projection，不新增 IPC：
+
+- `src-tauri` 可以把既有订阅事件 `StatsChanged`、`Partial`、`Segment`、`HistoryAppended`
+  映射到当前 `shuohua://daemon-event` payload。
+- frontend 可以用这些 payload 自动更新现有 placeholder 字段，覆盖 live stats/text/latest record；
+  不自动触发 Refresh，不读取文件，不建立完整 History view。
+- 不新增 IPC command/event，不 bump `PROTO_VERSION`，不新增 recording controls、reconnect supervisor、
+  service management、daemon auto-start 或 release build/bundle。
+
 范围：
 
 - 建一个最小 Tauri app。

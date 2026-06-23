@@ -551,6 +551,15 @@ Phase 9ak 修复 GUI event stream state forwarding，不新增 IPC：
   control command，不改变 daemon/TUI 行为。
 - frontend 继续消费同一个 `shuohua://daemon-event` 和既有 `daemonStatus` payload。
 
+Phase 9al 增加 GUI event stream first-screen data projection，不新增 IPC：
+
+- GUI backend event stream 可以把既有 `StatsChanged`、`Partial`、`Segment` 和 `HistoryAppended`
+  映射到同一个 `shuohua://daemon-event` payload。
+- frontend 只更新现有 first-screen placeholder 字段：manual history count、latest preview、
+  request/status summary 和 live text。Refresh 仍作为 one-shot 对照，不被自动触发。
+- 不新增 IPC event、不 bump `PROTO_VERSION`、不轮询、不新增 reconnect supervisor、service
+  management 或 recording controls。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：

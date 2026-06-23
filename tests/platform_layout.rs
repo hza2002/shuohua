@@ -2642,6 +2642,71 @@ fn gui_backend_event_stream_forwards_recording_state_changes() {
     }
 }
 
+#[test]
+fn gui_event_stream_projects_first_screen_data_without_refresh() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+    for token in [
+        "Phase 9al",
+        "StatsChanged",
+        "Partial",
+        "Segment",
+        "HistoryAppended",
+        "不轮询",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9al stream projection token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "live_text: Option<String>",
+        "duration_ms: Option<u64>",
+        "word_count: Option<u32>",
+        "history_record_count_delta: i64",
+        "Event::StatsChanged",
+        "Event::Partial",
+        "Event::Segment",
+        "Event::HistoryAppended",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should project Phase 9al stream data token `{token}`"
+        );
+    }
+
+    let html = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "payload.durationMs",
+        "payload.wordCount",
+        "payload.liveText",
+        "payload.historyRecordCountDelta",
+        "payload.latestPreview",
+        "stream update",
+    ] {
+        assert!(
+            html.contains(token),
+            "gui-dist/index.html should project Phase 9al stream data token `{token}`"
+        );
+    }
+
+    for forbidden in [
+        "Command::StartRecording",
+        "Command::StopRecording",
+        "Command::CancelRecording",
+        "setInterval(",
+        "setTimeout(",
+        "gui_first_screen_summary_request_once()",
+    ] {
+        assert!(
+            !html.contains(forbidden),
+            "Phase 9al frontend stream projection must not add controls/polling token `{forbidden}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

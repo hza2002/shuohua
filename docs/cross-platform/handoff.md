@@ -6,17 +6,15 @@
 
 ## 最近 commit
 
-HEAD: `fix: forward gui recording state events`
+HEAD: `feat: project gui stream data`
 
 ## 当前 phase
 
-Phase 9ak: GUI Event Stream State Forwarding Fix 正在收口。
-用户验证 9aj/初版 9ak 后反馈：不点 Refresh 时 GUI 不会随录音变化。定位结果是 backend stream 只转发
-`Snapshot` / `DaemonStatus` / `HistoryChanged` / `Error`，但录音开始/停止来自 daemon 已有
-`StateChanged` event。初版 9ak 只补了 payload mapper，但 stream loop 前置
-`gui_backend_event_from_daemon_event()` classifier 仍会丢掉 `StateChanged`。最终修复是让
-`gui_daemon_event_payload()` 直接决定是否 emit，并把 `Event::StateChanged` 映射为 frontend
-已消费的 `daemonStatus` payload；不新增 IPC event、不 bump `PROTO_VERSION`、不新增 recording controls。
+Phase 9al: GUI Event Stream First-Screen Data Projection 正在收口。
+用户验证 9ak 后确认 recording state 会变化，但很多字段仍只在 Refresh 后变化。当前阶段把既有
+`StatsChanged`、`Partial`、`Segment` 和 `HistoryAppended` 映射到同一个 Tauri event payload，
+frontend 自动更新现有 placeholder 的 live stats/text/latest record 字段。
+这仍不是完整 Status/History view；不新增 IPC event、不 bump `PROTO_VERSION`、不轮询、不新增 recording controls。
 不要直接做完整 GUI、reconnect runtime、service management、配置编辑器或 release 打包指标。
 
 ## 已完成事项
@@ -743,6 +741,14 @@ Phase 9ak: GUI Event Stream State Forwarding Fix 正在收口。
   5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
   tests、49 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests；
   Tauri crate `cargo check` 通过。
+- Phase 9al 已跑窄验证：
+  `cargo test --test platform_layout gui_event_stream_projects_first_screen_data_without_refresh`
+  先红灯失败于缺少 live stats/text/history appended projection；补 backend payload 和 frontend projection 后通过。
+- Phase 9al 已跑：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo check --manifest-path src-tauri/Cargo.toml`，
+  通过。`cargo test` 覆盖：92 个 library unit tests、639 个 binary unit tests、
+  5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
+  tests、50 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests；
+  Tauri crate `cargo check` 通过。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -778,7 +784,7 @@ Phase 9ak: GUI Event Stream State Forwarding Fix 正在收口。
   capabilities JSON、frontend command binding、release build 或打包验证。
 - Phase 9l 只记录 reconnect supervisor ownership/cancellation 语义，没有实现真实 runtime loop、
   Tauri event emission、frontend view model 或 metrics sink。
-- Phase 9m/9n/9o/9p/9q/9r/9s/9t/9u/9v/9w/9x/9y/9z/9aa/9ab/9ac/9ad/9ae/9af/9ag/9ah/9ai/9aj/9ak 只创建最小 `src-tauri/**` skeleton、静态 placeholder、本地 metadata
+- Phase 9m/9n/9o/9p/9q/9r/9s/9t/9u/9v/9w/9x/9y/9z/9aa/9ab/9ac/9ad/9ae/9af/9ag/9ah/9ai/9aj/9ak/9al 只创建最小 `src-tauri/**` skeleton、静态 placeholder、本地 metadata
   command、first-screen request plan command、daemon status snapshot shape command、纯 daemon
   status event mapper、显式 one-shot daemon status request command 和显式 one-shot history summary
   request command、显式 one-shot first-screen summary request command、first-screen summary 本地
@@ -787,7 +793,8 @@ Phase 9ak: GUI Event Stream State Forwarding Fix 正在收口。
   first-screen explicit refresh affordance shape、placeholder explicit refresh click wiring 和
   click-scoped summary/error projection、success offline clear、application command ACL、初始化错误可见性和静态
   frontend global Tauri API、手动 Refresh 可读摘要、本地 first-screen view model 和显式 backend
-  daemon event stream bridge、frontend daemon event listener wiring 和 `StateChanged` forwarding；
+  daemon event stream bridge、frontend daemon event listener wiring、`StateChanged` forwarding 和
+  first-screen stream data projection；
   尚未运行 `tauri dev` / `tauri build` / `tauri bundle`，也没有启动 GUI 或 daemon。后续需要
   单独决定何时运行 release build、如何记录 cold start/RSS/CPU/bundle 指标。
 - Phase 9n 的 `gui_shell_metadata` 只验证本地 command wiring，不连接 daemon、不读
@@ -842,6 +849,8 @@ Phase 9ak: GUI Event Stream State Forwarding Fix 正在收口。
 - Phase 9ak 只修复 backend stream mapper，把既有 `StateChanged` 转成现有 `daemonStatus`
   payload，并移除 stream loop 对 shared first-screen classifier 的前置过滤；不新增 IPC event、不改变
   daemon/TUI 行为、不新增 GUI recording controls。
+- Phase 9al 只把既有 `StatsChanged`、`Partial`、`Segment`、`HistoryAppended` 投影到现有
+  placeholder 字段；不自动触发 Refresh、不建立完整 History view、不新增 IPC event 或 polling。
 - `ipc::transport` 仍是 Unix-only，library client 只实际覆盖 macOS/Linux 当前 transport。
   Windows Named Pipe adapter 仍是后续 IPC transport backend 工作。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
@@ -851,16 +860,18 @@ Phase 9ak: GUI Event Stream State Forwarding Fix 正在收口。
 
 ## 下一步
 
-Phase 9ak 后，回到用户真实验证点：
+Phase 9al 后，回到用户真实验证点：
 
 - 用户在 macOS 上运行：
   `cargo run --bin shuo -- daemon`
 - 另开终端运行：
   `cargo run --manifest-path src-tauri/Cargo.toml`
-- 然后用现有热键开始/停止录音，观察 GUI 的 `Manual summary`、`Manual state`、`Manual error`、
-  `Status state` 是否随 daemon event 自动变化。Refresh 仍可作为 one-shot 对照。
-- 若 GUI 自动变化，下一阶段再做首屏展示收敛或最小 reconnect 状态显示。若仍没有变化，优先确认
-  Tauri listener 是否启动、backend bridge 是否收到 Snapshot/StateChanged，而不是继续堆功能。
+- 然后用现有热键开始/停止录音，观察 GUI 的 `Manual summary`、`Manual state`、`Manual latest`、
+  `Manual timing`、`Manual error`、`Status state` 是否随 daemon event 自动变化。Refresh 仍可作为
+  one-shot 对照。
+- 若这些字段自动变化，下一阶段再做首屏展示收敛或最小 reconnect 状态显示。若仍有字段不变，先判断
+  该字段是否有对应 daemon subscription event；没有的话需要设计新的 summary/event strategy，而不是
+  靠 Refresh 伪装实时。
 - 若目标平台环境可用，也可以先按 Phase 7a/8a checklist 做 Windows/Linux 最小 overlay PoC。
 
 建议下一 session prompt：

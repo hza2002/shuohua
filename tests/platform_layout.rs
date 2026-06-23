@@ -844,6 +844,7 @@ fn gui_minimal_tauri_workspace_skeleton_is_isolated_from_root_runtime() {
         "src-tauri/src/main.rs",
         "src-tauri/src/lib.rs",
         "src-tauri/capabilities/default.json",
+        "src-tauri/Cargo.lock",
     ] {
         assert!(
             root.join(file).exists(),
@@ -869,6 +870,8 @@ fn gui_minimal_tauri_workspace_skeleton_is_isolated_from_root_runtime() {
         "\"productName\": \"Shuohua\"",
         "\"identifier\": \"dev.shuohua.app\"",
         "\"frontendDist\": \"../gui-dist\"",
+        "\"active\": false",
+        "\"icon\": [\"../assets/icon/shuohua-icon-1024.png\"]",
         "\"label\": \"main\"",
         "\"title\": \"Shuohua\"",
     ] {
@@ -897,6 +900,104 @@ fn gui_minimal_tauri_workspace_skeleton_is_isolated_from_root_runtime() {
         assert!(
             !root_cargo.contains(token),
             "root Cargo.toml must not depend on GUI runtime token `{token}`"
+        );
+    }
+
+    for file in rust_files_under(&root.join("src/daemon"))
+        .into_iter()
+        .chain(rust_files_under(&root.join("src/tui")))
+        .chain([root.join("src/client_api.rs")])
+    {
+        let body = std::fs::read_to_string(&file).unwrap();
+        let relative = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        for token in ["tauri", "wry", "webview", "WebView", "tao"] {
+            assert!(
+                !body.contains(token),
+                "{relative} must not import GUI runtime token `{token}`"
+            );
+        }
+    }
+}
+
+#[test]
+fn gui_backend_shell_placeholder_stays_local_to_tauri_app() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9n",
+        "metadata command",
+        "gui-dist/index.html",
+        "不接 daemon",
+        "不读配置/history",
+        "不实现 reconnect supervisor",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9n GUI shell token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "#[tauri::command]",
+        "gui_shell_metadata",
+        "GuiShellMetadata",
+        "invoke_handler",
+        "tauri::generate_handler![gui_shell_metadata]",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should wire minimal GUI shell command token `{token}`"
+        );
+    }
+
+    for token in [
+        "connect_default",
+        "DaemonClient",
+        "ipc::client",
+        "Command::",
+        "Event::",
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+    ] {
+        assert!(
+            !tauri_lib.contains(token),
+            "Phase 9n GUI shell must not connect daemon or own runtime loop token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "Shuohua",
+        "gui_shell_metadata",
+        "__TAURI__",
+        "daemonConnected",
+        "false",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should contain minimal placeholder token `{token}`"
+        );
+    }
+
+    for path in ["package.json", "vite.config.js", "gui-dist/package.json"] {
+        assert!(
+            !root.join(path).exists(),
+            "Phase 9n should not introduce frontend package/build config {path}"
+        );
+    }
+
+    let root_cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    for token in ["tauri", "wry", "webview", "WebView", "tao"] {
+        assert!(
+            !root_cargo.contains(token),
+            "root Cargo.toml must remain free of GUI runtime token `{token}`"
         );
     }
 

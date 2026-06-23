@@ -316,6 +316,15 @@ Phase 9m 创建最小 Tauri workspace skeleton，不接 daemon、不实现页面
 - 不新增 IPC protocol，不运行 Tauri dev/build/bundle，不启动 daemon/GUI，不实现 reconnect loop
   或 frontend view model。
 
+Phase 9n 增加最小 GUI backend shell 和静态 frontend placeholder，不接 daemon：
+
+- `src-tauri` 可以注册一个本地 metadata command，用于验证 Tauri command wiring 和 frontend
+  invoke 入口；command 只能返回静态 GUI shell 信息，不连接 IPC、不读配置/history。
+- 新增最小 `gui-dist/**` 静态 placeholder，让 `frontendDist` 有可审计输入；不引入 npm/vite、
+  build script、frontend dependency 或完整页面。
+- 不新增 IPC protocol，不运行 Tauri dev/build/bundle，不启动 daemon/GUI，不实现 reconnect loop、
+  service management、配置编辑或 history view model。
+
 范围：
 
 - 建一个最小 Tauri app。

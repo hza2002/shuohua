@@ -227,6 +227,22 @@ Phase 9m 创建最小 Tauri workspace skeleton，不接 daemon、不实现页面
 - 这个阶段不运行 `tauri dev`、`tauri build` 或 `tauri bundle`，不生成 release 指标，不新增 IPC
   command/event，不改变 TUI/CLI 行为。
 
+Phase 9n 增加最小 GUI backend shell 和静态 frontend placeholder，不接 daemon：
+
+- `src-tauri` 可以注册一个 Tauri command，用于验证 GUI backend command wiring。command 只返回
+  静态 shell metadata，例如 app 名称、当前 phase、是否存在 daemon connection 和 frontend
+  placeholder readiness；不得调用 `shuohua::client_api`、`ipc::client`、`tokio::spawn`、
+  timer、channel 或 metrics sink。
+- frontend 只允许新增 `gui-dist/index.html` 和必要的同目录静态资源。placeholder 可以调用本地
+  metadata command 并渲染返回值，但不得实现 Status/History/Diagnostics view model，不读
+  config/history 文件，不直接访问 IPC transport。
+- Tauri command/event API 仍只能出现在 `src-tauri/**` 和 `gui-dist/**`。daemon、TUI、root
+  `Cargo.toml` 和 shared `client_api` 继续不含 Tauri/WRY/WebView runtime token。
+- capabilities 仍保持最小；本阶段不新增 shell、filesystem、http、process、global shortcut、
+  updater、sidecar 或 service management 权限。
+- 这个阶段不运行 `tauri dev`、`tauri build` 或 `tauri bundle`，不启动 daemon/GUI，不新增 IPC
+  command/event，不实现 reconnect supervisor。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：
@@ -356,6 +372,18 @@ Phase 9m 验收：
   依赖根 crate `shuohua`。
 - root `Cargo.toml`、`src/daemon/**`、`src/tui/**` 和 `src/client_api.rs` 仍不含 Tauri/WRY/WebView
   runtime token。
+- 不运行 `tauri dev` / `tauri build` / `tauri bundle`，不启动 daemon/GUI，不新增 IPC
+  command/event。
+
+Phase 9n 验收：
+
+- `src-tauri/src/lib.rs` 注册最小 metadata command，并通过 `tauri::generate_handler!` 接入
+  builder；command 返回静态 shell metadata，不连接 daemon IPC。
+- `gui-dist/index.html` 存在，作为 `frontendDist` 的最小静态 placeholder；不新增 frontend
+  package manager、dev server config 或 build output 目录。
+- root `Cargo.toml`、`src/daemon/**`、`src/tui/**` 和 `src/client_api.rs` 仍不含 Tauri/WRY/WebView
+  runtime token；`src-tauri/**` 不出现 `connect_default`、`tokio::spawn`、`Command::` 或
+  `Event::`。
 - 不运行 `tauri dev` / `tauri build` / `tauri bundle`，不启动 daemon/GUI，不新增 IPC
   command/event。
 

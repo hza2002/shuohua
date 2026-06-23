@@ -6,6 +6,10 @@
   "build": {
     "frontendDist": "../gui-dist"
   },
+  "bundle": {
+    "active": false,
+    "icon": ["../assets/icon/shuohua-icon-1024.png"]
+  },
   "app": {
     "windows": [
       {

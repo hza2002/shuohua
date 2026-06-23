@@ -83,6 +83,14 @@
         <dd id="refresh-default-history-limit">20</dd>
         <dt>Refresh target</dt>
         <dd id="refresh-invoke-target">gui_first_screen_summary_request_once</dd>
+        <dt>Readiness ready</dt>
+        <dd id="readiness-ready">false</dd>
+        <dt>Readiness inputs</dt>
+        <dd id="readiness-required-inputs">status:false, history:false, stats:false</dd>
+        <dt>Readiness timing</dt>
+        <dd id="readiness-timing">pending</dd>
+        <dt>Readiness source</dt>
+        <dd id="readiness-source">placeholder</dd>
       </dl>
     </main>
     <script>
@@ -139,6 +147,21 @@
         );
         document.getElementById("refresh-invoke-target").textContent =
           refreshShape.invokeTarget;
+
+        const readinessShape = await invoke("gui_first_screen_readiness_shape");
+        document.getElementById("readiness-ready").textContent = String(
+          readinessShape.ready
+        );
+        document.getElementById("readiness-required-inputs").textContent =
+          `status:${readinessShape.inputs.daemonStatusReceived}, ` +
+          `history:${readinessShape.inputs.historyPageReceived}, ` +
+          `stats:${readinessShape.inputs.historyStatsReceived}`;
+        document.getElementById("readiness-timing").textContent =
+          `connect:${readinessShape.timing.connectDurationMs ?? "pending"}, ` +
+          `first:${readinessShape.timing.firstEventMs ?? "pending"}, ` +
+          `ready:${readinessShape.timing.readyMs ?? "pending"}`;
+        document.getElementById("readiness-source").textContent =
+          readinessShape.source;
       }
 
       loadShellMetadata().catch(() => {});

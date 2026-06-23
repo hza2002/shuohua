@@ -164,6 +164,31 @@ struct GuiFirstScreenRefreshShape {
     invoke_target: &'static str,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiFirstScreenReadinessShape {
+    ready: bool,
+    inputs: GuiFirstScreenReadinessInputs,
+    timing: GuiFirstScreenReadinessTimingShape,
+    source: &'static str,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiFirstScreenReadinessInputs {
+    daemon_status_received: bool,
+    history_page_received: bool,
+    history_stats_received: bool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiFirstScreenReadinessTimingShape {
+    connect_duration_ms: Option<u64>,
+    first_event_ms: Option<u64>,
+    ready_ms: Option<u64>,
+}
+
 #[tauri::command]
 fn gui_first_screen_request_plan(history_limit: Option<usize>) -> GuiFirstScreenRequestPlan {
     let history_limit = history_limit.unwrap_or(20);
@@ -195,6 +220,24 @@ fn gui_first_screen_refresh_shape(history_limit: Option<usize>) -> GuiFirstScree
         requires_daemon_connection: true,
         transport_opened: false,
         invoke_target: "gui_first_screen_summary_request_once",
+    }
+}
+
+#[tauri::command]
+fn gui_first_screen_readiness_shape() -> GuiFirstScreenReadinessShape {
+    GuiFirstScreenReadinessShape {
+        ready: false,
+        inputs: GuiFirstScreenReadinessInputs {
+            daemon_status_received: false,
+            history_page_received: false,
+            history_stats_received: false,
+        },
+        timing: GuiFirstScreenReadinessTimingShape {
+            connect_duration_ms: None,
+            first_event_ms: None,
+            ready_ms: None,
+        },
+        source: "placeholder",
     }
 }
 
@@ -649,6 +692,7 @@ pub fn run() {
             gui_first_screen_request_plan,
             gui_daemon_status_snapshot,
             gui_first_screen_refresh_shape,
+            gui_first_screen_readiness_shape,
             gui_daemon_status_request_once,
             gui_history_summary_request_once,
             gui_first_screen_summary_request_once
@@ -862,6 +906,20 @@ mod tests {
             shape.invoke_target,
             "gui_first_screen_summary_request_once"
         );
+    }
+
+    #[test]
+    fn first_screen_readiness_shape_is_static_placeholder() {
+        let shape = gui_first_screen_readiness_shape();
+
+        assert!(!shape.ready);
+        assert!(!shape.inputs.daemon_status_received);
+        assert!(!shape.inputs.history_page_received);
+        assert!(!shape.inputs.history_stats_received);
+        assert_eq!(shape.timing.connect_duration_ms, None);
+        assert_eq!(shape.timing.first_event_ms, None);
+        assert_eq!(shape.timing.ready_ms, None);
+        assert_eq!(shape.source, "placeholder");
     }
 
     fn sample_record(id: &str, text: &str) -> HistoryRecord {

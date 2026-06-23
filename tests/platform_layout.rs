@@ -1551,6 +1551,82 @@ fn gui_first_screen_refresh_shape_is_static_and_explicit() {
     );
 }
 
+#[test]
+fn gui_first_screen_readiness_shape_is_static_display_preflight() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9w",
+        "gui_first_screen_readiness_shape",
+        "display preflight",
+        "ready=false",
+        "timing 字段暂不可用",
+        "std::time::Instant::now()",
+        "不得启动 timer/reconnect loop",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9w readiness display token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "gui_first_screen_readiness_shape",
+        "GuiFirstScreenReadinessShape",
+        "GuiFirstScreenReadinessInputs",
+        "GuiFirstScreenReadinessTimingShape",
+        "ready",
+        "daemon_status_received",
+        "history_page_received",
+        "history_stats_received",
+        "connect_duration_ms",
+        "first_event_ms",
+        "ready_ms",
+        "source",
+        "placeholder",
+        "tauri::generate_handler!",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should expose Phase 9w readiness display token `{token}`"
+        );
+    }
+
+    for token in [
+        "client.send(&Command::Subscribe)",
+        "subscribe_events",
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+    ] {
+        assert!(
+            !tauri_lib.contains(token),
+            "Phase 9w readiness shape must not subscribe, reconnect, spawn, or own timer token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "gui_first_screen_readiness_shape",
+        "readiness-ready",
+        "readiness-required-inputs",
+        "readiness-timing",
+        "readiness-source",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should display readiness shape token `{token}`"
+        );
+    }
+    assert!(
+        !frontend.contains("invoke(\"gui_first_screen_summary_request_once\"")
+            && !frontend.contains("invoke('gui_first_screen_summary_request_once'"),
+        "placeholder must not auto-call the one-shot first-screen summary request"
+    );
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

@@ -421,6 +421,16 @@ Phase 9v 增加 GUI first-screen explicit refresh shape，不自动请求：
   或 frontend Status/History view model。
 - 不新增 IPC protocol，不运行 Tauri dev/build/bundle，不启动 daemon/GUI，不改变 TUI/CLI 行为。
 
+Phase 9w 增加 GUI first-screen readiness/timing display shape，不自动请求：
+
+- `src-tauri` 可以注册一个 readiness/timing display shape command，固定后续首屏空态展示契约：
+  `ready=false`、必需输入均未到达、timing 暂不可用、source 为 placeholder。
+- command 不创建 `DaemonClient`、不调用 `connect_default()`、不发送 IPC、不调用 one-shot summary、
+  不读系统时间、不启动 timer/reconnect loop、不做 Tauri event emission。
+- placeholder 只展示 readiness/timing 空态字段，不实现 loading/retry UI 或 frontend Status/History
+  view model。
+- 不新增 IPC protocol，不运行 Tauri dev/build/bundle，不启动 daemon/GUI，不改变 TUI/CLI 行为。
+
 范围：
 
 - 建一个最小 Tauri app。

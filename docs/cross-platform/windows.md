@@ -58,6 +58,10 @@ Startup should be user scoped:
 
 ## File Layout
 
+Windows file layout follows the shared product data ownership model in [app-data.md](app-data.md). The same
+product config/history/audio/log roots are shared by CLI, daemon, TUI, GUI, and tray. Package-private app data
+is reserved for GUI/runtime state and must not become a second product data truth source.
+
 Windows must use Windows per-user app data locations, not Unix-style home dotfiles.
 
 Recommended mapping:
@@ -79,14 +83,19 @@ Implementation notes:
   validation.
 - Windows unpackaged desktop builds should resolve known folders through Windows APIs when possible, with
   `%APPDATA%` / `%LOCALAPPDATA%` environment fallback only as a development fallback.
-- Packaged-app `ApplicationData` APIs are not the baseline for the CLI/daemon because the current product is an
-  unpackaged Rust desktop tool.
+- Packaged-app `ApplicationData` or MSIX package-local data is app-private by default. It may store GUI window
+  state, WebView cache, onboarding state, tray preference, or updater/package runtime state, but it must not
+  silently replace the shared product data root used by CLI and daemon.
+- If a future packaged app cannot access the shared product data root because of sandbox/store constraints,
+  add an explicit migration/import/export design before changing roots.
 - Do not store transcripts, audio, or logs in `Program Files`, the executable directory, or system-wide
   locations.
 - Do not create app data directly under `%USERPROFILE%`; Microsoft documents the profile root as inappropriate
   for normal application folders.
 - Config backup/sync behavior is intentionally limited to the user-editable config directory. History, retained
   audio, traces, and logs stay local because they may be large or sensitive.
+- Future path implementation should converge behind an `AppPaths`-style facade so business modules do not read
+  `%APPDATA%`, `%LOCALAPPDATA%`, package paths, or install paths directly.
 
 Initial path validation checklist:
 

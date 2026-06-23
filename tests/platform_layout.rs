@@ -3321,6 +3321,48 @@ fn windows_development_design_records_first_runtime_baseline() {
     }
 }
 
+#[test]
+fn app_data_ownership_separates_product_data_from_package_private_data() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let readme = std::fs::read_to_string(root.join("docs/cross-platform/README.md")).unwrap();
+    assert!(
+        readme.contains("[app-data.md](app-data.md)"),
+        "cross-platform README should route data ownership decisions to app-data.md"
+    );
+
+    let doc = std::fs::read_to_string(root.join("docs/cross-platform/app-data.md")).unwrap();
+    for token in [
+        "Product data root",
+        "App-private data",
+        "CLI, daemon, GUI, and packaged desktop app entries must share one product data model",
+        "Packaged app data is not the default source of product data",
+        "Config remains terminal-friendly by default",
+        "~/.config/shuohua",
+        "%APPDATA%\\Shuohua",
+        "%LOCALAPPDATA%\\Shuohua",
+        "$XDG_CONFIG_HOME/shuohua",
+        "AppPaths",
+        "app_private_dir",
+    ] {
+        assert!(
+            doc.contains(token),
+            "docs/cross-platform/app-data.md should record app data ownership token `{token}`"
+        );
+    }
+
+    let windows_doc = std::fs::read_to_string(root.join("docs/cross-platform/windows.md")).unwrap();
+    for token in [
+        "[app-data.md](app-data.md)",
+        "must not become a second product data truth source",
+        "AppPaths",
+    ] {
+        assert!(
+            windows_doc.contains(token),
+            "docs/cross-platform/windows.md should reference app data ownership token `{token}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

@@ -5,6 +5,10 @@
 用户应能同步同一套 `config.toml`、profile、ASR/post 配置和 theme 到 macOS、Windows、Linux。
 平台差异通过 capability 诊断和 theme 平台段处理，不要求用户维护三份主配置。
 
+配置和 theme 属于共享 product data。CLI、daemon、TUI、GUI 和 packaged desktop app 默认读取同一套
+product config root；package/app 私有目录只能保存 GUI/runtime 私有状态，不能保存另一份有效配置。
+路径归属规则见 [app-data.md](app-data.md)。
+
 ## 主配置
 
 `config.toml` 只放行为级通用配置：

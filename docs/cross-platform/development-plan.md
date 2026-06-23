@@ -756,6 +756,7 @@ Phase 10m Windows Development Design Baseline:
 - Record Windows per-user file layout, Named Pipe security, user-session daemon lifecycle, Task Scheduler
   startup direction, audio/hotkey/clipboard/overlay routes, artifact strategy, runtime validation order, and
   user-intervention points.
+- Add `docs/cross-platform/app-data.md` as the shared CLI/daemon/GUI/packaged app data ownership model.
 - This phase is docs-only. It must not change Windows behavior or promote any Windows capability.
 
 Phase 10n Windows Runtime Validation Checklist:
@@ -768,8 +769,9 @@ Phase 10n Windows Runtime Validation Checklist:
 
 Phase 10o Windows Path/Config/State Backend:
 
-- Replace Unix-only path discovery in `src/paths.rs` with a Windows backend using per-user known folders:
-  config under `%APPDATA%\Shuohua`, state/history/audio/logs/traces under `%LOCALAPPDATA%\Shuohua`.
+- Start converging path discovery behind an `AppPaths`-style product path facade, then replace Unix-only state
+  discovery in `src/paths.rs` with a Windows backend using per-user known folders: config under
+  `%APPDATA%\Shuohua`, state/history/audio/logs/traces under `%LOCALAPPDATA%\Shuohua`.
 - Prefer Windows known-folder APIs; allow environment fallback only when documented as development fallback.
 - Add tests that protect Windows from using Unix dotfile/XDG/HOME paths.
 - This phase must not change macOS path layout or config schema.

@@ -6,7 +6,7 @@
 
 ## 最近 commit
 
-HEAD: `docs: add windows development design`
+HEAD: `docs: define app data ownership`
 
 ## 当前 phase
 
@@ -15,8 +15,12 @@ Phase 10m Windows Development Design Baseline 已完成：新增 `docs/cross-pla
 记录 Windows per-user desktop app 方向、AppData/LocalAppData 文件布局、Named Pipe 安全、
 user-session daemon lifecycle、Task Scheduler startup 边界、audio/hotkey/clipboard/overlay 路线、
 artifact 策略、runtime 验证顺序和需要用户介入的 stop points。
-下一步不要继续打磨 GUI placeholder；优先做 Windows runtime validation checklist，然后做
-Windows path/config/state backend 和 Windows artifact/CI。
+Phase 10m1 App Data Ownership Baseline 已完成：新增 `docs/cross-platform/app-data.md`，
+明确 CLI、daemon、TUI、GUI 和 packaged desktop app 默认共享同一套 product data root；
+package/app-private data 只保存 GUI/runtime 私有状态。macOS 配置可继续保持终端友好的
+`~/.config/shuohua`；Windows product config/state 仍走 `%APPDATA%\Shuohua` /
+`%LOCALAPPDATA%\Shuohua`。下一步不要继续打磨 GUI placeholder；优先做 Windows runtime
+validation checklist，然后做 Windows path/config/state backend 和 Windows artifact/CI。
 Windows IPC capability 诊断已与 Phase 3c 同步：Windows target 使用 Tokio Named Pipe transport
 编译通过，`ipc.transport` 静态 capability 报 `partial/named_pipe/runtime_not_verified`；runtime/ACL/
 smart fallback 仍需 Windows 实机或 VM 验证。
@@ -1200,8 +1204,10 @@ permission probe 或 active app runtime。
   state/history/log path、Named Pipe daemon status、single-instance smoke、service dry-run、Explorer
   open/reveal。不要把 audio/overlay/hotkey/paste 塞进第一版，等可测 artifact/backend 后再加。
 - Phase 10o：实现 Windows path/config/state backend。`src/paths.rs` 当前仍是 Unix/XDG/HOME 路线；
-  Windows 应使用 known-folder/AppData 方向，config -> `%APPDATA%\Shuohua`，state/history/audio/logs/
-  traces -> `%LOCALAPPDATA%\Shuohua`。先补测试保护 Windows 不走 dotfile/XDG/HOME。
+  先按 `docs/cross-platform/app-data.md` 收敛 `AppPaths`-style product path facade，再做 Windows
+  known-folder/AppData backend：config -> `%APPDATA%\Shuohua`，state/history/audio/logs/traces ->
+  `%LOCALAPPDATA%\Shuohua`。先补测试保护 Windows 不走 dotfile/XDG/HOME，也保护 package-private
+  data 不会成为 product data truth source。
 - Phase 10p：做 Windows CI artifact build，优先让用户测试下载的 `shuo.exe`，不要要求用户反复在
   Windows 上手动构建。
 - Phase 10q 之后才做 Named Pipe endpoint scoping/security descriptor 和 Windows runtime smoke；
@@ -1219,8 +1225,10 @@ development-plan.md、gui.md、overlay.md、platform-capabilities.md、macos-bas
 handoff.md。
 Phase 9al 后 GUI PoC 已冻结；不要继续打磨 GUI placeholder。
 Phase 10m Windows Development Design Baseline 已完成；`docs/cross-platform/windows.md` 是
-Windows-first 实现基线。后续主线是 Phase 10n Windows runtime validation checklist，然后
-Phase 10o Windows path/config/state backend，再做 Windows CI artifact build。
+Windows-first 实现基线。Phase 10m1 App Data Ownership Baseline 已完成；
+`docs/cross-platform/app-data.md` 规定 CLI/daemon/GUI/packaged app 共享 product data root，
+package/app-private data 只放 GUI/runtime 私有状态。后续主线是 Phase 10n Windows runtime
+validation checklist，然后 Phase 10o Windows path/config/state backend，再做 Windows CI artifact build。
 Phase 7b/8b overlay backend skeleton、Phase 3b IPC transport cfg boundary、Phase 10a
 cross-check baseline、Phase 10b TUI capability diagnostics、Phase 10c Docker/cross Linux
 check baseline、Phase 10d Linux compile-time capability sync、Phase 3c Windows Named Pipe

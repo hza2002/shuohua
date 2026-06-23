@@ -201,6 +201,22 @@ struct GuiFirstScreenOfflineShape {
     source: &'static str,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiFirstScreenCommandPolicyShape {
+    commands: Vec<GuiFirstScreenCommandPolicyEntry>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuiFirstScreenCommandPolicyEntry {
+    command_name: &'static str,
+    auto_invocation_allowed: bool,
+    requires_explicit_trigger: bool,
+    opens_daemon_transport: bool,
+    policy_reason: &'static str,
+}
+
 #[tauri::command]
 fn gui_first_screen_request_plan(history_limit: Option<usize>) -> GuiFirstScreenRequestPlan {
     let history_limit = history_limit.unwrap_or(20);
@@ -263,6 +279,43 @@ fn gui_first_screen_offline_shape() -> GuiFirstScreenOfflineShape {
         auto_start_allowed: false,
         service_management_allowed: false,
         source: "placeholder",
+    }
+}
+
+#[tauri::command]
+fn gui_first_screen_command_policy_shape() -> GuiFirstScreenCommandPolicyShape {
+    GuiFirstScreenCommandPolicyShape {
+        commands: vec![
+            static_command_policy("gui_shell_metadata"),
+            static_command_policy("gui_first_screen_request_plan"),
+            static_command_policy("gui_daemon_status_snapshot"),
+            static_command_policy("gui_first_screen_refresh_shape"),
+            static_command_policy("gui_first_screen_readiness_shape"),
+            static_command_policy("gui_first_screen_offline_shape"),
+            one_shot_command_policy("gui_daemon_status_request_once"),
+            one_shot_command_policy("gui_history_summary_request_once"),
+            one_shot_command_policy("gui_first_screen_summary_request_once"),
+        ],
+    }
+}
+
+fn static_command_policy(command_name: &'static str) -> GuiFirstScreenCommandPolicyEntry {
+    GuiFirstScreenCommandPolicyEntry {
+        command_name,
+        auto_invocation_allowed: true,
+        requires_explicit_trigger: false,
+        opens_daemon_transport: false,
+        policy_reason: "staticPreflight",
+    }
+}
+
+fn one_shot_command_policy(command_name: &'static str) -> GuiFirstScreenCommandPolicyEntry {
+    GuiFirstScreenCommandPolicyEntry {
+        command_name,
+        auto_invocation_allowed: false,
+        requires_explicit_trigger: true,
+        opens_daemon_transport: true,
+        policy_reason: "opensDaemonTransport",
     }
 }
 
@@ -719,6 +772,7 @@ pub fn run() {
             gui_first_screen_refresh_shape,
             gui_first_screen_readiness_shape,
             gui_first_screen_offline_shape,
+            gui_first_screen_command_policy_shape,
             gui_daemon_status_request_once,
             gui_history_summary_request_once,
             gui_first_screen_summary_request_once
@@ -959,6 +1013,31 @@ mod tests {
         assert!(!shape.auto_start_allowed);
         assert!(!shape.service_management_allowed);
         assert_eq!(shape.source, "placeholder");
+    }
+
+    #[test]
+    fn first_screen_command_policy_keeps_one_shots_explicit() {
+        let shape = gui_first_screen_command_policy_shape();
+
+        let metadata = shape
+            .commands
+            .iter()
+            .find(|entry| entry.command_name == "gui_shell_metadata")
+            .unwrap();
+        assert!(metadata.auto_invocation_allowed);
+        assert!(!metadata.requires_explicit_trigger);
+        assert!(!metadata.opens_daemon_transport);
+        assert_eq!(metadata.policy_reason, "staticPreflight");
+
+        let summary = shape
+            .commands
+            .iter()
+            .find(|entry| entry.command_name == "gui_first_screen_summary_request_once")
+            .unwrap();
+        assert!(!summary.auto_invocation_allowed);
+        assert!(summary.requires_explicit_trigger);
+        assert!(summary.opens_daemon_transport);
+        assert_eq!(summary.policy_reason, "opensDaemonTransport");
     }
 
     fn sample_record(id: &str, text: &str) -> HistoryRecord {

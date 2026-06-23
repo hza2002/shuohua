@@ -101,6 +101,12 @@
         <dd id="offline-auto-start">false</dd>
         <dt>Offline service</dt>
         <dd id="offline-service-management">false</dd>
+        <dt>Policy auto</dt>
+        <dd id="policy-auto-count">0 commands</dd>
+        <dt>Policy explicit</dt>
+        <dd id="policy-explicit-count">0 commands</dd>
+        <dt>Policy one-shot</dt>
+        <dd id="policy-one-shot-commands">pending</dd>
       </dl>
     </main>
     <script>
@@ -188,6 +194,20 @@
         document.getElementById("offline-service-management").textContent = String(
           offlineShape.serviceManagementAllowed
         );
+
+        const policyShape = await invoke("gui_first_screen_command_policy_shape");
+        const autoCommands = policyShape.commands.filter(
+          (command) => command.autoInvocationAllowed
+        );
+        const explicitCommands = policyShape.commands.filter(
+          (command) => command.requiresExplicitTrigger
+        );
+        document.getElementById("policy-auto-count").textContent =
+          `${autoCommands.length} commands`;
+        document.getElementById("policy-explicit-count").textContent =
+          `${explicitCommands.length} commands`;
+        document.getElementById("policy-one-shot-commands").textContent =
+          explicitCommands.map((command) => command.commandName).join(", ");
       }
 
       loadShellMetadata().catch(() => {});

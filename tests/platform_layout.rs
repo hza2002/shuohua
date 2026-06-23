@@ -3363,6 +3363,39 @@ fn app_data_ownership_separates_product_data_from_package_private_data() {
     }
 }
 
+#[test]
+fn windows_runtime_validation_checklist_stays_bottom_up() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let readme = std::fs::read_to_string(root.join("docs/cross-platform/README.md")).unwrap();
+    assert!(
+        readme.contains("[windows-runtime-validation.md](windows-runtime-validation.md)"),
+        "cross-platform README should route first Windows smoke tests to windows-runtime-validation.md"
+    );
+
+    let doc =
+        std::fs::read_to_string(root.join("docs/cross-platform/windows-runtime-validation.md"))
+            .unwrap();
+    for token in [
+        "artifact identity",
+        "Product Data Paths",
+        "Daemon And IPC Smoke",
+        "Single Instance Smoke",
+        "Service Dry-Run Status",
+        "Explorer Open/Reveal",
+        "Do not use this checklist to claim audio, overlay, hotkey, clipboard, paste",
+        ".\\shuo.exe doctor",
+        ".\\shuo.exe daemon",
+        ".\\shuo.exe service status",
+        "$env:APPDATA\\Shuohua",
+        "$env:LOCALAPPDATA\\Shuohua",
+    ] {
+        assert!(
+            doc.contains(token),
+            "docs/cross-platform/windows-runtime-validation.md should record bottom-up smoke token `{token}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

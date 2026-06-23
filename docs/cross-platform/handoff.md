@@ -6,7 +6,7 @@
 
 ## 最近 commit
 
-HEAD: `docs: define app data ownership`
+HEAD: `docs: add windows runtime checklist`
 
 ## 当前 phase
 
@@ -19,8 +19,11 @@ Phase 10m1 App Data Ownership Baseline 已完成：新增 `docs/cross-platform/a
 明确 CLI、daemon、TUI、GUI 和 packaged desktop app 默认共享同一套 product data root；
 package/app-private data 只保存 GUI/runtime 私有状态。macOS 配置可继续保持终端友好的
 `~/.config/shuohua`；Windows product config/state 仍走 `%APPDATA%\Shuohua` /
-`%LOCALAPPDATA%\Shuohua`。下一步不要继续打磨 GUI placeholder；优先做 Windows runtime
-validation checklist，然后做 Windows path/config/state backend 和 Windows artifact/CI。
+`%LOCALAPPDATA%\Shuohua`。Phase 10n Windows Runtime Validation Checklist 已完成：
+新增 `docs/cross-platform/windows-runtime-validation.md`，第一版只覆盖 artifact identity、
+product data paths、daemon/client IPC、single instance、service dry-run 和 Explorer open/reveal；
+不验证 audio/overlay/hotkey/clipboard/paste。下一步不要继续打磨 GUI placeholder；优先做
+Windows path/config/state backend 和 Windows artifact/CI。
 Windows IPC capability 诊断已与 Phase 3c 同步：Windows target 使用 Tokio Named Pipe transport
 编译通过，`ipc.transport` 静态 capability 报 `partial/named_pipe/runtime_not_verified`；runtime/ACL/
 smart fallback 仍需 Windows 实机或 VM 验证。

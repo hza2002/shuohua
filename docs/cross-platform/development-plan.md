@@ -761,7 +761,8 @@ Phase 10m Windows Development Design Baseline:
 
 Phase 10n Windows Runtime Validation Checklist:
 
-- Add a Windows validation checklist document or section that the user can run directly on Windows.
+- Add `docs/cross-platform/windows-runtime-validation.md`, a Windows validation checklist the user can run
+  directly on Windows.
 - Include exact commands, expected observable behavior, and where to paste command output.
 - Scope the first checklist to version/doctor/config paths, state/history/log path creation, Named Pipe daemon
   status, single-instance smoke, service dry-run status, and Explorer open/reveal.

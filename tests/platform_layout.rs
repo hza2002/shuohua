@@ -948,7 +948,7 @@ fn gui_backend_shell_placeholder_stays_local_to_tauri_app() {
         "gui_shell_metadata",
         "GuiShellMetadata",
         "invoke_handler",
-        "tauri::generate_handler![gui_shell_metadata]",
+        "tauri::generate_handler!",
     ] {
         assert!(
             tauri_lib.contains(token),
@@ -960,7 +960,6 @@ fn gui_backend_shell_placeholder_stays_local_to_tauri_app() {
         "connect_default",
         "DaemonClient",
         "ipc::client",
-        "Command::",
         "Event::",
         "tokio::spawn",
         "tokio::time",
@@ -998,6 +997,93 @@ fn gui_backend_shell_placeholder_stays_local_to_tauri_app() {
         assert!(
             !root_cargo.contains(token),
             "root Cargo.toml must remain free of GUI runtime token `{token}`"
+        );
+    }
+
+    for file in rust_files_under(&root.join("src/daemon"))
+        .into_iter()
+        .chain(rust_files_under(&root.join("src/tui")))
+        .chain([root.join("src/client_api.rs")])
+    {
+        let body = std::fs::read_to_string(&file).unwrap();
+        let relative = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        for token in ["tauri", "wry", "webview", "WebView", "tao"] {
+            assert!(
+                !body.contains(token),
+                "{relative} must not import GUI runtime token `{token}`"
+            );
+        }
+    }
+}
+
+#[test]
+fn gui_first_screen_request_plan_reuses_client_api_without_sending_ipc() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9o",
+        "first-screen request plan command",
+        "first_screen_commands()",
+        "不发送 IPC",
+        "不订阅 daemon event stream",
+        "不启动 reconnect loop",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9o request plan token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    for token in [
+        "gui_first_screen_request_plan",
+        "GuiFirstScreenRequestPlan",
+        "GuiFirstScreenCommandSummary",
+        "shuohua::client_api::first_screen_commands",
+        "tauri::generate_handler!",
+        "gui_shell_metadata",
+        "history_limit",
+        "requires_daemon_connection",
+        "transport_opened",
+    ] {
+        assert!(
+            tauri_lib.contains(token),
+            "src-tauri/src/lib.rs should expose Phase 9o request plan token `{token}`"
+        );
+    }
+
+    for token in [
+        "connect_default",
+        "DaemonClient",
+        "send_command",
+        "subscribe_events",
+        "tokio::spawn",
+        "tokio::time",
+        "std::thread::spawn",
+    ] {
+        assert!(
+            !tauri_lib.contains(token),
+            "Phase 9o request plan must not connect daemon or own runtime loop token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "gui_first_screen_request_plan",
+        "historyLimit",
+        "requiresDaemonConnection",
+        "transportOpened",
+        "request-plan-count",
+        "request-plan-kinds",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should display request plan summary token `{token}`"
         );
     }
 

@@ -243,6 +243,19 @@ Phase 9n 增加最小 GUI backend shell 和静态 frontend placeholder，不接 
 - 这个阶段不运行 `tauri dev`、`tauri build` 或 `tauri bundle`，不启动 daemon/GUI，不新增 IPC
   command/event，不实现 reconnect supervisor。
 
+Phase 9o 增加 GUI first-screen request plan command，不发送 IPC：
+
+- `src-tauri` 可以注册一个 Tauri command，用于返回首屏请求计划。该 command 必须复用
+  `shuohua::client_api::first_screen_commands()`，把既有 daemon `Command` 映射成 GUI 可展示的
+  summary，例如 `subscribe`、`daemonStatus`、`historyPage`、`historyStats`。
+- request plan 只描述“后续真实连接 daemon 时要发送什么”，可以包含 history limit、
+  requires daemon connection 和 transport not opened 等静态字段；不得创建 `DaemonClient`、
+  不得调用 `connect_default()`、不发送 IPC、不订阅 daemon event stream、不启动 reconnect loop。
+- frontend placeholder 可以调用该 command 并展示 command count/kinds，仍不得生成真实
+  Status/History/Diagnostics view model，不读 config/history 文件，不直接访问 IPC transport。
+- 这个阶段不新增 IPC command/event，不 bump `PROTO_VERSION`，不改变 TUI/CLI 行为，不运行
+  `tauri dev`、`tauri build` 或 `tauri bundle`，不启动 daemon/GUI。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：
@@ -386,6 +399,16 @@ Phase 9n 验收：
   `Event::`。
 - 不运行 `tauri dev` / `tauri build` / `tauri bundle`，不启动 daemon/GUI，不新增 IPC
   command/event。
+
+Phase 9o 验收：
+
+- `src-tauri/src/lib.rs` 注册 `gui_first_screen_request_plan` command，并通过 shared
+  `client_api::first_screen_commands()` 生成 summary。
+- command 返回 summary，不创建 `DaemonClient`，不调用 `connect_default()`，不出现
+  `send_command`、`subscribe_events`、`tokio::spawn` 或 reconnect timer。
+- `gui-dist/index.html` 只展示 request plan summary，不实现真实 Status/History/Diagnostics
+  view model。
+- root `Cargo.toml`、daemon、TUI 和 shared `client_api` 仍不含 Tauri/WRY/WebView runtime token。
 
 参考资料：
 

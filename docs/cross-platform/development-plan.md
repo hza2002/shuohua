@@ -325,6 +325,15 @@ Phase 9n 增加最小 GUI backend shell 和静态 frontend placeholder，不接 
 - 不新增 IPC protocol，不运行 Tauri dev/build/bundle，不启动 daemon/GUI，不实现 reconnect loop、
   service management、配置编辑或 history view model。
 
+Phase 9o 增加 GUI first-screen request plan command，不发送 IPC：
+
+- `src-tauri` 可以注册一个 first-screen request plan command，复用
+  `shuohua::client_api::first_screen_commands()` 生成 GUI 首屏将要发送的既有 IPC command summary。
+- command 只能返回 command kind、history limit 和是否需要 daemon connection 等静态计划信息；
+  不创建 `DaemonClient`、不调用 `connect_default()`、不发送 IPC、不订阅 event stream。
+- frontend placeholder 可以展示该 plan，但不得实现 Status/History/Diagnostics view model。
+- 不新增 IPC protocol，不运行 Tauri dev/build/bundle，不启动 daemon/GUI，不实现 reconnect loop。
+
 范围：
 
 - 建一个最小 Tauri app。

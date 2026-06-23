@@ -6,11 +6,11 @@
 
 ## 最近 commit
 
-HEAD: `feat: add minimal gui backend shell`
+HEAD: `feat: add gui first-screen request plan`
 
 ## 当前 phase
 
-Phase 9n: Minimal GUI Backend Shell 已实现并完成自动验证。下一步可以继续做 daemon
+Phase 9o: GUI First-Screen Request Plan 已实现并完成自动验证。下一步可以继续做 daemon
 status snapshot command 的一个窄切片，或回到 Windows/Linux overlay PoC；不要直接做完整 GUI、
 reconnect runtime、service management、配置编辑器或 release 打包指标。
 
@@ -289,6 +289,21 @@ reconnect runtime、service management、配置编辑器或 release 打包指标
     runtime loop，且 root/daemon/TUI/client_api 不引入 GUI runtime token。
   - 未运行 `tauri dev` / `tauri build` / `tauri bundle`，未启动 daemon/GUI，未新增 IPC
     command/event，未实现 Status/History/Diagnostics view model 或 reconnect supervisor。
+- Phase 9o:
+  - 更新 `docs/cross-platform/gui.md`，记录 GUI first-screen request plan command 的边界。
+  - 更新 `docs/cross-platform/development-plan.md` 和 `docs/cross-platform/overview.md`，记录
+    Phase 9o 状态。
+  - `src-tauri/src/lib.rs` 增加 `gui_first_screen_request_plan` Tauri command，复用
+    `shuohua::client_api::first_screen_commands()` 生成首屏请求计划 summary。
+  - request plan 只返回 command kind、history limit、requires daemon connection 和 transport
+    opened=false；不创建 `DaemonClient`，不调用 `connect_default()`，不发送 IPC，不订阅 event
+    stream。
+  - `gui-dist/index.html` 展示 request plan command count/kinds 和静态连接字段；仍不实现真实
+    Status/History/Diagnostics view model。
+  - `tests/platform_layout.rs` 增加 Phase 9o 架构守卫，并调整 9n 守卫以允许 9o 在 `src-tauri`
+    内对既有 `Command` 做 summary 映射。
+  - 未运行 `tauri dev` / `tauri build` / `tauri bundle`，未启动 daemon/GUI，未新增 IPC
+    command/event，未实现 reconnect supervisor。
 
 ## 验证结果
 
@@ -411,6 +426,19 @@ reconnect runtime、service management、配置编辑器或 release 打包指标
   通过。`cargo test` 覆盖：92 个 library unit tests、639 个 binary unit tests、
   5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、2 个 `doc_consistency`
   tests、26 个 `platform_layout` tests、6 个 `theme_registry_build` tests、0 个 doctests。
+- Phase 9o 已跑：`cargo test --test platform_layout gui_first_screen_request_plan_reuses_client_api_without_sending_ipc`，
+  先红灯失败于缺少 `gui_first_screen_request_plan`，实现后通过。
+- Phase 9o 已跑：`cargo test --test platform_layout`，通过 27 个测试。
+- Phase 9o 已跑：`cargo check --manifest-path src-tauri/Cargo.toml`，通过。
+- Phase 9o 已跑：`cargo clippy --all-targets -- -D warnings`，通过。
+- Phase 9o 已跑：`cargo test`，通过。`cargo test` 覆盖：92 个 library unit tests、
+  639 个 binary unit tests、5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、
+  2 个 `doc_consistency` tests、27 个 `platform_layout` tests、6 个 `theme_registry_build` tests、
+  0 个 doctests。
+- Phase 9o 已跑：`rg -n "tauri|wry|webview|WebView|tao" Cargo.toml src/daemon src/tui src/client_api.rs`，
+  无命中。
+- Phase 9o 已跑：`rg -n "connect_default|DaemonClient|send_command|subscribe_events|tokio::spawn|tokio::time|std::thread::spawn" src-tauri`，
+  无命中。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -446,11 +474,14 @@ reconnect runtime、service management、配置编辑器或 release 打包指标
   capabilities JSON、frontend command binding、release build 或打包验证。
 - Phase 9l 只记录 reconnect supervisor ownership/cancellation 语义，没有实现真实 runtime loop、
   Tauri event emission、frontend view model 或 metrics sink。
-- Phase 9m/9n 只创建最小 `src-tauri/**` skeleton、静态 placeholder 和本地 metadata command；
+- Phase 9m/9n/9o 只创建最小 `src-tauri/**` skeleton、静态 placeholder、本地 metadata command
+  和 first-screen request plan command；
   尚未运行 `tauri dev` / `tauri build` / `tauri bundle`，也没有启动 GUI 或 daemon。后续需要
   单独决定何时运行 release build、如何记录 cold start/RSS/CPU/bundle 指标。
 - Phase 9n 的 `gui_shell_metadata` 只验证本地 command wiring，不连接 daemon、不读
   config/history、不生成真实 Status/History/Diagnostics view model。
+- Phase 9o 的 `gui_first_screen_request_plan` 只生成请求计划 summary，不发送 IPC、不订阅
+  event stream、不读取 daemon status。
 - `ipc::transport` 仍是 Unix-only，library client 只实际覆盖 macOS/Linux 当前 transport。
   Windows Named Pipe adapter 仍是后续 IPC transport backend 工作。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
@@ -460,10 +491,10 @@ reconnect runtime、service management、配置编辑器或 release 打包指标
 
 ## 下一步
 
-Phase 9n 后，进入下一小步：
+Phase 9o 后，进入下一小步：
 
-- 若继续 GUI，下一阶段只能做 daemon status snapshot command 或 first-screen command wiring
-  的一个窄切片；继续禁止 daemon 热路径引入 WebView，且不要启动 daemon、GUI 或 release 打包。
+- 若继续 GUI，下一阶段只能做 daemon status snapshot command 的一个窄切片；继续禁止 daemon
+  热路径引入 WebView，且不要启动 daemon、GUI 或 release 打包。
 - 若目标平台环境可用，也可以先按 Phase 7a/8a checklist 做 Windows/Linux 最小 overlay PoC。
 
 建议下一 session prompt：
@@ -473,6 +504,6 @@ Phase 9n 后，进入下一小步：
 先读 AGENTS.md、TODO、docs/cross-platform/README.md、overview.md、
 development-plan.md、overlay.md、platform-capabilities.md、macos-baseline.md、
 handoff.md。
-Phase 9n Minimal GUI Backend Shell 已实现；先查看最新 commit 和验证结果。
-下一步在 daemon status snapshot command / first-screen command wiring / Windows/Linux overlay PoC 之间做一个小步计划。
+Phase 9o GUI First-Screen Request Plan 已实现；先查看最新 commit 和验证结果。
+下一步在 daemon status snapshot command 或 Windows/Linux overlay PoC 之间做一个小步计划。
 ```

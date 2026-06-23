@@ -252,11 +252,11 @@ fn linux_capabilities() -> Vec<CapabilityStatus> {
         CapabilityStatus {
             id: CapabilityId::ServiceManager,
             platform: PlatformKind::Linux,
-            backend: "systemd_user_skeleton",
-            status: CapabilityStatusKind::Unsupported,
-            summary: "systemd user service management is not implemented",
-            reason: "backend_not_implemented",
-            next_step: Some("Implement systemd user service manager"),
+            backend: "systemd_user_dry_run",
+            status: CapabilityStatusKind::Partial,
+            summary: "systemd user service status can report dry-run unit information",
+            reason: "dry_run_status_only",
+            next_step: Some("Validate systemd user service install/start/stop on Linux"),
         },
         CapabilityStatus {
             id: CapabilityId::AudioCapture,

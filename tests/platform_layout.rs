@@ -90,6 +90,25 @@ fn linux_capability_snapshot_marks_compile_checked_unix_primitives() {
 }
 
 #[test]
+fn linux_service_manager_capability_reports_dry_run_skeleton() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+
+    for token in [
+        "CapabilityId::ServiceManager",
+        "systemd_user_dry_run",
+        "CapabilityStatusKind::Partial",
+        "dry_run_status_only",
+        "Validate systemd user service install/start/stop on Linux",
+    ] {
+        assert!(
+            capability.contains(token),
+            "Linux service.manager capability should report dry-run skeleton token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn shared_macos_adapters_live_under_platform_module() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for file in [

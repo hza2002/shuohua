@@ -685,6 +685,15 @@ Phase 10e Linux systemd user dry-run/status skeleton:
   behavior is validated on a Linux machine.
 - This phase does not add service CLI flags, does not write unit files, and does not implement smart fallback.
 
+Phase 10f Linux service manager capability sync:
+
+- Update the Linux static capability snapshot so `service.manager` reflects the Phase 10e dry-run/status
+  skeleton instead of generic unsupported.
+- The status should be `partial`, backend `systemd_user_dry_run`, reason `dry_run_status_only`, with a next
+  step that points to real systemd user install/start validation on Linux.
+- This is diagnostics truthfulness only. It must not implement install/start/stop/restart, write unit files,
+  call `systemctl --user`, or declare Linux service management runtime-ready.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

@@ -130,6 +130,18 @@ Phase 10d 只同步 Linux target 已经具备编译边界的静态 capability，
 
 其他 Linux desktop、overlay、path open/reveal capability 继续按对应 skeleton/unsupported 阶段推进。
 
+## Phase 10f Linux Service Manager Capability Sync
+
+Phase 10e 后，Linux service backend 已经有 dry-run/status skeleton，因此静态 capability 不应继续
+把 `service.manager` 描述为完全未实现：
+
+- `service.manager`：`partial`，backend `systemd_user_dry_run`，reason `dry_run_status_only`。
+- summary 应明确只支持生成 systemd user unit path/body 和 dry-run status。
+- next step 应指向真实 Linux 环境中的 systemd user install/start/stop/status 验证。
+
+Phase 10f 仍不实现 service install/start/stop/restart，不写 unit 文件，不调用 `systemctl --user`，
+不声明 Linux service runtime 可用。
+
 ## 设计约束
 
 - capability probe 不执行高风险动作。

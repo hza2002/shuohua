@@ -243,6 +243,13 @@ Phase 9d 记录 GUI library boundary 前置条件，不写 GUI app：
 - 记录创建 Tauri workspace 前必须先做 library split 评审。
 - 增加架构测试，防止当前阶段误加 `src/lib.rs`、Tauri workspace 或 WebView runtime 依赖。
 
+Phase 9e 记录 library split audit baseline，不写 GUI app：
+
+- 审计 `client_api` / `ipc::client` / `ipc::protocol` / `ipc::transport` 的最小可复用 surface。
+- 记录 `ipc::protocol` 对 `history` / `state` 模型的依赖，和 `ipc::transport` 的 Unix-only
+  transport 现状。
+- 不创建 `src/lib.rs`，不创建 Tauri workspace，不移动核心文件。
+
 范围：
 
 - 建一个最小 Tauri app。

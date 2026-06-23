@@ -506,6 +506,30 @@ fn gui_library_boundary_is_not_split_before_design_review() {
     }
 }
 
+#[test]
+fn gui_library_split_audit_records_minimal_surface_and_blockers() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9e",
+        "client_api",
+        "ipc::client",
+        "ipc::protocol",
+        "ipc::transport",
+        "history",
+        "state",
+        "Unix-only transport",
+        "daemon runtime",
+        "Tauri workspace",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9e library split audit token `{token}`"
+        );
+    }
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

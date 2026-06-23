@@ -84,6 +84,25 @@ Phase 9d 先记录 GUI 复用边界的当前限制，不做 crate 拆分：
 - 在 library split 之前，不创建 Tauri app/workspace，避免 PoC 通过 path hacks、复制 IPC 类型或
   直接依赖 binary internals 形成错误基线。
 
+Phase 9e 记录 library split audit baseline，不做 crate 拆分：
+
+- 最小候选 library surface 仍是 `client_api`、`ipc::client`、`ipc::protocol`、
+  `ipc::transport` 和必要数据模型。这个 surface 足够让后续 GUI backend 连接 daemon、发送
+  首屏命令、接收和分类首屏事件。
+- `ipc::protocol` 当前依赖 `history` 和 `state` 数据类型：`HistoryRecord`、
+  `HistoryStatsSnapshot`、`AnalyticsSnapshot`、`AudioMeter`、`SessionMeta`、`SessionPhase`
+  等。library split 不能只移动 `ipc::protocol` 文件；必须同时决定这些模型是进入 library
+  surface，还是拆出更小的 wire DTO。
+- `ipc::client` 依赖 `ipc::transport`；`ipc::transport` 当前是 Unix-only transport，
+  直接使用 Unix domain socket 和 Unix filesystem metadata。library split 可以先保持
+  macOS/Linux client 可用，但 Windows Named Pipe adapter 必须仍由后续 IPC transport backend
+  阶段处理。
+- 禁止把 daemon runtime、service manager、hotkey、voice、overlay、AppKit/macOS backend、TUI
+  拉进 GUI library surface。GUI backend 只能依赖 daemon client API、wire protocol 和必要
+  DTO。
+- 在 library split 阶段之前仍不创建 Tauri workspace。先让 library boundary 编译和测试成立，
+  再创建 GUI app；否则 PoC 很容易复制 IPC 类型或绕过 `client_api`。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：
@@ -147,6 +166,15 @@ Phase 9d 验收：
 - 文档明确当前 `client_api` 仍在 binary crate 内，尚不是外部 GUI crate 可依赖的 library API。
 - 架构测试保护当前状态：没有 `src/lib.rs`、没有 Tauri workspace、没有 GUI runtime 依赖。
 - 后续 library split 的最小候选 surface 和禁止依赖方向有明确记录。
+
+Phase 9e 验收：
+
+- 记录 library split 的最小 surface：`client_api`、`ipc::client`、`ipc::protocol`、
+  `ipc::transport` 和必要 DTO。
+- 记录阻塞点：`ipc::protocol` 依赖 `history` / `state` 模型，`ipc::transport` 当前是
+  Unix-only transport。
+- 明确 library split 前仍不创建 Tauri workspace，不把 daemon runtime 或平台 UI backend
+  暴露给 GUI backend。
 
 参考资料：
 

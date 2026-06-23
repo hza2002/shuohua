@@ -39,6 +39,17 @@ Phase 3b implementation status:
 - 这一步只解除 Windows target 被 Unix-only IPC/lifecycle API 直接阻断的问题，不实现 Named Pipe、
   Windows daemon lock、Windows process probing 或 smart fallback 启动策略。
 
+Phase 3c Windows Named Pipe transport compile backend:
+
+- Windows `ipc::transport` 使用 Tokio `tokio::net::windows::named_pipe`，保持 JSON-line
+  command/event protocol 不变。
+- Server `accept()` 在当前 pipe instance 连接后创建下一条 pipe instance，再把已连接 stream
+  交给 IPC server，避免短窗口内 client 看到 pipe not found。
+- Client `connect()` 只处理 transport connect；遇到 pipe busy 做短退避重试，不启动 daemon、
+  不 probe service、不改变 smart fallback 策略。
+- 该阶段只要求 Windows target compile；Named Pipe ACL、安全描述符、multi-user 隔离、
+  stale endpoint 判定和真实 Windows runtime 行为仍需 Windows 实机/VM 验证。
+
 ## 单实例
 
 daemon 单实例锁和 stale endpoint 清理需要平台化：

@@ -217,6 +217,37 @@ fn ipc_transport_backends_are_cfg_gated() {
 }
 
 #[test]
+fn windows_ipc_transport_uses_tokio_named_pipe_backend() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let transport = std::fs::read_to_string(root.join("src/ipc/transport.rs")).unwrap();
+    let windows_section = transport
+        .split("#[cfg(windows)]")
+        .nth(1)
+        .expect("missing windows IPC transport cfg section");
+
+    for token in [
+        "tokio::net::windows::named_pipe",
+        "NamedPipeClient",
+        "NamedPipeServer",
+        "ServerOptions::new()",
+        "ClientOptions::new()",
+        ".first_pipe_instance(true)",
+        ".connect().await",
+        "ERROR_PIPE_BUSY",
+    ] {
+        assert!(
+            windows_section.contains(token),
+            "Windows IPC transport should use Tokio Named Pipe token `{token}`"
+        );
+    }
+
+    assert!(
+        !windows_section.contains("DuplexStream"),
+        "Windows IPC transport should no longer use the placeholder duplex stream"
+    );
+}
+
+#[test]
 fn network_clients_use_rustls_for_cross_platform_checks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();

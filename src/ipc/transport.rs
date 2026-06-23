@@ -157,24 +157,51 @@ mod imp {
 #[cfg(windows)]
 mod imp {
     use std::path::{Path, PathBuf};
+    use std::pin::Pin;
+    use std::task::{Context as TaskContext, Poll};
+    use std::time::Duration;
 
-    use anyhow::Result;
-    use tokio::io::DuplexStream;
+    use anyhow::{Context, Result};
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+    use tokio::net::windows::named_pipe::{
+        ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
+    };
+    use tokio::time;
 
-    pub type ReadHalf = tokio::io::ReadHalf<DuplexStream>;
-    pub type WriteHalf = tokio::io::WriteHalf<DuplexStream>;
+    const ERROR_PIPE_BUSY: i32 = 231;
+
+    pub type ReadHalf = tokio::io::ReadHalf<PipeStream>;
+    pub type WriteHalf = tokio::io::WriteHalf<PipeStream>;
 
     #[derive(Debug)]
-    pub struct Listener;
+    pub struct Listener {
+        next: tokio::sync::Mutex<NamedPipeServer>,
+        path: PathBuf,
+    }
 
     #[derive(Debug)]
     pub struct Stream {
-        inner: DuplexStream,
+        inner: PipeStream,
+    }
+
+    #[derive(Debug)]
+    pub enum PipeStream {
+        Client(NamedPipeClient),
+        Server(NamedPipeServer),
     }
 
     impl Listener {
         pub async fn accept(&self) -> Result<Stream> {
-            anyhow::bail!("Windows IPC Named Pipe transport is not implemented")
+            let mut guard = self.next.lock().await;
+            guard.connect().await.context("accept Windows IPC client")?;
+            let connected = std::mem::replace(
+                &mut *guard,
+                create_server(&self.path, false)
+                    .context("create next Windows IPC pipe instance")?,
+            );
+            Ok(Stream {
+                inner: PipeStream::Server(connected),
+            })
         }
     }
 
@@ -184,16 +211,105 @@ mod imp {
         }
     }
 
+    impl AsyncRead for PipeStream {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut TaskContext<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            match &mut *self {
+                Self::Client(client) => Pin::new(client).poll_read(cx, buf),
+                Self::Server(server) => Pin::new(server).poll_read(cx, buf),
+            }
+        }
+    }
+
+    impl AsyncWrite for PipeStream {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut TaskContext<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            match &mut *self {
+                Self::Client(client) => Pin::new(client).poll_write(cx, buf),
+                Self::Server(server) => Pin::new(server).poll_write(cx, buf),
+            }
+        }
+
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            cx: &mut TaskContext<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            match &mut *self {
+                Self::Client(client) => Pin::new(client).poll_flush(cx),
+                Self::Server(server) => Pin::new(server).poll_flush(cx),
+            }
+        }
+
+        fn poll_shutdown(
+            mut self: Pin<&mut Self>,
+            cx: &mut TaskContext<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            match &mut *self {
+                Self::Client(client) => Pin::new(client).poll_shutdown(cx),
+                Self::Server(server) => Pin::new(server).poll_shutdown(cx),
+            }
+        }
+    }
+
     pub fn default_endpoint() -> PathBuf {
         PathBuf::from(r"\\.\pipe\shuohua")
     }
 
-    pub async fn connect(_path: impl AsRef<Path>) -> Result<Stream> {
-        anyhow::bail!("Windows IPC Named Pipe transport is not implemented")
+    pub async fn connect(path: impl AsRef<Path>) -> Result<Stream> {
+        let path = path.as_ref();
+        let mut attempts = 0;
+        loop {
+            match ClientOptions::new().open(path.as_os_str()) {
+                Ok(client) => {
+                    return Ok(Stream {
+                        inner: PipeStream::Client(client),
+                    });
+                }
+                Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                    attempts += 1;
+                    if attempts >= 20 {
+                        return Err(error).with_context(|| {
+                            format!("connect Windows IPC pipe {}", path.display())
+                        });
+                    }
+                    time::sleep(Duration::from_millis(50)).await;
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("connect Windows IPC pipe {}", path.display()));
+                }
+            }
+        }
     }
 
     pub async fn bind_default() -> Result<Listener> {
-        anyhow::bail!("Windows IPC Named Pipe transport is not implemented")
+        bind(default_endpoint()).await
+    }
+
+    pub async fn bind(path: impl AsRef<Path>) -> Result<Listener> {
+        let path = path.as_ref().to_path_buf();
+        let server = create_server(&path, true)
+            .with_context(|| format!("bind Windows IPC pipe {}", path.display()))?;
+        Ok(Listener {
+            next: tokio::sync::Mutex::new(server),
+            path,
+        })
+    }
+
+    fn create_server(path: &Path, first: bool) -> std::io::Result<NamedPipeServer> {
+        if first {
+            ServerOptions::new()
+                .first_pipe_instance(true)
+                .create(path.as_os_str())
+        } else {
+            ServerOptions::new().create(path.as_os_str())
+        }
     }
 }
 

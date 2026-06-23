@@ -6,13 +6,13 @@
 
 ## 最近 commit
 
-HEAD: `feat: show platform capabilities in tui`
+HEAD: `feat: add windows named pipe transport`
 
 ## 当前 phase
 
 GUI PoC 冻结，当前主线回到非 macOS 可用性。
-Phase 10b TUI capability diagnostics 已完成一个最小阶段：TUI Status 页只读展示 platform/renderer
-capability summary，不 probe 权限、不打开 overlay、不创建 IPC client、不启动后台任务。
+Phase 3c Windows Named Pipe transport compile backend 已完成一个最小阶段：Windows target
+使用 Tokio Named Pipe transport 编译通过，但 runtime/ACL/smart fallback 仍需 Windows 实机或 VM 验证。
 
 ## 已完成事项
 
@@ -34,6 +34,15 @@ capability summary，不 probe 权限、不打开 overlay、不创建 IPC client
     和 stale endpoint 清理。
   - `src/ipc/client.rs` / `src/ipc/server.rs` 不再直接 import `tokio::net::UnixStream` /
     `UnixListener`，JSON-line protocol 未改变。
+- Phase 3c:
+  - 更新 `docs/cross-platform/ipc-service.md`，记录 Windows Named Pipe transport compile backend
+    的范围和未验证项。
+  - Windows `ipc::transport` 从 placeholder `DuplexStream` 改为 Tokio
+    `tokio::net::windows::named_pipe`。
+  - server `accept()` 在当前 pipe instance 连接后创建下一条 pipe instance，再把已连接 stream
+    交给既有 IPC server；client `connect()` 遇到 pipe busy 做短退避重试。
+  - 该阶段不实现 Named Pipe ACL/security descriptor、不实现 Windows daemon single instance、
+    不实现 smart fallback service 启动，也不声明 Windows runtime 可用。
 - Phase 4a:
   - 更新 `docs/cross-platform/ipc-service.md`，把 Phase 4 拆成 lock/process probe facade 和
     后续 service manager facade。
@@ -808,6 +817,18 @@ capability summary，不 probe 权限、不打开 overlay、不创建 IPC client
   641 个 binary unit tests、5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、
   2 个 `doc_consistency` tests、54 个 `platform_layout` tests、6 个 `theme_registry_build` tests、
   0 个 doctests。
+- Phase 3c 已跑窄验证：
+  `cargo test --test platform_layout windows_ipc_transport_uses_tokio_named_pipe_backend` 先红灯失败于
+  Windows IPC transport 仍是 placeholder，改为 Tokio Named Pipe backend 后通过。
+- Phase 3c 已跑：`cargo fmt --check`，通过。
+- Phase 3c 已跑：`cargo clippy --all-targets -- -D warnings`，通过。
+- Phase 3c 已跑：`cargo test --test platform_layout`，通过 55 个测试。
+- Phase 3c 已跑：`cargo test`，通过。`cargo test` 覆盖：92 个 library unit tests、
+  641 个 binary unit tests、5 个 `apple_helper_build` tests、1 个 `cli_runtime_boundary` test、
+  2 个 `doc_consistency` tests、55 个 `platform_layout` tests、6 个 `theme_registry_build` tests、
+  0 个 doctests。
+- Phase 3c 已跑：`make check-windows`，exit 0；仍有大量 dead-code/unused warning，原因是
+  Windows hotkey/overlay/service/lifecycle 等 backend 仍多为 skeleton，不能等同于 Windows runtime 可用。
 - macOS 权限、录音、overlay、clipboard/paste、TUI、service lifecycle、history 手动体验：未执行，
   需用户在真实 macOS 会话按 `macos-baseline.md` checklist 验证。
 
@@ -915,9 +936,9 @@ capability summary，不 probe 权限、不打开 overlay、不创建 IPC client
   作为 cfg-gated backend skeleton，`overlay::renderer` 在 Windows/Linux 下调度到对应 backend。
   Windows 当前报告 `win32_overlay_skeleton` structured unsupported；Linux 当前报告
   `wayland_overlay_skeleton`，其中 window anchor 为 `degraded/screen_anchor_expected`。
-- `ipc::transport` 已有 cfg-gated Windows skeleton，但仍不是 Named Pipe 实现；library client
-  在 Windows 上只能得到明确 unsupported error。Windows daemon lock/process probe/smart fallback
-  同样只是 unsupported skeleton。
+- `ipc::transport` 已有 Windows Named Pipe compile backend，但未在 Windows 实机/VM 验证 runtime
+  connect/bind/accept、ACL/security descriptor、multi-user 隔离或 pipe busy 行为。Windows daemon
+  lock/process probe/smart fallback 同样仍只是 unsupported skeleton。
 - `current_platform_capabilities()` 是 Phase 1 静态快照，不执行权限 probe；后续消费方不要把
   静态 `desktop.permissions=available` 误解为当前已授权。
 - `overlay::renderer::renderer_capabilities()` 同样是静态快照，不创建窗口、不 probe 当前
@@ -925,10 +946,10 @@ capability summary，不 probe 权限、不打开 overlay、不创建 IPC client
 
 ## 下一步
 
-Phase 10b TUI capability diagnostics 已完成一个最小阶段。下一步：
+Phase 3c Windows Named Pipe transport compile backend 已完成一个最小阶段。下一步：
 
-- 下一阶段若继续 Windows，可实现真实 Named Pipe backend，或继续把 desktop/hotkey/service 的
-  Windows unsupported skeleton 接入 doctor/TUI 诊断。
+- 下一阶段若继续 Windows，可做 Windows daemon single-instance/process probe/smart fallback skeleton
+  收敛，或继续把 desktop/hotkey/service 的 Windows unsupported skeleton 接入 doctor/TUI 诊断。
 - 若继续 Linux build baseline，应优先配置 Linux C cross compiler/sysroot，或改用 Docker/cross/CI。
 - 若继续 overlay 视觉 PoC，则需要用户提供真实 Windows 11/10 或 Linux wlroots/KDE/GNOME 环境；
   在当前 macOS 主机上不要假装验证真实 topmost/click-through/layer-shell 行为。
@@ -944,9 +965,9 @@ development-plan.md、gui.md、overlay.md、platform-capabilities.md、macos-bas
 handoff.md。
 Phase 9al 后 GUI PoC 已冻结；不要继续打磨 GUI placeholder。
 Phase 7b/8b overlay backend skeleton、Phase 3b IPC transport cfg boundary、Phase 10a
-cross-check baseline、Phase 10b TUI capability diagnostics 已完成一个最小阶段。先查看最新
-diff/commit 和验证结果。
-保持 macOS 不回退，不引入 GUI/WebView。不要把 Windows transport skeleton 当作 Named Pipe 实现。
-下一步优先考虑 Windows Named Pipe backend 或 Linux Docker/cross build baseline；真实 overlay
-视觉 PoC 需要用户提供目标系统。
+cross-check baseline、Phase 10b TUI capability diagnostics、Phase 3c Windows Named Pipe
+transport compile backend 已完成一个最小阶段。先查看最新 diff/commit 和验证结果。
+保持 macOS 不回退，不引入 GUI/WebView。不要把 Windows Named Pipe compile backend 当成实机
+runtime 验收。下一步优先考虑 Windows lifecycle/smart fallback 诊断收敛或 Linux Docker/cross
+build baseline；真实 overlay 视觉 PoC 需要用户提供目标系统。
 ```

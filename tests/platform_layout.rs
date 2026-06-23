@@ -1991,6 +1991,76 @@ fn gui_first_screen_refresh_result_projection_stays_click_scoped() {
     );
 }
 
+#[test]
+fn gui_first_screen_refresh_error_projection_stays_catch_scoped() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gui_doc = std::fs::read_to_string(root.join("docs/cross-platform/gui.md")).unwrap();
+
+    for token in [
+        "Phase 9ac",
+        "explicit refresh error projection",
+        "error projection 必须只发生在 explicit refresh click 的 catch 路径内",
+        "不得实现 retry loop",
+        "不新增 Tauri command",
+        "不启动 daemon/GUI",
+    ] {
+        assert!(
+            gui_doc.contains(token),
+            "docs/cross-platform/gui.md should record Phase 9ac error projection token `{token}`"
+        );
+    }
+
+    let frontend = std::fs::read_to_string(root.join("gui-dist/index.html")).unwrap();
+    for token in [
+        "projectExplicitRefreshError",
+        "projectExplicitRefreshError(error)",
+        "error?.kind",
+        "error?.recoverable",
+        "offline-problem-kind",
+        "offline-recoverable",
+        "offline-retry-allowed",
+    ] {
+        assert!(
+            frontend.contains(token),
+            "gui-dist/index.html should expose Phase 9ac error projection token `{token}`"
+        );
+    }
+
+    let error_projection_pos = frontend
+        .find("projectExplicitRefreshError(error)")
+        .expect("explicit refresh error projection call should be present");
+    let catch_pos = frontend
+        .find("catch (error)")
+        .expect("explicit refresh error path should be present");
+    let finally_pos = frontend
+        .find("finally")
+        .expect("explicit refresh finally path should be present");
+    assert!(
+        error_projection_pos > catch_pos && error_projection_pos < finally_pos,
+        "error projection must stay in the explicit refresh catch path"
+    );
+
+    for token in [
+        "setInterval",
+        "setTimeout",
+        "subscribe_events",
+        "client.send(&Command::Subscribe)",
+        "install_service",
+        "restart_service",
+    ] {
+        assert!(
+            !frontend.contains(token),
+            "Phase 9ac frontend must not subscribe, loop, or manage service token `{token}`"
+        );
+    }
+
+    let tauri_lib = std::fs::read_to_string(root.join("src-tauri/src/lib.rs")).unwrap();
+    assert!(
+        !tauri_lib.contains("gui_first_screen_refresh_error_projection"),
+        "Phase 9ac must not add a backend error projection command"
+    );
+}
+
 fn rust_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     collect_rust_files(dir, &mut out);

@@ -453,6 +453,18 @@ Phase 9ab 增加 GUI first-screen explicit refresh result projection，不新增
   Status/History view model，不写 history，不做 metrics sink，不改变 TUI/CLI 行为。
 - 这个阶段不运行 `tauri dev`、`tauri build` 或 `tauri bundle`，不启动 daemon/GUI。
 
+Phase 9ac 增加 GUI first-screen explicit refresh error projection，不新增请求：
+
+- placeholder 可以在 9aa 的显式 click 失败后，把 one-shot request error 投影到已有
+  offline/action 文本字段：例如 action status、action result、offline problem、recoverable 和
+  retry allowed。
+- error projection 必须只发生在 explicit refresh click 的 catch 路径内；初始加载仍不得自动调用
+  one-shot，不得实现 retry loop、service management、daemon start、daemon event subscription、
+  reconnect loop、timer 或 Tauri event emission。
+- 这个阶段不新增 Tauri command，不新增 IPC command/event，不 bump `PROTO_VERSION`，不建立完整
+  error view model，不写 history，不做 metrics sink，不改变 TUI/CLI 行为。
+- 这个阶段不运行 `tauri dev`、`tauri build` 或 `tauri bundle`，不启动 daemon/GUI。
+
 ## 验收指标
 
 GUI PoC 进入实现前建议记录：

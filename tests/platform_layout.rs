@@ -3444,32 +3444,46 @@ fn windows_runtime_validation_checklist_stays_bottom_up() {
 }
 
 #[test]
-fn ci_builds_windows_artifact_without_runtime_claims() {
+fn windows_local_dev_replaces_ci_artifact_loop() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workflow = std::fs::read_to_string(root.join(".github/workflows/ci.yml")).unwrap();
-    for token in [
+    for forbidden in [
         "windows-artifact",
-        "runs-on: windows-latest",
-        "cargo build --target x86_64-pc-windows-msvc",
-        "cargo test --target x86_64-pc-windows-msvc",
-        "path: dist/windows",
+        "windows-latest",
+        "upload-artifact",
         "shuo-windows-debug",
     ] {
         assert!(
-            workflow.contains(token),
-            ".github/workflows/ci.yml should build Windows artifact token `{token}`"
+            !workflow.contains(forbidden),
+            ".github/workflows/ci.yml should not use slow Windows CI artifact token `{forbidden}`"
+        );
+    }
+
+    let local_dev =
+        std::fs::read_to_string(root.join("docs/cross-platform/windows-local-dev.md")).unwrap();
+    for token in [
+        "Windows Local Development",
+        "git pull --ff-only",
+        "rustup default stable-x86_64-pc-windows-msvc",
+        "cargo test --target x86_64-pc-windows-msvc",
+        "cargo build --target x86_64-pc-windows-msvc",
+        "windows-runtime-validation.md",
+    ] {
+        assert!(
+            local_dev.contains(token),
+            "docs/cross-platform/windows-local-dev.md should document local dev token `{token}`"
         );
     }
 
     let doc = std::fs::read_to_string(root.join("docs/cross-platform/windows.md")).unwrap();
     for token in [
-        "CI artifact build is not runtime validation",
-        "shuo-windows-debug",
-        "Windows runtime checklist",
+        "Windows: maintain a local development checkout",
+        "Do not rely on GitHub Actions for Windows build artifacts",
+        "windows-local-dev.md",
     ] {
         assert!(
             doc.contains(token),
-            "docs/cross-platform/windows.md should document Windows artifact token `{token}`"
+            "docs/cross-platform/windows.md should document Windows local dev token `{token}`"
         );
     }
 }

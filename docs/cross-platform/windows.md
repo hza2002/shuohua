@@ -317,8 +317,10 @@ Not allowed in the Windows core phase:
 Development split:
 
 - macOS: edit code, run tests, run `make check-windows`.
-- Windows: build and runtime-test artifacts.
-- CI: use `windows-latest` to produce `shuo.exe` artifacts before asking for repeated manual runtime testing.
+- Windows: maintain a local development checkout, build with the MSVC Rust toolchain, and run runtime tests on
+  the same machine.
+- GitHub is used for source synchronization. Do not rely on GitHub Actions for Windows build artifacts during
+  the current Windows-first runtime phase because CI turnaround is too slow.
 
 Mac commands:
 
@@ -340,23 +342,13 @@ cargo test --target x86_64-pc-windows-msvc
 .\target\x86_64-pc-windows-msvc\debug\shuo.exe service status
 ```
 
-Artifact strategy:
+Local Windows development strategy:
 
-- Short term: build on the Windows machine or CI. macOS `cargo check --target x86_64-pc-windows-msvc` is only a
-  compile boundary check, not an artifact packaging route.
-- Do not ask the user to repeatedly rebuild on Windows after every small code change once CI artifact upload is
-  available.
-- A Windows artifact is testable only after `shuo.exe`, any required DLLs, and the expected config/runtime path
-  behavior are captured in the validation notes.
-- CI artifact build is not runtime validation. The `shuo-windows-debug` artifact is only a convenient debug
-  binary plus the Windows runtime checklist; capabilities remain `runtime_not_verified` until the checklist is
-  run on Windows.
-
-Preferred artifact route before repeated manual testing:
-
-- Add CI on `windows-latest` to build `shuo.exe` and upload an artifact.
-- The Windows machine should primarily test artifacts, not be the main development environment.
-- Do not claim a Windows release until artifact build, runtime smoke test, and manual desktop checks pass.
+- Follow [windows-local-dev.md](windows-local-dev.md) to set up Git, MSVC Build Tools, and Rust on Windows.
+- Build and test locally on Windows before reporting runtime results.
+- macOS `cargo check --target x86_64-pc-windows-msvc` remains a compile boundary check only, not runtime
+  evidence.
+- Do not claim a Windows release until local Windows build, runtime smoke test, and manual desktop checks pass.
 
 ## Runtime Validation Order
 
@@ -379,14 +371,14 @@ User intervention points:
 
 | Phase | Needs user? | Why |
 |---|---:|---|
-| Path/config/state backend | No, until Windows artifact exists | Mostly compile and unit-testable. |
+| Path/config/state backend | No, until Windows local build exists | Mostly compile and unit-testable. |
 | Named Pipe + mutex runtime smoke | Yes | Needs Windows process/session behavior. |
 | Service dry-run/install preview | Yes before real install | User must approve startup registration. |
 | Audio capture | Yes | Requires real microphone and Windows privacy state. |
 | Overlay | Yes | Visual/focus/DPI behavior is runtime-only. |
 | Hotkey suppression | Yes | Needs real foreground apps and keyboard state. |
 | Clipboard/paste | Yes | Needs target apps and UAC/elevation boundaries. |
-| CI artifact upload | No | Agent can implement once repository policy is clear. |
+| Windows local toolchain setup | Yes | User must prepare or expose the Windows development machine. |
 
 ## Capability Promotion Rules
 
@@ -411,7 +403,7 @@ Recommended next phases:
 
 1. Windows runtime validation document and command checklist.
 2. Windows path/config/state directory backend.
-3. Windows CI artifact build for `shuo.exe`.
+3. Windows local development setup and build/test loop.
 4. Windows Named Pipe endpoint scoping/security hardening.
 5. Windows Named Pipe + mutex runtime smoke.
 6. Windows audio capture smoke with `cpal`/WASAPI.

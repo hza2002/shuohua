@@ -11,6 +11,7 @@
 | 总体目标、阶段边界、文档维护规则 | [overview.md](overview.md) |
 | macOS 回归基线、平台边界审计 | [macos-baseline.md](macos-baseline.md) |
 | Windows 开发规范、路径、IPC、桌面能力、验证顺序 | [windows.md](windows.md) |
+| Windows 本地开发机搭建、Git 同步、build/test 命令 | [windows-local-dev.md](windows-local-dev.md) |
 | Windows 首次实机/VM runtime smoke checklist | [windows-runtime-validation.md](windows-runtime-validation.md) |
 | CLI / daemon / GUI / packaged app 的数据归属和路径根 | [app-data.md](app-data.md) |
 | GUI App / Tauri client | [gui.md](gui.md) |

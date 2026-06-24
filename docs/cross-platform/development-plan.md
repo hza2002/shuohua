@@ -605,7 +605,7 @@ Phase 9al 后冻结 GUI 产品化开发：
 1. 保留已完成的 Linux compile/capability/service dry-run 基线，作为 Unix 侧回归保护。
 2. Windows-first core：path/config/state、IPC endpoint security、single instance runtime、audio、
    overlay、hotkey、clipboard/paste。
-3. Windows artifact/CI 优先于反复让用户在 Windows 上手动构建。
+3. Windows 本地开发机负责 build/runtime test；GitHub 只负责代码同步，不用 GitHub Actions 产物。
 4. Linux runtime backend 在 Windows 核心路径稳定后继续推进。
 
 选择 Windows first 是因为 Windows 与 macOS/Linux 的桌面、安全、IPC、启动和输入模型差异最大。
@@ -781,14 +781,16 @@ Phase 10o Windows Path/Config/State Backend:
 - Passing `make check-windows` proves compile/cfg boundaries only. Product path behavior still needs the
   Windows runtime checklist.
 
-Phase 10p Windows CI Artifact Build:
+Phase 10p Windows Local Development Setup:
 
-- Add a `windows-latest` CI job that produces a debug `shuo.exe` artifact suitable for manual smoke testing.
-- Include `docs/cross-platform/windows-runtime-validation.md` in the uploaded artifact so the user can run the
-  matching checklist beside the binary.
-- Keep artifact build separate from runtime validation. CI proves build/package shape, not hotkey/audio/overlay
-  behavior.
-- This phase should run after the Windows path backend so first manual artifacts create data in final locations.
+- Add `docs/cross-platform/windows-local-dev.md`, documenting Git sync, MSVC/Rust setup, local build/test
+  commands, and how to report runtime smoke results back to the macOS session.
+- Do not add a `windows-latest` CI artifact job in this phase. GitHub Actions is too slow for the current
+  Windows-first runtime loop.
+- Keep local build separate from runtime validation. A local Windows build proves the binary exists on Windows;
+  desktop capabilities still need the runtime checklist.
+- This phase should run after the Windows path backend so the first manual builds create data in final
+  locations.
 
 Phase 10q Windows Named Pipe Security And Runtime Smoke:
 

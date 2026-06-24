@@ -6,7 +6,7 @@
 
 ## 最近 commit
 
-HEAD: `ci: add windows debug artifact`
+HEAD: `docs: use windows local development loop`
 
 ## 当前 phase
 
@@ -23,16 +23,16 @@ package/app-private data 只保存 GUI/runtime 私有状态。macOS 配置可继
 新增 `docs/cross-platform/windows-runtime-validation.md`，第一版只覆盖 artifact identity、
 product data paths、daemon/client IPC、single instance、service dry-run 和 Explorer open/reveal；
 不验证 audio/overlay/hotkey/clipboard/paste。下一步不要继续打磨 GUI placeholder；优先做
-Windows path/config/state backend 和 Windows artifact/CI。
+Windows path/config/state backend 和 Windows 本地开发链路。
 Phase 10o Windows Path/Config/State Backend 已完成：`src/paths.rs` 新增 `AppPaths` product path
 facade，config path helpers 和 `StateDirs` 改走该 facade；Windows target 使用 known-folder API
 优先解析 Roaming/Local AppData，环境变量仅作为 fallback。该阶段仍只证明 compile/cfg 边界，
 真实目录解析、package redirection、目录创建时机和 elevated/non-elevated 行为需要 Windows runtime
 checklist。
-Phase 10p Windows CI Artifact Build 已完成：`.github/workflows/ci.yml` 新增 `windows-artifact`
-job，在 `windows-latest` 上 build/test `x86_64-pc-windows-msvc`，上传 `shuo-windows-debug`
-artifact，内含 `shuo.exe` 和 Windows runtime checklist。该 artifact 只用于后续手动 smoke test，
-不代表 runtime 已验证。
+Phase 10p Windows Local Development Setup 已完成：不使用 GitHub Actions 编译 Windows artifact，
+因为 CI turnaround 太慢。Windows 机器作为本地开发/build/runtime 测试环境，通过 GitHub 同步代码。
+`.github/workflows/ci.yml` 不再包含 `windows-artifact` job；`docs/cross-platform/windows-local-dev.md`
+记录 Windows 本地 toolchain、Git sync、build/test 和结果回传流程。
 Windows IPC capability 诊断已与 Phase 3c 同步：Windows target 使用 Tokio Named Pipe transport
 编译通过，`ipc.transport` 静态 capability 报 `partial/named_pipe/runtime_not_verified`；runtime/ACL/
 smart fallback 仍需 Windows 实机或 VM 验证。
@@ -1212,13 +1212,9 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10n：写 Windows runtime validation checklist，第一版只覆盖 version/doctor/config path、
-  state/history/log path、Named Pipe daemon status、single-instance smoke、service dry-run、Explorer
-  open/reveal。不要把 audio/overlay/hotkey/paste 塞进第一版，等可测 artifact/backend 后再加。
-- Phase 10p：做 Windows CI artifact build，优先让用户测试下载的 `shuo.exe`，不要要求用户反复在 Windows 上手动构建。
-- Phase 10q：下一步是 Windows Named Pipe endpoint scoping/security descriptor 和 runtime smoke；该阶段开始前先看 GitHub Actions 是否成功产出 `shuo-windows-debug`。如果已有 artifact，就需要用户在 Windows 上按 `docs/cross-platform/windows-runtime-validation.md` 跑首次 smoke。
-- Phase 10q 之后才做 Named Pipe endpoint scoping/security descriptor 和 Windows runtime smoke；
-  这一步需要用户 Windows 机器/VM 介入。
+- Phase 10q：Windows Named Pipe endpoint scoping/security descriptor 和 runtime smoke；
+  该阶段需要用户 Windows 本地 checkout 能 `cargo build` / `cargo test`，然后按
+  `docs/cross-platform/windows-runtime-validation.md` 跑首次 smoke。
 - audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability
   升级。
 - 不继续 GUI 产品化开发。
@@ -1234,8 +1230,9 @@ Phase 9al 后 GUI PoC 已冻结；不要继续打磨 GUI placeholder。
 Phase 10m Windows Development Design Baseline 已完成；`docs/cross-platform/windows.md` 是
 Windows-first 实现基线。Phase 10m1 App Data Ownership Baseline 已完成；
 `docs/cross-platform/app-data.md` 规定 CLI/daemon/GUI/packaged app 共享 product data root，
-package/app-private data 只放 GUI/runtime 私有状态。后续主线是 Phase 10n Windows runtime
-validation checklist，然后 Phase 10o Windows path/config/state backend，再做 Windows CI artifact build。
+package/app-private data 只放 GUI/runtime 私有状态。Phase 10n Windows runtime validation checklist、
+Phase 10o Windows path/config/state backend、Phase 10p Windows local development setup 已完成。
+下一步是 Phase 10q Windows Named Pipe endpoint scoping/security descriptor 和 runtime smoke。
 Phase 7b/8b overlay backend skeleton、Phase 3b IPC transport cfg boundary、Phase 10a
 cross-check baseline、Phase 10b TUI capability diagnostics、Phase 10c Docker/cross Linux
 check baseline、Phase 10d Linux compile-time capability sync、Phase 3c Windows Named Pipe
@@ -1244,6 +1241,6 @@ Phase 10j Windows lifecycle primitive compile backend、Phase 10k Windows servic
 skeleton 和 Phase 10l non-macOS desktop capability truthfulness 已完成。先查看最新
 diff/commit 和验证结果。
 保持 macOS 不回退，不引入 GUI/WebView。不要把 Windows Named Pipe compile backend 当成实机
-runtime 验收。下一步优先写 Windows runtime validation checklist；随后实现 Windows path/config/state
-backend。真实 Windows IPC/audio/overlay/hotkey/clipboard 验证需要用户目标系统。
+runtime 验收。不要添加 GitHub Actions Windows artifact job；Windows 机器作为本地开发/build/runtime
+测试环境，通过 GitHub 同步代码。真实 Windows IPC/audio/overlay/hotkey/clipboard 验证需要用户目标系统。
 ```

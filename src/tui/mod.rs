@@ -97,11 +97,11 @@ impl App {
                 self.status =
                     crate::i18n::tr("tui.status.config_reloaded", &[("path", path.to_string())]);
                 self.configure.apply_event(&event, true);
-                self.theme = crate::config::load_from(&crate::config::default_path())
+                let config_path = std::path::Path::new(path);
+                self.theme = crate::config::load_from(config_path)
                     .map(|cfg| {
                         crate::i18n::init(&cfg.ui.language);
-                        crate::config::theme::load_effective(&cfg, &crate::config::default_path())
-                            .tui
+                        crate::config::theme::load_effective(&cfg, config_path).tui
                     })
                     .unwrap_or_default();
             }
@@ -190,7 +190,11 @@ pub async fn run() -> Result<()> {
 }
 
 fn init_i18n_from_config() {
-    let language = crate::config::load_from(&crate::config::default_path())
+    init_i18n_from_config_path(&crate::config::default_path());
+}
+
+fn init_i18n_from_config_path(path: &std::path::Path) {
+    let language = crate::config::load_from(path)
         .map(|cfg| cfg.ui.language)
         .unwrap_or_else(|_| "auto".to_string());
     crate::i18n::init(&language);
@@ -367,16 +371,10 @@ language = "zh-CN"
 "#,
         )
         .unwrap();
-        let old = std::env::var("XDG_CONFIG_HOME").ok();
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
 
-        super::init_i18n_from_config();
+        super::init_i18n_from_config_path(&root.join("config.toml"));
 
         assert_eq!(crate::i18n::tr("tui.tab_settings", &[]), "3 配置");
-        match old {
-            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
-        }
         let _ = std::fs::remove_dir_all(home);
     }
 
@@ -398,8 +396,6 @@ language = "zh-CN"
 "#,
         )
         .unwrap();
-        let old = std::env::var("XDG_CONFIG_HOME").ok();
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
         crate::i18n::init("en-US");
         let mut app = super::App::new();
 
@@ -408,10 +404,6 @@ language = "zh-CN"
         });
 
         assert_eq!(crate::i18n::tr("tui.tab_settings", &[]), "3 配置");
-        match old {
-            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
-        }
         let _ = std::fs::remove_dir_all(home);
     }
 }

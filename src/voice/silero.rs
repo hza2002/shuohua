@@ -36,7 +36,7 @@ pub struct SileroFrame {
     pub frame: VadFrame,
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
 pub struct SileroVad {
     detector: voice_activity_detector::VoiceActivityDetector,
     threshold: f32,
@@ -44,10 +44,10 @@ pub struct SileroVad {
     sample_offset: u64,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "macos"))]
 pub struct SileroVad;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
 impl SileroVad {
     pub fn new(config: SileroConfig) -> anyhow::Result<Self> {
         let detector = voice_activity_detector::VoiceActivityDetector::builder()
@@ -94,11 +94,11 @@ impl SileroVad {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "macos"))]
 impl SileroVad {
     pub fn new(_config: SileroConfig) -> anyhow::Result<Self> {
         Err(anyhow::anyhow!(
-            "Silero VAD is not available on Linux until ONNX Runtime provisioning is defined"
+            "Silero VAD is not available on this platform until ONNX Runtime provisioning is defined"
         ))
     }
 
@@ -107,7 +107,7 @@ impl SileroVad {
     }
 }
 
-#[cfg(all(test, not(target_os = "linux")))]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 

@@ -15,7 +15,7 @@ pub use scan::{run_local, run_local_from_config_home};
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::*;
     use crate::config::spec::Severity;
@@ -25,6 +25,10 @@ mod tests {
             std::env::temp_dir().join(format!("shuohua-diagnostics-test-{}", ulid::Ulid::new()));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn source_ends_with(source: &Path, relative: &[&str]) -> bool {
+        source.ends_with(relative.iter().collect::<PathBuf>())
     }
 
     #[test]
@@ -53,15 +57,15 @@ mod tests {
         assert!(report
             .diagnostics
             .iter()
-            .any(|d| d.source.ends_with("profile/broken.toml")));
+            .any(|d| source_ends_with(&d.source, &["profile", "broken.toml"])));
         assert!(report
             .diagnostics
             .iter()
-            .any(|d| d.source.ends_with("asr/apple.toml")));
+            .any(|d| source_ends_with(&d.source, &["asr", "apple.toml"])));
         assert!(report
             .diagnostics
             .iter()
-            .any(|d| d.source.ends_with("post/llm/broken.toml")));
+            .any(|d| source_ends_with(&d.source, &["post", "llm", "broken.toml"])));
         let _ = fs::remove_dir_all(home);
     }
 
@@ -86,31 +90,49 @@ chain = ["rule:missing", "llm:missing", "bad-item", "other:name"]
         .unwrap();
 
         let report = run_local_from_config_home(&home);
+        let missing_asr = root.join("asr").join("doubao.toml");
+        let missing_rule = root.join("post").join("rule").join("missing.toml");
 
-        assert!(report.diagnostics.iter().any(|d| {
-            d.scope == DiagnosticScope::Profile
-                && d.source.ends_with("profile/default.toml")
-                && d.path == "asr.provider"
-                && d.message.contains("asr/doubao.toml")
-        }));
-        assert!(report.diagnostics.iter().any(|d| {
-            d.scope == DiagnosticScope::Profile
-                && d.source.ends_with("profile/default.toml")
-                && d.path == "post.chain"
-                && d.message.contains("post/rule/missing.toml")
-        }));
-        assert!(report.diagnostics.iter().any(|d| {
-            d.scope == DiagnosticScope::Profile
-                && d.source.ends_with("profile/default.toml")
-                && d.path == "post.chain"
-                && d.message.contains("post chain item")
-        }));
-        assert!(report.diagnostics.iter().any(|d| {
-            d.scope == DiagnosticScope::Profile
-                && d.source.ends_with("profile/default.toml")
-                && d.path == "post.chain"
-                && d.message.contains("unknown post component kind")
-        }));
+        assert!(
+            report.diagnostics.iter().any(|d| {
+                d.scope == DiagnosticScope::Profile
+                    && source_ends_with(&d.source, &["profile", "default.toml"])
+                    && d.path == "asr.provider"
+                    && d.message.contains(&missing_asr.display().to_string())
+            }),
+            "{:?}",
+            report.diagnostics
+        );
+        assert!(
+            report.diagnostics.iter().any(|d| {
+                d.scope == DiagnosticScope::Profile
+                    && source_ends_with(&d.source, &["profile", "default.toml"])
+                    && d.path == "post.chain"
+                    && d.message.contains(&missing_rule.display().to_string())
+            }),
+            "{:?}",
+            report.diagnostics
+        );
+        assert!(
+            report.diagnostics.iter().any(|d| {
+                d.scope == DiagnosticScope::Profile
+                    && source_ends_with(&d.source, &["profile", "default.toml"])
+                    && d.path == "post.chain"
+                    && d.message.contains("post chain item")
+            }),
+            "{:?}",
+            report.diagnostics
+        );
+        assert!(
+            report.diagnostics.iter().any(|d| {
+                d.scope == DiagnosticScope::Profile
+                    && source_ends_with(&d.source, &["profile", "default.toml"])
+                    && d.path == "post.chain"
+                    && d.message.contains("unknown post component kind")
+            }),
+            "{:?}",
+            report.diagnostics
+        );
         let _ = fs::remove_dir_all(home);
     }
 

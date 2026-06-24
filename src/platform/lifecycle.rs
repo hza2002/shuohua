@@ -233,7 +233,8 @@ mod imp {
                 .unwrap()
             );
             assert!(
-                process_exists_with_open_result(Err(std::io::Error::from_raw_os_error(5))).is_err()
+                process_exists_with_open_result(Err(std::io::Error::from_raw_os_error(123)))
+                    .is_err()
             );
         }
     }

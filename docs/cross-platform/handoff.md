@@ -6,13 +6,49 @@
 
 ## 最近 commit
 
-HEAD: `docs: update cross-platform handoff`
+HEAD: `fix: unblock windows core runtime smoke` (`4d42294`).
 
 当前分支已 rebase 到 `v0.2.0` / `release: v0.2.0` 基底（commit `7fff199`）。
 
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10q Windows native build/test and first core runtime smoke 已完成：
+
+- Windows 原生仓库路径：`C:\Users\hza2002\repo\shuohua`（请求里的 `C:\dev\shuohua` 不存在）。
+- Windows 工具链：stable MSVC，`rustc -Vv` host 为 `x86_64-pc-windows-msvc`，`cl.exe` /
+  `link.exe` 来自 VS 2022 Community MSVC 14.35。
+- Windows build/test 修复点：
+  - 非 macOS 不再编译/link `voice_activity_detector` / ONNX Runtime；Windows/Linux Silero VAD
+    保持 explicit unavailable stub，避免当前机器 MSVC STL symbol link failure 阻塞 core runtime。
+  - 多处测试和 diagnostics 改为 Windows-safe path/cfg 行为，避免 Unix-only 假设。
+  - Windows IPC tests 使用合法 Named Pipe endpoint。
+  - Windows/Linux overlay skeleton 的 daemon runtime 改为 no-op drain，capability 仍为
+    `unsupported`，不实现 overlay。
+  - 非 macOS hotkey backend 启动 idle placeholder，让 daemon core IPC 可以运行；capability
+    仍为 `unsupported`，不实现 hotkey/suppression。
+  - Windows `service status` 先查询 daemon `DaemonStatus`，再打印 user-session dry-run strategy；
+    不安装 Task Scheduler/SCM，不启动 service。
+  - 非 macOS binary/library crate-level 允许当前 skeleton surface 的 dead code/unused imports，
+    用于让 Windows `clippy -D warnings` 通过；macOS 严格度不变。
+- Windows runtime smoke 结果：
+  - `shuo.exe --version` 输出 `shuo 0.2.0`。
+  - `%APPDATA%\Shuohua` 用 `config-template` 创建；`%LOCALAPPDATA%\Shuohua` 在 smoke 中确认/创建。
+  - `shuo.exe --daemon` 可以保持运行；`doctor` 能通过 Named Pipe 返回
+    `daemon: OK pid=... state=Idle`。
+  - 第二个 `shuo.exe --daemon` 明确失败：`another shuo daemon is already starting or running`。
+  - `shuo.exe service status` 能显示运行中 daemon，并继续打印
+    `windows.user: dry-run strategy=user_session_logon_task ... install_start=unsupported`。
+  - `doctor` 仍因当前机器模板 secret 空值、无默认输入设备、权限探针等返回 1；这是本机环境/
+    后续 backend 问题，不代表 IPC smoke 失败。
+  - Explorer direct open/reveal 命令不挂起，但工具会话中 `explorer.exe` 快速返回 1；窗口行为未人工确认。
+- 已知风险：
+  - Windows Named Pipe 仍使用 `\\.\pipe\shuohua`，尚未实现 user/session scoped endpoint naming
+    或 security descriptor/DACL hardening；capability 仍必须保持 `partial/runtime_not_verified`。
+  - Windows overlay/hotkey/audio/clipboard/paste 仍未实现，不要把 daemon core smoke 解读为这些能力可用。
+  - `windows-runtime-validation.md` 仍写了过时的 `shuo.exe daemon` 子命令；实际 CLI 入口是
+    `shuo.exe --daemon`。
+
 Phase 10m Windows Development Design Baseline 已完成：新增 `docs/cross-platform/windows.md`，
 记录 Windows per-user desktop app 方向、AppData/LocalAppData 文件布局、Named Pipe 安全、
 user-session daemon lifecycle、Task Scheduler startup 边界、audio/hotkey/clipboard/overlay 路线、
@@ -1207,16 +1243,20 @@ permission probe 或 active app runtime。
 
 最新验证结果：
 
-- `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && make check-windows && make check-linux-cross`
-  通过。
+- Windows native:
+  - `cargo fmt --check` 通过。
+  - `cargo clippy --all-targets -- -D warnings` 通过。
+  - `cargo test` 通过。
+  - `cargo test --target x86_64-pc-windows-msvc` 通过。
+  - `cargo build --target x86_64-pc-windows-msvc` 通过。
 - `make check-windows` / `make check-linux-cross` 仍输出既有非 macOS skeleton dead-code warnings；
   Phase 10l 只同步静态 capability truthfulness，不代表 Linux/Windows desktop runtime 已验证。
 
 下一步：
 
-- Phase 10q：Windows Named Pipe endpoint scoping/security descriptor 和 runtime smoke；
-  该阶段需要用户 Windows 本地 checkout 能 `cargo build` / `cargo test`，然后按
-  `docs/cross-platform/windows-runtime-validation.md` 跑首次 smoke。
+- Phase 10r：Windows Named Pipe endpoint scoping/security descriptor hardening。优先处理
+  user/session scoped endpoint 命名、DACL/security descriptor、ERROR_PIPE_BUSY retry 行为和
+  elevated/non-elevated 差异；保持 service install/start/stop dry-run。
 - audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability
   升级。
 - 不继续 GUI 产品化开发。

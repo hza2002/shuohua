@@ -21,8 +21,19 @@ pub(crate) fn spawn_event_tap(
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn spawn_event_tap(
-    _writer: os_pipe::PipeWriter,
+    writer: os_pipe::PipeWriter,
     _suppressor: Arc<Mutex<Suppressor>>,
 ) -> Result<()> {
-    anyhow::bail!("daemon hotkey event tap is not implemented on this platform")
+    std::thread::Builder::new()
+        .name("hotkey-unimplemented-idle".into())
+        .spawn(move || {
+            tracing::warn!(
+                "daemon hotkey event tap is unsupported on this platform; keeping IPC runtime alive"
+            );
+            let _writer = writer;
+            loop {
+                std::thread::park();
+            }
+        })?;
+    Ok(())
 }

@@ -283,7 +283,7 @@ fn validate_profile_references(
     match profile.asr.provider.as_str() {
         "apple" => {}
         "doubao" => {
-            let path = root.join("asr/doubao.toml");
+            let path = root.join("asr").join("doubao.toml");
             if !path.exists() {
                 push_error(
                     report,
@@ -317,8 +317,8 @@ fn validate_profile_references(
             continue;
         };
         let path = match kind {
-            "rule" => root.join("post/rule").join(format!("{name}.toml")),
-            "llm" => root.join("post/llm").join(format!("{name}.toml")),
+            "rule" => root.join("post").join("rule").join(format!("{name}.toml")),
+            "llm" => root.join("post").join("llm").join(format!("{name}.toml")),
             other => {
                 has_post_reference_error = true;
                 push_error(

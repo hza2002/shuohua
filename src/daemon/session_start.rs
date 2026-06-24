@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::overlay::{OverlayCmd, OverlayHandle, TextKind};
@@ -38,9 +39,31 @@ pub(super) fn prepare(
     overlay: OverlayHandle,
     build_provider: impl Fn(&str, &toml::value::Table) -> Result<crate::asr::providers::ProviderRuntime>,
 ) -> std::result::Result<SessionStart, SessionStartError> {
+    let profile_dir = crate::config::profile::default_dir();
+    let post_dir = crate::config::post::default_dir();
+    prepare_with_dirs(
+        runtime_cfg,
+        start_app_context,
+        state_store,
+        overlay,
+        &profile_dir,
+        &post_dir,
+        build_provider,
+    )
+}
+
+fn prepare_with_dirs(
+    runtime_cfg: &crate::reload::Cfg,
+    start_app_context: crate::post::AppContext,
+    state_store: StateStore,
+    overlay: OverlayHandle,
+    profile_dir: &Path,
+    post_dir: &Path,
+    build_provider: impl Fn(&str, &toml::value::Table) -> Result<crate::asr::providers::ProviderRuntime>,
+) -> std::result::Result<SessionStart, SessionStartError> {
     let cfg = &runtime_cfg.config;
     let profile = crate::config::profile::load_for_app(
-        &crate::config::profile::default_dir(),
+        profile_dir,
         &cfg.profile,
         start_app_context.bundle_id.as_deref(),
     )
@@ -49,7 +72,6 @@ pub(super) fn prepare(
         SessionStartError::Profile
     })?;
 
-    let post_dir = crate::config::post::default_dir();
     let post_chain_config = crate::config::post::load_components(
         &profile.post.chain,
         &crate::config::post::PostDirs {
@@ -199,7 +221,6 @@ hotwords = ["Rust", "macOS"]
 chain = []
 "#,
         );
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
         let cfg = Arc::new(crate::reload::RuntimeConfig {
             config: crate::config::load_from(&root.join("config.toml")).unwrap(),
             theme: crate::config::theme::EffectiveTheme::default(),
@@ -207,7 +228,7 @@ chain = []
         });
         let (overlay, _rx) = OverlayHandle::channel();
 
-        let start = prepare(
+        let start = prepare_with_dirs(
             &cfg,
             crate::post::AppContext {
                 bundle_id: Some("com.example.App".to_string()),
@@ -215,6 +236,8 @@ chain = []
             },
             StateStore::new(),
             overlay,
+            &root.join("profile"),
+            &root.join("post"),
             |name, overrides| {
                 assert_eq!(name, "fake");
                 assert!(overrides.is_empty());
@@ -234,7 +257,6 @@ chain = []
             Some("Example")
         );
 
-        std::env::remove_var("XDG_CONFIG_HOME");
         let _ = fs::remove_dir_all(config_home);
     }
 
@@ -255,7 +277,6 @@ provider = "fake"
 chain = []
 "#,
         );
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
         let cfg = Arc::new(crate::reload::RuntimeConfig {
             config: crate::config::load_from(&root.join("config.toml")).unwrap(),
             theme: crate::config::theme::EffectiveTheme::default(),
@@ -263,11 +284,13 @@ chain = []
         });
         let (overlay, _rx) = OverlayHandle::channel();
 
-        let result = prepare(
+        let result = prepare_with_dirs(
             &cfg,
             crate::post::AppContext::default(),
             StateStore::new(),
             overlay,
+            &root.join("profile"),
+            &root.join("post"),
             |_name, _overrides| anyhow::bail!("provider unavailable"),
         );
         let Err(error) = result else {
@@ -276,7 +299,6 @@ chain = []
 
         assert_eq!(error, SessionStartError::AsrProvider);
 
-        std::env::remove_var("XDG_CONFIG_HOME");
         let _ = fs::remove_dir_all(config_home);
     }
 }

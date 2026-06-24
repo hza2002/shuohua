@@ -670,10 +670,32 @@ trigger = "f16"
         tx
     }
 
+    fn ipc_test_endpoint(label: &str) -> PathBuf {
+        let id = ulid::Ulid::new();
+        #[cfg(windows)]
+        {
+            PathBuf::from(format!(r"\\.\pipe\shuohua-{label}-{id}"))
+        }
+        #[cfg(not(windows))]
+        {
+            PathBuf::from(format!("/tmp/shuohua-{label}-{id}.sock"))
+        }
+    }
+
+    fn remove_test_endpoint(path: impl AsRef<Path>) {
+        #[cfg(not(windows))]
+        {
+            let _ = fs::remove_file(path);
+        }
+        #[cfg(windows)]
+        {
+            let _ = path;
+        }
+    }
+
     #[tokio::test]
     async fn subscribe_fans_out_snapshot_and_live_events() {
-        let path =
-            std::env::temp_dir().join(format!("shuohua-ipc-test-{}.sock", ulid::Ulid::new()));
+        let path = ipc_test_endpoint("ipc-test");
         let listener = crate::ipc::transport::bind(&path).await.unwrap();
         let state = StateStore::new();
         let cfg_path =
@@ -746,7 +768,7 @@ trigger = "f16"
         );
 
         server.abort();
-        fs::remove_file(path).ok();
+        remove_test_endpoint(path);
     }
 
     #[tokio::test]
@@ -811,8 +833,8 @@ trigger = "f16"
 
     #[tokio::test]
     async fn shutdown_command_acknowledges_and_requests_shutdown() {
-        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-{}.sock", ulid::Ulid::new()));
-        let _ = fs::remove_file(&sock);
+        let sock = ipc_test_endpoint("ipc");
+        remove_test_endpoint(&sock);
         let listener = crate::ipc::transport::bind(&sock).await.unwrap();
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
         let control = ServerControl {
@@ -833,16 +855,13 @@ trigger = "f16"
         shutdown_rx.changed().await.unwrap();
         assert!(*shutdown_rx.borrow_and_update());
         server.abort();
-        let _ = fs::remove_file(sock);
+        remove_test_endpoint(sock);
     }
 
     #[tokio::test]
     async fn shutdown_after_subscribe_closes_client_handler() {
-        let sock = PathBuf::from(format!(
-            "/tmp/shuohua-ipc-sub-shutdown-{}.sock",
-            ulid::Ulid::new()
-        ));
-        let _ = fs::remove_file(&sock);
+        let sock = ipc_test_endpoint("ipc-sub-shutdown");
+        remove_test_endpoint(&sock);
         let listener = crate::ipc::transport::bind(&sock).await.unwrap();
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
         let control = ServerControl {
@@ -872,7 +891,7 @@ trigger = "f16"
             .expect("subscribed shutdown connection should close")
             .unwrap();
         server.abort();
-        let _ = fs::remove_file(sock);
+        remove_test_endpoint(sock);
     }
 
     #[test]
@@ -1034,11 +1053,8 @@ trigger = "f16"
 
     #[tokio::test]
     async fn before_id_without_before_maps_to_bad_command() {
-        let sock = PathBuf::from(format!(
-            "/tmp/shuohua-ipc-before-id-{}.sock",
-            ulid::Ulid::new()
-        ));
-        let _ = fs::remove_file(&sock);
+        let sock = ipc_test_endpoint("ipc-before-id");
+        remove_test_endpoint(&sock);
         let listener = crate::ipc::transport::bind(&sock).await.unwrap();
         let history = HistoryService::with_dir(
             std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new())),
@@ -1073,13 +1089,13 @@ trigger = "f16"
             event => panic!("expected bad_command error, got {event:?}"),
         }
         server.abort();
-        let _ = fs::remove_file(sock);
+        remove_test_endpoint(sock);
     }
 
     #[tokio::test]
     async fn first_stats_request_initializes_history() {
-        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-stats-{}.sock", ulid::Ulid::new()));
-        let _ = fs::remove_file(&sock);
+        let sock = ipc_test_endpoint("ipc-stats");
+        remove_test_endpoint(&sock);
         let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
         fs::create_dir_all(&dir).unwrap();
         write_history_record(
@@ -1128,13 +1144,13 @@ trigger = "f16"
             event => panic!("expected history stats, got {event:?}"),
         }
         server.abort();
-        let _ = fs::remove_file(sock);
+        remove_test_endpoint(sock);
         let _ = fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
     async fn subscribed_clients_receive_external_history_changed() {
-        let path = PathBuf::from(format!("/tmp/sh-ipc-chg-{}.sock", ulid::Ulid::new()));
+        let path = ipc_test_endpoint("ipc-chg");
         let listener = crate::ipc::transport::bind(&path).await.unwrap();
         let state = StateStore::new();
         let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
@@ -1168,13 +1184,13 @@ trigger = "f16"
 
         assert_eq!(client.read_event().await, Event::HistoryChanged);
         server.abort();
-        let _ = fs::remove_file(path);
+        remove_test_endpoint(path);
         let _ = fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
     async fn subscribed_clients_receive_history_appended_record() {
-        let path = PathBuf::from(format!("/tmp/sh-ipc-app-{}.sock", ulid::Ulid::new()));
+        let path = ipc_test_endpoint("ipc-app");
         let listener = crate::ipc::transport::bind(&path).await.unwrap();
         let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
         let history = HistoryService::with_dir(dir.clone());
@@ -1206,17 +1222,14 @@ trigger = "f16"
             event => panic!("expected history_appended event, got {event:?}"),
         }
         server.abort();
-        let _ = fs::remove_file(path);
+        remove_test_endpoint(path);
         let _ = fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
     async fn delete_response_includes_record_deleted() {
-        let sock = PathBuf::from(format!(
-            "/tmp/shuohua-ipc-delete-{}.sock",
-            ulid::Ulid::new()
-        ));
-        let _ = fs::remove_file(&sock);
+        let sock = ipc_test_endpoint("ipc-delete");
+        remove_test_endpoint(&sock);
         let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
         fs::create_dir_all(&dir).unwrap();
         write_history_record(
@@ -1258,13 +1271,13 @@ trigger = "f16"
             event => panic!("expected history deleted, got {event:?}"),
         }
         server.abort();
-        let _ = fs::remove_file(sock);
+        remove_test_endpoint(sock);
         let _ = fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
     async fn history_changed_and_delete_response_work_in_either_order() {
-        let path = PathBuf::from(format!("/tmp/sh-ipc-del-{}.sock", ulid::Ulid::new()));
+        let path = ipc_test_endpoint("ipc-del");
         let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
         fs::create_dir_all(&dir).unwrap();
         write_history_record(
@@ -1312,7 +1325,7 @@ trigger = "f16"
             .iter()
             .any(|event| matches!(event, Event::HistoryChanged)));
         server.abort();
-        let _ = fs::remove_file(path);
+        remove_test_endpoint(path);
         let _ = fs::remove_dir_all(dir);
     }
 

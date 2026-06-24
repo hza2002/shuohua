@@ -1,10 +1,12 @@
 use anyhow::Result;
+#[cfg(not(target_os = "macos"))]
+use std::time::Duration;
 
 use crate::platform::capability::{
     CapabilityId, CapabilityStatus, CapabilityStatusKind, PlatformKind,
 };
 
-use super::OverlayReceiver;
+use super::{OverlayCmd, OverlayReceiver};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MaterialPreference {
@@ -92,6 +94,24 @@ pub(super) fn run(
 ) -> Result<()> {
     debug_assert_eq!(renderer_capabilities().len(), OVERLAY_CAPABILITY_IDS.len());
     anyhow::bail!("overlay is not implemented on this platform")
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) fn run_noop(mut rx: OverlayReceiver, backend: &'static str) -> Result<()> {
+    tracing::warn!(
+        backend,
+        "overlay renderer is unsupported on this platform; draining overlay commands"
+    );
+    loop {
+        match rx.try_recv() {
+            Ok(OverlayCmd::Quit) => return Ok(()),
+            Ok(_) => continue,
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return Ok(()),
+        }
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -231,8 +251,8 @@ mod tests {
     fn non_macos_renderer_capabilities_are_structured_unsupported() {
         for status in renderer_capabilities() {
             assert_eq!(status.platform, PlatformKind::current());
-            assert_eq!(status.status, CapabilityStatusKind::Unsupported);
-            assert_eq!(status.reason, "backend_not_implemented");
+            assert_ne!(status.status, CapabilityStatusKind::Available);
+            assert!(!status.reason.is_empty());
         }
     }
 

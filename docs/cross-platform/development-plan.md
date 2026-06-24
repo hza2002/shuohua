@@ -654,6 +654,10 @@ Phase 10c Docker/cross Linux check baseline:
   current `load-dynamic` feature still leaves `ort` default features enabled and pulls
   `ort-sys/download-binaries` plus `native-tls` into the Docker build. Linux ONNX Runtime/VAD provisioning
   remains a later runtime design item.
+- Windows should not link ONNX Runtime during the current Windows-first core runtime phase. The Windows target
+  also uses the local Silero unavailable stub and does not depend on `voice_activity_detector` until ONNX
+  Runtime provisioning is designed for the installed MSVC toolchain. This keeps build/test and IPC runtime
+  smoke unblocked without claiming Windows VAD or audio support.
 - `cross` still requires Docker/Podman to be running and may require rustup metadata for the target-specific
   stable toolchain on macOS. If it fails before starting Docker with
   `toolchain 'stable-x86_64-unknown-linux-gnu' may not be able to run on this system`, install it with:

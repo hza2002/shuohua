@@ -33,7 +33,7 @@ fn section_body<'a>(document: &'a str, header: &str) -> &'a str {
 }
 
 #[test]
-fn linux_cross_check_does_not_download_vad_runtime_at_build_time() {
+fn non_macos_checks_do_not_download_vad_runtime_at_build_time() {
     let manifest =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
 
@@ -43,16 +43,25 @@ fn linux_cross_check_does_not_download_vad_runtime_at_build_time() {
     );
     assert!(
         !linux_section.contains(r#"voice_activity_detector"#),
-        "Linux cross checks must not compile voice_activity_detector because it enables ort-sys/download-binaries"
+        "Linux checks must not compile voice_activity_detector because it enables ort-sys/download-binaries"
     );
 
-    let non_linux_section = section_body(
+    let windows_section = section_body(
         &manifest,
-        r#"[target.'cfg(not(target_os = "linux"))'.dependencies]"#,
+        r#"[target.'cfg(target_os = "windows")'.dependencies]"#,
     );
     assert!(
-        non_linux_section.contains(r#"voice_activity_detector = "0.2.1""#),
-        "macOS/Windows VAD dependency should keep the current default runtime behavior"
+        !windows_section.contains(r#"voice_activity_detector"#),
+        "Windows checks must not compile voice_activity_detector until ONNX Runtime provisioning is defined"
+    );
+
+    let macos_section = section_body(
+        &manifest,
+        r#"[target.'cfg(target_os = "macos")'.dependencies]"#,
+    );
+    assert!(
+        macos_section.contains(r#"voice_activity_detector = "0.2.1""#),
+        "macOS VAD dependency should keep the current default runtime behavior"
     );
 
     let common_dependencies = section_body(&manifest, "[dependencies]");

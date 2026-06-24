@@ -363,6 +363,7 @@ async fn provider_done_during_stop_drain_skips_finalize() {
 
 /// VadPause + provider 主动 Done：当前实现重复 finalize 并触发 asr_timeout。
 /// 修复后：跳过 finalize，进入 Idle，stop 后 1 个 session、无错误。
+#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn vad_pause_provider_done_does_not_double_finalize() {
     let (event_tx, event_rx) = mpsc::channel(8);

@@ -194,6 +194,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn afconvert_creates_flac_and_removes_temporary_wav() {
         let dir = std::env::temp_dir().join(format!("shuohua-audio-{}", ulid::Ulid::new()));
@@ -213,6 +214,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn afconvert_creates_compact_m4a_and_removes_temporary_wav() {
         let dir = std::env::temp_dir().join(format!("shuohua-audio-{}", ulid::Ulid::new()));

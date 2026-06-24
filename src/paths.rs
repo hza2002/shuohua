@@ -26,7 +26,7 @@ impl AppPaths {
         xdg_state_home: Option<&str>,
         home: Option<&str>,
     ) -> Self {
-        imp::from_unix_env(xdg_config_home, xdg_state_home, None, home)
+        Self::unix_product_roots(xdg_config_home, xdg_state_home, None, home)
     }
 
     #[cfg(test)]
@@ -40,6 +40,30 @@ impl AppPaths {
             roaming_app_data.join("Shuohua"),
             local_app_data.join("Shuohua"),
             local_app_data.join("Shuohua").join("cache"),
+        )
+    }
+
+    #[cfg(any(test, target_os = "macos", target_os = "linux"))]
+    fn unix_product_roots(
+        xdg_config_home: Option<&str>,
+        xdg_state_home: Option<&str>,
+        xdg_cache_home: Option<&str>,
+        home: Option<&str>,
+    ) -> Self {
+        let home = home.unwrap_or_default();
+        let config_home = xdg_config_home
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(home).join(".config"));
+        let state_home = xdg_state_home
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(home).join(".local/state"));
+        let cache_home = xdg_cache_home
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(home).join(".cache"));
+        Self::from_roots(
+            config_home.join("shuohua"),
+            state_home.join("shuohua"),
+            cache_home.join("shuohua"),
         )
     }
 
@@ -140,34 +164,11 @@ mod imp {
     use std::path::PathBuf;
 
     pub(super) fn discover() -> AppPaths {
-        from_unix_env(
+        AppPaths::unix_product_roots(
             std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
             std::env::var("XDG_STATE_HOME").ok().as_deref(),
             std::env::var("XDG_CACHE_HOME").ok().as_deref(),
             std::env::var("HOME").ok().as_deref(),
-        )
-    }
-
-    pub(super) fn from_unix_env(
-        xdg_config_home: Option<&str>,
-        xdg_state_home: Option<&str>,
-        xdg_cache_home: Option<&str>,
-        home: Option<&str>,
-    ) -> AppPaths {
-        let home = home.unwrap_or_default();
-        let config_home = xdg_config_home
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(home).join(".config"));
-        let state_home = xdg_state_home
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(home).join(".local/state"));
-        let cache_home = xdg_cache_home
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(home).join(".cache"));
-        AppPaths::from_roots(
-            config_home.join("shuohua"),
-            state_home.join("shuohua"),
-            cache_home.join("shuohua"),
         )
     }
 }

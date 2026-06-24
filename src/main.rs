@@ -9,6 +9,8 @@
 //!   * 配置热重载靠 `reload` 模块（独立）：watcher 在 `~/.config/shuohua/`
 //!     上跑 notify；各 subscriber 自取所需。
 
+#![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
+
 mod asr;
 mod cli;
 pub mod client_api;

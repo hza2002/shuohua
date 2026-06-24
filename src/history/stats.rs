@@ -1726,6 +1726,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[cfg(unix)]
     #[test]
     fn same_size_rewrite_changes_unix_fingerprint() {
         let dir = temp_dir("same-size-fingerprint");

@@ -11,10 +11,10 @@ pub(super) fn renderer_capabilities() -> &'static [CapabilityStatus] {
 }
 
 pub(super) fn run(
-    _rx: OverlayReceiver,
+    rx: OverlayReceiver,
     _cfg: crate::config::theme::EffectiveOverlayCfg,
 ) -> Result<()> {
-    anyhow::bail!("Linux overlay renderer skeleton is present but not implemented")
+    super::renderer::run_noop(rx, "wayland_overlay_skeleton")
 }
 
 static LINUX_RENDERER_CAPABILITIES: [CapabilityStatus; 5] = {

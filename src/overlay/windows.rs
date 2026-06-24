@@ -11,10 +11,10 @@ pub(super) fn renderer_capabilities() -> &'static [CapabilityStatus] {
 }
 
 pub(super) fn run(
-    _rx: OverlayReceiver,
+    rx: OverlayReceiver,
     _cfg: crate::config::theme::EffectiveOverlayCfg,
 ) -> Result<()> {
-    anyhow::bail!("Windows overlay renderer skeleton is present but not implemented")
+    super::renderer::run_noop(rx, "win32_overlay_skeleton")
 }
 
 static WINDOWS_RENDERER_CAPABILITIES: [CapabilityStatus; 5] = {

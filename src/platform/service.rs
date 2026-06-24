@@ -720,9 +720,15 @@ WantedBy=default.target
 
 #[cfg(target_os = "windows")]
 mod imp {
+    use std::ops::ControlFlow;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use anyhow::Result;
+
+    use crate::ipc::protocol::{Command, Event};
+
+    const DAEMON_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
 
     pub fn launchd_status() -> super::LaunchdStatus {
         super::LaunchdStatus::Unsupported
@@ -750,16 +756,73 @@ mod imp {
 
     pub async fn status() -> Result<()> {
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("shuo"));
-        println!(
-            "daemon: {}",
-            crate::i18n::tr("cli.service.not_running", &[])
-        );
+        match tokio::time::timeout(DAEMON_STATUS_TIMEOUT, ipc_status()).await {
+            Ok(Ok(Some(line))) => println!("{line}"),
+            Ok(Ok(None)) => println!(
+                "daemon: {}",
+                crate::i18n::tr("cli.service.not_running", &[])
+            ),
+            Ok(Err(error)) => return Err(error),
+            Err(_) => anyhow::bail!(
+                "{}",
+                crate::i18n::tr(
+                    "cli.service.status_timeout",
+                    &[("seconds", DAEMON_STATUS_TIMEOUT.as_secs().to_string())]
+                )
+            ),
+        }
         println!(
             "windows.user: dry-run strategy={} command={} install_start=unsupported",
             service_strategy(),
             daemon_command(&exe)
         );
         Ok(())
+    }
+
+    async fn ipc_status() -> Result<Option<String>> {
+        let mut client = match crate::ipc::client::IpcClient::connect_default().await {
+            Ok(client) => client,
+            Err(_) => return Ok(None),
+        };
+        client.send(&Command::DaemonStatus).await?;
+        client
+            .recv_until(|event| match event {
+                Event::DaemonStatus {
+                    pid,
+                    uptime_ms,
+                    state,
+                    recording_id,
+                } => Ok(ControlFlow::Break(format_daemon_status(
+                    pid,
+                    uptime_ms,
+                    &format!("{state:?}"),
+                    recording_id.as_deref().unwrap_or("-"),
+                ))),
+                Event::Error { kind, msg, .. } => anyhow::bail!("{kind}: {msg}"),
+                _ => Ok(ControlFlow::Continue(())),
+            })
+            .await
+    }
+
+    fn format_daemon_status(pid: u32, uptime_ms: u64, state: &str, recording_id: &str) -> String {
+        format!(
+            "daemon: running pid={pid} uptime={} state={state} recording={recording_id}",
+            format_duration(uptime_ms)
+        )
+    }
+
+    fn format_duration(ms: u64) -> String {
+        let secs = ms / 1000;
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        let s = secs % 60;
+        if h > 0 {
+            format!("{h}h{m}m{s}s")
+        } else if m > 0 {
+            format!("{m}m{s}s")
+        } else {
+            format!("{s}s")
+        }
     }
 
     fn service_strategy() -> &'static str {
@@ -801,6 +864,14 @@ mod imp {
             assert_eq!(
                 daemon_command(std::path::Path::new("C:\\Shuo\\shuo.exe")),
                 "C:\\Shuo\\shuo.exe --daemon"
+            );
+        }
+
+        #[test]
+        fn daemon_status_line_matches_cli_contract() {
+            assert_eq!(
+                format_daemon_status(42, 65_000, "Idle", "-"),
+                "daemon: running pid=42 uptime=1m5s state=Idle recording=-"
             );
         }
     }

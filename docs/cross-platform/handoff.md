@@ -15,6 +15,16 @@ Previous commit: `fix: unblock windows core runtime smoke` (`265e293`).
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10s Windows runtime checklist command sync 已完成：
+
+- `docs/cross-platform/windows-runtime-validation.md` 中 daemon 启动命令从过时的
+  `.\shuo.exe daemon` 修正为实际 CLI 入口 `.\shuo.exe --daemon`。
+- checklist 中 Named Pipe 说明同步 Phase 10r 现状：endpoint scoping 和 current-user DACL 已做第一轮
+  smoke，但 capability 仍保持 `partial/runtime_not_verified`，等待 cross-user、elevated/non-elevated、
+  busy-pipe 和 long-running 验证。
+- 验证：`cargo fmt --check` 通过；
+  `cargo test --test platform_layout windows_runtime_validation_checklist_stays_bottom_up` 通过。
+
 Phase 10r Windows Named Pipe endpoint scoping/security descriptor hardening 已完成：
 
 - Windows Named Pipe endpoint 不再使用固定 `\\.\pipe\shuohua`，改为当前 user SID + logon LUID
@@ -1288,9 +1298,9 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10s：继续 Windows core runtime hardening，但只在 Named Pipe/lifecycle/service dry-run/path
-  范围内小步推进。优先补 `windows-runtime-validation.md` 的 `--daemon` 命令修正，并设计/验证
-  ERROR_PIPE_BUSY retry、elevated/non-elevated 行为矩阵、cross-user 隔离或 client access mask 收窄。
+- Phase 10t：继续 Windows core runtime hardening，但只在 Named Pipe/lifecycle/service dry-run/path
+  范围内小步推进。优先设计/验证 ERROR_PIPE_BUSY retry、elevated/non-elevated 行为矩阵、
+  cross-user 隔离或 client access mask 收窄。
 - audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability
   升级。
 - 不继续 GUI 产品化开发。

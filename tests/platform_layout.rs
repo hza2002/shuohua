@@ -3440,7 +3440,7 @@ fn windows_runtime_validation_checklist_stays_bottom_up() {
         "Explorer Open/Reveal",
         "Do not use this checklist to claim audio, overlay, hotkey, clipboard, paste",
         ".\\shuo.exe doctor",
-        ".\\shuo.exe daemon",
+        ".\\shuo.exe --daemon",
         ".\\shuo.exe service status",
         "$env:APPDATA\\Shuohua",
         "$env:LOCALAPPDATA\\Shuohua",

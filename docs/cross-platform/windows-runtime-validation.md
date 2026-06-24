@@ -65,7 +65,7 @@ be explicit, not guessed.
 Open PowerShell window A:
 
 ```powershell
-.\shuo.exe daemon
+.\shuo.exe --daemon
 ```
 
 Open PowerShell window B:
@@ -80,15 +80,15 @@ Expected:
 - The daemon starts or reports a clear error.
 - `doctor` and `service status` do not hang.
 - IPC status is visible when the daemon is running.
-- Current Windows Named Pipe transport is not runtime-accepted until endpoint scoping and DACL behavior are
-  implemented and tested.
+- Windows Named Pipe transport remains `partial/runtime_not_verified` until cross-user,
+  elevated/non-elevated, busy-pipe, and longer runtime behavior are tested.
 
 ## Single Instance Smoke
 
 Keep window A running the daemon. Open PowerShell window C:
 
 ```powershell
-.\shuo.exe daemon
+.\shuo.exe --daemon
 ```
 
 Expected:

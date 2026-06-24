@@ -137,6 +137,9 @@ Security requirements:
   daemon runtimes.
 - Avoid `GENERIC_WRITE` for final access masks where narrower rights are sufficient because Microsoft documents
   that generic pipe write rights include pipe-instance creation rights.
+- Current client connect still uses Tokio `ClientOptions`, whose public `read`/`write` knobs map to
+  `GENERIC_READ`/`GENERIC_WRITE`. Client access mask narrowing is not implemented yet; doing it requires a
+  raw `CreateFileW`/overlapped client path or an upstream Tokio API that accepts explicit desired access.
 - Server accept flow should keep the existing pattern: once one server instance connects, prepare the next
   instance before handing the connected stream to protocol handling.
 - Client connect may retry `ERROR_PIPE_BUSY`; it must not silently start the daemon until smart fallback is

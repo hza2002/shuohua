@@ -70,6 +70,17 @@ Phase 10t Windows Named Pipe busy retry policy:
   不进入 smart fallback。
 - 当前已补单元测试固定 retry 边界；尚未做真实 busy-pipe 压力测试或高并发 client runtime soak。
 
+Phase 10x Windows Named Pipe client access-mask audit:
+
+- 当前 client connect 仍使用 Tokio `ClientOptions::new().open(...)`。Tokio 1.52 的公开选项只允许
+  `read`/`write` 布尔配置，并映射到 Windows `GENERIC_READ` / `GENERIC_WRITE`；没有公开 API 传入
+  更窄的 desired access mask。
+- 因此 Phase 10r/10w 已完成的是 endpoint scope、server-side DACL、mutex security descriptor 和
+  elevation split 修复，不代表 client access mask 已收窄。
+- 真正收窄 client mask 需要后续单独实现 raw `CreateFileW` + overlapped handle -> Tokio pipe client
+  的路径，或等待/引入支持 explicit desired access 的 Tokio API；这一步必须重新做 Windows runtime
+  smoke，尤其是 client connect、busy retry、cross-elevation 和 cross-user 行为。
+
 ## 单实例
 
 daemon 单实例锁和 stale endpoint 清理需要平台化：

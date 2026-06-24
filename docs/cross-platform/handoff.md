@@ -15,6 +15,17 @@ Previous commit: `docs: record windows boundary smoke results` (`841e38e`).
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10x Windows Named Pipe client access-mask audit 已完成：
+
+- 复查 Tokio 1.52 `tokio::net::windows::named_pipe::ClientOptions`：当前公开 client `read`/`write`
+  选项映射到 Windows `GENERIC_READ` / `GENERIC_WRITE`，不能传入更窄的 desired access mask。
+- 因此当前 Windows IPC hardening 范围仍是 endpoint scope、server-side DACL、mutex security descriptor、
+  elevation split 修复和 runtime smoke；client access mask 收窄尚未实现。
+- `docs/cross-platform/windows.md` 和 `docs/cross-platform/ipc-service.md` 已记录该限制；`tests/platform_layout.rs`
+  增加守护，避免后续把 DACL hardening 误读成 client access mask hardening。
+- 下一步如果要收窄 client mask，需要单独设计 raw `CreateFileW` + overlapped handle -> Tokio pipe client
+  的路径，或等待/引入支持 explicit desired access 的 Tokio API；该实现必须重新跑 Windows IPC smoke。
+
 Phase 10w Windows elevation split 修复已完成：
 
 - 用户手动跑交叉矩阵发现：medium daemon 运行时 elevated `service status` 显示
@@ -1365,11 +1376,10 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10w 或手动停点：优先补齐 elevated daemon + medium client、medium daemon + elevated
-  client 的交叉矩阵，以及 cross-user 第二账号/VM 隔离验证；这些仍需要真实交互式 Windows
-  会话或第二用户，当前自动化 session 不宜继续声称完成。
-- 后续代码小步可选：在不改变 capability 结论的前提下，评估是否需要绕过 Tokio ClientOptions
-  来收窄 Windows Named Pipe client access mask，或把 busy smoke 脚本沉淀为开发者手动命令。
+- Phase 10y 或手动停点：优先做 cross-user 第二账号/VM 隔离验证；没有第二用户前不要升级
+  Windows IPC capability。
+- 后续代码小步可选：在不改变 capability 结论的前提下，设计 raw `CreateFileW`/overlapped client
+  access-mask narrowing，或把 busy/elevation smoke 脚本沉淀为开发者手动命令。
 - audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability
   升级。
 - 不继续 GUI 产品化开发。

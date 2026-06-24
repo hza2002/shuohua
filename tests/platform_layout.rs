@@ -465,6 +465,37 @@ fn windows_ipc_transport_uses_tokio_named_pipe_backend() {
 }
 
 #[test]
+fn windows_ipc_docs_record_client_access_mask_limitation() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let windows = std::fs::read_to_string(root.join("docs/cross-platform/windows.md")).unwrap();
+    let ipc = std::fs::read_to_string(root.join("docs/cross-platform/ipc-service.md")).unwrap();
+
+    for token in [
+        "Tokio `ClientOptions`",
+        "`GENERIC_READ`/`GENERIC_WRITE`",
+        "Client access mask narrowing is not implemented yet",
+        "raw `CreateFileW`/overlapped client path",
+    ] {
+        assert!(
+            windows.contains(token),
+            "Windows design doc should record client access-mask limitation token `{token}`"
+        );
+    }
+
+    for token in [
+        "Phase 10x Windows Named Pipe client access-mask audit",
+        "`ClientOptions::new().open(...)`",
+        "`GENERIC_READ` / `GENERIC_WRITE`",
+        "不代表 client access mask 已收窄",
+    ] {
+        assert!(
+            ipc.contains(token),
+            "IPC service doc should record client access-mask audit token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn windows_capability_snapshot_marks_named_pipe_transport_partial() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();

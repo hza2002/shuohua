@@ -6,15 +6,30 @@
 
 ## 最近 commit
 
-HEAD: `fix: scope windows ipc endpoint`（当前提交；精确 hash 以 `git log -1` 为准）。
+HEAD: `docs: add windows ipc boundary smoke`（Phase 10u 提交；精确 hash 以 `git log -1` 为准）。
 
-Previous commit: `fix: unblock windows core runtime smoke` (`265e293`).
+Previous commit: `test: bound windows pipe busy retry` (`6c7b570`).
 
 当前分支已 rebase 到 `v0.2.0` / `release: v0.2.0` 基底（commit `7fff199`）。
 
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10u Windows IPC boundary smoke checklist 已完成：
+
+- `docs/cross-platform/windows-runtime-validation.md` 新增 Named Pipe Busy Smoke、Elevation Boundary
+  Smoke、Cross-User Smoke 三段，作为 Phase 10r/10t 之后继续验证 Windows IPC scoping、安全边界和
+  busy retry 的手动/半自动步骤。
+- `tests/platform_layout.rs` 增加 checklist 顺序守护，避免 Windows runtime smoke 文档跳过
+  Daemon/IPC、single instance、busy/elevation/cross-user 边界就进入后续桌面能力。
+- 本 Windows elevated session 已跑同用户 busy smoke：启动 `shuo.exe --daemon` 后并发 20 个
+  `shuo.exe service status` job，结果 `exit_0=20`，daemon 仍保持 running；日志目录为
+  `C:\Users\hza2002\AppData\Local\Temp\shuohua-phase10u-busy`。
+- 该阶段不声明 Windows IPC capability available：非 elevated/elevated 矩阵、cross-user 第二账号/VM
+  验证、Explorer 窗口行为仍需要用户手动介入确认。
+- 验证：`cargo fmt --check` 通过；
+  `cargo test --test platform_layout windows_runtime_validation_checklist_stays_bottom_up` 通过。
+
 Phase 10t Windows Named Pipe busy retry policy 已完成：
 
 - Windows client connect 的 `ERROR_PIPE_BUSY` retry policy 抽为可测试边界：最多 20 次 open
@@ -1307,9 +1322,11 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10u：继续 Windows core runtime hardening，但只在 Named Pipe/lifecycle/service dry-run/path
-  范围内小步推进。下一步可选：设计真实 busy-pipe 压力 smoke、记录 elevated/non-elevated
-  手动验证步骤、cross-user 隔离步骤，或评估是否需要绕过 Tokio ClientOptions 来收窄 client access mask。
+- Phase 10v 或手动停点：先完成 elevated/non-elevated daemon/client 矩阵、cross-user 第二账号/VM
+  隔离验证、Explorer open/reveal 窗口行为确认；这些需要真实交互式 Windows 会话或第二用户，
+  当前自动化 session 不宜继续声称完成。
+- 后续代码小步可选：在不改变 capability 结论的前提下，评估是否需要绕过 Tokio ClientOptions
+  来收窄 Windows Named Pipe client access mask，或把 busy smoke 脚本沉淀为开发者手动命令。
 - audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability
   升级。
 - 不继续 GUI 产品化开发。

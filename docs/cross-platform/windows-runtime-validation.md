@@ -97,6 +97,58 @@ Expected:
 - It must not create an independent usable runtime endpoint.
 - If behavior differs between elevated and non-elevated shells, record both cases.
 
+## Named Pipe Busy Smoke
+
+Keep window A running the daemon. Open another PowerShell window in the directory containing `shuo.exe`:
+
+```powershell
+$jobs = 1..20 | ForEach-Object {
+  Start-Job -ScriptBlock {
+    param($exe)
+    & $exe service status
+    exit $LASTEXITCODE
+  } -ArgumentList (Resolve-Path .\shuo.exe)
+}
+$jobs | Wait-Job | Receive-Job
+$jobs | ForEach-Object { $_.ChildJobs[0].JobStateInfo.State }
+$jobs | Remove-Job
+```
+
+Expected:
+
+- Every client exits successfully or reports a clear bounded connect error.
+- No client hangs.
+- The daemon remains running and `.\shuo.exe service status` still works afterward.
+- Any `ERROR_PIPE_BUSY` behavior must be recorded with counts and command output.
+
+## Elevation Boundary Smoke
+
+Run the daemon/client matrix with the same artifact:
+
+| Daemon shell | Client shell | Commands |
+|---|---|---|
+| Non-elevated | Non-elevated | `.\shuo.exe --daemon`; `.\shuo.exe service status` |
+| Non-elevated | Elevated | `.\shuo.exe --daemon`; `.\shuo.exe service status` |
+| Elevated | Non-elevated | `.\shuo.exe --daemon`; `.\shuo.exe service status` |
+| Elevated | Elevated | `.\shuo.exe --daemon`; `.\shuo.exe service status` |
+
+Expected:
+
+- Same-user clients in the same logon session should either connect or fail with a clear access/scope error.
+- A second daemon in the same matrix row must still fail single-instance.
+- Record whether the scoped endpoint suffix differs between elevated and non-elevated shells.
+
+## Cross-User Smoke
+
+Run only when a second local Windows user account or VM snapshot is available.
+
+Expected:
+
+- A daemon for user A must not expose a usable runtime endpoint to user B.
+- User B should either use a different scoped endpoint or receive a clear access/scope error.
+- Do not change capability status based on this checklist unless the exact Windows version, account type, and
+  elevation state are recorded.
+
 ## Service Dry-Run Status
 
 Run:

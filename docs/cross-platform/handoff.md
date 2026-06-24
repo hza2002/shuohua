@@ -6,7 +6,9 @@
 
 ## 最近 commit
 
-HEAD: `docs: use windows local development loop`
+HEAD: `docs: update cross-platform handoff`
+
+当前分支已 rebase 到 `v0.2.0` / `release: v0.2.0` 基底（commit `7fff199`）。
 
 ## 当前 phase
 

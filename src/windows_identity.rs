@@ -1,29 +1,30 @@
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
-use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL, LUID};
+use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, TokenStatistics, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
-    TOKEN_QUERY, TOKEN_STATISTICS, TOKEN_USER,
+    GetTokenInformation, TokenGroups, TokenUser, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+    TOKEN_GROUPS, TOKEN_QUERY, TOKEN_USER,
 };
+use windows_sys::Win32::System::SystemServices::SE_GROUP_LOGON_ID;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 #[derive(Clone)]
 pub(crate) struct WindowsSessionIdentity {
     user_sid: String,
-    logon_luid: LUID,
+    logon_sid: String,
 }
 
 impl WindowsSessionIdentity {
     pub(crate) fn current() -> Result<Self> {
         let token = current_process_token()?;
         let user_sid = token_user_sid_string(token.raw())?;
-        let statistics: TOKEN_STATISTICS = token_information(token.raw(), TokenStatistics)?;
+        let logon_sid = token_logon_sid_string(token.raw())?;
         Ok(Self {
             user_sid,
-            logon_luid: statistics.AuthenticationId,
+            logon_sid,
         })
     }
 
@@ -32,7 +33,7 @@ impl WindowsSessionIdentity {
     }
 
     pub(crate) fn scoped_name_suffix(&self) -> String {
-        scoped_name_suffix(&self.user_sid, self.logon_luid)
+        scoped_name_suffix(&self.user_sid, &self.logon_sid)
     }
 }
 
@@ -128,6 +129,42 @@ fn token_user_sid_string(token: HANDLE) -> Result<String> {
     sid_to_string(user.User.Sid).context("convert current user SID")
 }
 
+fn token_logon_sid_string(token: HANDLE) -> Result<String> {
+    let groups = token_groups(token)?;
+    let groups = unsafe { &*groups.as_ptr().cast::<TOKEN_GROUPS>() };
+    for index in 0..groups.GroupCount {
+        let group = unsafe { *groups.Groups.as_ptr().add(index as usize) };
+        if group.Attributes & (SE_GROUP_LOGON_ID as u32) != 0 {
+            return sid_to_string(group.Sid).context("convert current logon SID");
+        }
+    }
+    anyhow::bail!("current token does not contain a logon SID")
+}
+
+fn token_groups(token: HANDLE) -> Result<Vec<u8>> {
+    let mut len = 0;
+    unsafe {
+        let _ = GetTokenInformation(token, TokenGroups, std::ptr::null_mut(), 0, &mut len);
+    }
+    if len == 0 {
+        return Err(std::io::Error::last_os_error()).context("query token groups size");
+    }
+    let mut buffer = vec![0u8; len as usize];
+    let ok = unsafe {
+        GetTokenInformation(
+            token,
+            TokenGroups,
+            buffer.as_mut_ptr().cast(),
+            len,
+            &mut len,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error()).context("query token groups");
+    }
+    Ok(buffer)
+}
+
 fn sid_to_string(sid: *mut std::ffi::c_void) -> Result<String> {
     let mut raw = std::ptr::null_mut();
     let ok = unsafe { ConvertSidToStringSidW(sid, &mut raw) };
@@ -151,12 +188,11 @@ fn wide_ptr_to_string(ptr: *const u16) -> String {
     }
 }
 
-fn scoped_name_suffix(user_sid: &str, logon_luid: LUID) -> String {
+fn scoped_name_suffix(user_sid: &str, logon_sid: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(user_sid.as_bytes());
     hasher.update(b":");
-    hasher.update(logon_luid.HighPart.to_le_bytes());
-    hasher.update(logon_luid.LowPart.to_le_bytes());
+    hasher.update(logon_sid.as_bytes());
     let digest = hasher.finalize();
     digest[..12]
         .iter()
@@ -194,18 +230,25 @@ mod tests {
 
     #[test]
     fn scoped_name_suffix_is_stable_and_not_raw_sid() {
-        let luid = LUID {
-            LowPart: 0x9abc_def0,
-            HighPart: 0x1234_5678,
-        };
         let sid = "S-1-5-21-1000-2000-3000-1001";
-        let first = scoped_name_suffix(sid, luid);
-        let second = scoped_name_suffix(sid, luid);
+        let logon_sid = "S-1-5-5-100-200";
+        let first = scoped_name_suffix(sid, logon_sid);
+        let second = scoped_name_suffix(sid, logon_sid);
 
         assert_eq!(first, second);
         assert_eq!(first.len(), 24);
         assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
         assert!(!first.contains("S-1-5"));
+    }
+
+    #[test]
+    fn scoped_name_suffix_changes_with_logon_sid() {
+        let sid = "S-1-5-21-1000-2000-3000-1001";
+
+        assert_ne!(
+            scoped_name_suffix(sid, "S-1-5-5-100-200"),
+            scoped_name_suffix(sid, "S-1-5-5-300-400")
+        );
     }
 
     #[test]

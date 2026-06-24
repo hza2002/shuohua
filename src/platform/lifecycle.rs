@@ -125,9 +125,14 @@ mod imp {
     pub(crate) struct DaemonLockGuard(Handle);
 
     pub(crate) fn acquire_daemon_lock() -> Result<DaemonLockGuard> {
-        let lock_name = default_lock_name();
+        let identity = crate::windows_identity::WindowsSessionIdentity::current()
+            .context("resolve Windows daemon identity")?;
+        let lock_name = scoped_lock_name(&identity.scoped_name_suffix());
+        let mut attrs =
+            crate::windows_identity::SecurityAttributes::for_current_user_ipc(&identity)
+                .context("create Windows daemon mutex security descriptor")?;
         let name = wide_null(&lock_name);
-        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        let handle = unsafe { CreateMutexW(attrs.as_mut_ptr().cast(), 0, name.as_ptr()) };
         if handle.is_null() {
             return Err(std::io::Error::last_os_error())
                 .with_context(|| format!("create Windows daemon mutex {lock_name}"));
@@ -140,19 +145,6 @@ mod imp {
                     anyhow::bail!("another shuo daemon is already starting or running");
                 }
                 Err(error).context("acquire Windows daemon mutex")
-            }
-        }
-    }
-
-    fn default_lock_name() -> String {
-        match crate::windows_identity::WindowsSessionIdentity::current() {
-            Ok(identity) => scoped_lock_name(&identity.scoped_name_suffix()),
-            Err(error) => {
-                tracing::warn!(
-                    error = ?error,
-                    "falling back to process-scoped Windows daemon mutex"
-                );
-                scoped_lock_name(&format!("fallback-{}", std::process::id()))
             }
         }
     }

@@ -53,7 +53,7 @@ Phase 3c Windows Named Pipe transport compile backend:
 Phase 10r Windows Named Pipe endpoint scoping/security descriptor hardening:
 
 - Windows `default_endpoint()` 不再使用固定 `\\.\pipe\shuohua`，而是使用当前 user SID +
-  logon LUID 的 SHA-256 prefix 生成 `\\.\pipe\shuohua-<scope>`。
+  logon SID 的 SHA-256 prefix 生成 `\\.\pipe\shuohua-<scope>`。
 - Windows daemon mutex 使用相同 scope suffix：`Local\shuohua-daemon-<scope>`。
 - Server pipe instance 创建时传入显式 security descriptor。当前 DACL 只授予 current user SID、
   LocalSystem 和 Built-in Administrators，不授予 Everyone/World 或 Anonymous；不再依赖默认

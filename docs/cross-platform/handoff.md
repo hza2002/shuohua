@@ -6,15 +6,36 @@
 
 ## 最近 commit
 
-HEAD: `docs: record windows boundary smoke results`（Phase 10v 提交；精确 hash 以 `git log -1` 为准）。
+HEAD: `fix: share windows ipc scope across elevation`（Phase 10w 提交；精确 hash 以 `git log -1` 为准）。
 
-Previous commit: `docs: add windows ipc boundary smoke` (`b9aa956`).
+Previous commit: `docs: record windows boundary smoke results` (`841e38e`).
 
 当前分支已 rebase 到 `v0.2.0` / `release: v0.2.0` 基底（commit `7fff199`）。
 
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10w Windows elevation split 修复已完成：
+
+- 用户手动跑交叉矩阵发现：medium daemon 运行时 elevated `service status` 显示
+  `daemon: not running`，且 elevated `--daemon` 会独立启动；反向 elevated daemon + medium client
+  行为相同。这证明 Phase 10r 的 scope 选择把同一用户同一桌面拆成了两个 runtime。
+- 根因判断：使用 `TokenStatistics.AuthenticationId` 作为 scope 输入时，elevated token 和 medium token
+  可能拿到不同 LUID；这不符合 Windows user-session daemon 设计。
+- 修复方向：Windows endpoint/mutex scope 改为当前 user SID + token logon SID
+  (`SE_GROUP_LOGON_ID`) 的 SHA-256 prefix；logon SID 使同一交互式登录会话内 elevated/medium
+  共享 endpoint，同时仍保留不同用户/不同登录会话隔离。
+- Windows named mutex 创建改用与 Named Pipe 一致的 current-user security descriptor，避免 scope
+  名字统一后仍受默认 DACL 差异影响。
+- 验证结果：管理员侧 runtime smoke 通过；用户确认修复后两组交叉矩阵均符合预期：
+  normal daemon + admin client 能看到 running daemon，第二个 admin `--daemon` 被拒绝；
+  admin daemon + normal client 能看到 running daemon，第二个 normal `--daemon` 被拒绝。
+- 已跑验证：`cargo fmt --check`、`cargo test --target x86_64-pc-windows-msvc windows_identity::tests`、
+  `cargo test --target x86_64-pc-windows-msvc platform::lifecycle::imp::tests`、
+  `cargo test --target x86_64-pc-windows-msvc ipc::transport::imp::tests`、
+  `cargo build --target x86_64-pc-windows-msvc`、`cargo test --test platform_layout`。
+- Capability 在 cross-user 第二账号/VM 隔离补齐前仍不得升级为 `available`。
+
 Phase 10v Windows IPC boundary smoke 第一轮结果已记录：
 
 - Elevated/elevated：当前 Codex session 为 `High Mandatory Level`；`shuo.exe --daemon`
@@ -32,10 +53,8 @@ Phase 10v Windows IPC boundary smoke 第一轮结果已记录：
 - Explorer open/reveal：`explorer.exe` 对 `%APPDATA%\Shuohua`、`%LOCALAPPDATA%\Shuohua`、
   `%APPDATA%\Shuohua\config.toml` reveal 的进程 exit code 仍为 1，但用户目视确认窗口已打开/
   reveal 生效；后续不要仅用 `explorer.exe` exit code 判断失败。
-- 仍未验证：elevated daemon + medium client、medium daemon + elevated client 的交叉矩阵，以及
-  cross-user 第二账号/VM 隔离。管理员 session 中尝试用 Shell broker、`runas /trustlevel:0x20000`
-  和 linked-token `CreateProcessWithTokenW` 自动降权启动 medium 子进程均未成功，不能把交叉矩阵
-  伪装为已完成。
+- Phase 10v 当时仍未验证 elevated daemon + medium client、medium daemon + elevated client 的交叉矩阵；
+  Phase 10w 已补齐并修复 elevation split。cross-user 第二账号/VM 隔离仍未验证。
 - Capability 结论不变：Windows `ipc.transport` / `daemon.single_instance` 仍保持
   `partial/runtime_not_verified`，至少等 cross-user 和交叉 elevation 矩阵补齐后再讨论升级。
 
@@ -75,7 +94,7 @@ Phase 10s Windows runtime checklist command sync 已完成：
 
 Phase 10r Windows Named Pipe endpoint scoping/security descriptor hardening 已完成：
 
-- Windows Named Pipe endpoint 不再使用固定 `\\.\pipe\shuohua`，改为当前 user SID + logon LUID
+- Windows Named Pipe endpoint 不再使用固定 `\\.\pipe\shuohua`，改为当前 user SID + logon SID
   的 SHA-256 prefix scope：`\\.\pipe\shuohua-<scope>`；raw SID 不进入对象名。
 - Windows daemon named mutex 使用同一 scope：`Local\shuohua-daemon-<scope>`。
 - Named Pipe server instance 创建时传入显式 SDDL security descriptor：

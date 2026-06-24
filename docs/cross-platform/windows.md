@@ -117,10 +117,10 @@ Test-Path "$env:LOCALAPPDATA\Shuohua"
 
 Windows IPC uses Named Pipes and keeps the same JSON-line protocol.
 
-Default endpoint design uses a user/session-scoped suffix derived from current user SID + logon LUID:
+Default endpoint design uses a user/session-scoped suffix derived from current user SID + logon SID:
 
 ```text
-\\.\pipe\shuohua-<sha256(user-sid + logon-luid) prefix>
+\\.\pipe\shuohua-<sha256(user-sid + logon-sid) prefix>
 ```
 
 The raw SID is not embedded in the pipe name. The same scope material is shared with the daemon mutex.
@@ -131,10 +131,10 @@ Security requirements:
 - Server pipe instances use an explicit security descriptor/DACL instead of the default Named Pipe security
   descriptor. Current implementation grants access to the current user SID, LocalSystem, and Built-in
   Administrators, and does not grant World/Everyone or Anonymous.
-- Use the logon SID when practical so elevated/non-elevated processes in the same logon session can be reasoned
-  about explicitly and unrelated terminal sessions do not share the endpoint. Current implementation uses the
-  logon LUID in the scope hash but the DACL is user-SID based; elevated/non-elevated behavior still needs
-  runtime validation.
+- Use the logon SID so elevated/non-elevated processes in the same interactive logon session resolve the same
+  endpoint while unrelated terminal sessions do not share it. Phase 10w switched away from
+  `TokenStatistics.AuthenticationId` after runtime smoke showed elevated and medium tokens produced split
+  daemon runtimes.
 - Avoid `GENERIC_WRITE` for final access masks where narrower rights are sufficient because Microsoft documents
   that generic pipe write rights include pipe-instance creation rights.
 - Server accept flow should keep the existing pattern: once one server instance connects, prepare the next
@@ -155,7 +155,7 @@ Validation gates:
 The Windows daemon guard should be user-session scoped:
 
 ```text
-Local\shuohua-daemon-<sha256(user-sid + logon-luid) prefix>
+Local\shuohua-daemon-<sha256(user-sid + logon-sid) prefix>
 ```
 
 The daemon guard uses the same scope suffix as the Named Pipe endpoint.

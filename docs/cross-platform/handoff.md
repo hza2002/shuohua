@@ -6,9 +6,9 @@
 
 ## 最近 commit
 
-HEAD: `fix: share windows ipc scope across elevation`（Phase 10w 提交；精确 hash 以 `git log -1` 为准）。
+HEAD: `docs: record windows pipe client access mask limit`（Phase 10x 提交；精确 hash 以 `git log -1` 为准）。
 
-Previous commit: `docs: record windows boundary smoke results` (`841e38e`).
+Previous commit: `fix: share windows ipc scope across elevation` (`e7d8965`).
 
 当前分支已 rebase 到 `v0.2.0` / `release: v0.2.0` 基底（commit `7fff199`）。
 

@@ -6,15 +6,39 @@
 
 ## 最近 commit
 
-HEAD: `docs: add windows ipc boundary smoke`（Phase 10u 提交；精确 hash 以 `git log -1` 为准）。
+HEAD: `docs: record windows boundary smoke results`（Phase 10v 提交；精确 hash 以 `git log -1` 为准）。
 
-Previous commit: `test: bound windows pipe busy retry` (`6c7b570`).
+Previous commit: `docs: add windows ipc boundary smoke` (`b9aa956`).
 
 当前分支已 rebase 到 `v0.2.0` / `release: v0.2.0` 基底（commit `7fff199`）。
 
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10v Windows IPC boundary smoke 第一轮结果已记录：
+
+- Elevated/elevated：当前 Codex session 为 `High Mandatory Level`；`shuo.exe --daemon`
+  可保持运行，elevated `service status` exit 0 并返回
+  `daemon: running ... state=Idle recording=-`；第二个 elevated `--daemon` exit 1，
+  输出 `another shuo daemon is already starting or running`。
+- Elevated busy smoke：elevated daemon 下并发 20 个 elevated `service status` job，20/20 exit 0，
+  daemon 仍保持 running；日志目录
+  `C:\Users\hza2002\AppData\Local\Temp\shuohua-phase10v-boundary\elev-busy-rerun`。
+- Medium/medium：用户在普通 PowerShell 运行生成的
+  `run-medium-boundary-smoke.ps1`，输出确认 `Medium Mandatory Level`；medium daemon +
+  medium `service status` exit 0；第二个 medium `--daemon` exit 1；20 个并发 medium
+  `service status` 全部 exit 0；日志目录
+  `C:\Users\hza2002\AppData\Local\Temp\shuohua-phase10v-boundary\medium-manual`。
+- Explorer open/reveal：`explorer.exe` 对 `%APPDATA%\Shuohua`、`%LOCALAPPDATA%\Shuohua`、
+  `%APPDATA%\Shuohua\config.toml` reveal 的进程 exit code 仍为 1，但用户目视确认窗口已打开/
+  reveal 生效；后续不要仅用 `explorer.exe` exit code 判断失败。
+- 仍未验证：elevated daemon + medium client、medium daemon + elevated client 的交叉矩阵，以及
+  cross-user 第二账号/VM 隔离。管理员 session 中尝试用 Shell broker、`runas /trustlevel:0x20000`
+  和 linked-token `CreateProcessWithTokenW` 自动降权启动 medium 子进程均未成功，不能把交叉矩阵
+  伪装为已完成。
+- Capability 结论不变：Windows `ipc.transport` / `daemon.single_instance` 仍保持
+  `partial/runtime_not_verified`，至少等 cross-user 和交叉 elevation 矩阵补齐后再讨论升级。
+
 Phase 10u Windows IPC boundary smoke checklist 已完成：
 
 - `docs/cross-platform/windows-runtime-validation.md` 新增 Named Pipe Busy Smoke、Elevation Boundary
@@ -1322,9 +1346,9 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10v 或手动停点：先完成 elevated/non-elevated daemon/client 矩阵、cross-user 第二账号/VM
-  隔离验证、Explorer open/reveal 窗口行为确认；这些需要真实交互式 Windows 会话或第二用户，
-  当前自动化 session 不宜继续声称完成。
+- Phase 10w 或手动停点：优先补齐 elevated daemon + medium client、medium daemon + elevated
+  client 的交叉矩阵，以及 cross-user 第二账号/VM 隔离验证；这些仍需要真实交互式 Windows
+  会话或第二用户，当前自动化 session 不宜继续声称完成。
 - 后续代码小步可选：在不改变 capability 结论的前提下，评估是否需要绕过 Tokio ClientOptions
   来收窄 Windows Named Pipe client access mask，或把 busy smoke 脚本沉淀为开发者手动命令。
 - audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability

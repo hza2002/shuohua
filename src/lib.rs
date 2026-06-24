@@ -12,3 +12,5 @@ pub mod ipc;
 pub mod paths;
 pub mod state;
 pub mod text_stats;
+#[cfg(windows)]
+mod windows_identity;

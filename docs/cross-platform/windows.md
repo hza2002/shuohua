@@ -14,7 +14,10 @@ Current status:
 - `make check-windows` proves `x86_64-pc-windows-msvc` cfg/type boundaries only.
 - Named Pipe IPC, named mutex lifecycle primitives, path open/reveal, service dry-run status, and capability
   truthfulness have compile-checked skeletons.
-- No Windows runtime behavior is verified yet. Do not mark Windows capabilities `available` until tested on
+- Windows Phase 10q/10r smoke on a native Windows 11 machine verified daemon/client `DaemonStatus`,
+  single-instance rejection, scoped pipe/mutex names, and explicit current-user pipe DACL creation for the
+  current Windows session. The final Phase 10r smoke shell was elevated; do not mark Windows capabilities
+  `available` until elevated/non-elevated, cross-user, busy-pipe, and longer runtime behavior are tested on
   Windows.
 
 Primary baseline:
@@ -114,21 +117,24 @@ Test-Path "$env:LOCALAPPDATA\Shuohua"
 
 Windows IPC uses Named Pipes and keeps the same JSON-line protocol.
 
-Default endpoint design should move from the current compile skeleton `\\.\pipe\shuohua` to a user-session
-scoped pipe before runtime-ready status:
+Default endpoint design uses a user/session-scoped suffix derived from current user SID + logon LUID:
 
 ```text
-\\.\pipe\shuohua-<logon-sid-or-session-scoped-hash>
+\\.\pipe\shuohua-<sha256(user-sid + logon-luid) prefix>
 ```
+
+The raw SID is not embedded in the pipe name. The same scope material is shared with the daemon mutex.
 
 Security requirements:
 
 - The pipe must not be globally writable/readable by unrelated users or sessions.
-- Before marking IPC available, create a security descriptor/DACL that restricts access to the current user or
-  logon SID.
-- Do not rely on the default Named Pipe security descriptor for final runtime behavior.
+- Server pipe instances use an explicit security descriptor/DACL instead of the default Named Pipe security
+  descriptor. Current implementation grants access to the current user SID, LocalSystem, and Built-in
+  Administrators, and does not grant World/Everyone or Anonymous.
 - Use the logon SID when practical so elevated/non-elevated processes in the same logon session can be reasoned
-  about explicitly and unrelated terminal sessions do not share the endpoint.
+  about explicitly and unrelated terminal sessions do not share the endpoint. Current implementation uses the
+  logon LUID in the scope hash but the DACL is user-SID based; elevated/non-elevated behavior still needs
+  runtime validation.
 - Avoid `GENERIC_WRITE` for final access masks where narrower rights are sufficient because Microsoft documents
   that generic pipe write rights include pipe-instance creation rights.
 - Server accept flow should keep the existing pattern: once one server instance connects, prepare the next
@@ -149,10 +155,10 @@ Validation gates:
 The Windows daemon guard should be user-session scoped:
 
 ```text
-Local\shuohua-<logon-sid-or-session-scoped-hash>
+Local\shuohua-daemon-<sha256(user-sid + logon-luid) prefix>
 ```
 
-Current `Local\shuohua-daemon` is a compile skeleton and must be hardened before runtime-ready status.
+The daemon guard uses the same scope suffix as the Named Pipe endpoint.
 
 Rules:
 

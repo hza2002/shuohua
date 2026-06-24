@@ -10,21 +10,25 @@ use crate::config::spec::{validate_value, ConfigSpec, Severity};
 use crate::config::{Config, ProfileRouteCfg};
 
 pub fn run_local() -> ConfigDiagnosticReport {
-    run_local_from_config_home(&crate::config::paths::config_home())
+    run_local_from_config_root(&crate::config::paths::config_root())
 }
 
 pub fn run_local_from_config_home(config_home: &Path) -> ConfigDiagnosticReport {
     let root = config_home.join("shuohua");
+    run_local_from_config_root(&root)
+}
+
+pub fn run_local_from_config_root(root: &Path) -> ConfigDiagnosticReport {
     let mut report = ConfigDiagnosticReport {
-        root: root.clone(),
+        root: root.to_path_buf(),
         diagnostics: Vec::new(),
         files_checked: 0,
     };
-    let main = scan_main(&mut report, &root);
-    let profiles = scan_profiles(&mut report, &root, main.as_ref());
-    scan_asr(&mut report, &root);
-    scan_post(&mut report, &root, &referenced_llm_components(&profiles));
-    scan_theme(&mut report, &root);
+    let main = scan_main(&mut report, root);
+    let profiles = scan_profiles(&mut report, root, main.as_ref());
+    scan_asr(&mut report, root);
+    scan_post(&mut report, root, &referenced_llm_components(&profiles));
+    scan_theme(&mut report, root);
     report
 }
 

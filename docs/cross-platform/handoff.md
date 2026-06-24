@@ -6,13 +6,42 @@
 
 ## 最近 commit
 
-HEAD: `fix: unblock windows core runtime smoke` (`4d42294`).
+HEAD: `fix: scope windows ipc endpoint`（当前提交；精确 hash 以 `git log -1` 为准）。
+
+Previous commit: `fix: unblock windows core runtime smoke` (`265e293`).
 
 当前分支已 rebase 到 `v0.2.0` / `release: v0.2.0` 基底（commit `7fff199`）。
 
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10r Windows Named Pipe endpoint scoping/security descriptor hardening 已完成：
+
+- Windows Named Pipe endpoint 不再使用固定 `\\.\pipe\shuohua`，改为当前 user SID + logon LUID
+  的 SHA-256 prefix scope：`\\.\pipe\shuohua-<scope>`；raw SID 不进入对象名。
+- Windows daemon named mutex 使用同一 scope：`Local\shuohua-daemon-<scope>`。
+- Named Pipe server instance 创建时传入显式 SDDL security descriptor：
+  current user SID、LocalSystem、Built-in Administrators；不授予 World/Everyone 或 Anonymous。
+- 修复 runtime smoke 暴露的 Windows config diagnostics/inventory/root plan 路径偏差：运行时扫描
+  `AppPaths::config_root()`，Windows 下为 `%APPDATA%\Shuohua`，不再把 `config_home` 再拼成小写
+  `shuohua`。
+- Windows runtime smoke 环境：Windows 11 Pro 10.0.26200 build 26200，PowerShell 7.5.5，
+  `bill-win\hza2002`，最终 smoke shell 为 elevated。
+- Windows runtime smoke 结果：
+  - `shuo.exe --version` 输出 `shuo 0.2.0`。
+  - `doctor` 扫描 `C:\Users\hza2002\AppData\Roaming\Shuohua`，仍因本机模板 secret 空值、
+    无默认输入设备、权限探针等返回 1；这不代表 IPC smoke 失败。
+  - `service status` 在 daemon 未运行时 exit 0，只打印 daemon not running + windows.user dry-run。
+  - `shuo.exe --daemon` 可以保持运行；`service status` 通过 scoped Named Pipe 返回
+    `daemon: running pid=33512 uptime=1s state=Idle recording=-`。
+  - 第二个 `shuo.exe --daemon` exit 1，并输出
+    `another shuo daemon is already starting or running`。
+  - Explorer direct open/reveal 命令不挂起，但工具会话中 `explorer.exe` 仍快速返回 1；
+    窗口行为未人工确认。
+- Phase 10r 仍未完成：cross-user 验证、elevated/non-elevated 行为矩阵、busy-pipe 压力测试、
+  client access mask 收窄、long-running soak。Windows `ipc.transport` / `daemon.single_instance`
+  capability 仍必须保持 `partial/runtime_not_verified`。
+
 Phase 10q Windows native build/test and first core runtime smoke 已完成：
 
 - Windows 原生仓库路径：`C:\Users\hza2002\repo\shuohua`（请求里的 `C:\dev\shuohua` 不存在）。
@@ -43,8 +72,6 @@ Phase 10q Windows native build/test and first core runtime smoke 已完成：
     后续 backend 问题，不代表 IPC smoke 失败。
   - Explorer direct open/reveal 命令不挂起，但工具会话中 `explorer.exe` 快速返回 1；窗口行为未人工确认。
 - 已知风险：
-  - Windows Named Pipe 仍使用 `\\.\pipe\shuohua`，尚未实现 user/session scoped endpoint naming
-    或 security descriptor/DACL hardening；capability 仍必须保持 `partial/runtime_not_verified`。
   - Windows overlay/hotkey/audio/clipboard/paste 仍未实现，不要把 daemon core smoke 解读为这些能力可用。
   - `windows-runtime-validation.md` 仍写了过时的 `shuo.exe daemon` 子命令；实际 CLI 入口是
     `shuo.exe --daemon`。
@@ -1249,14 +1276,21 @@ permission probe 或 active app runtime。
   - `cargo test` 通过。
   - `cargo test --target x86_64-pc-windows-msvc` 通过。
   - `cargo build --target x86_64-pc-windows-msvc` 通过。
-- `make check-windows` / `make check-linux-cross` 仍输出既有非 macOS skeleton dead-code warnings；
-  Phase 10l 只同步静态 capability truthfulness，不代表 Linux/Windows desktop runtime 已验证。
+- Windows runtime smoke:
+  - `shuo.exe --version` 通过。
+  - `shuo.exe doctor` 能运行并使用 `%APPDATA%\Shuohua`，但因本机配置/设备/权限返回 1。
+  - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。
+  - `shuo.exe --daemon` + scoped Named Pipe `DaemonStatus` 通过。
+  - 第二个 `shuo.exe --daemon` 明确失败，单实例 guard 生效。
+  - Explorer direct open/reveal 不挂起，但工具会话返回 1，窗口行为未人工确认。
+- 未在本 Windows session 跑 `make check-windows` / `make check-linux-cross`；本阶段验证重点是
+  Windows native build/test/runtime smoke。
 
 下一步：
 
-- Phase 10r：Windows Named Pipe endpoint scoping/security descriptor hardening。优先处理
-  user/session scoped endpoint 命名、DACL/security descriptor、ERROR_PIPE_BUSY retry 行为和
-  elevated/non-elevated 差异；保持 service install/start/stop dry-run。
+- Phase 10s：继续 Windows core runtime hardening，但只在 Named Pipe/lifecycle/service dry-run/path
+  范围内小步推进。优先补 `windows-runtime-validation.md` 的 `--daemon` 命令修正，并设计/验证
+  ERROR_PIPE_BUSY retry、elevated/non-elevated 行为矩阵、cross-user 隔离或 client access mask 收窄。
 - audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability
   升级。
 - 不继续 GUI 产品化开发。

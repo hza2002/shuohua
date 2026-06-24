@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use crate::config::diagnostics::report::{
     diagnostic_report_error, ConfigDiagnosticReportResult, DiagnosticScope,
 };
-use crate::config::diagnostics::scan::{run_local_from_config_home, toml_files};
+use crate::config::diagnostics::scan::{
+    run_local_from_config_home, run_local_from_config_root, toml_files,
+};
 use crate::config::profile::Profile;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,7 +81,7 @@ pub struct LlmRuntimeTarget {
 }
 
 pub fn runtime_check_plan() -> ConfigDiagnosticReportResult<RuntimeCheckPlan> {
-    runtime_check_plan_from_config_home(&crate::config::paths::config_home())
+    runtime_check_plan_from_config_root(&crate::config::paths::config_root())
 }
 
 pub fn runtime_check_plan_from_config_home(
@@ -91,6 +93,22 @@ pub fn runtime_check_plan_from_config_home(
     }
 
     let root = config_home.join("shuohua");
+    runtime_check_plan_from_checked_root(root)
+}
+
+pub fn runtime_check_plan_from_config_root(
+    root: &Path,
+) -> ConfigDiagnosticReportResult<RuntimeCheckPlan> {
+    let report = run_local_from_config_root(root);
+    if report.has_errors() {
+        return Err(report);
+    }
+    runtime_check_plan_from_checked_root(root.to_path_buf())
+}
+
+fn runtime_check_plan_from_checked_root(
+    root: PathBuf,
+) -> ConfigDiagnosticReportResult<RuntimeCheckPlan> {
     let mut profiles = Vec::new();
     for path in toml_files(&root.join("profile")) {
         let body = std::fs::read_to_string(&path).map_err(|error| {

@@ -153,6 +153,24 @@ chain = ["rule:missing", "llm:missing", "bad-item", "other:name"]
     }
 
     #[test]
+    fn local_diagnostics_can_scan_product_config_root_directly() {
+        let home = temp_config_home();
+        let root = home.join("Shuohua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
+
+        let report = scan::run_local_from_config_root(&root);
+
+        assert_eq!(report.root, root);
+        assert!(report.files_checked >= 1);
+        assert!(report
+            .diagnostics
+            .iter()
+            .all(|d| d.source.starts_with(&root)));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn theme_diagnostics_accepts_macos_overlay_fields() {
         let home = temp_config_home();
         let root = home.join("shuohua");

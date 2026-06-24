@@ -1,11 +1,16 @@
 use std::path::PathBuf;
 
 pub fn config_home() -> PathBuf {
-    crate::paths::AppPaths::discover()
-        .config_root()
+    config_root()
         .parent()
         .map(PathBuf::from)
         .unwrap_or_default()
+}
+
+pub fn config_root() -> PathBuf {
+    crate::paths::AppPaths::discover()
+        .config_root()
+        .to_path_buf()
 }
 
 pub fn main_config() -> PathBuf {

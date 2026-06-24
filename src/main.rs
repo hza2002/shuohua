@@ -35,6 +35,8 @@ mod state;
 mod text_stats;
 mod tui;
 mod voice;
+#[cfg(windows)]
+mod windows_identity;
 
 use anyhow::Result;
 

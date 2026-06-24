@@ -50,6 +50,19 @@ Phase 3c Windows Named Pipe transport compile backend:
 - 该阶段只要求 Windows target compile；Named Pipe ACL、安全描述符、multi-user 隔离、
   stale endpoint 判定和真实 Windows runtime 行为仍需 Windows 实机/VM 验证。
 
+Phase 10r Windows Named Pipe endpoint scoping/security descriptor hardening:
+
+- Windows `default_endpoint()` 不再使用固定 `\\.\pipe\shuohua`，而是使用当前 user SID +
+  logon LUID 的 SHA-256 prefix 生成 `\\.\pipe\shuohua-<scope>`。
+- Windows daemon mutex 使用相同 scope suffix：`Local\shuohua-daemon-<scope>`。
+- Server pipe instance 创建时传入显式 security descriptor。当前 DACL 只授予 current user SID、
+  LocalSystem 和 Built-in Administrators，不授予 Everyone/World 或 Anonymous；不再依赖默认
+  Named Pipe security descriptor。
+- 已在当前 Windows session 验证：daemon 能启动、`service status` 能通过 Named Pipe 取得
+  `DaemonStatus`，第二个 daemon 被 named mutex 拒绝。
+- 仍未完成：cross-user 验证、elevated/non-elevated 行为矩阵、busy-pipe 压力测试、client
+  access mask 收窄和长时间 runtime soak。因此 capability 仍保持 `partial/runtime_not_verified`。
+
 ## 单实例
 
 daemon 单实例锁和 stale endpoint 清理需要平台化：

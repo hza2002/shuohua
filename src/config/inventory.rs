@@ -65,13 +65,16 @@ impl ConfigInventory {
 }
 
 pub fn load() -> ConfigInventory {
-    load_from_config_home(&config_home())
+    load_from_config_root(&config_root())
 }
 
 pub fn load_from_config_home(config_home: &Path) -> ConfigInventory {
-    let root = config_home.join("shuohua");
+    load_from_config_root(&config_home.join("shuohua"))
+}
+
+pub fn load_from_config_root(root: &Path) -> ConfigInventory {
     let mut inventory = ConfigInventory {
-        root: root.clone(),
+        root: root.to_path_buf(),
         modules: [
             InventoryModule::Overview,
             InventoryModule::Main,
@@ -88,11 +91,11 @@ pub fn load_from_config_home(config_home: &Path) -> ConfigInventory {
         .collect(),
     };
 
-    push_main(&mut inventory, &root);
-    push_profiles(&mut inventory, &root);
-    push_post(&mut inventory, &root);
-    push_asr(&mut inventory, &root);
-    push_theme(&mut inventory, &root);
+    push_main(&mut inventory, root);
+    push_profiles(&mut inventory, root);
+    push_post(&mut inventory, root);
+    push_asr(&mut inventory, root);
+    push_theme(&mut inventory, root);
     push_overview(&mut inventory);
     inventory
 }
@@ -379,8 +382,8 @@ fn file_stem(path: &Path, fallback: &str) -> String {
         .to_string()
 }
 
-fn config_home() -> PathBuf {
-    crate::config::paths::config_home()
+fn config_root() -> PathBuf {
+    crate::config::paths::config_root()
 }
 
 #[cfg(test)]
@@ -485,6 +488,24 @@ chain = ["rule:zh_filter", "llm:deepseek"]
                 && entry.summary == "fg0"
         }));
 
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn inventory_can_scan_product_config_root_directly() {
+        let home = temp_config_home();
+        let root = home.join("Shuohua");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
+
+        let inventory = load_from_config_root(&root);
+
+        assert_eq!(inventory.root, root);
+        assert!(inventory.entries().any(|entry| {
+            entry.module == InventoryModule::Main
+                && entry.key == "config.hotkey.trigger"
+                && entry.status == InventoryStatus::Ok
+        }));
         let _ = fs::remove_dir_all(home);
     }
 

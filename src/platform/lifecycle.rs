@@ -122,16 +122,15 @@ mod imp {
 
     pub(crate) type Pid = u32;
 
-    const LOCK_NAME: &str = "Local\\shuohua-daemon";
-
     pub(crate) struct DaemonLockGuard(Handle);
 
     pub(crate) fn acquire_daemon_lock() -> Result<DaemonLockGuard> {
-        let name = wide_null(LOCK_NAME);
+        let lock_name = default_lock_name();
+        let name = wide_null(&lock_name);
         let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
         if handle.is_null() {
             return Err(std::io::Error::last_os_error())
-                .with_context(|| format!("create Windows daemon mutex {LOCK_NAME}"));
+                .with_context(|| format!("create Windows daemon mutex {lock_name}"));
         }
         let handle = Handle(handle);
         match wait_for_mutex(handle.raw()) {
@@ -143,6 +142,23 @@ mod imp {
                 Err(error).context("acquire Windows daemon mutex")
             }
         }
+    }
+
+    fn default_lock_name() -> String {
+        match crate::windows_identity::WindowsSessionIdentity::current() {
+            Ok(identity) => scoped_lock_name(&identity.scoped_name_suffix()),
+            Err(error) => {
+                tracing::warn!(
+                    error = ?error,
+                    "falling back to process-scoped Windows daemon mutex"
+                );
+                scoped_lock_name(&format!("fallback-{}", std::process::id()))
+            }
+        }
+    }
+
+    fn scoped_lock_name(scope: &str) -> String {
+        format!("Local\\shuohua-daemon-{scope}")
     }
 
     fn wait_for_mutex(handle: HANDLE) -> std::io::Result<()> {
@@ -215,7 +231,10 @@ mod imp {
 
         #[test]
         fn lock_name_uses_user_session_namespace() {
-            assert_eq!(LOCK_NAME, "Local\\shuohua-daemon");
+            assert_eq!(
+                scoped_lock_name("abcdef0123456789abcdef01"),
+                "Local\\shuohua-daemon-abcdef0123456789abcdef01"
+            );
         }
 
         #[test]

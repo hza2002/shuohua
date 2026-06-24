@@ -168,6 +168,8 @@ mod imp {
     };
     use tokio::time;
 
+    use crate::windows_identity::{SecurityAttributes, WindowsSessionIdentity};
+
     const ERROR_PIPE_BUSY: i32 = 231;
 
     pub type ReadHalf = tokio::io::ReadHalf<PipeStream>;
@@ -258,7 +260,20 @@ mod imp {
     }
 
     pub fn default_endpoint() -> PathBuf {
-        PathBuf::from(r"\\.\pipe\shuohua")
+        match WindowsSessionIdentity::current() {
+            Ok(identity) => scoped_endpoint(&identity.scoped_name_suffix()),
+            Err(error) => {
+                tracing::warn!(
+                    error = ?error,
+                    "falling back to process-scoped Windows IPC endpoint"
+                );
+                scoped_endpoint(&format!("fallback-{}", std::process::id()))
+            }
+        }
+    }
+
+    fn scoped_endpoint(scope: &str) -> PathBuf {
+        PathBuf::from(format!(r"\\.\pipe\shuohua-{scope}"))
     }
 
     pub async fn connect(path: impl AsRef<Path>) -> Result<Stream> {
@@ -303,12 +318,42 @@ mod imp {
     }
 
     fn create_server(path: &Path, first: bool) -> std::io::Result<NamedPipeServer> {
+        let identity = WindowsSessionIdentity::current().map_err(std::io::Error::other)?;
+        let mut attrs =
+            SecurityAttributes::for_current_user_ipc(&identity).map_err(std::io::Error::other)?;
+        create_server_with_security(path, first, attrs.as_mut_ptr())
+    }
+
+    fn create_server_with_security(
+        path: &Path,
+        first: bool,
+        attrs: *mut std::ffi::c_void,
+    ) -> std::io::Result<NamedPipeServer> {
+        let mut options = ServerOptions::new();
         if first {
-            ServerOptions::new()
-                .first_pipe_instance(true)
-                .create(path.as_os_str())
-        } else {
-            ServerOptions::new().create(path.as_os_str())
+            options.first_pipe_instance(true);
+        }
+        unsafe { options.create_with_security_attributes_raw(path.as_os_str(), attrs) }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn scoped_endpoint_uses_pipe_namespace_and_hash_suffix() {
+            assert_eq!(
+                scoped_endpoint("abcdef0123456789abcdef01"),
+                PathBuf::from(r"\\.\pipe\shuohua-abcdef0123456789abcdef01")
+            );
+        }
+
+        #[test]
+        fn default_endpoint_is_no_longer_global_product_name() {
+            let endpoint = default_endpoint();
+
+            assert!(endpoint.to_string_lossy().starts_with(r"\\.\pipe\shuohua-"));
+            assert_ne!(endpoint, PathBuf::from(r"\\.\pipe\shuohua"));
         }
     }
 }

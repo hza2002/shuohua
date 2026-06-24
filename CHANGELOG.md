@@ -2,6 +2,33 @@
 
 本文件只记录公开发布版本的用户可感知变化，最新版本在最上面。
 
+## v0.2.0 - 2026-06-24
+
+### Added
+
+- Added shell completion generation through `shuo completions`, covering the
+  common shells documented by the CLI.
+- Added `shuo update` so installed binaries can update from GitHub release
+  artifacts with checksum verification.
+- Added release archive helpers and updated the release workflow so published
+  artifacts include the binary, checksums, license, and bilingual README files.
+
+### Changed
+
+- Moved launchd lifecycle operations under `shuo service`, with refreshed
+  command text, documentation, and localized messages for the new command
+  layout.
+- Improved overlay glass frame synchronization so the visual effect frame stays
+  aligned with overlay layout changes.
+- Removed the unused overlay thinking-delay setting from configuration schema,
+  generated templates, themes, and localization.
+
+### Fixed
+
+- Fixed a VadPause stop edge case where pressing the trigger while ASR finalize
+  was transitioning back to idle could be swallowed, leaving the session stuck
+  until cancel.
+
 ## v0.1.2 - 2026-06-22
 
 ### Changed

@@ -102,6 +102,10 @@ git commit -S -m "docs: add vX.Y.Z changelog"
 git push origin main
 ```
 
+如果由 agent 执行到需要 GPG 签名的步骤，agent 只负责准备文件和 `git add`；
+`git commit -S`、`git commit --amend -S`、`git tag -s` 这类签名命令必须停下来
+交给用户在本机手动执行。用户完成后，agent 再继续验证签名、push、监控 CI。
+
 `cargo-release` 要求工作区干净。后续生成的 `release: vX.Y.Z` commit 只包含版本
 bump，不要通过绕过 dirty check 把其他修改混入 release commit。
 
@@ -139,7 +143,27 @@ cargo release <patch|minor|0.1.0> --dry-run
 cargo release <patch|minor|0.1.0> --execute
 ```
 
-这会修改 `Cargo.toml`、创建 signed release commit、创建 signed tag，并 push 到 origin。失败时停下报告状态，不使用 `--no-verify`、不自动重试。
+这会修改 `Cargo.toml`、创建 signed release commit、创建 signed tag，并 push 到 origin。
+如果执行环境无法完成 GPG 交互，agent 必须在版本 bump 后停下，由用户手动执行：
+
+```bash
+git add Cargo.toml Cargo.lock
+git commit -S -m "release: vX.Y.Z"
+git tag -s vX.Y.Z -m "shuo vX.Y.Z"
+git push origin main vX.Y.Z
+```
+
+如果需要把发版文档或其他只属于 release commit 的小修订补进已创建的 release commit，
+agent 可以准备并 `git add` 文件，但 amend 和重新签 tag 由用户手动执行：
+
+```bash
+git commit --amend -S --no-edit
+git tag -d vX.Y.Z
+git tag -s vX.Y.Z -m "shuo vX.Y.Z"
+git push origin main vX.Y.Z
+```
+
+失败时停下报告状态，不使用 `--no-verify`、不自动重试。
 
 ## 9. 监控 Release Workflow
 

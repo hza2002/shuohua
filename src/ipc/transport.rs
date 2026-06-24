@@ -171,6 +171,8 @@ mod imp {
     use crate::windows_identity::{SecurityAttributes, WindowsSessionIdentity};
 
     const ERROR_PIPE_BUSY: i32 = 231;
+    const PIPE_BUSY_MAX_ATTEMPTS: u32 = 20;
+    const PIPE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(50);
 
     pub type ReadHalf = tokio::io::ReadHalf<PipeStream>;
     pub type WriteHalf = tokio::io::WriteHalf<PipeStream>;
@@ -278,7 +280,7 @@ mod imp {
 
     pub async fn connect(path: impl AsRef<Path>) -> Result<Stream> {
         let path = path.as_ref();
-        let mut attempts = 0;
+        let mut attempts = 1;
         loop {
             match ClientOptions::new().open(path.as_os_str()) {
                 Ok(client) => {
@@ -287,13 +289,13 @@ mod imp {
                     });
                 }
                 Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
-                    attempts += 1;
-                    if attempts >= 20 {
+                    let Some(delay) = pipe_busy_retry_delay(attempts) else {
                         return Err(error).with_context(|| {
                             format!("connect Windows IPC pipe {}", path.display())
                         });
-                    }
-                    time::sleep(Duration::from_millis(50)).await;
+                    };
+                    attempts += 1;
+                    time::sleep(delay).await;
                 }
                 Err(error) => {
                     return Err(error)
@@ -301,6 +303,10 @@ mod imp {
                 }
             }
         }
+    }
+
+    fn pipe_busy_retry_delay(attempt: u32) -> Option<Duration> {
+        (attempt < PIPE_BUSY_MAX_ATTEMPTS).then_some(PIPE_BUSY_RETRY_DELAY)
     }
 
     pub async fn bind_default() -> Result<Listener> {
@@ -354,6 +360,16 @@ mod imp {
 
             assert!(endpoint.to_string_lossy().starts_with(r"\\.\pipe\shuohua-"));
             assert_ne!(endpoint, PathBuf::from(r"\\.\pipe\shuohua"));
+        }
+
+        #[test]
+        fn pipe_busy_retry_policy_is_bounded_and_short() {
+            assert_eq!(pipe_busy_retry_delay(1), Some(Duration::from_millis(50)));
+            assert_eq!(
+                pipe_busy_retry_delay(PIPE_BUSY_MAX_ATTEMPTS - 1),
+                Some(Duration::from_millis(50))
+            );
+            assert_eq!(pipe_busy_retry_delay(PIPE_BUSY_MAX_ATTEMPTS), None);
         }
     }
 }

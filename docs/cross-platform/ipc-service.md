@@ -63,6 +63,13 @@ Phase 10r Windows Named Pipe endpoint scoping/security descriptor hardening:
 - 仍未完成：cross-user 验证、elevated/non-elevated 行为矩阵、busy-pipe 压力测试、client
   access mask 收窄和长时间 runtime soak。因此 capability 仍保持 `partial/runtime_not_verified`。
 
+Phase 10t Windows Named Pipe busy retry policy:
+
+- Client connect 的 `ERROR_PIPE_BUSY` retry 仍是 bounded short retry：最多 20 次 open attempt，
+  每次 busy 后等待 50ms。该策略只避免短暂 server instance 切换窗口内立即失败，不启动 daemon，
+  不进入 smart fallback。
+- 当前已补单元测试固定 retry 边界；尚未做真实 busy-pipe 压力测试或高并发 client runtime soak。
+
 ## 单实例
 
 daemon 单实例锁和 stale endpoint 清理需要平台化：

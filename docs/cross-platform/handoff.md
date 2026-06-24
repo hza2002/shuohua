@@ -15,6 +15,15 @@ Previous commit: `fix: unblock windows core runtime smoke` (`265e293`).
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10t Windows Named Pipe busy retry policy 已完成：
+
+- Windows client connect 的 `ERROR_PIPE_BUSY` retry policy 抽为可测试边界：最多 20 次 open
+  attempt，每次 busy 后等待 50ms。
+- 该策略仍只覆盖短暂 server pipe instance 切换窗口；不启动 daemon，不实现 smart fallback，
+  不代表 busy-pipe 压力测试或高并发 soak 已完成。
+- 验证范围：Windows unit test 固定 retry 边界，仍需真实 runtime busy-pipe 压力和
+  elevated/non-elevated/cross-user 验证。
+
 Phase 10s Windows runtime checklist command sync 已完成：
 
 - `docs/cross-platform/windows-runtime-validation.md` 中 daemon 启动命令从过时的
@@ -1298,9 +1307,9 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10t：继续 Windows core runtime hardening，但只在 Named Pipe/lifecycle/service dry-run/path
-  范围内小步推进。优先设计/验证 ERROR_PIPE_BUSY retry、elevated/non-elevated 行为矩阵、
-  cross-user 隔离或 client access mask 收窄。
+- Phase 10u：继续 Windows core runtime hardening，但只在 Named Pipe/lifecycle/service dry-run/path
+  范围内小步推进。下一步可选：设计真实 busy-pipe 压力 smoke、记录 elevated/non-elevated
+  手动验证步骤、cross-user 隔离步骤，或评估是否需要绕过 Tokio ClientOptions 来收窄 client access mask。
 - audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability
   升级。
 - 不继续 GUI 产品化开发。

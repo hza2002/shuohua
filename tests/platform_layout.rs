@@ -992,6 +992,46 @@ fn windows_overlay_capability_reports_minimal_partial_backend() {
 }
 
 #[test]
+fn windows_overlay_records_dpi_and_font_baseline() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let backend = std::fs::read_to_string(root.join("src/overlay/windows.rs")).unwrap();
+    let overlay_doc = std::fs::read_to_string(root.join("docs/cross-platform/overlay.md")).unwrap();
+    let macos_view = std::fs::read_to_string(root.join("src/overlay/macos/view.rs")).unwrap();
+
+    for token in [
+        "GetDpiForWindow",
+        "SPI_GETWORKAREA",
+        "WindowMetrics",
+        "work_area_layout",
+        "create_ui_font",
+        "Segoe UI",
+    ] {
+        assert!(
+            backend.contains(token),
+            "Windows overlay DPI/font baseline should contain token `{token}`"
+        );
+    }
+
+    for token in ["NSFont::systemFontOfSize", "NSFont::boldSystemFontOfSize"] {
+        assert!(
+            macos_view.contains(token),
+            "macOS overlay should continue using system fonts via `{token}`"
+        );
+    }
+
+    for token in [
+        "Do not bundle SF Pro",
+        "does not hard-require JetBrains Mono",
+        "DirectWrite/Direct2D text quality",
+    ] {
+        assert!(
+            overlay_doc.contains(token),
+            "overlay font/DPI policy should document `{token}`"
+        );
+    }
+}
+
+#[test]
 fn windows_active_app_identity_backend_lives_behind_desktop_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let windows_app_context = root.join("src/platform/windows/app_context.rs");

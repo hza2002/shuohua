@@ -894,6 +894,20 @@ Phase 10ao Windows Minimal Overlay Backend:
 - Capability may move to partial after smoke, but input passthrough, focused-window anchoring, advanced material,
   multi-monitor behavior, and real visual quality remain manual validation gates.
 
+Phase 10ap Windows Overlay DPI And Font Baseline:
+
+- Fix Windows overlay sizing and placement before visual polish: use monitor work area and DPI scale instead of
+  raw primary-screen pixels and fixed unscaled layout constants.
+- Keep the renderer native Win32. Do not introduce Direct2D/DirectWrite, Acrylic/Mica, bundled fonts, or
+  advanced animation in this phase.
+- Use the platform UI font path first. macOS already uses `NSFont::systemFontOfSize` /
+  `boldSystemFontOfSize`; it does not require JetBrains Mono or bundled SF Pro. Windows should likewise prefer
+  system UI fonts for prose text.
+- Do not bundle SF Pro. If a monospace or branded fallback is needed later, treat JetBrains or another OFL font as
+  an optional packaged fallback, not a hard runtime requirement.
+- Capability remains partial/degraded until high-DPI, multi-monitor, and final visual quality are manually
+  validated.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

@@ -129,6 +129,24 @@ Phase 10ao replaces the skeleton with a minimal native Win32 backend:
 This phase does not validate audio, hotkey-triggered recording, clipboard/paste, advanced material, multi-monitor
 behavior, fullscreen apps, UAC prompts, or final visual quality.
 
+### Windows Phase 10ap DPI And Font Baseline
+
+Phase 10ap fixes the first visual correctness layer before material polish:
+
+- The renderer now scales window size, placement, text rectangles, and GDI font sizes from shared logical layout
+  units to physical pixels using the current window DPI.
+- Placement uses the Windows work area instead of raw primary-screen bounds, so the overlay avoids the taskbar in
+  the common single-monitor case.
+- Windows text uses the platform UI font path (`Segoe UI`) at DPI-scaled point sizes. This is still a GDI baseline,
+  not the final text renderer.
+- macOS does not hard-require JetBrains Mono or bundled SF Pro; the current AppKit renderer uses
+  `NSFont::systemFontOfSize` / `boldSystemFontOfSize`.
+- Do not bundle SF Pro. If a monospace or branded fallback becomes necessary, use an optional font with suitable
+  redistribution terms as a fallback, not as a hard runtime dependency.
+
+Remaining gates: per-monitor work area on secondary displays, DirectWrite/Direct2D text quality, rounded/shadowed
+surface polish, fullscreen/UAC behavior, and final multi-monitor visual QA.
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。

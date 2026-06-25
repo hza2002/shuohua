@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: add windows minimal overlay backend`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: add windows overlay dpi baseline`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: add windows hotkey hook backend` (`3a321d6`).
+Previous phase commit: `feat: add windows minimal overlay backend` (`ae5abe6`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,20 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10ap Windows overlay DPI and font baseline 已完成：
+
+- Windows overlay 现在用 `GetDpiForWindow` 计算当前 window DPI scale，并把共享 logical layout 的窗口尺寸、
+  位置、文本 rect 和 GDI font size 转成 physical pixels。
+- overlay placement 使用 Windows work area (`SPI_GETWORKAREA`) 而不是 raw primary-screen bounds，单屏常见
+  场景会避开 taskbar；secondary monitor 的 per-monitor work area 仍是后续 gate。
+- Windows prose text 使用系统 UI 字体路径 `Segoe UI`，作为 GDI baseline；macOS 现有 AppKit renderer 使用
+  `NSFont::systemFontOfSize` / `boldSystemFontOfSize`，不硬依赖 JetBrains Mono 或 bundled SF Pro。
+- 不 bundle SF Pro。若后续需要 monospace/branded fallback，应选择可再分发字体并作为 optional fallback，
+  不是 daemon/runtime 硬依赖。
+- Capability 不升级：`overlay.renderer` 仍是 `partial`，`overlay.material` / `overlay.window_anchor` 仍是
+  `degraded`，因为 DirectWrite/Direct2D、material/shadow/rounding、fullscreen/UAC、multi-monitor 和最终
+  视觉 QA 尚未完成。
+
 Phase 10ao Windows minimal overlay backend 已完成：
 
 - Windows overlay 不再是 no-op skeleton；现在创建一个原生 Win32 `WS_POPUP` overlay window，使用
@@ -1653,6 +1667,11 @@ permission probe 或 active app runtime。
   - 用户手动 overlay smoke 通过：临时 `trigger = "f16"` 后启动 daemon，用合成 F16 触发无麦克风错误路径；
     目视确认 overlay 可见、位置大致正确、不抢焦点、可消失，点击穿透符合预期。该结论仍不覆盖
     fullscreen/UAC/multi-monitor/touch/pen 或最终视觉质量。
+  - Phase 10ap overlay DPI/font baseline 通过 Windows native 验证：Windows target tests/build 通过，
+    ignored overlay runtime smoke 通过，`service start; service status; service stop` 单步 smoke 通过。
+    当前 `doctor` exit 1 仍是无默认输入设备；overlay capability 仍保持 partial/degraded。
+  - Phase 10ap 字体决策：三端优先使用系统 UI 字体；macOS 不 bundle SF Pro，Windows 不要求
+    JetBrains Mono。后续若需要额外 fallback，只选择可再分发字体并作为 optional packaged fallback。
   - 无参数 `shuo.exe` smart fallback 在 daemon absent 时可启动当前 executable 的 `--daemon` 子进程，
     并等到 scoped Named Pipe ready。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。

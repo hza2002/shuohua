@@ -313,6 +313,18 @@ Windows overlay 在 Phase 10ao 只表达最小 Win32 renderer 可以创建窗口
 - 在真实 foreground App、UAC/fullscreen/multi-monitor、mouse/touch/pen passthrough 和最终视觉质量验证前，
   不能升级为 `available`。
 
+## Phase 10ap Windows Overlay DPI And Font Baseline
+
+Phase 10ap does not change Windows overlay capability levels, but narrows the reason behind visual mismatch:
+
+- `win32_overlay_minimal` now scales window size, placement, text rectangles, and GDI font sizes by the current
+  window DPI.
+- Placement uses the Windows work area instead of raw primary-screen bounds.
+- Text uses the platform UI font path (`Segoe UI`) as a DPI-scaled GDI baseline.
+- macOS currently uses AppKit system fonts, not a hard JetBrains Mono or bundled SF Pro dependency.
+- Capability remains partial/degraded until per-monitor secondary-display behavior, DirectWrite/Direct2D text,
+  material/shadow/rounding, fullscreen/UAC behavior, and final visual QA are complete.
+
 ## Phase 10ah Windows Audio Capture Diagnostics
 
 Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：

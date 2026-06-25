@@ -5,20 +5,23 @@ use std::ptr::null_mut;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{GetLastError, COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect, GetStockObject,
-    InvalidateRect, SelectObject, SetBkMode, SetTextColor, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX,
-    DT_SINGLELINE, DT_TOP, DT_WORDBREAK, HBRUSH, HDC, HGDIOBJ, PAINTSTRUCT, TRANSPARENT,
-    WHITE_BRUSH,
+    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect,
+    GetStockObject, InvalidateRect, SelectObject, SetBkMode, SetTextColor, CLIP_DEFAULT_PRECIS,
+    DEFAULT_CHARSET, DEFAULT_QUALITY, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_TOP,
+    DT_WORDBREAK, FF_DONTCARE, FW_BOLD, FW_NORMAL, HBRUSH, HDC, HGDIOBJ, OUT_DEFAULT_PRECIS,
+    PAINTSTRUCT, TRANSPARENT, WHITE_BRUSH,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
     GetSystemMetrics, LoadCursorW, PeekMessageW, PostQuitMessage, RegisterClassW,
-    SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
-    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, HTTRANSPARENT, IDC_ARROW,
-    LWA_ALPHA, MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-    SW_HIDE, SW_SHOWNOACTIVATE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_NCHITTEST, WM_PAINT,
-    WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW,
+    TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA,
+    HTTRANSPARENT, IDC_ARROW, LWA_ALPHA, MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SPI_GETWORKAREA,
+    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WM_CREATE, WM_DESTROY,
+    WM_ERASEBKGND, WM_NCHITTEST, WM_PAINT, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::overlay::layout as L;
@@ -29,6 +32,39 @@ use crate::platform::capability::{
 
 const CLASS_NAME: &str = "ShuohuaOverlayWindow";
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
+const DEFAULT_DPI: f64 = 96.0;
+
+#[derive(Clone, Copy)]
+struct WindowMetrics {
+    dpi: u32,
+    scale: f64,
+    work_area: RECT,
+}
+
+impl WindowMetrics {
+    fn for_window(hwnd: HWND) -> Self {
+        let dpi = unsafe { GetDpiForWindow(hwnd) };
+        let dpi = if dpi == 0 { DEFAULT_DPI as u32 } else { dpi };
+        Self {
+            dpi,
+            scale: dpi as f64 / DEFAULT_DPI,
+            work_area: work_area_rect(),
+        }
+    }
+
+    fn px(self, logical: f64) -> i32 {
+        (logical * self.scale).round() as i32
+    }
+
+    fn rect(self, left: f64, top: f64, right: f64, bottom: f64) -> RECT {
+        RECT {
+            left: self.px(left),
+            top: self.px(top),
+            right: self.px(right),
+            bottom: self.px(bottom),
+        }
+    }
+}
 
 pub(super) fn renderer_capabilities() -> &'static [CapabilityStatus] {
     &WINDOWS_RENDERER_CAPABILITIES
@@ -142,7 +178,9 @@ impl WindowsOverlay {
         if self.visible {
             return;
         }
-        let frame = screen_panel_frame(&self.cfg);
+        let metrics = WindowMetrics::for_window(self.hwnd);
+        let frame = screen_panel_frame(&self.cfg, metrics);
+        let height = metrics.px(overlay_height(&self.model, &self.cfg));
         unsafe {
             SetWindowPos(
                 self.hwnd,
@@ -150,7 +188,7 @@ impl WindowsOverlay {
                 frame.x as i32,
                 frame.y as i32,
                 frame.w as i32,
-                frame.h as i32,
+                height,
                 SWP_NOACTIVATE,
             );
             ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
@@ -175,26 +213,25 @@ impl WindowsOverlay {
     }
 
     unsafe fn paint(&self, hdc: HDC) {
+        let metrics = WindowMetrics::for_window(self.hwnd);
         let rect = RECT {
             left: 0,
             top: 0,
-            right: L::constants::WIDTH as i32,
-            bottom: overlay_height(&self.model, &self.cfg) as i32,
+            right: metrics.px(L::constants::WIDTH),
+            bottom: metrics.px(overlay_height(&self.model, &self.cfg)),
         };
         let brush = CreateSolidBrush(to_colorref(self.cfg.core.background_rgb));
         FillRect(hdc, &rect, brush);
         DeleteObject(brush as HGDIOBJ);
 
         SetBkMode(hdc, TRANSPARENT as i32);
-        let old_font = SelectObject(hdc, GetStockObject(17));
+        let state_font = create_ui_font(metrics, 13.0, true);
+        let meta_font = create_ui_font(metrics, 12.0, false);
+        let body_font = create_ui_font(metrics, 14.0, false);
+        let old_font = SelectObject(hdc, state_font);
         draw_text(
             hdc,
-            &mut RECT {
-                left: 16,
-                top: 11,
-                right: 128,
-                bottom: 34,
-            },
+            &mut metrics.rect(16.0, 11.0, 128.0, 34.0),
             &self.model.state_label,
             self.model.state_color,
             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
@@ -206,14 +243,10 @@ impl WindowsOverlay {
             &crate::t!("overlay.word_count", n = self.model.words),
             app,
         );
+        SelectObject(hdc, meta_font);
         draw_text(
             hdc,
-            &mut RECT {
-                left: 132,
-                top: 11,
-                right: 430,
-                bottom: 34,
-            },
+            &mut metrics.rect(132.0, 11.0, 430.0, 34.0),
             &stats,
             self.cfg.core.text.secondary,
             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
@@ -229,12 +262,7 @@ impl WindowsOverlay {
         };
         draw_text(
             hdc,
-            &mut RECT {
-                left: 430,
-                top: 11,
-                right: L::constants::WIDTH as i32 - 16,
-                bottom: 34,
-            },
+            &mut metrics.rect(430.0, 11.0, L::constants::WIDTH - 16.0, 34.0),
             meta,
             meta_color,
             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
@@ -250,19 +278,23 @@ impl WindowsOverlay {
             self.cfg.core.max_text_lines,
             L::constants::CHARS_PER_LINE,
         );
+        SelectObject(hdc, body_font);
         draw_text(
             hdc,
-            &mut RECT {
-                left: 16,
-                top: 36,
-                right: L::constants::WIDTH as i32 - 16,
-                bottom: rect.bottom - 8,
-            },
+            &mut metrics.rect(
+                16.0,
+                36.0,
+                L::constants::WIDTH - 16.0,
+                overlay_height(&self.model, &self.cfg) - 8.0,
+            ),
             &text,
             text_color,
             DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX,
         );
         SelectObject(hdc, old_font);
+        DeleteObject(state_font);
+        DeleteObject(meta_font);
+        DeleteObject(body_font);
     }
 }
 
@@ -366,13 +398,11 @@ fn create_overlay_window(overlay: *mut WindowsOverlay) -> Result<HWND> {
     Ok(hwnd)
 }
 
-fn screen_panel_frame(cfg: &crate::config::theme::EffectiveOverlayCfg) -> L::LayoutFrame {
-    let screen = L::LayoutFrame::new(
-        0.0,
-        0.0,
-        unsafe { GetSystemMetrics(SM_CXSCREEN) } as f64,
-        unsafe { GetSystemMetrics(SM_CYSCREEN) } as f64,
-    );
+fn screen_panel_frame(
+    cfg: &crate::config::theme::EffectiveOverlayCfg,
+    metrics: WindowMetrics,
+) -> L::LayoutFrame {
+    let screen = work_area_layout(metrics);
     let height = L::constants::BASE_HEIGHT;
     let anchor = screen;
     let mut frame = L::panel_frame(
@@ -383,7 +413,32 @@ fn screen_panel_frame(cfg: &crate::config::theme::EffectiveOverlayCfg) -> L::Lay
         screen,
     );
     frame.y = screen.h - frame.y - frame.h;
+    frame.x = frame.x * metrics.scale + metrics.work_area.left as f64;
+    frame.y = frame.y * metrics.scale + metrics.work_area.top as f64;
+    frame.w *= metrics.scale;
+    frame.h *= metrics.scale;
     frame
+}
+
+fn work_area_layout(metrics: WindowMetrics) -> L::LayoutFrame {
+    let width = (metrics.work_area.right - metrics.work_area.left) as f64 / metrics.scale;
+    let height = (metrics.work_area.bottom - metrics.work_area.top) as f64 / metrics.scale;
+    L::LayoutFrame::new(0.0, 0.0, width, height)
+}
+
+fn work_area_rect() -> RECT {
+    let mut rect = RECT::default();
+    let ok =
+        unsafe { SystemParametersInfoW(SPI_GETWORKAREA, 0, (&mut rect as *mut RECT).cast(), 0) };
+    if ok != 0 {
+        return rect;
+    }
+    RECT {
+        left: 0,
+        top: 0,
+        right: unsafe { GetSystemMetrics(SM_CXSCREEN) },
+        bottom: unsafe { GetSystemMetrics(SM_CYSCREEN) },
+    }
 }
 
 fn overlay_height(model: &OverlayModel, cfg: &crate::config::theme::EffectiveOverlayCfg) -> f64 {
@@ -399,6 +454,30 @@ unsafe fn draw_text(hdc: HDC, rect: &mut RECT, text: &str, rgb: u32, format: u32
     SetTextColor(hdc, to_colorref(rgb));
     let wide = wide_null(text);
     DrawTextW(hdc, wide.as_ptr(), -1, rect, format);
+}
+
+unsafe fn create_ui_font(metrics: WindowMetrics, point_size: f64, bold: bool) -> HGDIOBJ {
+    let face = wide_null("Segoe UI");
+    CreateFontW(
+        -(point_size * metrics.dpi as f64 / 72.0).round() as i32,
+        0,
+        0,
+        0,
+        if bold {
+            FW_BOLD as i32
+        } else {
+            FW_NORMAL as i32
+        },
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET.into(),
+        OUT_DEFAULT_PRECIS.into(),
+        CLIP_DEFAULT_PRECIS.into(),
+        DEFAULT_QUALITY.into(),
+        FF_DONTCARE.into(),
+        face.as_ptr(),
+    ) as HGDIOBJ
 }
 
 fn to_colorref(rgb: u32) -> COLORREF {
@@ -495,6 +574,51 @@ mod tests {
             &cfg.core.state,
         );
         assert!(overlay_height(&model, &cfg) > L::constants::BASE_HEIGHT);
+    }
+
+    #[test]
+    fn metrics_scale_logical_units_to_physical_pixels() {
+        let metrics = WindowMetrics {
+            dpi: 144,
+            scale: 1.5,
+            work_area: RECT {
+                left: 100,
+                top: 50,
+                right: 2500,
+                bottom: 1850,
+            },
+        };
+
+        assert_eq!(metrics.px(10.0), 15);
+        let rect = metrics.rect(10.0, 20.0, 30.0, 40.0);
+        assert_eq!(rect.left, 15);
+        assert_eq!(rect.top, 30);
+        assert_eq!(rect.right, 45);
+        assert_eq!(rect.bottom, 60);
+        assert_eq!(work_area_layout(metrics).w, 1600.0);
+        assert_eq!(work_area_layout(metrics).h, 1200.0);
+    }
+
+    #[test]
+    fn screen_panel_frame_uses_work_area_origin_and_scale() {
+        let cfg = crate::config::theme::EffectiveOverlayCfg::default();
+        let metrics = WindowMetrics {
+            dpi: 144,
+            scale: 1.5,
+            work_area: RECT {
+                left: 100,
+                top: 50,
+                right: 2500,
+                bottom: 1850,
+            },
+        };
+
+        let frame = screen_panel_frame(&cfg, metrics);
+
+        assert_eq!(frame.w, L::constants::WIDTH * 1.5);
+        assert!(frame.x >= 100.0);
+        assert!(frame.y >= 50.0);
+        assert!(frame.x + frame.w <= 2500.0);
     }
 
     #[test]

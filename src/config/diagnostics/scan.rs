@@ -271,7 +271,7 @@ fn validate_profile_routes(
                 report,
                 DiagnosticScope::Main,
                 &root.join("config.toml"),
-                "profile",
+                "profile.routes",
                 format!("missing profile {}", path.display()),
             );
         }

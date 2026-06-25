@@ -823,6 +823,16 @@ Phase 10ah Windows Audio Capture Diagnostics:
 - Do not promote beyond `partial` until a user manually validates microphone permission behavior, actual
   recording, sample format conversion, silence/noise floor, and sustained capture on Windows.
 
+Phase 10ai Platform-Specific Profile Routes:
+
+- Replace the macOS-shaped `[profile] profile_name = ["bundle.id"]` route table with
+  `[profile.routes.<profile>.<platform>]` matcher tables.
+- Keep profile files, ASR provider configs, post chains, prompts, and hotwords shared across platforms; only
+  app identity matchers are platform-specific.
+- Do not implement Windows active app lookup in this phase. Windows/Linux matcher schema can exist while their
+  runtime identity backend still returns no app identity and falls back to `profile.default`.
+- The old top-level profile array route shape is rejected because there are no external users to migrate.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

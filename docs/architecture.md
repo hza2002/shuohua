@@ -27,7 +27,7 @@
 `daemon::process` 初始化 log/config/i18n/overlay 后在 tokio 线程跑 `daemon::runtime`。
 
 1. 键盘事件：`platform::hotkey` 启 CGEventTap（Default 模式可吞）→ 4 字节 `RawEvent` → pipe → `daemon::hotkey_input` bridge → mpsc → runtime 内 `TrackerSet`。回调同步问 `Mutex<Suppressor>` 决定 Drop/Keep。
-2. trigger 首次命中 = toggle ON：runtime 取 frontmost app → `daemon::session_start` 按 `[profile]` 路由选 profile → 构造 `SessionParams` → spawn `finish::run_recording`。profile/post/asr 初始化失败直接发 overlay error，不进录音 task。
+2. trigger 首次命中 = toggle ON：runtime 取 frontmost app → `daemon::session_start` 按 `profile.routes` 选 profile → 构造 `SessionParams` → spawn `finish::run_recording`。profile/post/asr 初始化失败直接发 overlay error，不进录音 task。
 3. trigger 二次命中 = Stop；cancel hotkey = Cancel（+ overlay `Dismiss` 清 lingering）。
 4. 录音 task 内：cpal stream → provider session → post chain → dispatch → history → StateStore/Overlay/UDS fanout（见 [voice](modules/voice.md)）。
 5. 热重载：notify watcher 监听 `~/.config/shuohua/`，`config.toml`/`theme/*.toml` 触发 parse + watch 广播给 overlay/i18n/hotkey；UDS `reload_config` 复用同一入口（见 [config](modules/config.md)）。

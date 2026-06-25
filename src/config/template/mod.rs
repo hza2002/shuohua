@@ -127,21 +127,27 @@ mod tests {
             .routes
             .get("chat")
             .unwrap()
+            .macos
+            .bundle_id
             .contains(&"com.openai.chat".to_string()));
         assert!(config
             .profile
             .routes
             .get("agent")
             .unwrap()
+            .macos
+            .bundle_id
             .contains(&"com.microsoft.VSCode".to_string()));
+        assert!(body.contains("[profile.routes.chat.macos]"));
+        assert!(body.contains("[profile.routes.agent.windows]"));
     }
 
     #[test]
     fn config_template_routes_are_disjoint_and_conservative() {
         let body = render_by_id("config").unwrap();
         let config = crate::config::main::parse(&body).unwrap();
-        let chat = config.profile.routes.get("chat").unwrap();
-        let agent = config.profile.routes.get("agent").unwrap();
+        let chat = &config.profile.routes.get("chat").unwrap().macos.bundle_id;
+        let agent = &config.profile.routes.get("agent").unwrap().macos.bundle_id;
 
         for bundle_id in chat {
             assert!(

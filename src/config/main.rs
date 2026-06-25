@@ -160,18 +160,204 @@ pub struct PostCfg {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileRouteCfg {
     #[serde(default = "default_profile_name")]
     pub default: String,
-    #[serde(flatten)]
-    pub routes: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub routes: ProfileRoutes,
 }
 
 impl Default for ProfileRouteCfg {
     fn default() -> Self {
         Self {
             default: default_profile_name(),
-            routes: BTreeMap::new(),
+            routes: ProfileRoutes::default(),
+        }
+    }
+}
+
+impl ProfileRouteCfg {
+    pub fn matching_profiles(&self, app: &AppIdentity<'_>) -> Vec<&str> {
+        self.routes.matching_profiles(app)
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct ProfileRoutes(BTreeMap<String, ProfileRouteMatchers>);
+
+impl ProfileRoutes {
+    pub fn get(&self, profile: &str) -> Option<&ProfileRouteMatchers> {
+        self.0.get(profile)
+    }
+
+    pub fn contains_key(&self, profile: &str) -> bool {
+        self.0.contains_key(profile)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.0.keys()
+    }
+
+    pub fn matching_profiles(&self, app: &AppIdentity<'_>) -> Vec<&str> {
+        self.0
+            .iter()
+            .filter_map(|(profile, routes)| routes.matches(app).then_some(profile.as_str()))
+            .collect()
+    }
+}
+
+impl FromIterator<(String, ProfileRouteMatchers)> for ProfileRoutes {
+    fn from_iter<T: IntoIterator<Item = (String, ProfileRouteMatchers)>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProfileRouteMatchers {
+    pub macos: MacosProfileMatchers,
+    pub windows: WindowsProfileMatchers,
+    pub linux: LinuxProfileMatchers,
+}
+
+impl ProfileRouteMatchers {
+    fn matches(&self, app: &AppIdentity<'_>) -> bool {
+        match app {
+            AppIdentity::Macos { bundle_id } => self.macos.matches(*bundle_id),
+            AppIdentity::Windows {
+                app_user_model_id,
+                exe_name,
+            } => self.windows.matches(*app_user_model_id, *exe_name),
+            AppIdentity::Linux {
+                desktop_id,
+                wm_class,
+                process_name,
+            } => self.linux.matches(*desktop_id, *wm_class, *process_name),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct MacosProfileMatchers {
+    pub bundle_id: Vec<String>,
+}
+
+impl MacosProfileMatchers {
+    fn matches(&self, bundle_id: Option<&str>) -> bool {
+        bundle_id.is_some_and(|actual| self.bundle_id.iter().any(|expected| expected == actual))
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct WindowsProfileMatchers {
+    pub app_user_model_id: Vec<String>,
+    pub exe_name: Vec<String>,
+}
+
+impl WindowsProfileMatchers {
+    fn matches(&self, app_user_model_id: Option<&str>, exe_name: Option<&str>) -> bool {
+        app_user_model_id
+            .is_some_and(|actual| contains_case_insensitive(&self.app_user_model_id, actual))
+            || exe_name.is_some_and(|actual| contains_case_insensitive(&self.exe_name, actual))
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct LinuxProfileMatchers {
+    pub desktop_id: Vec<String>,
+    pub wm_class: Vec<String>,
+    pub process_name: Vec<String>,
+}
+
+impl LinuxProfileMatchers {
+    fn matches(
+        &self,
+        desktop_id: Option<&str>,
+        wm_class: Option<&str>,
+        process_name: Option<&str>,
+    ) -> bool {
+        desktop_id.is_some_and(|actual| self.desktop_id.iter().any(|expected| expected == actual))
+            || wm_class
+                .is_some_and(|actual| self.wm_class.iter().any(|expected| expected == actual))
+            || process_name
+                .is_some_and(|actual| self.process_name.iter().any(|expected| expected == actual))
+    }
+}
+
+fn contains_case_insensitive(values: &[String], actual: &str) -> bool {
+    values
+        .iter()
+        .any(|expected| expected.eq_ignore_ascii_case(actual))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppIdentity<'a> {
+    Macos {
+        bundle_id: Option<&'a str>,
+    },
+    Windows {
+        app_user_model_id: Option<&'a str>,
+        exe_name: Option<&'a str>,
+    },
+    Linux {
+        desktop_id: Option<&'a str>,
+        wm_class: Option<&'a str>,
+        process_name: Option<&'a str>,
+    },
+}
+
+impl<'a> AppIdentity<'a> {
+    pub fn macos(bundle_id: Option<&'a str>) -> Self {
+        Self::Macos { bundle_id }
+    }
+
+    pub fn windows(app_user_model_id: Option<&'a str>, exe_name: Option<&'a str>) -> Self {
+        Self::Windows {
+            app_user_model_id,
+            exe_name,
+        }
+    }
+
+    pub fn linux(
+        desktop_id: Option<&'a str>,
+        wm_class: Option<&'a str>,
+        process_name: Option<&'a str>,
+    ) -> Self {
+        Self::Linux {
+            desktop_id,
+            wm_class,
+            process_name,
+        }
+    }
+
+    pub fn current_from_app_context(bundle_id: Option<&'a str>) -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self::macos(bundle_id)
+        }
+        #[cfg(windows)]
+        {
+            let _ = bundle_id;
+            Self::windows(None, None)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let _ = bundle_id;
+            Self::linux(None, None, None)
+        }
+        #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+        {
+            let _ = bundle_id;
+            Self::linux(None, None, None)
         }
     }
 }
@@ -567,28 +753,93 @@ max_text_lines = 0
     }
 
     #[test]
-    fn profile_routes_are_configurable() {
+    fn profile_routes_are_platform_specific() {
         let body = r#"
 [hotkey]
 trigger = "f16"
 
 [profile]
 default = "default"
-agent = ["com.mitchellh.ghostty", "com.apple.Terminal"]
-coding = ["com.apple.dt.Xcode"]
+
+[profile.routes.agent.macos]
+bundle_id = ["com.mitchellh.ghostty", "com.apple.Terminal"]
+
+[profile.routes.agent.windows]
+app_user_model_id = ["Microsoft.WindowsTerminal"]
+exe_name = ["WindowsTerminal.exe"]
+
+[profile.routes.coding.linux]
+desktop_id = ["code.desktop"]
+wm_class = ["Code"]
+process_name = ["code"]
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.profile.default, "default");
         assert_eq!(
-            cfg.profile.routes.get("agent").unwrap(),
+            &cfg.profile.routes.get("agent").unwrap().macos.bundle_id,
             &vec![
                 "com.mitchellh.ghostty".to_string(),
                 "com.apple.Terminal".to_string()
             ]
         );
         assert_eq!(
-            cfg.profile.routes.get("coding").unwrap(),
-            &vec!["com.apple.dt.Xcode".to_string()]
+            &cfg.profile.routes.get("agent").unwrap().windows.exe_name,
+            &vec!["WindowsTerminal.exe".to_string()]
         );
+        assert_eq!(
+            &cfg.profile.routes.get("coding").unwrap().linux.desktop_id,
+            &vec!["code.desktop".to_string()]
+        );
+    }
+
+    #[test]
+    fn profile_routes_match_windows_identity_case_insensitively() {
+        let routes = ProfileRouteCfg {
+            default: "default".to_string(),
+            routes: ProfileRoutes::from_iter([(
+                "agent".to_string(),
+                ProfileRouteMatchers {
+                    windows: WindowsProfileMatchers {
+                        app_user_model_id: vec!["Microsoft.VisualStudioCode".to_string()],
+                        exe_name: vec!["Code.exe".to_string()],
+                    },
+                    ..Default::default()
+                },
+            )]),
+        };
+
+        assert_eq!(
+            routes.matching_profiles(&AppIdentity::windows(
+                Some("microsoft.visualstudiocode"),
+                None
+            )),
+            vec!["agent"]
+        );
+        assert_eq!(
+            routes.matching_profiles(&AppIdentity::windows(None, Some("code.EXE"))),
+            vec!["agent"]
+        );
+        assert!(routes
+            .matching_profiles(&AppIdentity::macos(Some("Code.exe")))
+            .is_empty());
+    }
+
+    #[test]
+    fn rejects_legacy_top_level_profile_route_arrays() {
+        let error = parse(
+            r#"
+[hotkey]
+trigger = "f16"
+
+[profile]
+default = "default"
+agent = ["com.mitchellh.ghostty"]
+"#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("profile.agent"), "{error}");
+        assert!(error.contains("unknown field"), "{error}");
     }
 }

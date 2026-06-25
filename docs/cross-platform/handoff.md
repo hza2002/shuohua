@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `docs: record windows ipc soak result`（以 `git log -1` 为准）。
+Latest phase commit: `feat: add platform profile routes`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `test: cover windows service lifecycle smoke` (`7d56787`).
+Previous phase commit: `feat: add windows audio diagnostics` (`8fcf1cb`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,23 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10ai Platform-specific profile routes 已完成：
+
+- `config.toml` 的 profile 路由从旧的 `[profile] agent = ["bundle.id"]` 改为
+  `[profile.routes.<profile>.<platform>]`，profile 文件、ASR provider config、post chain、prompt 和
+  hotwords 仍三端共享。
+- 新增 `AppIdentity` / `ProfileRoutes` / platform matcher config model：macOS 用 `bundle_id` 精确匹配；
+  Windows 预留 `app_user_model_id` 和 `exe_name`，大小写不敏感；Linux 预留 `desktop_id`、`wm_class`、
+  `process_name`。
+- 旧的顶层 profile route array 已明确拒绝；当前没有外部用户，未做兼容迁移逻辑。
+- daemon 入口改为通过当前平台 `AppIdentity::current_from_app_context(...)` 选择 profile。Windows/Linux
+  active app identity backend 还未实现，所以运行时会诚实落到 `profile.default`，不会虚假命中
+  Windows/Linux route。
+- starter config 模板已输出 `profile.routes.chat.*` 和 `profile.routes.agent.*`，并保守填入 macOS、
+  Windows、Linux matcher 样例。
+- 本机 `%APPDATA%\Shuohua\config.toml` 已手动迁移到新 `profile.routes` 结构；没有改 ASR/LLM key
+  文件。
+
 Phase 10ah Windows audio capture diagnostics 已完成：
 
 - 新增 `platform::audio_capture` 诊断 facade，集中 cpal default host/default input/input device
@@ -1495,7 +1512,10 @@ permission probe 或 active app runtime。
   - `cargo build --target x86_64-pc-windows-msvc` 通过。
 - Windows runtime smoke:
   - `shuo.exe --version` 通过。
-  - `shuo.exe doctor` 能运行并使用 `%APPDATA%\Shuohua`，但因本机配置/设备/权限返回 1。
+  - `shuo.exe doctor` 能运行并使用 `%APPDATA%\Shuohua`；Phase 10ai 后旧 profile route schema 错误
+    已消失，但因本机 Doubao/DeepSeek secret 仍为空、无默认输入设备和权限探针未实现，仍返回 1。
+  - 本机 `%APPDATA%\Shuohua\config.toml` 已迁移到 `[profile.routes.<profile>.<platform>]`；后续填
+    `asr/doubao.toml` 和 `post/llm/deepseek.toml` 的 key 不需要再改 route schema。
   - Phase 10ah doctor audio diagnostics 通过执行：本机无默认输入设备时仍打印
     `microphone.input: backend=cpal_wasapi ERROR no default input device` 和
     `microphone.input.devices: count=0`。
@@ -1504,6 +1524,10 @@ permission probe 或 active app runtime。
   - 无参数 `shuo.exe` smart fallback 在 daemon absent 时可启动当前 executable 的 `--daemon` 子进程，
     并等到 scoped Named Pipe ready。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。
+  - Phase 10ai 后单步 runtime smoke 通过：`service start` 启动 daemon，单独 `service status` 返回
+    `daemon: running ... state=Idle`，`service stop` exit 0 且无残留同路径 `shuo` 进程。不要用
+    PowerShell native redirection/复合命令等待 `service start` 拉起的 daemon 子进程树；必要时用现有
+    `scripts/windows-ipc-smoke.ps1` 或单步命令。
   - `shuo.exe service start` 可在 daemon absent 时启动当前 executable 的 `--daemon` 子进程；daemon
     已运行时重复 start 只报告 already-running，不创建第二个 daemon。
   - `shuo.exe service restart` 可先 IPC stop 当前 daemon，再启动新 daemon；本机 smoke 中 restart 前后
@@ -1528,10 +1552,15 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10ai 候选：Windows audio capture smoke。需要用户接入/选择默认麦克风，并在 Windows
-  Privacy & Security 中确认终端/可执行文件麦克风权限；没有默认 input device 时不要进入真实录音验收。
-- 如果暂时不做麦克风手动测试，可继续做不依赖手动桌面交互的诊断/guard 小步，但不要升级
-  `audio.capture`、IPC 或 daemon capability。
+- 用户可以先填 `%APPDATA%\Shuohua\asr\doubao.toml` 和
+  `%APPDATA%\Shuohua\post\llm\deepseek.toml` 的 key，然后重跑 `shuo.exe doctor`；不要把空 key 的
+  doctor error 当作代码回归。
+- Windows active app identity backend 尚未实现；Windows route matcher 只是配置模型，后续要单独设计
+  active-window lookup / process identity facade，并保持找不到 identity 时落回 `profile.default`。
+- Windows audio capture smoke 仍需要用户接入/选择默认麦克风，并在 Windows Privacy & Security 中确认
+  终端/可执行文件麦克风权限；没有默认 input device 时不要进入真实录音验收。
+- 如果暂时不做麦克风或 active app 手动测试，可继续做不依赖手动桌面交互的诊断/guard 小步，但不要升级
+  `audio.capture`、`desktop.active_app`、IPC 或 daemon capability。
 - cross-user 第二账号/VM 隔离已后移为 deferred manual gate，没有第二用户前不要升级 Windows
   IPC/daemon capability。
 - overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability 升级。

@@ -3,8 +3,9 @@
 mod main;
 
 pub(crate) use self::main::{
-    default_path, load_from, Config, OverlayPosition, ProfileRouteCfg, RecordAudioMode,
-    VoiceVadBackend, VoiceVadCfg,
+    default_path, load_from, AppIdentity, Config, LinuxProfileMatchers, MacosProfileMatchers,
+    OverlayPosition, ProfileRouteCfg, ProfileRouteMatchers, ProfileRoutes, RecordAudioMode,
+    VoiceVadBackend, VoiceVadCfg, WindowsProfileMatchers,
 };
 
 pub(crate) mod asr;

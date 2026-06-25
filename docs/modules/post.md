@@ -17,7 +17,32 @@
 
 ## Profile 路由
 
-toggle ON 时取一次 `frontmost_bundle_id`，按 `config.toml` 的 `[profile]` 表查包含该 bundle id 的 profile；没命中用 `default`。**命中多个 profile → 报配置错，不猜**。该 profile 决定本次 ASR provider、hotwords、provider 覆盖、post chain。toggle OFF 时只再取一次 AppContext 当 prompt 变量，**不重选 profile**（避免录音中切 App 导致配置中途变化）。
+toggle ON 时取一次前台 App context，按 `config.toml` 的 `[profile.routes.<profile>.<platform>]`
+匹配当前平台的 app identity；没命中用 `default`。**命中多个 profile → 报配置错，不猜**。
+该 profile 决定本次 ASR provider、hotwords、provider 覆盖、post chain。toggle OFF 时只再取一次
+AppContext 当 prompt 变量，**不重选 profile**（避免录音中切 App 导致配置中途变化）。
+
+配置里的 `profile/*.toml`、ASR/post 链和 prompt 三端共享；只有 route matcher 按平台分段：
+
+```toml
+[profile]
+default = "default"
+
+[profile.routes.agent.macos]
+bundle_id = ["com.microsoft.VSCode", "com.mitchellh.ghostty"]
+
+[profile.routes.agent.windows]
+app_user_model_id = ["Microsoft.VisualStudioCode"]
+exe_name = ["Code.exe"]
+
+[profile.routes.agent.linux]
+desktop_id = ["code.desktop"]
+wm_class = ["Code"]
+process_name = ["code"]
+```
+
+当前 macOS route 使用 `bundle_id`；Windows/Linux route schema 先落地，runtime 要等各自 active app
+identity backend 验证后才会命中。旧的 `[profile] agent = [...]` 顶层数组格式不再是有效配置。
 
 ## 内置 processors
 
@@ -36,4 +61,5 @@ toggle ON 时取一次 `frontmost_bundle_id`，按 `config.toml` 的 `[profile]`
 
 ## 不做的事
 
-不做内容审查（敏感词/政治/隐私都不做，只清洗不审查）；粒度到 bundle_id 为止，不做 per-URL/字段匹配；不允许 processor 整段拒绝输出（失败只能跳过，链路始终产出）。
+不做内容审查（敏感词/政治/隐私都不做，只清洗不审查）；route 粒度到平台 app identity 为止，
+不做 per-URL/字段匹配；不允许 processor 整段拒绝输出（失败只能跳过，链路始终产出）。

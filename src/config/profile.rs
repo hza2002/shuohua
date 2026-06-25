@@ -6,7 +6,7 @@ use toml::value::Table;
 
 use crate::config::schema::{self, SchemaId};
 use crate::config::spec::validate_value;
-use crate::config::ProfileRouteCfg;
+use crate::config::{AppIdentity, ProfileRouteCfg};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Profile {
@@ -49,9 +49,9 @@ pub fn default_dir() -> PathBuf {
 pub fn load_for_app(
     profile_dir: &Path,
     routes: &ProfileRouteCfg,
-    bundle_id: Option<&str>,
+    app: &AppIdentity<'_>,
 ) -> Result<Profile> {
-    let path = profile_path_for_routes(profile_dir, routes, bundle_id)?;
+    let path = profile_path_for_routes(profile_dir, routes, app)?;
     let body = std::fs::read_to_string(&path)
         .with_context(|| format!("read profile {}", path.display()))?;
     parse(&body).with_context(|| format!("parse profile {}", path.display()))
@@ -69,25 +69,18 @@ pub fn parse(body: &str) -> Result<Profile> {
 fn profile_path_for_routes(
     profile_dir: &Path,
     routes: &ProfileRouteCfg,
-    bundle_id: Option<&str>,
+    app: &AppIdentity<'_>,
 ) -> Result<PathBuf> {
-    let profile_name = resolve_profile_name(routes, bundle_id)?;
+    let profile_name = resolve_profile_name(routes, app)?;
     Ok(profile_dir.join(format!("{profile_name}.toml")))
 }
 
-fn resolve_profile_name(routes: &ProfileRouteCfg, bundle_id: Option<&str>) -> Result<String> {
-    let Some(bundle_id) = bundle_id else {
-        return Ok(routes.default.clone());
-    };
-    let matches = routes
-        .routes
-        .iter()
-        .filter_map(|(profile, apps)| apps.iter().any(|app| app == bundle_id).then_some(profile))
-        .collect::<Vec<_>>();
+fn resolve_profile_name(routes: &ProfileRouteCfg, app: &AppIdentity<'_>) -> Result<String> {
+    let matches = routes.matching_profiles(app);
     match matches.as_slice() {
         [] => Ok(routes.default.clone()),
-        [profile] => Ok((*profile).clone()),
-        _ => anyhow::bail!("bundle id {bundle_id:?} matches multiple profiles: {matches:?}"),
+        [profile] => Ok((*profile).to_string()),
+        _ => anyhow::bail!("app identity matches multiple profiles: {matches:?}"),
     }
 }
 
@@ -121,7 +114,12 @@ chain = ["rule:zh_filter", "llm:deepseek"]
         .unwrap();
 
         let routes = ProfileRouteCfg::default();
-        let profile = load_for_app(&dir, &routes, Some("com.example.Missing")).unwrap();
+        let profile = load_for_app(
+            &dir,
+            &routes,
+            &AppIdentity::macos(Some("com.example.Missing")),
+        )
+        .unwrap();
 
         assert_eq!(profile.name, "default");
         assert_eq!(profile.asr.provider, "doubao");
@@ -163,11 +161,18 @@ system_prompt = "app prompt"
 
         let routes = ProfileRouteCfg {
             default: "default".to_string(),
-            routes: [("agent".to_string(), vec!["com.example.App".to_string()])]
-                .into_iter()
-                .collect(),
+            routes: crate::config::ProfileRoutes::from_iter([(
+                "agent".to_string(),
+                crate::config::ProfileRouteMatchers {
+                    macos: crate::config::MacosProfileMatchers {
+                        bundle_id: vec!["com.example.App".to_string()],
+                    },
+                    ..Default::default()
+                },
+            )]),
         };
-        let profile = load_for_app(&dir, &routes, Some("com.example.App")).unwrap();
+        let profile =
+            load_for_app(&dir, &routes, &AppIdentity::macos(Some("com.example.App"))).unwrap();
 
         assert_eq!(profile.name, "agent");
         assert_eq!(profile.post.chain, vec!["llm:deepseek"]);
@@ -213,16 +218,29 @@ chain = []
         .unwrap();
         let routes = ProfileRouteCfg {
             default: "default".to_string(),
-            routes: [(
+            routes: crate::config::ProfileRoutes::from_iter([(
                 "agent".to_string(),
-                vec!["com.mitchellh.ghostty".to_string()],
-            )]
-            .into_iter()
-            .collect(),
+                crate::config::ProfileRouteMatchers {
+                    macos: crate::config::MacosProfileMatchers {
+                        bundle_id: vec!["com.mitchellh.ghostty".to_string()],
+                    },
+                    ..Default::default()
+                },
+            )]),
         };
 
-        let agent = load_for_app(&dir, &routes, Some("com.mitchellh.ghostty")).unwrap();
-        let default = load_for_app(&dir, &routes, Some("com.example.Other")).unwrap();
+        let agent = load_for_app(
+            &dir,
+            &routes,
+            &AppIdentity::macos(Some("com.mitchellh.ghostty")),
+        )
+        .unwrap();
+        let default = load_for_app(
+            &dir,
+            &routes,
+            &AppIdentity::macos(Some("com.example.Other")),
+        )
+        .unwrap();
 
         assert_eq!(agent.name, "agent");
         assert_eq!(agent.asr.provider, "apple");
@@ -236,23 +254,35 @@ chain = []
         let dir = temp_dir();
         let routes = ProfileRouteCfg {
             default: "default".to_string(),
-            routes: [
+            routes: crate::config::ProfileRoutes::from_iter([
                 (
                     "agent".to_string(),
-                    vec!["com.mitchellh.ghostty".to_string()],
+                    crate::config::ProfileRouteMatchers {
+                        macos: crate::config::MacosProfileMatchers {
+                            bundle_id: vec!["com.mitchellh.ghostty".to_string()],
+                        },
+                        ..Default::default()
+                    },
                 ),
                 (
                     "coding".to_string(),
-                    vec!["com.mitchellh.ghostty".to_string()],
+                    crate::config::ProfileRouteMatchers {
+                        macos: crate::config::MacosProfileMatchers {
+                            bundle_id: vec!["com.mitchellh.ghostty".to_string()],
+                        },
+                        ..Default::default()
+                    },
                 ),
-            ]
-            .into_iter()
-            .collect(),
+            ]),
         };
 
-        let err = load_for_app(&dir, &routes, Some("com.mitchellh.ghostty"))
-            .unwrap_err()
-            .to_string();
+        let err = load_for_app(
+            &dir,
+            &routes,
+            &AppIdentity::macos(Some("com.mitchellh.ghostty")),
+        )
+        .unwrap_err()
+        .to_string();
 
         assert!(err.contains("matches multiple profiles"));
         let _ = fs::remove_dir_all(dir);

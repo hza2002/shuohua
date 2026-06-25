@@ -22,6 +22,29 @@ product config root；package/app 私有目录只能保存 GUI/runtime 私有状
 
 不把平台视觉实现细节放进主配置。
 
+Profile 内容三端共享，route matcher 按平台分段。`profile.routes` 使用 profile 名作为动态 key，
+每个 profile 下只读取当前平台段；同一 app identity 命中多个 profile 是配置错误：
+
+```toml
+[profile]
+default = "default"
+
+[profile.routes.agent.macos]
+bundle_id = ["com.microsoft.VSCode"]
+
+[profile.routes.agent.windows]
+app_user_model_id = ["Microsoft.VisualStudioCode"]
+exe_name = ["Code.exe"]
+
+[profile.routes.agent.linux]
+desktop_id = ["code.desktop"]
+wm_class = ["Code"]
+process_name = ["code"]
+```
+
+不要把不同平台的应用 ID 混在同一个数组里。Windows/Linux backend 未能提供 active app identity 前，
+这些平台会自然落到 `profile.default`。
+
 `[dev]` 属于本机调试开关，不是跨平台同步契约。schema 继续接受这类字段以保持兼容，
 但 starter config 不默认输出实验字段；需要时由开发者手动加入。
 

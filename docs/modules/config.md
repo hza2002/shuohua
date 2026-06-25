@@ -30,7 +30,7 @@
 | `[hotkey].trigger` | 立即（下次按键） | `spawn_hotkey` → mpsc<Combo> → 主循环换 Tracker+Suppressor |
 | `[ui].theme*` / `theme/*.toml` | 立即 | spawn_overlay / TUI reload 重载 effective theme |
 | `[voice].*` 全部 | 下次起 session | 主循环 `cfg_rx.borrow()` 取快照 |
-| `[profile]` 路由 / `profile/*.toml` / `post/**` | 下次起 session | toggle ON 时选 Profile |
+| `profile.routes` / `profile/*.toml` / `post/**` | 下次起 session | toggle ON 时选 Profile |
 | 手动 `{"op":"reload_config"}` | 立即 | 走 UDS server，复用同一 parse+broadcast 入口 |
 
 ## Hotkey trigger 热替换

@@ -73,6 +73,8 @@ fn description_key(name: &str) -> &'static str {
         "post" => "config.field.post.description",
         "post.timeout_ms" => "config.field.post.timeout_ms.description",
         "profile" => "config.field.profile.description",
+        "profile.default" => "config.field.profile.default.description",
+        "profile.routes" => "config.field.profile.routes.description",
         "ui" => "config.field.ui.description",
         "ui.language" => "config.field.ui.language.description",
         "ui.theme" => "config.field.ui.theme.description",
@@ -215,7 +217,13 @@ pub fn main_spec() -> ConfigSpec {
                 .optional()
                 .range(100.0, 60_000.0),
         )
-        .field(field(FieldSpec::table, "profile").optional().free_table())
+        .field(field(FieldSpec::table, "profile").optional())
+        .field(field(FieldSpec::string, "profile.default").optional())
+        .field(
+            field(FieldSpec::table, "profile.routes")
+                .optional()
+                .free_table(),
+        )
         .field(field(FieldSpec::table, "ui").optional())
         .field(field(FieldSpec::string, "ui.language").optional())
         .field(field(FieldSpec::string, "ui.theme").optional())

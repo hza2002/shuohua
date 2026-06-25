@@ -1383,7 +1383,11 @@ permission probe 或 active app runtime。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。
   - `shuo.exe --daemon` + scoped Named Pipe `DaemonStatus` 通过。
   - 第二个 `shuo.exe --daemon` 明确失败，单实例 guard 生效。
-  - Explorer direct open/reveal 不挂起，但工具会话返回 1，窗口行为未人工确认。
+  - same-user medium/elevated 和 elevated/medium 交叉矩阵通过，修复后不再拆成两个 daemon runtime。
+  - `scripts/windows-ipc-smoke.ps1 -StopExisting` 在 elevated session 通过：20/20 busy clients exit 0，
+    helper 输出 `failures: []`。
+  - Explorer direct open/reveal 工具会话仍返回 1，但用户目视确认窗口打开/reveal 生效；不要只看
+    `explorer.exe` exit code。
 - 未在本 Windows session 跑 `make check-windows` / `make check-linux-cross`；本阶段验证重点是
   Windows native build/test/runtime smoke。
 
@@ -1410,15 +1414,17 @@ Windows-first 实现基线。Phase 10m1 App Data Ownership Baseline 已完成；
 `docs/cross-platform/app-data.md` 规定 CLI/daemon/GUI/packaged app 共享 product data root，
 package/app-private data 只放 GUI/runtime 私有状态。Phase 10n Windows runtime validation checklist、
 Phase 10o Windows path/config/state backend、Phase 10p Windows local development setup 已完成。
-下一步是 Phase 10q Windows Named Pipe endpoint scoping/security descriptor 和 runtime smoke。
+下一步是 Phase 10z Windows IPC/lifecycle hardening；cross-user 第二账号/VM 隔离验证已后移为
+deferred manual gate。
 Phase 7b/8b overlay backend skeleton、Phase 3b IPC transport cfg boundary、Phase 10a
 cross-check baseline、Phase 10b TUI capability diagnostics、Phase 10c Docker/cross Linux
 check baseline、Phase 10d Linux compile-time capability sync、Phase 3c Windows Named Pipe
 transport compile backend、Windows IPC capability sync、Phase 10i audio convert facade、
 Phase 10j Windows lifecycle primitive compile backend、Phase 10k Windows service dry-run/status
-skeleton 和 Phase 10l non-macOS desktop capability truthfulness 已完成。先查看最新
+skeleton、Phase 10l non-macOS desktop capability truthfulness、Phase 10w elevation split 修复和
+Phase 10y Windows IPC same-user smoke helper 已完成。先查看最新
 diff/commit 和验证结果。
 保持 macOS 不回退，不引入 GUI/WebView。不要把 Windows Named Pipe compile backend 当成实机
 runtime 验收。不要添加 GitHub Actions Windows artifact job；Windows 机器作为本地开发/build/runtime
-测试环境，通过 GitHub 同步代码。真实 Windows IPC/audio/overlay/hotkey/clipboard 验证需要用户目标系统。
+测试环境，通过 GitHub 同步代码。cross-user、audio、overlay、hotkey、clipboard 验证需要用户目标系统。
 ```

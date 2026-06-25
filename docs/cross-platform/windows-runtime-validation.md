@@ -123,6 +123,8 @@ Same-user non-elevated or elevated smoke can be run with the repository helper:
 Expected:
 
 - The helper prints JSON with `failures: []`.
+- It starts the daemon through `service start`, verifies repeated start is idempotent, verifies
+  `service restart`, then stops through `service stop`.
 - `busy_exit_0` equals `busy_total`.
 - The daemon remains running until the helper stops it during cleanup.
 

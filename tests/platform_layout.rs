@@ -3519,6 +3519,7 @@ fn windows_runtime_validation_checklist_stays_bottom_up() {
         "$env:APPDATA\\Shuohua",
         "$env:LOCALAPPDATA\\Shuohua",
         ".\\scripts\\windows-ipc-smoke.ps1 -StopExisting",
+        "verifies repeated start is idempotent",
         "This is a deferred manual gate",
         "access/scope/security",
     ] {

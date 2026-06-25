@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `fix: narrow windows named pipe client access`（以 `git log -1` 为准）。
+Latest phase commit: `test: cover windows service lifecycle smoke`（以 `git log -1` 为准）。
 
-Previous phase commit: `fix: support windows service start over ipc` (`44bd8ee`).
+Previous phase commit: `fix: narrow windows named pipe client access` (`80d0c7c`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,20 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10ag Windows service lifecycle smoke helper 已完成：
+
+- `scripts/windows-ipc-smoke.ps1` 不再直接用 `Start-Process --daemon` 启动 daemon；现在通过
+  `shuo service start` 覆盖真实 CLI lifecycle 入口。
+- helper 现在验证重复 `service start` 的 idempotency（PID 不变）、`service restart` 后 daemon 仍
+  running 且 PID 变化、第二个 `--daemon` 仍失败、20 并发 `service status` busy smoke、`service stop`
+  后无残留 daemon。
+- PowerShell native command redirection / `Start-Process -Wait` 在 daemon 子进程存在时会等待过久；
+  helper 改为 `Start-Process -PassThru` + `.WaitForExit(timeout)`，避免把 daemon 子进程树当作 client
+  命令的一部分等待。
+- 本机 elevated helper 输出通过：`service_start_exit=0`、`service_start_again_exit=0`、
+  `service_restart_exit=0`、`after_start_again_pid == daemon_pid`、`after_restart_pid != daemon_pid`、
+  `busy_exit_0=20`、`service_stop_exit=0`、`failures=[]`。
+
 Phase 10af Windows raw Named Pipe client access mask 已完成：
 
 - Windows IPC client connect 不再使用 Tokio `ClientOptions::new().open(...)` 的
@@ -1478,8 +1492,10 @@ permission probe 或 active app runtime。
   - same-user medium/elevated 和 elevated/medium 交叉矩阵通过，修复后不再拆成两个 daemon runtime。
   - Windows IPC client 已切到 raw `CreateFileW` explicit access mask；
     `ipc::transport::imp::tests::client_open_uses_narrow_explicit_access_mask` 通过。
-  - `scripts/windows-ipc-smoke.ps1 -StopExisting` 在 elevated session 通过：20/20 busy clients exit 0，
-    `service_stop_exit=0`，`after_stop_status_exit=0`，helper 输出 `failures: []`。
+  - `scripts/windows-ipc-smoke.ps1 -StopExisting` 在 elevated session 通过，并覆盖 service
+    start/idempotent start/restart/status/busy/stop：20/20 busy clients exit 0，
+    `service_restart_exit=0`，`service_stop_exit=0`，`after_stop_status_exit=0`，helper 输出
+    `failures: []`。
   - Explorer direct open/reveal 工具会话仍返回 1，但用户目视确认窗口打开/reveal 生效；不要只看
     `explorer.exe` exit code。
 - 未在本 Windows session 跑 `make check-windows` / `make check-linux-cross`；本阶段验证重点是
@@ -1487,10 +1503,10 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10ag：继续做不需要第二用户的 Windows IPC/lifecycle 小步 hardening；cross-user 第二账号/VM
+- Phase 10ah：继续做不需要第二用户的 Windows IPC/lifecycle 小步 hardening；cross-user 第二账号/VM
   隔离验证已后移为 deferred manual gate，没有第二用户前不要升级 Windows IPC/daemon capability。
-- 后续代码小步可选：在不改变 capability 结论的前提下，把 start/restart/busy/elevation smoke 脚本沉淀
-  为开发者手动命令，或增加更长时间 same-user IPC soak。
+- 后续代码小步可选：在不改变 capability 结论的前提下，增加更长时间 same-user IPC soak 或更清晰的
+  Windows developer smoke 命令入口。
 - audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability
   升级。
 - 不继续 GUI 产品化开发。

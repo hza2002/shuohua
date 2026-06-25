@@ -1,3 +1,4 @@
+pub(crate) mod audio_capture;
 pub(crate) mod audio_convert;
 pub(crate) mod autotype;
 pub(crate) mod capability;

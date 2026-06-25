@@ -33,30 +33,8 @@ pub(crate) enum FinishMode {
     Discard,
 }
 
-#[derive(Debug, Clone)]
-pub struct InputDeviceInfo {
-    pub name: Option<String>,
-    pub sample_rate: u32,
-    pub channels: u16,
-    pub sample_format: SampleFormat,
-}
-
-pub fn probe_default_input() -> Result<InputDeviceInfo> {
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| anyhow!("no default input device"))?;
-    let name = Some(device.to_string());
-    let supported = device
-        .default_input_config()
-        .context("query default input config")?;
-    validate_supported_config(&supported)?;
-    Ok(InputDeviceInfo {
-        name,
-        sample_rate: supported.sample_rate(),
-        channels: supported.channels(),
-        sample_format: supported.sample_format(),
-    })
+pub(crate) fn probe_default_input() -> Result<crate::platform::audio_capture::InputDeviceInfo> {
+    crate::platform::audio_capture::probe_default_input()
 }
 
 impl RecordingStream {

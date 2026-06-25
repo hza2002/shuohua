@@ -812,6 +812,17 @@ Phase 10r Windows Desktop Runtime Sequence:
   and stop for user Windows runtime validation before capability promotion.
 - GUI product work remains frozen during these subphases.
 
+Phase 10ah Windows Audio Capture Diagnostics:
+
+- Add a `platform::audio_capture` diagnostic facade over `cpal` before attempting full recording.
+- `shuo doctor` may print the selected backend, default input device summary, and input device count. This is
+  safe to run in the normal Windows build/test loop because it does not start a recording stream, write retained
+  audio, call ASR, or trigger paste/overlay/hotkey behavior.
+- Windows `audio.capture` may move from unsupported to `partial/cpal_wasapi/diagnostic_probe_only`, but this
+  only means device enumeration/default config diagnostics exist.
+- Do not promote beyond `partial` until a user manually validates microphone permission behavior, actual
+  recording, sample format conversion, silence/noise floor, and sustained capture on Windows.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

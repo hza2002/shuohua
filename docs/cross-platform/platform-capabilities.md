@@ -239,6 +239,16 @@ static capability snapshot:
 Phase 10l 只修正诊断 truthfulness，不实现 Linux/Windows hotkey、clipboard、text injection、
 active app 或 permission runtime。
 
+## Phase 10ah Windows Audio Capture Diagnostics
+
+Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：
+
+- `audio.capture`：`partial`，backend `cpal_wasapi`，reason `diagnostic_probe_only`。
+- `shuo doctor` 可以打印默认输入设备 config 和 input device count。
+- 该探针不启动录音流、不写 retained audio、不触发 ASR、overlay、hotkey、clipboard 或 paste。
+- 在用户完成真实麦克风录音、权限/隐私设置、采样格式转换、静音/噪声底和持续采集测试前，
+  Windows `audio.capture` 不能升级到 `degraded` 或 `available`。
+
 ## 设计约束
 
 - capability probe 不执行高风险动作。

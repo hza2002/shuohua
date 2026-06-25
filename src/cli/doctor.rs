@@ -217,14 +217,41 @@ fn check_config() -> CheckStatus {
 }
 
 fn check_microphone_input() -> CheckStatus {
-    match crate::voice::recorder::probe_default_input() {
-        Ok(info) => {
-            let name = info.name.unwrap_or_else(|| "<unknown>".to_string());
-            println!(
-                "microphone.input: OK {name} ({}Hz, {}ch, {:?})",
-                info.sample_rate, info.channels, info.sample_format
-            );
-            CheckStatus::Ok
+    match crate::platform::audio_capture::diagnose_input() {
+        Ok(diagnostics) => {
+            let status = match diagnostics.default_input {
+                Some(info) => {
+                    let name = info.name.unwrap_or_else(|| "<unknown>".to_string());
+                    println!(
+                        "microphone.input: backend={} OK {name} ({}Hz, {}ch, {:?})",
+                        diagnostics.backend, info.sample_rate, info.channels, info.sample_format
+                    );
+                    CheckStatus::Ok
+                }
+                None => {
+                    let error = diagnostics
+                        .default_input_error
+                        .as_deref()
+                        .unwrap_or("default input unavailable");
+                    println!(
+                        "microphone.input: backend={} ERROR {error}",
+                        diagnostics.backend
+                    );
+                    println!("hint: {}", tr("cli.doctor.hint_microphone_input", &[]));
+                    CheckStatus::Error
+                }
+            };
+            match (
+                diagnostics.input_device_count,
+                diagnostics.device_count_error.as_deref(),
+            ) {
+                (Some(count), _) => println!("microphone.input.devices: count={count}"),
+                (None, Some(error)) => {
+                    println!("microphone.input.devices: unknown error={error}")
+                }
+                (None, None) => println!("microphone.input.devices: unknown"),
+            }
+            status
         }
         Err(e) => {
             println!("microphone.input: ERROR {e:#}");

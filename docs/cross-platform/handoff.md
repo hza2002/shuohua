@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `test: cover windows service lifecycle smoke`（以 `git log -1` 为准）。
+Latest phase commit: `docs: record windows ipc soak result`（以 `git log -1` 为准）。
 
-Previous phase commit: `fix: narrow windows named pipe client access` (`80d0c7c`).
+Previous phase commit: `test: cover windows service lifecycle smoke` (`7d56787`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,21 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10ah Windows audio capture diagnostics 已完成：
+
+- 新增 `platform::audio_capture` 诊断 facade，集中 cpal default host/default input/input device
+  enumeration；`voice::recorder::probe_default_input()` 现在转发到该 facade，录音启动路径的 stream
+  行为不变。
+- `shuo doctor` 现在打印 `microphone.input: backend=...`，并尽量打印
+  `microphone.input.devices: count=...`。即使本机没有 default input device，也会报告 Windows backend
+  和 input device count，便于后续手动麦克风验证前定位设备枚举状态。
+- Windows `audio.capture` capability 从 generic unsupported 调整为
+  `partial/cpal_wasapi/diagnostic_probe_only`；这只表示诊断探针存在，不代表真实录音、权限弹窗、
+  sample conversion、silence/noise floor、retained audio 或持续采集已验证。
+- 本机 Windows `doctor` 结果：`microphone.input: backend=cpal_wasapi ERROR no default input device`，
+  `microphone.input.devices: count=0`，并且 capability summary 包含
+  `audio.capture=partial backend=cpal_wasapi reason=diagnostic_probe_only`。
+
 Phase 10ag Windows service lifecycle smoke helper 已完成：
 
 - `scripts/windows-ipc-smoke.ps1` 不再直接用 `Start-Process --daemon` 启动 daemon；现在通过
@@ -1481,6 +1496,11 @@ permission probe 或 active app runtime。
 - Windows runtime smoke:
   - `shuo.exe --version` 通过。
   - `shuo.exe doctor` 能运行并使用 `%APPDATA%\Shuohua`，但因本机配置/设备/权限返回 1。
+  - Phase 10ah doctor audio diagnostics 通过执行：本机无默认输入设备时仍打印
+    `microphone.input: backend=cpal_wasapi ERROR no default input device` 和
+    `microphone.input.devices: count=0`。
+  - Windows capability summary 现在包含
+    `audio.capture=partial backend=cpal_wasapi reason=diagnostic_probe_only`；这仍不是录音可用声明。
   - 无参数 `shuo.exe` smart fallback 在 daemon absent 时可启动当前 executable 的 `--daemon` 子进程，
     并等到 scoped Named Pipe ready。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。
@@ -1508,12 +1528,13 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10ah：继续做不需要第二用户的 Windows IPC/lifecycle 小步 hardening；cross-user 第二账号/VM
-  隔离验证已后移为 deferred manual gate，没有第二用户前不要升级 Windows IPC/daemon capability。
-- 后续代码小步可选：在不改变 capability 结论的前提下，增加更长时间 same-user IPC soak 或更清晰的
-  Windows developer smoke 命令入口。
-- audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability
-  升级。
+- Phase 10ai 候选：Windows audio capture smoke。需要用户接入/选择默认麦克风，并在 Windows
+  Privacy & Security 中确认终端/可执行文件麦克风权限；没有默认 input device 时不要进入真实录音验收。
+- 如果暂时不做麦克风手动测试，可继续做不依赖手动桌面交互的诊断/guard 小步，但不要升级
+  `audio.capture`、IPC 或 daemon capability。
+- cross-user 第二账号/VM 隔离已后移为 deferred manual gate，没有第二用户前不要升级 Windows
+  IPC/daemon capability。
+- overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability 升级。
 - 不继续 GUI 产品化开发。
 
 建议下一 session prompt：

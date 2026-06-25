@@ -326,6 +326,17 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
             next_step: Some("Validate Windows user service install/startup registration strategy"),
         },
         CapabilityStatus {
+            id: CapabilityId::AudioCapture,
+            platform: PlatformKind::Windows,
+            backend: "cpal_wasapi",
+            status: CapabilityStatusKind::Partial,
+            summary: "cpal/WASAPI input diagnostics can report the default device but recording is not runtime-verified",
+            reason: "diagnostic_probe_only",
+            next_step: Some(
+                "Validate microphone permission behavior and sustained recording on Windows",
+            ),
+        },
+        CapabilityStatus {
             id: CapabilityId::PathOpenReveal,
             platform: PlatformKind::Windows,
             backend: "explorer",

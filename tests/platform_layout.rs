@@ -241,6 +241,88 @@ fn audio_conversion_lives_behind_platform_facade() {
 }
 
 #[test]
+fn audio_capture_diagnostics_live_behind_platform_facade() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let audio_capture_path = root.join("src/platform/audio_capture.rs");
+    assert!(
+        audio_capture_path.exists(),
+        "Phase 10ah audio capture diagnostics facade should live at src/platform/audio_capture.rs"
+    );
+
+    let platform_mod = std::fs::read_to_string(root.join("src/platform/mod.rs")).unwrap();
+    assert!(
+        platform_mod.contains("pub(crate) mod audio_capture;"),
+        "src/platform/mod.rs must expose the audio capture diagnostics facade"
+    );
+
+    let facade = std::fs::read_to_string(audio_capture_path).unwrap();
+    for token in [
+        "pub(crate) struct InputDeviceInfo",
+        "pub(crate) struct InputDiagnostics",
+        "pub(crate) fn probe_default_input(",
+        "pub(crate) fn diagnose_input(",
+        "cpal::default_host()",
+        ".input_devices()",
+        "default_input_device",
+        "diagnostic_probe_only",
+    ] {
+        assert!(
+            facade.contains(token),
+            "platform audio capture facade should contain token `{token}`"
+        );
+    }
+
+    let recorder = std::fs::read_to_string(root.join("src/voice/recorder.rs")).unwrap();
+    assert!(
+        recorder.contains("crate::platform::audio_capture::probe_default_input()"),
+        "voice recorder default input probe should route through platform::audio_capture"
+    );
+
+    let doctor = std::fs::read_to_string(root.join("src/cli/doctor.rs")).unwrap();
+    for token in [
+        "crate::platform::audio_capture::diagnose_input()",
+        "microphone.input.devices:",
+        "microphone.input: backend=",
+    ] {
+        assert!(
+            doctor.contains(token),
+            "doctor should expose audio capture diagnostics token `{token}`"
+        );
+    }
+}
+
+#[test]
+fn windows_audio_capture_capability_reports_diagnostic_probe_only() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+
+    for token in [
+        "CapabilityId::AudioCapture",
+        "cpal_wasapi",
+        "diagnostic_probe_only",
+        "Validate microphone permission behavior and sustained recording on Windows",
+    ] {
+        assert!(
+            capability.contains(token),
+            "Windows audio.capture capability should report diagnostic-only token `{token}`"
+        );
+    }
+
+    let platform_doc =
+        std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
+    for token in [
+        "Phase 10ah Windows Audio Capture Diagnostics",
+        "`partial`，backend `cpal_wasapi`，reason `diagnostic_probe_only`",
+        "不启动录音流",
+    ] {
+        assert!(
+            platform_doc.contains(token),
+            "platform capability docs should record audio diagnostic token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn shared_macos_adapters_live_under_platform_module() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for file in [

@@ -229,6 +229,10 @@ First implementation route:
 - Treat Windows audio capability as `partial/runtime_not_verified` until microphone device enumeration,
   permission behavior, sample format conversion, silence/noise floor, and sustained recording are tested.
 - If `cpal` is insufficient, evaluate a Windows-specific WASAPI backend behind `platform::audio`.
+- Phase 10ah adds only `platform::audio_capture` diagnostics: `shuo doctor` can report cpal/WASAPI default
+  input device config and input device count without starting a recording stream. This is
+  `diagnostic_probe_only`, not evidence that recording, permission prompts, silence detection, or retained
+  audio work on Windows.
 
 Runtime validation must cover:
 

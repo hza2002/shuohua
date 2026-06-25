@@ -1177,6 +1177,7 @@ fn windows_overlay_records_per_pixel_layered_surface() {
         "AC_SRC_ALPHA",
         "D2D1_ALPHA_MODE_PREMULTIPLIED",
         "SourceConstantAlpha: 255",
+        "None,\n                Some(&size)",
     ] {
         assert!(
             direct2d.contains(token),

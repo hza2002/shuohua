@@ -4,7 +4,7 @@ use std::os::windows::ffi::OsStrExt;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U,
+    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1RenderTarget,
@@ -352,7 +352,6 @@ impl LayeredSurface {
     }
 
     fn update_window(&self, hwnd: HWND) -> Result<()> {
-        let dst = POINT { x: 0, y: 0 };
         let size = SIZE {
             cx: self.width,
             cy: self.height,
@@ -368,7 +367,7 @@ impl LayeredSurface {
             UpdateLayeredWindow(
                 hwnd,
                 Some(self.screen_dc),
-                Some(&dst),
+                None,
                 Some(&size),
                 Some(self.memory_dc),
                 Some(&src),

@@ -22,6 +22,8 @@ Phase 10as Windows per-pixel layered surface 已完成：
 
 - 用户目视确认 Phase 10ar Direct2D 后“稍微好一点，但仍不够清晰”；根因判断为 Direct2D path 仍使用
   `SetLayeredWindowAttributes` 全窗 alpha，导致背景和文字一起半透明。
+- Phase 10as follow-up 修复 `UpdateLayeredWindow` 目标点回归：per-pixel surface 更新时 `pptDst` 传
+  `NULL`，保留 `SetWindowPos` 已设置的默认底部居中位置，不再把 overlay 移到屏幕左上角。
 - Windows Direct2D renderer 改为 top-down 32bpp DIB + `ID2D1DCRenderTarget` /
   `CreateDCRenderTarget` + `BindDC`，再用 `UpdateLayeredWindow` / `AC_SRC_ALPHA` 发布。
 - `UpdateLayeredWindow` 使用 `SourceConstantAlpha: 255`：背景像素使用

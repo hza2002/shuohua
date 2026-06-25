@@ -920,6 +920,22 @@ Phase 10aq Windows Overlay Rounded GDI Baseline:
 - Capability remains partial/degraded until user-visible QA covers real foreground apps, multi-monitor,
   fullscreen/UAC, and final material/text quality.
 
+Phase 10ar Windows Direct2D/DirectWrite Renderer Foundation:
+
+- Move Windows overlay text and rounded-surface drawing from GDI to Direct2D + DirectWrite while keeping the
+  existing Win32 popup/no-activate/topmost/click-through window shell.
+- Keep Direct2D/DirectWrite isolated in a Windows-only renderer module. Do not expose COM/D2D/DWrite types to
+  shared overlay model/layout code or daemon business layers.
+- Use the `windows` crate typed COM bindings for Direct2D/DirectWrite; keep `windows-sys` for existing lightweight
+  Win32/lifecycle/IPC backends.
+- First implementation uses `ID2D1HwndRenderTarget` and DirectWrite text formats. Do not introduce
+  DirectComposition, D3D/DXGI device chains, `UpdateLayeredWindow` per-pixel surfaces, Acrylic/Mica, shadows, or
+  animation until the text-quality foundation is stable.
+- Keep GDI fallback available if Direct2D/DirectWrite initialization or painting fails, so overlay remains usable on
+  machines with graphics stack issues.
+- Capability remains partial/degraded until user-visible QA confirms text clarity, real foreground app behavior,
+  fullscreen/UAC, multi-monitor behavior, and material/shadow decisions.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

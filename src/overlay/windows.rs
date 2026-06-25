@@ -30,13 +30,15 @@ use crate::platform::capability::{
     CapabilityId, CapabilityStatus, CapabilityStatusKind, PlatformKind,
 };
 
+mod direct2d;
+
 const CLASS_NAME: &str = "ShuohuaOverlayWindow";
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const DEFAULT_DPI: f64 = 96.0;
 
 #[derive(Clone, Copy)]
-struct WindowMetrics {
-    dpi: u32,
+pub(super) struct WindowMetrics {
+    pub(super) dpi: u32,
     scale: f64,
     work_area: RECT,
 }
@@ -64,6 +66,21 @@ impl WindowMetrics {
             bottom: self.px(bottom),
         }
     }
+
+    fn rect_f(
+        self,
+        left: f64,
+        top: f64,
+        right: f64,
+        bottom: f64,
+    ) -> windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F {
+        windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F {
+            left: self.px(left) as f32,
+            top: self.px(top) as f32,
+            right: self.px(right) as f32,
+            bottom: self.px(bottom) as f32,
+        }
+    }
 }
 
 pub(super) fn renderer_capabilities() -> &'static [CapabilityStatus] {
@@ -84,6 +101,7 @@ struct WindowsOverlay {
     model: OverlayModel,
     visible: bool,
     quit: bool,
+    direct2d: Option<direct2d::Direct2dRenderer>,
 }
 
 impl WindowsOverlay {
@@ -99,10 +117,21 @@ impl WindowsOverlay {
             cfg,
             visible: false,
             quit: false,
+            direct2d: None,
         });
         let raw = overlay.as_mut() as *mut Self;
         let hwnd = create_overlay_window(raw)?;
         overlay.hwnd = hwnd;
+        overlay.direct2d = match direct2d::Direct2dRenderer::new(hwnd) {
+            Ok(renderer) => Some(renderer),
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "Direct2D overlay renderer unavailable; falling back to GDI"
+                );
+                None
+            }
+        };
         Ok(overlay)
     }
 
@@ -227,7 +256,17 @@ impl WindowsOverlay {
         }
     }
 
-    unsafe fn paint(&self, hdc: HDC) {
+    unsafe fn paint(&mut self, hdc: HDC) {
+        if let Some(renderer) = &mut self.direct2d {
+            let metrics = WindowMetrics::for_window(self.hwnd);
+            match renderer.paint(&self.model, &self.cfg, metrics) {
+                Ok(()) => return,
+                Err(error) => {
+                    tracing::warn!(?error, "Direct2D overlay paint failed; falling back to GDI");
+                }
+            }
+        }
+
         let metrics = WindowMetrics::for_window(self.hwnd);
         let rect = RECT {
             left: 0,
@@ -342,7 +381,7 @@ unsafe extern "system" fn wnd_proc(
             let hdc = BeginPaint(hwnd, &mut ps);
             let ptr =
                 windows_sys::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA)
-                    as *const WindowsOverlay;
+                    as *mut WindowsOverlay;
             if !ptr.is_null() {
                 (*ptr).paint(hdc);
             }
@@ -477,7 +516,10 @@ fn work_area_rect() -> RECT {
     }
 }
 
-fn overlay_height(model: &OverlayModel, cfg: &crate::config::theme::EffectiveOverlayCfg) -> f64 {
+pub(super) fn overlay_height(
+    model: &OverlayModel,
+    cfg: &crate::config::theme::EffectiveOverlayCfg,
+) -> f64 {
     let (_, lines) = L::display_text_plan(
         &model.display_text(),
         cfg.core.max_text_lines,
@@ -523,7 +565,7 @@ fn to_colorref(rgb: u32) -> COLORREF {
     (b << 16) | g | r
 }
 
-fn wide_null(text: &str) -> Vec<u16> {
+pub(super) fn wide_null(text: &str) -> Vec<u16> {
     OsStr::new(text).encode_wide().chain([0]).collect()
 }
 

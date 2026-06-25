@@ -161,6 +161,23 @@ This is still not the final text/material renderer. If Windows text remains visi
 quality step should be a DirectWrite/Direct2D renderer foundation, not more GDI tuning. Shadow, Acrylic/Mica,
 animation, focused-window anchoring, fullscreen/UAC behavior, and multi-monitor visual QA remain open.
 
+### Windows Phase 10ar Direct2D/DirectWrite Foundation
+
+Phase 10ar moves the renderer-quality foundation to the modern Windows 2D stack:
+
+- The Win32 overlay window shell remains unchanged: popup, layered, topmost, tool window, no-activate, and
+  hit-test passthrough stay owned by `src/overlay/windows.rs`.
+- Direct2D/DirectWrite live in a Windows-only renderer module and do not leak into shared overlay model/layout,
+  daemon runtime, IPC, hotkey, audio, clipboard, or paste code.
+- The first renderer uses `ID2D1HwndRenderTarget` plus DirectWrite `IDWriteTextFormat` for text. This follows the
+  stable desktop Direct2D/DirectWrite path and avoids adding DirectComposition/D3D/DXGI device ownership before it
+  is needed.
+- Existing GDI drawing stays as a fallback when Direct2D/DirectWrite initialization or painting fails.
+
+This phase is a text and rounded-surface foundation, not a full material system. `UpdateLayeredWindow` per-pixel
+surfaces, DirectComposition, Acrylic/Mica, shadows, animation, and capture-exclusion policy remain separate phases.
+Manual visual QA is still required before upgrading capabilities.
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。

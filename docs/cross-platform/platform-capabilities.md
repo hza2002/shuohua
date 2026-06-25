@@ -338,6 +338,20 @@ Phase 10aq narrows the visual gap but does not change Windows overlay capability
   DirectWrite/Direct2D or equivalent text quality, material/shadow, focused anchoring, fullscreen/UAC, and
   multi-monitor visual QA are complete.
 
+## Phase 10ar Windows Direct2D/DirectWrite Renderer Foundation
+
+Phase 10ar changes the renderer implementation but does not upgrade capability levels yet:
+
+- Windows overlay text and rounded-surface drawing now have a Direct2D/DirectWrite path isolated under the Windows
+  overlay backend.
+- The existing Win32 window shell still owns topmost/no-activate/tool-window/layered/click-through behavior.
+- GDI remains a fallback if Direct2D/DirectWrite initialization or painting fails.
+- This phase deliberately avoids DirectComposition, `UpdateLayeredWindow` per-pixel surfaces, Acrylic/Mica,
+  shadows, and animation until the text renderer foundation is stable.
+- `overlay.renderer` remains `partial`; `overlay.material` and `overlay.window_anchor` remain `degraded` until
+  user-visible text QA, real foreground apps, fullscreen/UAC, multi-monitor behavior, and material/shadow decisions
+  are complete.
+
 ## Phase 10ah Windows Audio Capture Diagnostics
 
 Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：

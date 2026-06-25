@@ -3294,6 +3294,7 @@ dependencies = [
  "unicode-segmentation",
  "uuid",
  "voice_activity_detector",
+ "windows",
  "windows-sys 0.61.2",
 ]
 

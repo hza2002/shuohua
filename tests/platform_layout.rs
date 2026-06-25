@@ -960,7 +960,7 @@ fn windows_overlay_backend_uses_minimal_win32_window() {
         );
     }
 
-    for forbidden in ["tauri", "WebView", "Direct2D", "Skia", "wgpu"] {
+    for forbidden in ["tauri", "WebView", "Skia", "wgpu"] {
         assert!(
             !backend.contains(forbidden),
             "Windows minimal overlay backend must not depend on `{forbidden}`"
@@ -1068,6 +1068,90 @@ fn windows_overlay_records_rounded_gdi_baseline() {
         "Phase 10aq Windows Overlay Rounded GDI Baseline",
         "does not change Windows overlay capability levels",
         "still uses GDI `DrawTextW`",
+    ] {
+        assert!(
+            capability_doc.contains(token),
+            "platform capability doc should document `{token}`"
+        );
+    }
+}
+
+#[test]
+fn windows_overlay_records_direct2d_directwrite_foundation() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let backend = std::fs::read_to_string(root.join("src/overlay/windows.rs")).unwrap();
+    let direct2d = std::fs::read_to_string(root.join("src/overlay/windows/direct2d.rs")).unwrap();
+    let overlay_doc = std::fs::read_to_string(root.join("docs/cross-platform/overlay.md")).unwrap();
+    let capability_doc =
+        std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
+
+    for token in [
+        "Win32_Graphics_Direct2D",
+        "Win32_Graphics_DirectWrite",
+        "Win32_Graphics_Dxgi_Common",
+    ] {
+        assert!(
+            manifest.contains(token),
+            "Windows Direct2D/DirectWrite dependency should enable `{token}`"
+        );
+    }
+
+    for token in [
+        "mod direct2d;",
+        "Direct2dRenderer",
+        "falling back to GDI",
+        "WS_EX_NOACTIVATE",
+        "HTTRANSPARENT",
+    ] {
+        assert!(
+            backend.contains(token),
+            "Windows overlay shell should route Direct2D without losing Win32 shell token `{token}`"
+        );
+    }
+
+    for token in [
+        "D2D1CreateFactory",
+        "DWriteCreateFactory",
+        "ID2D1HwndRenderTarget",
+        "IDWriteTextFormat",
+        "CreateHwndRenderTarget",
+        "DrawText",
+        "Segoe UI",
+    ] {
+        assert!(
+            direct2d.contains(token),
+            "Windows Direct2D renderer should contain token `{token}`"
+        );
+    }
+
+    for forbidden in [
+        "crate::daemon",
+        "crate::ipc",
+        "crate::hotkey",
+        "crate::voice",
+    ] {
+        assert!(
+            !direct2d.contains(forbidden),
+            "Direct2D renderer must not depend on daemon/business module `{forbidden}`"
+        );
+    }
+
+    for token in [
+        "Windows Phase 10ar Direct2D/DirectWrite Foundation",
+        "ID2D1HwndRenderTarget",
+        "Existing GDI drawing stays as a fallback",
+    ] {
+        assert!(
+            overlay_doc.contains(token),
+            "overlay Direct2D policy should document `{token}`"
+        );
+    }
+
+    for token in [
+        "Phase 10ar Windows Direct2D/DirectWrite Renderer Foundation",
+        "does not upgrade capability levels yet",
+        "GDI remains a fallback",
     ] {
         assert!(
             capability_doc.contains(token),

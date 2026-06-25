@@ -178,6 +178,24 @@ This phase is a text and rounded-surface foundation, not a full material system.
 surfaces, DirectComposition, Acrylic/Mica, shadows, animation, and capture-exclusion policy remain separate phases.
 Manual visual QA is still required before upgrading capabilities.
 
+### Windows Phase 10as Per-Pixel Layered Surface
+
+Phase 10as fixes the next clarity issue found in manual QA: the previous Direct2D path still used
+`SetLayeredWindowAttributes` global alpha, so Windows composited both the translucent background and the text at the
+same opacity.
+
+- The Direct2D renderer now draws into a top-down 32bpp DIB section through `ID2D1DCRenderTarget` /
+  `CreateDCRenderTarget` + `BindDC`.
+- The window is updated with `UpdateLayeredWindow` and `AC_SRC_ALPHA`, with `SourceConstantAlpha: 255`. Background
+  pixels carry `overlay.surface.background_alpha`; text is rendered as solid 255-alpha text.
+- The Win32 shell remains the same: popup, layered, topmost, tool window, no-activate, and hit-test passthrough are
+  still owned by `src/overlay/windows.rs`.
+- GDI fallback remains available and may still use global layered-window alpha when Direct2D/per-pixel setup fails.
+
+This is the correct foundation before evaluating Acrylic/Mica/DirectComposition: material blur cannot make text sharp
+if the whole window is globally alpha-composited. It still is not a complete Liquid Glass equivalent; native backdrop,
+shadow, animation, focused-window anchoring, fullscreen/UAC behavior, and multi-monitor visual QA remain open.
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。

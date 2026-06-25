@@ -352,6 +352,19 @@ Phase 10ar changes the renderer implementation but does not upgrade capability l
   user-visible text QA, real foreground apps, fullscreen/UAC, multi-monitor behavior, and material/shadow decisions
   are complete.
 
+## Phase 10as Windows Per-Pixel Layered Surface
+
+Phase 10as changes Windows overlay compositing but does not upgrade capability levels yet:
+
+- The Direct2D renderer now renders into a 32bpp premultiplied-alpha DIB and publishes it with
+  `UpdateLayeredWindow` / `AC_SRC_ALPHA`.
+- This removes Direct2D from the previous global `SetLayeredWindowAttributes` alpha path. Background pixels stay
+  translucent while text keeps solid text alpha.
+- GDI remains a fallback when Direct2D/per-pixel setup fails, so the fallback path may still use global layered alpha.
+- `overlay.renderer` remains `partial`; `overlay.material` and `overlay.window_anchor` remain `degraded` until
+  manual visual QA, native backdrop/shadow decisions, focused anchoring, fullscreen/UAC, and multi-monitor behavior
+  are complete.
+
 ## Phase 10ah Windows Audio Capture Diagnostics
 
 Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：

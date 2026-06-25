@@ -251,7 +251,9 @@ impl WindowsOverlay {
         let height = metrics.px(overlay_height(&self.model, &self.cfg));
         let radius = metrics.px(self.cfg.core.corner_radius).max(0);
         unsafe {
-            apply_window_alpha(self.hwnd, self.cfg.core.background_alpha);
+            if self.direct2d.is_none() {
+                apply_window_alpha(self.hwnd, self.cfg.core.background_alpha);
+            }
             apply_rounded_window_region(self.hwnd, width, height, radius);
         }
     }
@@ -268,6 +270,7 @@ impl WindowsOverlay {
         }
 
         let metrics = WindowMetrics::for_window(self.hwnd);
+        apply_window_alpha(self.hwnd, self.cfg.core.background_alpha);
         let rect = RECT {
             left: 0,
             top: 0,

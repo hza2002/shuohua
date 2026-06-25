@@ -2,14 +2,13 @@ use anyhow::{Context, Result};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U,
+    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Factory, ID2D1HwndRenderTarget, ID2D1RenderTarget,
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1RenderTarget,
     D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
-    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_PRESENT_OPTIONS_IMMEDIATELY,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
     D2D1_ROUNDED_RECT,
 };
@@ -19,7 +18,13 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
     DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
 };
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_UNKNOWN;
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+use windows::Win32::Graphics::Gdi::{
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject,
+    AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS,
+    HBITMAP, HDC, HGDIOBJ,
+};
+use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 
 use super::{to_colorref, wide_null, WindowMetrics};
 use crate::overlay::layout as L;
@@ -32,8 +37,7 @@ pub(super) struct Direct2dRenderer {
     hwnd: HWND,
     factory: ID2D1Factory,
     dwrite: IDWriteFactory,
-    target: Option<ID2D1HwndRenderTarget>,
-    size: D2D_SIZE_U,
+    surface: Option<LayeredSurface>,
 }
 
 impl Direct2dRenderer {
@@ -51,11 +55,7 @@ impl Direct2dRenderer {
             hwnd,
             factory,
             dwrite,
-            target: None,
-            size: D2D_SIZE_U {
-                width: 0,
-                height: 0,
-            },
+            surface: None,
         })
     }
 
@@ -65,19 +65,22 @@ impl Direct2dRenderer {
         cfg: &crate::config::theme::EffectiveOverlayCfg,
         metrics: WindowMetrics,
     ) -> Result<()> {
-        let width = metrics.px(L::constants::WIDTH).max(1) as u32;
-        let height = metrics.px(super::overlay_height(model, cfg)).max(1) as u32;
-        self.ensure_target(width, height, metrics)?;
-        let target = self.target.as_ref().context("Direct2D render target")?;
+        let width = metrics.px(L::constants::WIDTH).max(1);
+        let height = metrics.px(super::overlay_height(model, cfg)).max(1);
+        self.ensure_surface(width, height, metrics)?;
+        let surface = self.surface.as_ref().context("Direct2D layered surface")?;
+        surface.clear_pixels();
 
         unsafe {
-            target.BeginDraw();
-            target.Clear(Some(&transparent_color()));
+            surface.target.BeginDraw();
+            surface.target.Clear(Some(&transparent_color()));
 
-            let background = target
-                .CreateSolidColorBrush(&color(cfg.core.background_rgb, 1.0), None)
+            let background_alpha = cfg.core.background_alpha.clamp(0.0, 1.0) as f32;
+            let background = surface
+                .target
+                .CreateSolidColorBrush(&color(cfg.core.background_rgb, background_alpha), None)
                 .context("CreateSolidColorBrush background")?;
-            target.FillRoundedRectangle(
+            surface.target.FillRoundedRectangle(
                 &D2D1_ROUNDED_RECT {
                     rect: D2D_RECT_F {
                         left: 0.0,
@@ -96,7 +99,7 @@ impl Direct2dRenderer {
             let body_format = self.text_format(14.0, false, true)?;
 
             self.draw_text(
-                target,
+                &surface.target,
                 &state_format,
                 &model.state_label,
                 metrics.rect_f(16.0, 11.0, 128.0, 34.0),
@@ -110,7 +113,7 @@ impl Direct2dRenderer {
                 app,
             );
             self.draw_text(
-                target,
+                &surface.target,
                 &meta_format,
                 &stats,
                 metrics.rect_f(132.0, 11.0, 430.0, 34.0),
@@ -123,7 +126,7 @@ impl Direct2dRenderer {
                 (model.chain_summary.as_str(), cfg.core.text.tertiary)
             };
             self.draw_text(
-                target,
+                &surface.target,
                 &meta_format,
                 meta,
                 metrics.rect_f(430.0, 11.0, L::constants::WIDTH - 16.0, 34.0),
@@ -141,7 +144,7 @@ impl Direct2dRenderer {
                 L::constants::CHARS_PER_LINE,
             );
             self.draw_text(
-                target,
+                &surface.target,
                 &body_format,
                 &text,
                 metrics.rect_f(
@@ -153,47 +156,25 @@ impl Direct2dRenderer {
                 text_color,
             )?;
 
-            target.EndDraw(None, None).context("Direct2D EndDraw")?;
+            surface
+                .target
+                .EndDraw(None, None)
+                .context("Direct2D EndDraw")?;
         }
 
+        surface.update_window(self.hwnd)?;
         Ok(())
     }
 
-    fn ensure_target(&mut self, width: u32, height: u32, metrics: WindowMetrics) -> Result<()> {
-        let size = D2D_SIZE_U { width, height };
-        if let Some(target) = &self.target {
-            if self.size != size {
-                unsafe {
-                    target.Resize(&size).context("Direct2D Resize")?;
-                }
-                self.size = size;
-            }
+    fn ensure_surface(&mut self, width: i32, height: i32, metrics: WindowMetrics) -> Result<()> {
+        let needs_new = self
+            .surface
+            .as_ref()
+            .is_none_or(|surface| surface.width != width || surface.height != height);
+        if !needs_new {
             return Ok(());
         }
-
-        let props = D2D1_RENDER_TARGET_PROPERTIES {
-            r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_UNKNOWN,
-                alphaMode: D2D1_ALPHA_MODE_IGNORE,
-            },
-            dpiX: metrics.dpi as f32,
-            dpiY: metrics.dpi as f32,
-            usage: D2D1_RENDER_TARGET_USAGE_NONE,
-            minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-        };
-        let hwnd_props = D2D1_HWND_RENDER_TARGET_PROPERTIES {
-            hwnd: self.hwnd,
-            pixelSize: size,
-            presentOptions: D2D1_PRESENT_OPTIONS_IMMEDIATELY,
-        };
-        let target = unsafe {
-            self.factory
-                .CreateHwndRenderTarget(&props, &hwnd_props)
-                .context("CreateHwndRenderTarget")?
-        };
-        self.target = Some(target);
-        self.size = size;
+        self.surface = Some(LayeredSurface::new(&self.factory, width, height, metrics)?);
         Ok(())
     }
 
@@ -237,7 +218,7 @@ impl Direct2dRenderer {
 
     fn draw_text(
         &self,
-        target: &ID2D1HwndRenderTarget,
+        target: &ID2D1DCRenderTarget,
         format: &IDWriteTextFormat,
         text: &str,
         rect: D2D_RECT_F,
@@ -260,6 +241,171 @@ impl Direct2dRenderer {
             );
         }
         Ok(())
+    }
+}
+
+struct LayeredSurface {
+    width: i32,
+    height: i32,
+    screen_dc: HDC,
+    memory_dc: HDC,
+    bitmap: HBITMAP,
+    old_bitmap: HGDIOBJ,
+    bits: *mut u8,
+    target: ID2D1DCRenderTarget,
+}
+
+impl LayeredSurface {
+    fn new(
+        factory: &ID2D1Factory,
+        width: i32,
+        height: i32,
+        metrics: WindowMetrics,
+    ) -> Result<Self> {
+        let screen_dc = unsafe { GetDC(None) };
+        if screen_dc.is_invalid() {
+            anyhow::bail!("GetDC returned null");
+        }
+
+        let memory_dc = unsafe { CreateCompatibleDC(Some(screen_dc)) };
+        if memory_dc.is_invalid() {
+            unsafe {
+                ReleaseDC(None, screen_dc);
+            }
+            anyhow::bail!("CreateCompatibleDC returned null");
+        }
+
+        let mut bits = std::ptr::null_mut();
+        let bitmap_info = bitmap_info(width, height);
+        let bitmap = unsafe {
+            CreateDIBSection(
+                Some(screen_dc),
+                &bitmap_info,
+                DIB_RGB_COLORS,
+                &mut bits,
+                None,
+                0,
+            )
+            .context("CreateDIBSection")?
+        };
+        if bits.is_null() {
+            unsafe {
+                let _ = DeleteDC(memory_dc);
+                ReleaseDC(None, screen_dc);
+            }
+            anyhow::bail!("CreateDIBSection returned null bits");
+        }
+
+        let old_bitmap = unsafe { SelectObject(memory_dc, HGDIOBJ(bitmap.0)) };
+        if old_bitmap.is_invalid() {
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(bitmap.0));
+                let _ = DeleteDC(memory_dc);
+                ReleaseDC(None, screen_dc);
+            }
+            anyhow::bail!("SelectObject returned null");
+        }
+
+        let props = D2D1_RENDER_TARGET_PROPERTIES {
+            r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: metrics.dpi as f32,
+            dpiY: metrics.dpi as f32,
+            usage: D2D1_RENDER_TARGET_USAGE_NONE,
+            minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+        };
+        let target = unsafe {
+            factory
+                .CreateDCRenderTarget(&props)
+                .context("CreateDCRenderTarget")?
+        };
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: height,
+        };
+        unsafe {
+            target.BindDC(memory_dc, &rect).context("BindDC")?;
+        }
+
+        Ok(Self {
+            width,
+            height,
+            screen_dc,
+            memory_dc,
+            bitmap,
+            old_bitmap,
+            bits: bits.cast(),
+            target,
+        })
+    }
+
+    fn clear_pixels(&self) {
+        let len = self.width.max(0) as usize * self.height.max(0) as usize * 4;
+        unsafe {
+            std::ptr::write_bytes(self.bits, 0, len);
+        }
+    }
+
+    fn update_window(&self, hwnd: HWND) -> Result<()> {
+        let dst = POINT { x: 0, y: 0 };
+        let size = SIZE {
+            cx: self.width,
+            cy: self.height,
+        };
+        let src = POINT { x: 0, y: 0 };
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: 255,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+        unsafe {
+            UpdateLayeredWindow(
+                hwnd,
+                Some(self.screen_dc),
+                Some(&dst),
+                Some(&size),
+                Some(self.memory_dc),
+                Some(&src),
+                windows::Win32::Foundation::COLORREF(0),
+                Some(&blend),
+                ULW_ALPHA,
+            )
+            .context("UpdateLayeredWindow")?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for LayeredSurface {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.memory_dc, self.old_bitmap);
+            let _ = DeleteObject(HGDIOBJ(self.bitmap.0));
+            let _ = DeleteDC(self.memory_dc);
+            ReleaseDC(None, self.screen_dc);
+        }
+    }
+}
+
+fn bitmap_info(width: i32, height: i32) -> BITMAPINFO {
+    BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            biSizeImage: width.max(0) as u32 * height.max(0) as u32 * 4,
+            ..Default::default()
+        },
+        ..Default::default()
     }
 }
 
@@ -296,6 +442,15 @@ mod tests {
         assert!((c.g - 0.4).abs() < 0.01);
         assert!((c.b - 0.6).abs() < 0.01);
         assert_eq!(to_colorref(0x336699), 0x996633);
+    }
+
+    #[test]
+    fn bitmap_info_uses_top_down_32bpp_surface() {
+        let info = bitmap_info(640, 120);
+        assert_eq!(info.bmiHeader.biWidth, 640);
+        assert_eq!(info.bmiHeader.biHeight, -120);
+        assert_eq!(info.bmiHeader.biBitCount, 32);
+        assert_eq!(info.bmiHeader.biSizeImage, 640 * 120 * 4);
     }
 
     #[test]

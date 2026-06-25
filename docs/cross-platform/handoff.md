@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: add windows direct2d overlay foundation`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: add windows per pixel overlay surface`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: add windows overlay rounded baseline` (`7e99797`).
+Previous phase commit: `feat: add windows direct2d overlay foundation` (`2da7516`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,20 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10as Windows per-pixel layered surface 已完成：
+
+- 用户目视确认 Phase 10ar Direct2D 后“稍微好一点，但仍不够清晰”；根因判断为 Direct2D path 仍使用
+  `SetLayeredWindowAttributes` 全窗 alpha，导致背景和文字一起半透明。
+- Windows Direct2D renderer 改为 top-down 32bpp DIB + `ID2D1DCRenderTarget` /
+  `CreateDCRenderTarget` + `BindDC`，再用 `UpdateLayeredWindow` / `AC_SRC_ALPHA` 发布。
+- `UpdateLayeredWindow` 使用 `SourceConstantAlpha: 255`：背景像素使用
+  `overlay.surface.background_alpha`，文字保持 solid 255-alpha text，避免全窗 alpha 模糊文字。
+- Win32 shell 不变：`WS_POPUP`、layered、topmost、tool window、no-activate、`HTTRANSPARENT`
+  click-through 仍由 `src/overlay/windows.rs` 管理。
+- GDI fallback 保留；只有 fallback 才继续使用 global layered-window alpha。
+- Capability 不升级：这只是文字 alpha/合成基础修正，native backdrop、shadow、animation、
+  focused-window anchoring、fullscreen/UAC、multi-monitor 和最终视觉 QA 仍未完成。
+
 Phase 10ar Windows Direct2D/DirectWrite renderer foundation 已完成：
 
 - Windows overlay 保留现有 Win32 window shell：`WS_POPUP`、layered、topmost、tool window、

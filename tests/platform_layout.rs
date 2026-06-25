@@ -1113,9 +1113,8 @@ fn windows_overlay_records_direct2d_directwrite_foundation() {
     for token in [
         "D2D1CreateFactory",
         "DWriteCreateFactory",
-        "ID2D1HwndRenderTarget",
         "IDWriteTextFormat",
-        "CreateHwndRenderTarget",
+        "ID2D1RenderTarget",
         "DrawText",
         "Segoe UI",
     ] {
@@ -1152,6 +1151,60 @@ fn windows_overlay_records_direct2d_directwrite_foundation() {
         "Phase 10ar Windows Direct2D/DirectWrite Renderer Foundation",
         "does not upgrade capability levels yet",
         "GDI remains a fallback",
+    ] {
+        assert!(
+            capability_doc.contains(token),
+            "platform capability doc should document `{token}`"
+        );
+    }
+}
+
+#[test]
+fn windows_overlay_records_per_pixel_layered_surface() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let backend = std::fs::read_to_string(root.join("src/overlay/windows.rs")).unwrap();
+    let direct2d = std::fs::read_to_string(root.join("src/overlay/windows/direct2d.rs")).unwrap();
+    let overlay_doc = std::fs::read_to_string(root.join("docs/cross-platform/overlay.md")).unwrap();
+    let capability_doc =
+        std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
+
+    for token in [
+        "CreateDIBSection",
+        "CreateDCRenderTarget",
+        "ID2D1DCRenderTarget",
+        "BindDC",
+        "UpdateLayeredWindow",
+        "AC_SRC_ALPHA",
+        "D2D1_ALPHA_MODE_PREMULTIPLIED",
+        "SourceConstantAlpha: 255",
+    ] {
+        assert!(
+            direct2d.contains(token),
+            "Windows per-pixel overlay surface should contain token `{token}`"
+        );
+    }
+
+    assert!(
+        backend.contains("if self.direct2d.is_none()")
+            && backend.contains("apply_window_alpha(self.hwnd, self.cfg.core.background_alpha)"),
+        "Windows Direct2D path should avoid global SetLayeredWindowAttributes alpha"
+    );
+
+    for token in [
+        "Windows Phase 10as Per-Pixel Layered Surface",
+        "UpdateLayeredWindow",
+        "solid 255-alpha text",
+    ] {
+        assert!(
+            overlay_doc.contains(token),
+            "overlay per-pixel surface policy should document `{token}`"
+        );
+    }
+
+    for token in [
+        "Phase 10as Windows Per-Pixel Layered Surface",
+        "does not upgrade capability levels yet",
+        "solid text alpha",
     ] {
         assert!(
             capability_doc.contains(token),

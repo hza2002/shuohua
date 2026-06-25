@@ -19,7 +19,23 @@ pub(crate) fn spawn_event_tap(
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub(crate) fn spawn_event_tap(
+    writer: os_pipe::PipeWriter,
+    suppressor: Arc<Mutex<Suppressor>>,
+) -> Result<()> {
+    std::thread::Builder::new()
+        .name("hotkey-wh-keyboard-ll".into())
+        .spawn(move || {
+            if let Err(e) = crate::hotkey::provider_windows::run(writer, suppressor) {
+                tracing::error!(error = ?e, "windows hotkey hook exited");
+                std::process::exit(2);
+            }
+        })?;
+    Ok(())
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 pub(crate) fn spawn_event_tap(
     writer: os_pipe::PipeWriter,
     _suppressor: Arc<Mutex<Suppressor>>,

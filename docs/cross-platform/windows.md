@@ -281,6 +281,18 @@ Stop point for user intervention:
 - After a compile-checked hook backend exists and can print key down/up diagnostics on Windows.
 - Suppression and hold-to-record parity require manual testing in real foreground applications.
 
+Current hotkey baseline:
+
+- Phase 10an implements the Windows provider backend with `WH_KEYBOARD_LL` on a dedicated OS thread.
+- The hook callback maps Windows virtual keys to the shared `Key` model, writes the existing 4-byte `RawEvent`
+  wire format to the daemon pipe, and then asks the shared `Suppressor` whether to drop the foreground event.
+- Modifier transitions are forwarded as `FlagsChanged` with a post-transition modifier snapshot, matching the
+  tracker contract used by macOS.
+- Capability is `partial/wh_keyboard_ll/runtime_smoke_only` for both `desktop.hotkey` and
+  `desktop.hotkey_suppression` until real foreground App, IME, remote desktop, and UAC/elevation boundaries are
+  validated.
+- This phase does not validate audio, overlay, clipboard/paste, or full record -> paste behavior.
+
 ## Clipboard And Text Injection
 
 First implementation route:

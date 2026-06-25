@@ -25,6 +25,8 @@ pub(crate) mod key;
 pub(crate) mod parse;
 #[cfg(target_os = "macos")]
 pub(crate) mod provider_darwin;
+#[cfg(target_os = "windows")]
+pub(crate) mod provider_windows;
 mod suppressor;
 mod tracker;
 

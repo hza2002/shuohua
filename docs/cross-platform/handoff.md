@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: add windows paste injection backend`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: add windows hotkey hook backend`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: add windows clipboard write backend` (`e3fe940`).
+Previous phase commit: `feat: add windows paste injection backend` (`7c29d88`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,22 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10an Windows hotkey hook backend 已完成：
+
+- Windows hotkey provider 现在使用 `WH_KEYBOARD_LL` low-level keyboard hook，运行在
+  `hotkey-wh-keyboard-ll` 专用 OS 线程。
+- hook callback 将 Windows virtual key 映射到共享 `Key` 模型，写入既有 4-byte `RawEvent`
+  pipe wire format，然后复用共享 `Suppressor` 判断是否 drop foreground event。
+- modifier key transition 在 Windows 下转成 `FlagsChanged`，并携带 post-transition `ModMask` snapshot，
+  保持与现有 tracker contract 对齐。
+- 新增显式 ignored runtime smoke：
+  `cargo test --target x86_64-pc-windows-msvc hotkey::provider_windows::tests::hook_runtime_smoke_receives_synthetic_f16_down_up -- --ignored --exact`。
+  本机 smoke 通过：hook 安装后用 `SendInput` 合成 F16 down/up，pipe 读回对应事件。
+- Windows `desktop.hotkey` 和 `desktop.hotkey_suppression` capability 现在是
+  `partial/wh_keyboard_ll/runtime_smoke_only`；不能升级为 available，直到真实 foreground app、IME、
+  remote desktop、UAC/elevation 和 hold-to-record 行为完成验证。
+- 本阶段没有启动 audio、overlay、clipboard/paste、provider runtime 或 full record -> paste flow。
+
 Phase 10am Windows paste injection backend 已完成：
 
 - Windows `platform::autotype::paste()` 现在调度到 Win32 `SendInput` backend，发送
@@ -1597,6 +1613,12 @@ permission probe 或 active app runtime。
     `shuohua-paste-smoke-20260625-winforms`；Notepad smoke 尝试未作为结论，因为 Windows 11 Notepad
     未暴露可用 `MainWindowHandle`。`doctor` capability summary 现在包含
     `desktop.text_injection=partial backend=sendinput_ctrl_v reason=runtime_smoke_only`。
+  - Phase 10an hotkey hook runtime smoke 通过：ignored test 安装 `WH_KEYBOARD_LL` hook 后用
+    `SendInput` 合成 F16 down/up，pipe 读回对应 `RawEvent`。`doctor` capability summary 现在包含
+    `desktop.hotkey=partial backend=wh_keyboard_ll reason=runtime_smoke_only` 和
+    `desktop.hotkey_suppression=partial backend=wh_keyboard_ll reason=runtime_smoke_only`。
+  - Phase 10an 后 `service start; service status; service stop` 单步 smoke 通过，daemon 可启动到
+    `state=Idle` 并正常停止；该 smoke 未触发录音，因为本机仍无默认麦克风。
   - 无参数 `shuo.exe` smart fallback 在 daemon absent 时可启动当前 executable 的 `--daemon` 子进程，
     并等到 scoped Named Pipe ready。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。

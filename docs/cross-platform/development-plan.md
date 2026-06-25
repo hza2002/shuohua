@@ -871,6 +871,17 @@ Phase 10am Windows Paste Injection Backend:
 - Do not implement global hotkey, overlay, audio, or full record -> ASR -> post -> paste flow in this phase.
 - Capability may move to partial after same-session smoke, but must not imply target-app or UAC/elevation parity.
 
+Phase 10an Windows Low-Level Hotkey Backend:
+
+- Implement only the Windows hotkey provider backend with `WH_KEYBOARD_LL` on a dedicated OS thread.
+- Reuse the existing `RawEvent` wire format and `Suppressor` decision path so daemon hotkey tracking stays shared.
+- Map Windows virtual keys to the existing platform-neutral `Key` model; unknown keys must still flow as
+  `Key::Unknown`.
+- Add an explicit ignored runtime smoke because it installs a global keyboard hook and observes real key events.
+- Do not start audio, overlay, clipboard/paste, provider runtime, or full record -> paste flow in this phase.
+- Capability may move to partial/runtime-smoke only after a same-session hook smoke, but suppression and target-app
+  parity still require manual foreground-app validation.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

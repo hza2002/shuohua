@@ -292,6 +292,24 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
         .into_iter()
         .chain([
             CapabilityStatus {
+                id: CapabilityId::DesktopHotkey,
+                platform: PlatformKind::Windows,
+                backend: "wh_keyboard_ll",
+                status: CapabilityStatusKind::Partial,
+                summary: "WH_KEYBOARD_LL hook backend is implemented but needs foreground-app validation",
+                reason: "runtime_smoke_only",
+                next_step: Some("Validate hotkey press/release tracking across real Windows foreground apps"),
+            },
+            CapabilityStatus {
+                id: CapabilityId::DesktopHotkeySuppression,
+                platform: PlatformKind::Windows,
+                backend: "wh_keyboard_ll",
+                status: CapabilityStatusKind::Partial,
+                summary: "Low-level hook can suppress matched key events but target-app parity is not validated",
+                reason: "runtime_smoke_only",
+                next_step: Some("Validate suppressed down/up pairing, stuck modifier prevention, IME, and UAC boundaries"),
+            },
+            CapabilityStatus {
                 id: CapabilityId::IpcTransport,
                 platform: PlatformKind::Windows,
                 backend: "named_pipe",

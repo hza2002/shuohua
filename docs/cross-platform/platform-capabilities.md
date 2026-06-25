@@ -286,6 +286,19 @@ Windows `desktop.text_injection` 在 Phase 10am 只表达 `SendInput` Ctrl+V bac
 - `desktop.clipboard` 和 `desktop.text_injection` 是分开的能力；前者可成功但后者被目标 App 拒收。
 - 在真实目标 App、elevation 边界和 full record -> paste session 验证前，不能升级为 `available`。
 
+## Phase 10an Windows Low-Level Hotkey Backend
+
+Windows `desktop.hotkey` / `desktop.hotkey_suppression` 在 Phase 10an 只表达 `WH_KEYBOARD_LL`
+backend 存在并做过同会话 smoke：
+
+- `desktop.hotkey`：`partial`，backend `wh_keyboard_ll`，reason `runtime_smoke_only`。
+- `desktop.hotkey_suppression`：`partial`，backend `wh_keyboard_ll`，reason `runtime_smoke_only`。
+- backend 运行在专用 OS 线程，callback 只写现有 `RawEvent` pipe wire format 并复用共享
+  `Suppressor` 判断是否 drop foreground event。
+- ignored runtime smoke 只验证 hook 可收到合成 F16 down/up；它不代表 hold-to-record、IME、真实
+  foreground App、remote desktop 或 UAC/elevation 边界可用。
+- 在真实目标 App 和完整 record -> paste session 验证前，不能升级为 `available`。
+
 ## Phase 10ah Windows Audio Capture Diagnostics
 
 Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：

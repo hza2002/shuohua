@@ -886,6 +886,58 @@ fn non_macos_desktop_capabilities_match_current_facade_behavior() {
 }
 
 #[test]
+fn windows_hotkey_backend_uses_low_level_keyboard_hook() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let provider = std::fs::read_to_string(root.join("src/hotkey/provider_windows.rs")).unwrap();
+    let platform = std::fs::read_to_string(root.join("src/platform/hotkey.rs")).unwrap();
+    let hotkey_mod = std::fs::read_to_string(root.join("src/hotkey/mod.rs")).unwrap();
+
+    for token in [
+        "WH_KEYBOARD_LL",
+        "SetWindowsHookExW",
+        "CallNextHookEx",
+        "KBDLLHOOKSTRUCT",
+        "RawEvent",
+        "Suppressor",
+        "hook_runtime_smoke_receives_synthetic_f16_down_up",
+    ] {
+        assert!(
+            provider.contains(token),
+            "Windows hotkey provider should contain token `{token}`"
+        );
+    }
+
+    assert!(
+        platform.contains("crate::hotkey::provider_windows::run(writer, suppressor)"),
+        "platform hotkey facade should dispatch to Windows provider"
+    );
+    assert!(
+        hotkey_mod.contains("pub(crate) mod provider_windows;"),
+        "hotkey module should expose the cfg-gated Windows provider"
+    );
+}
+
+#[test]
+fn windows_hotkey_capability_reports_hook_partial() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+
+    for token in [
+        "CapabilityId::DesktopHotkey",
+        "CapabilityId::DesktopHotkeySuppression",
+        "wh_keyboard_ll",
+        "runtime_smoke_only",
+        "Validate hotkey press/release tracking across real Windows foreground apps",
+        "Validate suppressed down/up pairing, stuck modifier prevention, IME, and UAC boundaries",
+    ] {
+        assert!(
+            capability.contains(token),
+            "Windows hotkey capability should report partial hook token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn windows_active_app_identity_backend_lives_behind_desktop_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let windows_app_context = root.join("src/platform/windows/app_context.rs");

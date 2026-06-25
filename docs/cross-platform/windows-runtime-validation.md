@@ -178,6 +178,8 @@ Run:
 Expected:
 
 - Status prints daemon availability plus Windows user-session dry-run strategy.
+- Only pipe-not-found style connect errors should be treated as `daemon: not running`; access/scope/security
+  errors must remain visible.
 - It must not install a Task Scheduler task, write registry keys, call SCM service APIs, or require elevation.
 
 ## Explorer Open/Reveal

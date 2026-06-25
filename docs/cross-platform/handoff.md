@@ -18,6 +18,14 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10ab Windows service status IPC error classification 已完成：
+
+- Windows `service status` 不再把所有 `connect_default()` 失败都当成 `daemon: not running`。
+- 现在只有 `ERROR_FILE_NOT_FOUND` / `ERROR_PATH_NOT_FOUND` 被归类为 daemon absent；access denied、
+  scope/security 错误、busy 超时和其他 IPC 错误会保留为错误返回，避免 cross-user/access-mask 问题被
+  dry-run status 吞掉。
+- 新增 Windows service 单测固定 absent-vs-access-denied 分类；runtime helper smoke 仍通过。
+
 Phase 10aa Windows abandoned mutex behavior 已完成：
 
 - Windows `platform::lifecycle` 不再把 `WAIT_ABANDONED` 静默当作普通 acquire；现在映射为

@@ -729,6 +729,8 @@ mod imp {
     use crate::ipc::protocol::{Command, Event};
 
     const DAEMON_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
+    const ERROR_FILE_NOT_FOUND: i32 = 2;
+    const ERROR_PATH_NOT_FOUND: i32 = 3;
 
     pub fn launchd_status() -> super::LaunchdStatus {
         super::LaunchdStatus::Unsupported
@@ -782,7 +784,8 @@ mod imp {
     async fn ipc_status() -> Result<Option<String>> {
         let mut client = match crate::ipc::client::IpcClient::connect_default().await {
             Ok(client) => client,
-            Err(_) => return Ok(None),
+            Err(error) if is_daemon_absent_connect_error(&error) => return Ok(None),
+            Err(error) => return Err(error.context("query Windows daemon status")),
         };
         client.send(&Command::DaemonStatus).await?;
         client
@@ -802,6 +805,15 @@ mod imp {
                 _ => Ok(ControlFlow::Continue(())),
             })
             .await
+    }
+
+    fn is_daemon_absent_connect_error(error: &anyhow::Error) -> bool {
+        error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::raw_os_error)
+                .is_some_and(|code| matches!(code, ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND))
+        })
     }
 
     fn format_daemon_status(pid: u32, uptime_ms: u64, state: &str, recording_id: &str) -> String {
@@ -873,6 +885,18 @@ mod imp {
                 format_daemon_status(42, 65_000, "Idle", "-"),
                 "daemon: running pid=42 uptime=1m5s state=Idle recording=-"
             );
+        }
+
+        #[test]
+        fn daemon_absent_connect_errors_are_narrowly_classified() {
+            let missing = std::io::Error::from_raw_os_error(ERROR_FILE_NOT_FOUND);
+            let missing_with_context: anyhow::Error =
+                anyhow::Error::new(missing).context("connect Windows IPC pipe");
+            let access_denied = anyhow::Error::new(std::io::Error::from_raw_os_error(5))
+                .context("connect Windows IPC pipe");
+
+            assert!(is_daemon_absent_connect_error(&missing_with_context));
+            assert!(!is_daemon_absent_connect_error(&access_denied));
         }
     }
 }

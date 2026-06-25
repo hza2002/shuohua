@@ -3482,6 +3482,7 @@ fn windows_runtime_validation_checklist_stays_bottom_up() {
         "$env:LOCALAPPDATA\\Shuohua",
         ".\\scripts\\windows-ipc-smoke.ps1 -StopExisting",
         "This is a deferred manual gate",
+        "access/scope/security",
     ] {
         assert!(
             doc.contains(token),

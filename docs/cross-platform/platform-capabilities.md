@@ -106,8 +106,8 @@ platform 按编译目标设置为 Linux/Windows/Unknown，reason 使用 `backend
 后续阶段已落地的编译级 backend 可以覆盖默认项，但必须如实表达未实机验证的范围。
 
 - Windows `ipc.transport`：`partial`，backend `named_pipe`，reason `runtime_not_verified`。
-  这表示 Tokio Named Pipe transport 已通过 Windows target compile check，但 connect/bind/accept、
-  ACL/security descriptor、multi-user 隔离和 pipe busy 行为仍需 Windows 实机/VM 验证。
+  这表示 Tokio Named Pipe transport 已通过 Windows target compile check 和 same-user/elevation
+  smoke，但 cross-user 隔离和 client access-mask narrowing 仍未完成。
 
 ## Phase 10d Linux Compile-Time Capability Sync
 
@@ -184,8 +184,8 @@ command behind `platform::audio_convert`:
 Windows lifecycle no longer needs to be a pure unsupported placeholder for compile checks:
 
 - `daemon.single_instance`：`partial`，backend `named_mutex`。`platform::lifecycle` uses a
-  named Win32 mutex to model the daemon single-instance guard, but runtime behavior, namespace choice,
-  abandoned mutex handling, and security descriptor hardening still need Windows validation.
+  named Win32 mutex to model the daemon single-instance guard. Same-user and elevated/non-elevated smoke has
+  passed, but cross-user isolation and abandoned mutex behavior still need Windows validation.
 - `process.probe`：`partial`，backend `open_process_probe`。`OpenProcess` is used as a compile backend
   for process existence probing, but PID reuse and permission behavior still need Windows validation.
 

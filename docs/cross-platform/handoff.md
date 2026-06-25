@@ -15,6 +15,17 @@ Previous commit: `docs: record windows pipe client access mask limit` (`f5b893c`
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10z Windows capability next-step sync 已完成：
+
+- Windows `ipc.transport` / `daemon.single_instance` capability 仍保持 `partial/runtime_not_verified`，
+  但 summary/next_step 不再停留在纯 compile backend 说法，已同步 same-user/elevation smoke 通过后的
+  真实剩余项：cross-user 隔离、client access-mask narrowing、abandoned mutex 等。
+- Windows `path.open_reveal` capability 仍保持 `partial/runtime_not_verified`，但 summary 记录基础
+  Explorer open/reveal 已人工确认，next_step 指向 UNC、missing path、non-interactive session 等更广
+  的路径/会话验证。
+- `docs/cross-platform/platform-capabilities.md` 和 `tests/platform_layout.rs` 已同步，避免 doctor/TUI
+  静态诊断继续提示已经完成的 same-user Named Pipe runtime smoke。
+
 Phase 10y Windows IPC same-user smoke helper 已完成：
 
 - 用户确认 cross-user 第二账号/VM 验证可以后移；它现在是 deferred manual gate，不阻塞继续做

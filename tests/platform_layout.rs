@@ -506,7 +506,9 @@ fn windows_capability_snapshot_marks_named_pipe_transport_partial() {
         "CapabilityStatusKind::Partial",
         "named_pipe",
         "runtime_not_verified",
-        "Validate Named Pipe transport on Windows",
+        "same-user smoke",
+        "Validate cross-user isolation and narrow client access masks",
+        "Validate cross-user daemon isolation on Windows",
     ] {
         assert!(
             capability.contains(token),

@@ -266,6 +266,16 @@ Phase 10ak extends the same diagnostic surface with `profile.route.current` in `
 - It is a read-only config/identity diagnostic. It does not open profile provider runtime, start recording, or
   exercise hotkey/overlay/clipboard/paste.
 
+## Phase 10al Windows Clipboard Write Backend
+
+Windows `desktop.clipboard` 在 Phase 10al 只表达写剪贴板 backend 存在并做过同会话 smoke：
+
+- `desktop.clipboard`：`partial`，backend `win32_clipboard_unicode`，reason `write_only_runtime_smoke`。
+- backend 使用 Win32 `CF_UNICODETEXT`，不实现 clipboard restore，不读取旧剪贴板内容。
+- `desktop.text_injection` 仍为 unsupported；本阶段不实现 `SendInput` paste，也不验证 record -> paste。
+- 在 Notepad/browser/editor/terminal、UAC/elevation 边界和失败恢复都验证前，不能把 clipboard capability
+  升级为 `available`。
+
 ## Phase 10ah Windows Audio Capture Diagnostics
 
 Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：

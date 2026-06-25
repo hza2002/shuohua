@@ -348,6 +348,15 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 next_step: Some("Validate Explorer open/reveal with UNC, missing paths, and non-interactive sessions"),
             },
             CapabilityStatus {
+                id: CapabilityId::DesktopClipboard,
+                platform: PlatformKind::Windows,
+                backend: "win32_clipboard_unicode",
+                status: CapabilityStatusKind::Partial,
+                summary: "Win32 CF_UNICODETEXT clipboard writes are implemented but need broader desktop-app runtime validation",
+                reason: "write_only_runtime_smoke",
+                next_step: Some("Validate Unicode clipboard writes across target Windows apps and elevation boundaries"),
+            },
+            CapabilityStatus {
                 id: CapabilityId::DesktopActiveApp,
                 platform: PlatformKind::Windows,
                 backend: "foreground_window_process_exe",

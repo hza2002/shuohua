@@ -853,6 +853,15 @@ Phase 10ak Windows Profile Route Diagnostics:
   audio/hotkey runtime exists.
 - Do not start recording, touch provider runtime, or trigger overlay/hotkey/clipboard/paste.
 
+Phase 10al Windows Clipboard Write Backend:
+
+- Implement only Windows Unicode clipboard writes behind the existing `platform::clipboard` facade.
+- Use Win32 `OpenClipboard` / `EmptyClipboard` / `SetClipboardData(CF_UNICODETEXT)` with movable global memory.
+- Keep paste injection unsupported; do not call `SendInput`, do not implement hotkey, overlay, audio, or full
+  record -> paste flow in this phase.
+- Capability may move from unsupported to partial/write-only after build and same-session runtime smoke, but must
+  not imply paste injection or target-app parity.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

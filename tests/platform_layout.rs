@@ -956,6 +956,62 @@ fn windows_active_app_capability_reports_exe_name_only_partial() {
 }
 
 #[test]
+fn windows_clipboard_write_backend_uses_win32_unicode_clipboard() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let backend = std::fs::read_to_string(root.join("src/platform/windows/clipboard.rs")).unwrap();
+
+    for token in [
+        "OpenClipboard",
+        "EmptyClipboard",
+        "SetClipboardData",
+        "CF_UNICODETEXT_FORMAT",
+        "GlobalAlloc",
+        "GlobalLock",
+        "GlobalUnlock",
+        "GlobalFree",
+        "clipboard_utf16",
+    ] {
+        assert!(
+            backend.contains(token),
+            "Windows clipboard backend should contain token `{token}`"
+        );
+    }
+
+    let platform_clipboard =
+        std::fs::read_to_string(root.join("src/platform/clipboard.rs")).unwrap();
+    assert!(
+        platform_clipboard.contains("crate::platform::windows::clipboard::write_string(text)"),
+        "shared clipboard facade should dispatch to the Windows backend"
+    );
+
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    for feature in ["Win32_System_DataExchange", "Win32_System_Memory"] {
+        assert!(
+            manifest.contains(feature),
+            "Cargo.toml should enable `{feature}` for Windows clipboard writes"
+        );
+    }
+}
+
+#[test]
+fn windows_clipboard_capability_reports_write_only_partial() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+
+    for token in [
+        "CapabilityId::DesktopClipboard",
+        "win32_clipboard_unicode",
+        "write_only_runtime_smoke",
+        "Validate Unicode clipboard writes across target Windows apps and elevation boundaries",
+    ] {
+        assert!(
+            capability.contains(token),
+            "Windows desktop.clipboard capability should report write-only partial token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn desktop_capabilities_live_behind_platform_desktop_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 

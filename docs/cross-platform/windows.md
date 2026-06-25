@@ -300,6 +300,17 @@ Rules:
 - Clipboard access is foreground-desktop state. Keep it in the daemon desktop facade; do not move it into GUI
   code or service code.
 
+Current clipboard baseline:
+
+- Phase 10al implements write-only Unicode clipboard support with Win32
+  `OpenClipboard` / `EmptyClipboard` / `SetClipboardData(CF_UNICODETEXT)`.
+- The backend writes `CF_UNICODETEXT` using movable global memory and transfers ownership to the system only after
+  `SetClipboardData` succeeds.
+- Paste injection remains unsupported; this phase does not call `SendInput` and does not validate record -> paste
+  or target-app text insertion parity.
+- Capability is `partial/win32_clipboard_unicode/write_only_runtime_smoke` until broader target-app and elevation
+  boundary validation is complete.
+
 Current active app identity baseline:
 
 - Phase 10aj implements the first Windows active app backend with `GetForegroundWindow`,

@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: add windows profile route diagnostics`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: add windows clipboard write backend`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: add windows active app identity` (`86c3d91`).
+Previous phase commit: `feat: add windows profile route diagnostics` (`ffd831c`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,20 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10al Windows clipboard write backend 已完成：
+
+- Windows `platform::clipboard::write_string` 现在调度到 Win32 backend，使用
+  `OpenClipboard` / `EmptyClipboard` / `SetClipboardData(CF_UNICODETEXT)` 写 Unicode 文本。
+- backend 使用 movable global memory；`SetClipboardData` 成功后句柄所有权转交系统，失败路径释放内存。
+- 新增显式 ignored runtime smoke：
+  `cargo test --target x86_64-pc-windows-msvc platform::windows::clipboard::tests::clipboard_write_runtime_smoke -- --ignored --exact`。
+  本机用 `SHUOHUA_WINDOWS_CLIPBOARD_SMOKE_TEXT=shuohua-clipboard-smoke-20260625-🙂` 执行并通过，随后
+  PowerShell STA `[System.Windows.Forms.Clipboard]::GetText()` 读回同一内容。
+- Windows `desktop.clipboard` capability 现在是
+  `partial/win32_clipboard_unicode/write_only_runtime_smoke`；`desktop.text_injection` 仍是 unsupported。
+- 本阶段没有实现 `SendInput` paste、hotkey、overlay、audio 或 record -> paste 全链路；clipboard
+  capability 不能升级为 available，直到目标 App 和 elevation 边界完成验证。
+
 Phase 10ak Windows profile route diagnostics 已完成：
 
 - `shuo doctor` 现在复用当前 foreground app `AppContext`，同时打印
@@ -1561,6 +1575,11 @@ permission probe 或 active app runtime。
   - Phase 10ak doctor profile route diagnostics 通过执行：本机 Windows Terminal 前台时打印
     `profile.route.current: selected=agent source=route matches=agent`。`doctor` 汇总的麦克风、daemon/
     service、permissions next-step 已使用 Windows 语义；当前 `doctor` exit 1 仍只因无默认输入设备。
+  - Phase 10al clipboard write runtime smoke 通过：ignored test 写入
+    `shuohua-clipboard-smoke-20260625-🙂`，PowerShell STA clipboard readback 返回同一内容。
+    `doctor` capability summary 现在包含
+    `desktop.clipboard=partial backend=win32_clipboard_unicode reason=write_only_runtime_smoke`，同时
+    `desktop.text_injection` 仍为 unsupported。
   - 无参数 `shuo.exe` smart fallback 在 daemon absent 时可启动当前 executable 的 `--daemon` 子进程，
     并等到 scoped Named Pipe ready。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。

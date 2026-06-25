@@ -168,6 +168,15 @@ Phase 10ac Windows service stop IPC shutdown:
 - `install` / `uninstall` / `start` / `restart` 仍返回明确 unsupported；`service.manager` capability
   仍保持 `partial`，不能据此声明 Windows service lifecycle runtime-ready。
 
+Phase 10ad Windows smart fallback Named Pipe probe:
+
+- Windows `run_smart_fallback()` 不再把 endpoint 永远视为 absent；它用现有 Named Pipe transport
+  probe 当前 scoped endpoint，能区分 pipe-not-found、pipe-busy/present 和 access/scope 类错误。
+- Absent endpoint 仍只启动当前 executable 的 `--daemon` 子进程并等待 Named Pipe ready；不调用
+  Task Scheduler、SCM、PowerShell、registry，也不实现 service install/start。
+- 该路径只服务无参数 `shuo.exe` 进入 TUI 前的 developer/runtime convenience；Windows IPC capability
+  仍不得在 cross-user 和更长 soak 前升级为 `available`。
+
 ## Smart Fallback
 
 CLI/TUI/GUI 连接 daemon 时：

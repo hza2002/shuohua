@@ -18,6 +18,16 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10ad Windows smart fallback Named Pipe probe 已完成：
+
+- Windows `run_smart_fallback()` 不再把 endpoint 永远视为 absent；现在用现有 Named Pipe transport
+  probe 当前 scoped endpoint，能区分 pipe-not-found、pipe-busy/present 和 access/scope 类错误。
+- Absent endpoint 仍只启动当前 executable 的 `--daemon` 子进程并等待 Named Pipe ready；没有调用
+  Task Scheduler、SCM、PowerShell 或 registry APIs，也没有实现 service install/start。
+- 新增 Windows fallback 单测覆盖 pipe-not-found、pipe-busy 和 live Named Pipe probe。
+- 本机 elevated runtime smoke 通过：无参数 `shuo.exe` 可拉起 daemon，随后 `service status` 显示
+  `daemon: running ... state=Idle`，`service stop` exit 0，最后无残留 `shuo` 进程。
+
 Phase 10ac Windows service stop IPC shutdown 已完成：
 
 - Windows `shuo service stop` 现在只通过当前用户/登录会话的 Named Pipe 发送既有
@@ -1423,6 +1433,8 @@ permission probe 或 active app runtime。
 - Windows runtime smoke:
   - `shuo.exe --version` 通过。
   - `shuo.exe doctor` 能运行并使用 `%APPDATA%\Shuohua`，但因本机配置/设备/权限返回 1。
+  - 无参数 `shuo.exe` smart fallback 在 daemon absent 时可启动当前 executable 的 `--daemon` 子进程，
+    并等到 scoped Named Pipe ready。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。
   - `shuo.exe service stop` 通过 IPC shutdown 停止运行中 daemon；after-stop `service status` 显示
     `daemon: not running`。
@@ -1438,7 +1450,7 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10ad：继续做不需要第二用户的 Windows IPC/lifecycle 小步 hardening；cross-user 第二账号/VM
+- Phase 10ae：继续做不需要第二用户的 Windows IPC/lifecycle 小步 hardening；cross-user 第二账号/VM
   隔离验证已后移为 deferred manual gate，没有第二用户前不要升级 Windows IPC capability。
 - 后续代码小步可选：在不改变 capability 结论的前提下，设计 raw `CreateFileW`/overlapped client
   access-mask narrowing，或把 busy/elevation smoke 脚本沉淀为开发者手动命令。

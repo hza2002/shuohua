@@ -56,6 +56,8 @@ the normal interactive desktop model and are a poor fit for clipboard/text injec
 Startup should be user scoped:
 
 - Preferred first runtime route: explicit `shuo daemon` launched by the user or a development script.
+- Unqualified `shuo.exe` may use smart fallback to spawn the current executable with `--daemon` and wait for
+  the current scoped Named Pipe endpoint; this is not service installation or auto-start registration.
 - Later install route: Task Scheduler logon task or Startup App registration for the current user.
 - Avoid elevated install and machine-wide service management unless a future requirement proves it necessary.
 
@@ -144,6 +146,8 @@ Security requirements:
   instance before handing the connected stream to protocol handling.
 - Client connect may retry `ERROR_PIPE_BUSY`; it must not silently start the daemon until smart fallback is
   explicitly implemented.
+- Smart fallback may probe the current scoped endpoint and spawn the current executable with `--daemon` when
+  the pipe is absent; access/scope/security errors must remain visible.
 
 Validation gates:
 

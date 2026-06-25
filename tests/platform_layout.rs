@@ -734,6 +734,36 @@ fn windows_service_manager_has_dry_run_status_skeleton() {
 }
 
 #[test]
+fn windows_smart_fallback_probes_named_pipe_without_service_manager() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fallback = std::fs::read_to_string(root.join("src/daemon/fallback.rs")).unwrap();
+    let ipc = std::fs::read_to_string(root.join("docs/cross-platform/ipc-service.md")).unwrap();
+
+    for token in [
+        "socket_status_from_windows_connect_result",
+        "crate::ipc::transport::connect(path)",
+        "ERROR_PIPE_BUSY",
+        "Windows smart fallback Named Pipe probe",
+    ] {
+        assert!(
+            fallback.contains(token) || ipc.contains(token),
+            "Windows smart fallback should keep probe token `{token}`"
+        );
+    }
+
+    let windows_probe = fallback
+        .split("#[cfg(windows)]")
+        .nth(1)
+        .expect("missing Windows smart fallback cfg");
+    for forbidden in ["Task Scheduler", "SCM", "registry", "schtasks"] {
+        assert!(
+            !windows_probe.contains(forbidden),
+            "Windows smart fallback probe must not manage services via `{forbidden}`"
+        );
+    }
+}
+
+#[test]
 fn non_macos_desktop_capabilities_match_current_facade_behavior() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();

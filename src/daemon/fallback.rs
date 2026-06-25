@@ -73,8 +73,41 @@ fn connect_endpoint(path: &Path) -> SocketStatus {
 }
 
 #[cfg(windows)]
-fn connect_endpoint(_path: &Path) -> SocketStatus {
-    SocketStatus::Absent
+fn connect_endpoint(path: &Path) -> SocketStatus {
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("create Windows IPC probe runtime")
+        .and_then(|runtime| {
+            runtime.block_on(async {
+                let _stream = crate::ipc::transport::connect(path).await?;
+                Ok(())
+            })
+        });
+    socket_status_from_windows_connect_result(result)
+}
+
+#[cfg(windows)]
+fn socket_status_from_windows_connect_result(result: Result<()>) -> SocketStatus {
+    const ERROR_FILE_NOT_FOUND: i32 = 2;
+    const ERROR_PATH_NOT_FOUND: i32 = 3;
+    const ERROR_PIPE_BUSY: i32 = 231;
+
+    match result {
+        Ok(()) => SocketStatus::AcceptsConnections,
+        Err(error) => {
+            let raw_os_error = error.chain().find_map(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(std::io::Error::raw_os_error)
+            });
+            match raw_os_error {
+                Some(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) => SocketStatus::Absent,
+                Some(ERROR_PIPE_BUSY) => SocketStatus::AcceptsConnections,
+                _ => SocketStatus::Inaccessible(std::io::Error::other(error.to_string())),
+            }
+        }
+    }
 }
 
 fn wait_for_socket(path: &Path, timeout: Duration) -> Result<()> {
@@ -117,6 +150,51 @@ mod tests {
         assert!(matches!(
             socket_status_from_connect_result(err(libc::EPROTOTYPE)),
             SocketStatus::Inaccessible(_)
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_socket_status_treats_pipe_not_found_as_absent() {
+        let error = anyhow::Error::new(std::io::Error::from_raw_os_error(2))
+            .context("connect Windows IPC pipe");
+
+        assert!(matches!(
+            socket_status_from_windows_connect_result(Err(error)),
+            SocketStatus::Absent
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_socket_status_treats_pipe_busy_as_present() {
+        let error = anyhow::Error::new(std::io::Error::from_raw_os_error(231))
+            .context("connect Windows IPC pipe");
+
+        assert!(matches!(
+            socket_status_from_windows_connect_result(Err(error)),
+            SocketStatus::AcceptsConnections
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_socket_status_can_probe_live_named_pipe() {
+        let path = std::path::PathBuf::from(format!(
+            r"\\.\pipe\shuohua-fallback-probe-{}",
+            ulid::Ulid::new()
+        ));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _listener = runtime
+            .block_on(crate::ipc::transport::bind(&path))
+            .unwrap();
+
+        assert!(matches!(
+            socket_status(&path),
+            SocketStatus::AcceptsConnections
         ));
     }
 }

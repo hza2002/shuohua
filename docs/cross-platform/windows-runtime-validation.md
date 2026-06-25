@@ -83,6 +83,21 @@ Expected:
 - Windows Named Pipe transport remains `partial/runtime_not_verified` until cross-user,
   elevated/non-elevated, busy-pipe, and longer runtime behavior are tested.
 
+## Smart Fallback Smoke
+
+Run only after daemon/status smoke has passed:
+
+```powershell
+.\shuo.exe
+```
+
+Expected:
+
+- If the daemon is absent, the command may spawn the current executable with `--daemon` and wait for the scoped
+  Named Pipe endpoint before entering the TUI.
+- If the endpoint is inaccessible because of scope/security, the error remains visible.
+- It must not install, start, or register Task Scheduler/SCM service entries.
+
 ## Single Instance Smoke
 
 Keep window A running the daemon. Open PowerShell window C:

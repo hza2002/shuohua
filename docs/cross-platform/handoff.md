@@ -6,9 +6,9 @@
 
 ## 最近 commit
 
-HEAD: `test: add windows ipc smoke helper`（Phase 10y 提交；精确 hash 以 `git log -1` 为准）。
+HEAD: `docs: sync windows capability next steps`（Phase 10z 提交；精确 hash 以 `git log -1` 为准）。
 
-Previous commit: `docs: record windows pipe client access mask limit` (`f5b893c`).
+Previous commit: `test: add windows ipc smoke helper` (`9caa693`).
 
 当前分支已 rebase 到 `v0.2.0` / `release: v0.2.0` 基底（commit `7fff199`）。
 

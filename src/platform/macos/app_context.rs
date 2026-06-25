@@ -9,5 +9,6 @@ pub fn frontmost_app() -> AppContext {
     AppContext {
         bundle_id: app.bundleIdentifier().map(|s| s.to_string()),
         app_name: app.localizedName().map(|s| s.to_string()),
+        ..AppContext::default()
     }
 }

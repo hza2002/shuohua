@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: add platform profile routes`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: add windows active app identity`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: add windows audio diagnostics` (`8fcf1cb`).
+Previous phase commit: `feat: add platform profile routes` (`4b618d0`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,24 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10aj Windows active app identity diagnostics 已完成：
+
+- Windows `platform::desktop::frontmost_app()` 现在通过 `GetForegroundWindow` /
+  `GetWindowThreadProcessId` / `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` /
+  `QueryFullProcessImageNameW` 解析 foreground window owner process。
+- `AppContext` 新增 `windows_app_user_model_id` 和 `windows_exe_name`；本阶段只填
+  `windows_exe_name`，并用 executable file name 派生 display `app_name`。完整进程路径不进入
+  doctor、state、history 或 IPC。
+- `AppIdentity::current_from_app_context(&AppContext)` 现在在 Windows 下使用
+  `windows_app_user_model_id` / `windows_exe_name`，所以
+  `profile.routes.<profile>.windows.exe_name` 已有真实 runtime 输入；`app_user_model_id` 仍是预留
+  matcher，AUMID lookup 未实现。
+- `shuo doctor` 新增 `desktop.active_app.current` 低风险诊断行，用于 Windows runtime smoke；该诊断
+  不启动录音、hotkey、overlay、clipboard 或 paste。
+- Windows `desktop.active_app` capability 更新为
+  `partial/foreground_window_process_exe/exe_name_only`；不能升级为 `available`，因为 AUMID、更多
+  foreground window 类型和真实录音 session profile 命中还未验证。
+
 Phase 10ai Platform-specific profile routes 已完成：
 
 - `config.toml` 的 profile 路由从旧的 `[profile] agent = ["bundle.id"]` 改为
@@ -27,9 +45,9 @@ Phase 10ai Platform-specific profile routes 已完成：
   Windows 预留 `app_user_model_id` 和 `exe_name`，大小写不敏感；Linux 预留 `desktop_id`、`wm_class`、
   `process_name`。
 - 旧的顶层 profile route array 已明确拒绝；当前没有外部用户，未做兼容迁移逻辑。
-- daemon 入口改为通过当前平台 `AppIdentity::current_from_app_context(...)` 选择 profile。Windows/Linux
-  active app identity backend 还未实现，所以运行时会诚实落到 `profile.default`，不会虚假命中
-  Windows/Linux route。
+- daemon 入口改为通过当前平台 `AppIdentity::current_from_app_context(...)` 选择 profile。Windows
+  `exe_name` route 在 Phase 10aj 后已有 runtime 输入；Linux active app identity backend 还未实现，
+  所以 Linux 仍会诚实落到 `profile.default`。
 - starter config 模板已输出 `profile.routes.chat.*` 和 `profile.routes.agent.*`，并保守填入 macOS、
   Windows、Linux matcher 样例。
 - 本机 `%APPDATA%\Shuohua\config.toml` 已手动迁移到新 `profile.routes` 结构；没有改 ASR/LLM key
@@ -1513,7 +1531,8 @@ permission probe 或 active app runtime。
 - Windows runtime smoke:
   - `shuo.exe --version` 通过。
   - `shuo.exe doctor` 能运行并使用 `%APPDATA%\Shuohua`；Phase 10ai 后旧 profile route schema 错误
-    已消失，但因本机 Doubao/DeepSeek secret 仍为空、无默认输入设备和权限探针未实现，仍返回 1。
+    已消失。当前返回 1 的 blocking issue 是无默认输入设备和 Windows permission probe 未实现；另有
+    `post/llm/anthropic.toml`、`post/llm/openai.toml` draft key empty warning。
   - 本机 `%APPDATA%\Shuohua\config.toml` 已迁移到 `[profile.routes.<profile>.<platform>]`；后续填
     `asr/doubao.toml` 和 `post/llm/deepseek.toml` 的 key 不需要再改 route schema。
   - Phase 10ah doctor audio diagnostics 通过执行：本机无默认输入设备时仍打印
@@ -1521,6 +1540,10 @@ permission probe 或 active app runtime。
     `microphone.input.devices: count=0`。
   - Windows capability summary 现在包含
     `audio.capture=partial backend=cpal_wasapi reason=diagnostic_probe_only`；这仍不是录音可用声明。
+  - Phase 10aj doctor active app diagnostics 通过执行：本机 Windows Terminal 前台时打印
+    `desktop.active_app.current: exe_name=WindowsTerminal.exe app_name=WindowsTerminal`；capability summary
+    包含
+    `desktop.active_app=partial backend=foreground_window_process_exe reason=exe_name_only`。
   - 无参数 `shuo.exe` smart fallback 在 daemon absent 时可启动当前 executable 的 `--daemon` 子进程，
     并等到 scoped Named Pipe ready。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。
@@ -1552,15 +1575,14 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- 用户可以先填 `%APPDATA%\Shuohua\asr\doubao.toml` 和
-  `%APPDATA%\Shuohua\post\llm\deepseek.toml` 的 key，然后重跑 `shuo.exe doctor`；不要把空 key 的
-  doctor error 当作代码回归。
-- Windows active app identity backend 尚未实现；Windows route matcher 只是配置模型，后续要单独设计
-  active-window lookup / process identity facade，并保持找不到 identity 时落回 `profile.default`。
+- 若要让 `shuo.exe doctor --runtime` 继续往 ASR/LLM provider runtime 走，先确认当前 profile 实际引用的
+  provider/component key 已填写；未被 profile 引用的 draft `anthropic/openai` 空 key 只是 warning。
+- Windows active app identity backend 当前只覆盖 foreground process `exe_name`；后续若需要 packaged app
+  或 Store app 精准匹配，要单独实现 AUMID lookup。找不到 identity 时仍应落回 `profile.default`。
 - Windows audio capture smoke 仍需要用户接入/选择默认麦克风，并在 Windows Privacy & Security 中确认
   终端/可执行文件麦克风权限；没有默认 input device 时不要进入真实录音验收。
-- 如果暂时不做麦克风或 active app 手动测试，可继续做不依赖手动桌面交互的诊断/guard 小步，但不要升级
-  `audio.capture`、`desktop.active_app`、IPC 或 daemon capability。
+- 如果暂时不做麦克风、AUMID 或真实录音 session profile 命中测试，可继续做不依赖手动桌面交互的
+  诊断/guard 小步，但不要升级 `audio.capture`、`desktop.active_app`、IPC 或 daemon capability。
 - cross-user 第二账号/VM 隔离已后移为 deferred manual gate，没有第二用户前不要升级 Windows
   IPC/daemon capability。
 - overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability 升级。

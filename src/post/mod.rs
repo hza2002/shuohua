@@ -102,6 +102,8 @@ impl PipelineText {
 pub struct AppContext {
     pub bundle_id: Option<String>,
     pub app_name: Option<String>,
+    pub windows_app_user_model_id: Option<String>,
+    pub windows_exe_name: Option<String>,
 }
 
 #[derive(Error, Debug)]

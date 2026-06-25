@@ -300,6 +300,18 @@ Rules:
 - Clipboard access is foreground-desktop state. Keep it in the daemon desktop facade; do not move it into GUI
   code or service code.
 
+Current active app identity baseline:
+
+- Phase 10aj implements the first Windows active app backend with `GetForegroundWindow`,
+  `GetWindowThreadProcessId`, `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`, and
+  `QueryFullProcessImageNameW`.
+- The backend exposes only `exe_name` such as `Code.exe` plus a display `app_name`; it does not expose or store
+  the full process path.
+- `profile.routes.<profile>.windows.exe_name` can use this identity. `app_user_model_id` remains a reserved
+  matcher field until a separate AUMID lookup is implemented and runtime-tested.
+- Capability remains `partial/foreground_window_process_exe/exe_name_only`; foreground lookup failure falls back
+  to the default profile.
+
 ## Overlay
 
 Windows overlay must be native Win32, not Tauri/WebView.

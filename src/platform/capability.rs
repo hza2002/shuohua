@@ -288,66 +288,75 @@ fn linux_capabilities() -> Vec<CapabilityStatus> {
 #[cfg(target_os = "windows")]
 fn windows_capabilities() -> Vec<CapabilityStatus> {
     let mut capabilities = unsupported_capabilities(PlatformKind::Windows);
-    for replacement in [
-        CapabilityStatus {
-            id: CapabilityId::IpcTransport,
-            platform: PlatformKind::Windows,
-            backend: "named_pipe",
-            status: CapabilityStatusKind::Partial,
-            summary: "Named Pipe transport passed same-user smoke with explicit client access masks but still needs cross-user validation",
-            reason: "runtime_not_verified",
-            next_step: Some("Validate cross-user isolation and longer Windows IPC soak"),
-        },
-        CapabilityStatus {
-            id: CapabilityId::DaemonSingleInstance,
-            platform: PlatformKind::Windows,
-            backend: "named_mutex",
-            status: CapabilityStatusKind::Partial,
-            summary: "Named mutex daemon guard passed same-user and elevation smoke but still needs cross-user validation",
-            reason: "runtime_not_verified",
-            next_step: Some("Validate cross-user daemon isolation on Windows"),
-        },
-        CapabilityStatus {
-            id: CapabilityId::ProcessProbe,
-            platform: PlatformKind::Windows,
-            backend: "open_process_probe",
-            status: CapabilityStatusKind::Partial,
-            summary: "OpenProcess process probe compiles but is not runtime-verified",
-            reason: "runtime_not_verified",
-            next_step: Some("Validate Windows process probing semantics"),
-        },
-        CapabilityStatus {
-            id: CapabilityId::ServiceManager,
-            platform: PlatformKind::Windows,
-            backend: "windows_user_session",
-            status: CapabilityStatusKind::Partial,
-            summary: "Windows user service can start, stop, and restart the current user-session daemon without startup registration",
-            reason: "user_session_start_stop_only",
-            next_step: Some("Validate Windows user service install/startup registration strategy"),
-        },
-        CapabilityStatus {
-            id: CapabilityId::AudioCapture,
-            platform: PlatformKind::Windows,
-            backend: "cpal_wasapi",
-            status: CapabilityStatusKind::Partial,
-            summary: "cpal/WASAPI input diagnostics can report the default device but recording is not runtime-verified",
-            reason: "diagnostic_probe_only",
-            next_step: Some(
-                "Validate microphone permission behavior and sustained recording on Windows",
-            ),
-        },
-        CapabilityStatus {
-            id: CapabilityId::PathOpenReveal,
-            platform: PlatformKind::Windows,
-            backend: "explorer",
-            status: CapabilityStatusKind::Partial,
-            summary: "explorer.exe path open/reveal passed basic manual smoke but still needs broader path/session validation",
-            reason: "runtime_not_verified",
-            next_step: Some("Validate Explorer open/reveal with UNC, missing paths, and non-interactive sessions"),
-        },
-    ]
-    .into_iter()
-    .chain(non_macos_desktop_capabilities(PlatformKind::Windows))
+    for replacement in non_macos_desktop_capabilities(PlatformKind::Windows)
+        .into_iter()
+        .chain([
+            CapabilityStatus {
+                id: CapabilityId::IpcTransport,
+                platform: PlatformKind::Windows,
+                backend: "named_pipe",
+                status: CapabilityStatusKind::Partial,
+                summary: "Named Pipe transport passed same-user smoke with explicit client access masks but still needs cross-user validation",
+                reason: "runtime_not_verified",
+                next_step: Some("Validate cross-user isolation and longer Windows IPC soak"),
+            },
+            CapabilityStatus {
+                id: CapabilityId::DaemonSingleInstance,
+                platform: PlatformKind::Windows,
+                backend: "named_mutex",
+                status: CapabilityStatusKind::Partial,
+                summary: "Named mutex daemon guard passed same-user and elevation smoke but still needs cross-user validation",
+                reason: "runtime_not_verified",
+                next_step: Some("Validate cross-user daemon isolation on Windows"),
+            },
+            CapabilityStatus {
+                id: CapabilityId::ProcessProbe,
+                platform: PlatformKind::Windows,
+                backend: "open_process_probe",
+                status: CapabilityStatusKind::Partial,
+                summary: "OpenProcess process probe compiles but is not runtime-verified",
+                reason: "runtime_not_verified",
+                next_step: Some("Validate Windows process probing semantics"),
+            },
+            CapabilityStatus {
+                id: CapabilityId::ServiceManager,
+                platform: PlatformKind::Windows,
+                backend: "windows_user_session",
+                status: CapabilityStatusKind::Partial,
+                summary: "Windows user service can start, stop, and restart the current user-session daemon without startup registration",
+                reason: "user_session_start_stop_only",
+                next_step: Some("Validate Windows user service install/startup registration strategy"),
+            },
+            CapabilityStatus {
+                id: CapabilityId::AudioCapture,
+                platform: PlatformKind::Windows,
+                backend: "cpal_wasapi",
+                status: CapabilityStatusKind::Partial,
+                summary: "cpal/WASAPI input diagnostics can report the default device but recording is not runtime-verified",
+                reason: "diagnostic_probe_only",
+                next_step: Some(
+                    "Validate microphone permission behavior and sustained recording on Windows",
+                ),
+            },
+            CapabilityStatus {
+                id: CapabilityId::PathOpenReveal,
+                platform: PlatformKind::Windows,
+                backend: "explorer",
+                status: CapabilityStatusKind::Partial,
+                summary: "explorer.exe path open/reveal passed basic manual smoke but still needs broader path/session validation",
+                reason: "runtime_not_verified",
+                next_step: Some("Validate Explorer open/reveal with UNC, missing paths, and non-interactive sessions"),
+            },
+            CapabilityStatus {
+                id: CapabilityId::DesktopActiveApp,
+                platform: PlatformKind::Windows,
+                backend: "foreground_window_process_exe",
+                status: CapabilityStatusKind::Partial,
+                summary: "Foreground window lookup can resolve the owning process executable name but not AppUserModelID",
+                reason: "exe_name_only",
+                next_step: Some("Validate foreground app route matching and add AppUserModelID lookup on Windows"),
+            },
+        ])
     {
         replace_capability(&mut capabilities, replacement);
     }

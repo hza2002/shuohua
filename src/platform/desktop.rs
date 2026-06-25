@@ -9,7 +9,12 @@ pub(crate) fn frontmost_app() -> AppContext {
     crate::platform::macos::app_context::frontmost_app()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub(crate) fn frontmost_app() -> AppContext {
+    crate::platform::windows::app_context::frontmost_app()
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 pub(crate) fn frontmost_app() -> AppContext {
     AppContext::default()
 }

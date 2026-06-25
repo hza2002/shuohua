@@ -339,24 +339,26 @@ impl<'a> AppIdentity<'a> {
         }
     }
 
-    pub fn current_from_app_context(bundle_id: Option<&'a str>) -> Self {
+    pub fn current_from_app_context(ctx: &'a crate::post::AppContext) -> Self {
         #[cfg(target_os = "macos")]
         {
-            Self::macos(bundle_id)
+            Self::macos(ctx.bundle_id.as_deref())
         }
         #[cfg(windows)]
         {
-            let _ = bundle_id;
-            Self::windows(None, None)
+            Self::windows(
+                ctx.windows_app_user_model_id.as_deref(),
+                ctx.windows_exe_name.as_deref(),
+            )
         }
         #[cfg(target_os = "linux")]
         {
-            let _ = bundle_id;
+            let _ = ctx;
             Self::linux(None, None, None)
         }
         #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
         {
-            let _ = bundle_id;
+            let _ = ctx;
             Self::linux(None, None, None)
         }
     }
@@ -822,6 +824,21 @@ process_name = ["code"]
         assert!(routes
             .matching_profiles(&AppIdentity::macos(Some("Code.exe")))
             .is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn current_windows_identity_uses_app_context_exe_name() {
+        let ctx = crate::post::AppContext {
+            windows_app_user_model_id: Some("Microsoft.VisualStudioCode".to_string()),
+            windows_exe_name: Some("Code.exe".to_string()),
+            ..crate::post::AppContext::default()
+        };
+
+        assert_eq!(
+            AppIdentity::current_from_app_context(&ctx),
+            AppIdentity::windows(Some("Microsoft.VisualStudioCode"), Some("Code.exe"))
+        );
     }
 
     #[test]

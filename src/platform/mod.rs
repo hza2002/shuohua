@@ -12,3 +12,5 @@ pub mod macos;
 pub(crate) mod path;
 pub(crate) mod permissions;
 pub(crate) mod service;
+#[cfg(target_os = "windows")]
+pub(crate) mod windows;

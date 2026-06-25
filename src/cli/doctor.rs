@@ -42,6 +42,7 @@ pub async fn run(args: DoctorArgs) -> Result<()> {
     report.record_with_step(check_uds().await, "cli.doctor.next_step_daemon");
     report.record_with_step(check_launchd(), "cli.doctor.next_step_launchd");
     print_platform_capabilities();
+    print_active_app_diagnostics();
     report.record_with_step(check_permissions(), "cli.doctor.next_step_permissions");
     if args.runtime {
         report.record_with_step(check_runtime().await, "cli.doctor.next_step_runtime_config");
@@ -748,6 +749,35 @@ fn print_platform_capabilities() {
     }
 }
 
+fn print_active_app_diagnostics() {
+    println!(
+        "desktop.active_app.current: {}",
+        active_app_diagnostic_line(&crate::platform::desktop::frontmost_app())
+    );
+}
+
+fn active_app_diagnostic_line(ctx: &crate::post::AppContext) -> String {
+    let mut fields = Vec::new();
+    if let Some(bundle_id) = ctx.bundle_id.as_deref() {
+        fields.push(format!("bundle_id={bundle_id}"));
+    }
+    if let Some(exe_name) = ctx.windows_exe_name.as_deref() {
+        fields.push(format!("exe_name={exe_name}"));
+    }
+    if let Some(app_user_model_id) = ctx.windows_app_user_model_id.as_deref() {
+        fields.push(format!("app_user_model_id={app_user_model_id}"));
+    }
+    if let Some(app_name) = ctx.app_name.as_deref() {
+        fields.push(format!("app_name={app_name}"));
+    }
+
+    if fields.is_empty() {
+        "unavailable".to_string()
+    } else {
+        fields.join(" ")
+    }
+}
+
 fn platform_capability_summary_lines() -> Vec<String> {
     platform_capability_summary_lines_from(merged_platform_capabilities())
 }
@@ -972,6 +1002,26 @@ mod tests {
             .contains("platform.capabilities.unsupported: ipc.transport=unsupported backend=named_pipe_skeleton reason=backend_skeleton_only next=Implement Windows Named Pipe transport")));
         assert!(lines.iter().any(|line| line
             .contains("platform.capabilities.unavailable: desktop.permissions=unavailable backend=windows_permissions reason=permission_probe_missing")));
+    }
+
+    #[test]
+    fn active_app_diagnostic_line_reports_route_identity_without_path() {
+        let line = super::active_app_diagnostic_line(&crate::post::AppContext {
+            app_name: Some("Code".to_string()),
+            windows_exe_name: Some("Code.exe".to_string()),
+            ..crate::post::AppContext::default()
+        });
+
+        assert_eq!(line, "exe_name=Code.exe app_name=Code");
+        assert!(!line.contains(r"C:\"));
+    }
+
+    #[test]
+    fn active_app_diagnostic_line_marks_empty_context_unavailable() {
+        assert_eq!(
+            super::active_app_diagnostic_line(&crate::post::AppContext::default()),
+            "unavailable"
+        );
     }
 
     #[test]

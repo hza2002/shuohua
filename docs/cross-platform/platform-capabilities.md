@@ -239,6 +239,25 @@ static capability snapshot:
 Phase 10l 只修正诊断 truthfulness，不实现 Linux/Windows hotkey、clipboard、text injection、
 active app 或 permission runtime。
 
+## Phase 10aj Windows Active App Identity Diagnostics
+
+Windows `desktop.active_app` 第一版只实现 foreground window owner process lookup，用于给
+`profile.routes.<profile>.windows.exe_name` 提供真实输入：
+
+- backend：`foreground_window_process_exe`。
+- status：`partial`，reason `exe_name_only`。
+- 实现路径：`GetForegroundWindow` → `GetWindowThreadProcessId` →
+  `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` → `QueryFullProcessImageNameW`，只暴露
+  executable file name，不把完整进程路径写入 doctor、state、history 或 IPC。
+- `app_user_model_id` 字段保留在 schema/model 中，但本阶段不实现 AUMID 查询，也不声明 packaged app
+  identity route 已可用。
+- `shuo doctor` 可以打印 `desktop.active_app.current`，用于 Windows runtime smoke；该诊断不启动录音、
+  hotkey、overlay、clipboard 或 paste。
+
+该阶段允许 Windows `exe_name` route 在后续 session start 时命中；如果 lookup 失败，仍应落回
+`profile.default`。在真实录音 session 中验证 profile 命中、AUMID 查询和更多前台窗口类型之前，
+不能把 `desktop.active_app` 升级为 `available`。
+
 ## Phase 10ah Windows Audio Capture Diagnostics
 
 Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：

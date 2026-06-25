@@ -41,8 +41,10 @@ wm_class = ["Code"]
 process_name = ["code"]
 ```
 
-当前 macOS route 使用 `bundle_id`；Windows/Linux route schema 先落地，runtime 要等各自 active app
-identity backend 验证后才会命中。旧的 `[profile] agent = [...]` 顶层数组格式不再是有效配置。
+当前 macOS route 使用 `bundle_id`；Windows route 已能用 foreground process `exe_name`，但
+`app_user_model_id` 仍是预留 matcher，等后续 AUMID backend 验证。Linux route schema 先落地，runtime
+要等 Linux active app identity backend 验证后才会命中。旧的 `[profile] agent = [...]` 顶层数组格式不再
+是有效配置。
 
 ## 内置 processors
 

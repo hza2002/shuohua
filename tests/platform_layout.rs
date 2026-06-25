@@ -886,6 +886,76 @@ fn non_macos_desktop_capabilities_match_current_facade_behavior() {
 }
 
 #[test]
+fn windows_active_app_identity_backend_lives_behind_desktop_facade() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let windows_app_context = root.join("src/platform/windows/app_context.rs");
+    assert!(
+        windows_app_context.exists(),
+        "Windows active app backend should live at src/platform/windows/app_context.rs"
+    );
+
+    let platform_mod = std::fs::read_to_string(root.join("src/platform/mod.rs")).unwrap();
+    for token in ["#[cfg(target_os = \"windows\")]", "pub(crate) mod windows;"] {
+        assert!(
+            platform_mod.contains(token),
+            "src/platform/mod.rs should cfg-gate Windows backend token `{token}`"
+        );
+    }
+
+    let desktop = std::fs::read_to_string(root.join("src/platform/desktop.rs")).unwrap();
+    for token in [
+        "#[cfg(target_os = \"windows\")]",
+        "crate::platform::windows::app_context::frontmost_app()",
+        "AppContext::default()",
+    ] {
+        assert!(
+            desktop.contains(token),
+            "desktop facade should route Windows active app lookup through token `{token}`"
+        );
+    }
+
+    let backend = std::fs::read_to_string(windows_app_context).unwrap();
+    for token in [
+        "GetForegroundWindow",
+        "GetWindowThreadProcessId",
+        "OpenProcess",
+        "QueryFullProcessImageNameW",
+        "PROCESS_QUERY_LIMITED_INFORMATION",
+        "windows_exe_name",
+        "app_name_from_exe_name",
+    ] {
+        assert!(
+            backend.contains(token),
+            "Windows active app backend should contain token `{token}`"
+        );
+    }
+
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    assert!(
+        manifest.contains("Win32_UI_WindowsAndMessaging"),
+        "Cargo.toml should enable foreground-window APIs for Windows active app lookup"
+    );
+}
+
+#[test]
+fn windows_active_app_capability_reports_exe_name_only_partial() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+
+    for token in [
+        "CapabilityId::DesktopActiveApp",
+        "foreground_window_process_exe",
+        "exe_name_only",
+        "Validate foreground app route matching and add AppUserModelID lookup on Windows",
+    ] {
+        assert!(
+            capability.contains(token),
+            "Windows desktop.active_app capability should report exe-name-only token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn desktop_capabilities_live_behind_platform_desktop_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 

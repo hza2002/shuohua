@@ -833,6 +833,17 @@ Phase 10ai Platform-Specific Profile Routes:
   runtime identity backend still returns no app identity and falls back to `profile.default`.
 - The old top-level profile array route shape is rejected because there are no external users to migrate.
 
+Phase 10aj Windows Active App Identity Diagnostics:
+
+- Add the first Windows `platform::desktop::frontmost_app()` backend using foreground-window owner process
+  metadata.
+- Scope the first step to `exe_name`; keep `app_user_model_id` as schema/model reserve until a separate AUMID
+  lookup is designed and runtime-tested.
+- Expose a privacy-safe `shuo doctor` diagnostic line for runtime smoke. Do not print full process paths.
+- Allow Windows profile routes to match `profile.routes.<profile>.windows.exe_name`, but keep
+  `desktop.active_app` at `partial/foreground_window_process_exe/exe_name_only`.
+- Do not start audio, overlay, hotkey, clipboard, paste, or full recording validation in this phase.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

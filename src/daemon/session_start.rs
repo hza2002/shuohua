@@ -65,9 +65,7 @@ fn prepare_with_dirs(
     let profile = crate::config::profile::load_for_app(
         profile_dir,
         &cfg.profile,
-        &crate::config::AppIdentity::current_from_app_context(
-            start_app_context.bundle_id.as_deref(),
-        ),
+        &crate::config::AppIdentity::current_from_app_context(&start_app_context),
     )
     .map_err(|error| {
         tracing::warn!(error = ?error, "profile load failed");
@@ -235,6 +233,7 @@ chain = []
             crate::post::AppContext {
                 bundle_id: Some("com.example.App".to_string()),
                 app_name: Some("Example".to_string()),
+                ..crate::post::AppContext::default()
             },
             StateStore::new(),
             overlay,

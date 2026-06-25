@@ -39,6 +39,7 @@ impl LlmCleanup {
         let ctx = AppContext {
             bundle_id: Some("doctor.runtime".to_string()),
             app_name: Some("shuo doctor".to_string()),
+            ..AppContext::default()
         };
         let prompt = render_prompt(&self.cfg.prompt, &ctx, "doctor runtime check");
         match self.cfg.format {
@@ -322,6 +323,7 @@ mod tests {
         let ctx = AppContext {
             bundle_id: Some("com.apple.dt.Xcode".to_string()),
             app_name: Some("Xcode".to_string()),
+            ..AppContext::default()
         };
 
         let rendered = render_prompt(

@@ -14,10 +14,10 @@ use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use crate::config::theme::{EffectiveOverlayCfg, GlassStyle};
 use crate::overlay::layout as L;
 
-pub(super) fn root_frame() -> NSRect {
+pub(super) fn root_frame(cfg: &EffectiveOverlayCfg) -> NSRect {
     NSRect::new(
         NSPoint::new(0.0, 0.0),
-        NSSize::new(L::constants::WIDTH, L::constants::BASE_HEIGHT),
+        NSSize::new(cfg.core.width, L::constants::BASE_HEIGHT),
     )
 }
 
@@ -111,11 +111,12 @@ pub(super) fn build_chrome(
     Option<String>,
 ) {
     let container = NSView::new(mtm);
-    container.setFrame(root_frame());
+    container.setFrame(root_frame(cfg));
     let background = make_background_layer(mtm, cfg);
 
     if AnyClass::get(c"NSGlassEffectView").is_some() {
-        let glass = NSGlassEffectView::initWithFrame(NSGlassEffectView::alloc(mtm), root_frame());
+        let glass =
+            NSGlassEffectView::initWithFrame(NSGlassEffectView::alloc(mtm), root_frame(cfg));
         #[cfg(debug_assertions)]
         {
             super::debug::dump_glass_selectors(&glass);
@@ -139,7 +140,7 @@ pub(super) fn build_chrome(
     }
 
     let visual = NSVisualEffectView::new(mtm);
-    visual.setFrame(root_frame());
+    visual.setFrame(root_frame(cfg));
     visual.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
     visual.setMaterial(NSVisualEffectMaterial::HUDWindow);
     visual.setState(NSVisualEffectState::Active);
@@ -195,7 +196,7 @@ pub(super) fn make_background_layer(
     cfg: &EffectiveOverlayCfg,
 ) -> Retained<NSView> {
     let background = NSView::new(mtm);
-    background.setFrame(root_frame());
+    background.setFrame(root_frame(cfg));
     background.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );

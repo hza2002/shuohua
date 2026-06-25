@@ -102,6 +102,8 @@ const CONFIG_VALUES: &[(&str, TemplateValue)] = &[
         TemplateValue::Table(&[
             ("position", TemplateValue::String("bottom")),
             ("max_text_lines", TemplateValue::Integer(5)),
+            ("width", TemplateValue::Float(572.0)),
+            ("text_scale", TemplateValue::Float(1.0)),
         ]),
     ),
     (

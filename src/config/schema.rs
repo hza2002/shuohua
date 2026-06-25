@@ -83,6 +83,8 @@ fn description_key(name: &str) -> &'static str {
         "overlay" => "config.field.overlay.description",
         "overlay.position" => "config.field.overlay.position.description",
         "overlay.max_text_lines" => "config.field.overlay.max_text_lines.description",
+        "overlay.width" => "config.field.overlay.width.description",
+        "overlay.text_scale" => "config.field.overlay.text_scale.description",
         "palette" => "config.field.theme.palette.description",
         "foreground" => "config.field.theme.foreground.description",
         "muted" => "config.field.theme.muted.description",
@@ -239,6 +241,16 @@ pub fn main_spec() -> ConfigSpec {
             field(FieldSpec::integer, "overlay.max_text_lines")
                 .optional()
                 .range(1.0, 10.0),
+        )
+        .field(
+            field(FieldSpec::float, "overlay.width")
+                .optional()
+                .range(360.0, 1200.0),
+        )
+        .field(
+            field(FieldSpec::float, "overlay.text_scale")
+                .optional()
+                .range(0.8, 1.6),
         )
 }
 

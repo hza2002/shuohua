@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: add windows per pixel overlay surface`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: add overlay size preferences`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: add windows direct2d overlay foundation` (`2da7516`).
+Previous phase commit: `fix: preserve windows overlay position` (`2d2be24`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,17 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10at Overlay size preferences 已完成：
+
+- 主配置 `[overlay]` 新增用户偏好 `width` 和 `text_scale`；已有 `max_text_lines` 继续负责最多显示行数。
+- 这两个字段不放进 theme：切换 theme 只改变颜色/材质，用户的宽度、文字大小和行数偏好保持稳定。
+- `EffectiveOverlayCfg.core` 现在携带 `width` / `text_scale`；Windows 和 macOS renderer 都消费同一语义。
+- `overlay::layout` 根据 `width` 和 `text_scale` 推导 body 宽度、行高和 `chars_per_line`，不暴露
+  `height` 或 `chars_per_line` 配置，避免和 `max_text_lines` / 实际字体渲染冲突。
+- 默认值保持 `width=572.0`、`text_scale=1.0`，因此默认不改变 macOS 现有视觉；Windows 4K 用户可先在
+  `%APPDATA%\Shuohua\config.toml` 的 `[overlay]` 下手动调大，例如 `width=680.0`、`text_scale=1.1`。
+- 本阶段只增加配置和 renderer 消费，不升级 overlay capability。
+
 Phase 10as Windows per-pixel layered surface 已完成：
 
 - 用户目视确认 Phase 10ar Direct2D 后“稍微好一点，但仍不够清晰”；根因判断为 Direct2D path 仍使用

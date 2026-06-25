@@ -43,6 +43,21 @@ pub mod constants {
     pub const META_MIN_W: f64 = 180.0;
 }
 
+pub fn body_width(width: f64) -> f64 {
+    (width - constants::H_PAD * 2.0).max(120.0)
+}
+
+pub fn body_line_height(text_scale: f64) -> f64 {
+    constants::BODY_LINE_H * text_scale.clamp(0.8, 1.6)
+}
+
+pub fn chars_per_line(width: f64, text_scale: f64) -> usize {
+    let default_body = constants::BODY_W;
+    let scale = text_scale.clamp(0.8, 1.6);
+    let estimate = constants::CHARS_PER_LINE as f64 * body_width(width) / default_body / scale;
+    estimate.round().clamp(12.0, 96.0) as usize
+}
+
 pub fn frame_y_for_visual_center(center_y: f64, height: f64, optical_y: f64) -> f64 {
     center_y - height / 2.0 - optical_y
 }
@@ -55,7 +70,7 @@ pub struct FirstRow {
     pub meta: LayoutFrame,
 }
 
-pub fn first_row_frames(top_offset: f64) -> FirstRow {
+pub fn first_row_frames(width: f64, top_offset: f64) -> FirstRow {
     use constants::*;
     let center_y = HEADER_CENTER_Y + top_offset;
     let mut x = H_PAD;
@@ -80,7 +95,7 @@ pub fn first_row_frames(top_offset: f64) -> FirstRow {
         META_BOX_H,
     );
     x += STATS_W + META_GAP;
-    let right = WIDTH - H_PAD;
+    let right = width - H_PAD;
     let meta_w = (right - x).max(META_MIN_W);
     FirstRow {
         icon,
@@ -93,6 +108,10 @@ pub fn first_row_frames(top_offset: f64) -> FirstRow {
             META_BOX_H,
         ),
     }
+}
+
+pub fn scaled_font_size(base: f64, text_scale: f64) -> f64 {
+    base * text_scale.clamp(0.8, 1.6)
 }
 
 pub fn display_text_plan(text: &str, max_lines: usize, chars_per_line: usize) -> (String, usize) {
@@ -314,7 +333,7 @@ mod tests {
 
     #[test]
     fn first_row_clusters_stats_and_app_on_left_with_wide_meta() {
-        let row = first_row_frames(0.0);
+        let row = first_row_frames(constants::WIDTH, 0.0);
         assert!(row.stats.x - (row.status.x + row.status.w) <= 6.0);
         assert!(row.stats.w >= 210.0);
         assert!(row.stats.x < row.meta.x);
@@ -332,7 +351,7 @@ mod tests {
 
     #[test]
     fn first_row_uses_shared_visual_center() {
-        let row = first_row_frames(0.0);
+        let row = first_row_frames(constants::WIDTH, 0.0);
         let center = constants::HEADER_CENTER_Y;
         assert!((visual_center(row.icon, constants::ICON_OPTICAL_Y) - center).abs() < 0.1);
         assert!((visual_center(row.status, constants::STATE_OPTICAL_Y) - center).abs() < 0.1);
@@ -343,6 +362,17 @@ mod tests {
     #[test]
     fn header_body_gap_keeps_rows_breathing() {
         assert_eq!(constants::HEADER_BODY_GAP, 2.0);
+    }
+
+    #[test]
+    fn text_capacity_follows_width_and_scale() {
+        assert_eq!(
+            chars_per_line(constants::WIDTH, 1.0),
+            constants::CHARS_PER_LINE
+        );
+        assert!(chars_per_line(constants::WIDTH * 1.2, 1.0) > constants::CHARS_PER_LINE);
+        assert!(chars_per_line(constants::WIDTH, 1.2) < constants::CHARS_PER_LINE);
+        assert!(body_line_height(1.2) > constants::BODY_LINE_H);
     }
 
     #[test]

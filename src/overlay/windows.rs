@@ -247,7 +247,7 @@ impl WindowsOverlay {
 
     fn apply_surface_shape(&self) {
         let metrics = WindowMetrics::for_window(self.hwnd);
-        let width = metrics.px(L::constants::WIDTH);
+        let width = metrics.px(self.cfg.core.width);
         let height = metrics.px(overlay_height(&self.model, &self.cfg));
         let radius = metrics.px(self.cfg.core.corner_radius).max(0);
         unsafe {
@@ -274,7 +274,7 @@ impl WindowsOverlay {
         let rect = RECT {
             left: 0,
             top: 0,
-            right: metrics.px(L::constants::WIDTH),
+            right: metrics.px(self.cfg.core.width),
             bottom: metrics.px(overlay_height(&self.model, &self.cfg)),
         };
         let brush = CreateSolidBrush(to_colorref(self.cfg.core.background_rgb));
@@ -282,9 +282,10 @@ impl WindowsOverlay {
         DeleteObject(brush as HGDIOBJ);
 
         SetBkMode(hdc, TRANSPARENT as i32);
-        let state_font = create_ui_font(metrics, 13.0, true);
-        let meta_font = create_ui_font(metrics, 12.0, false);
-        let body_font = create_ui_font(metrics, 14.0, false);
+        let text_scale = self.cfg.core.text_scale;
+        let state_font = create_ui_font(metrics, L::scaled_font_size(13.0, text_scale), true);
+        let meta_font = create_ui_font(metrics, L::scaled_font_size(12.0, text_scale), false);
+        let body_font = create_ui_font(metrics, L::scaled_font_size(14.0, text_scale), false);
         let old_font = SelectObject(hdc, state_font);
         draw_text(
             hdc,
@@ -319,7 +320,7 @@ impl WindowsOverlay {
         };
         draw_text(
             hdc,
-            &mut metrics.rect(430.0, 11.0, L::constants::WIDTH - 16.0, 34.0),
+            &mut metrics.rect(430.0, 11.0, self.cfg.core.width - 16.0, 34.0),
             meta,
             meta_color,
             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
@@ -333,7 +334,7 @@ impl WindowsOverlay {
         let (text, _) = L::display_text_plan(
             &self.model.display_text(),
             self.cfg.core.max_text_lines,
-            L::constants::CHARS_PER_LINE,
+            L::chars_per_line(self.cfg.core.width, self.cfg.core.text_scale),
         );
         SelectObject(hdc, body_font);
         draw_text(
@@ -341,7 +342,7 @@ impl WindowsOverlay {
             &mut metrics.rect(
                 16.0,
                 36.0,
-                L::constants::WIDTH - 16.0,
+                self.cfg.core.width - 16.0,
                 overlay_height(&self.model, &self.cfg) - 8.0,
             ),
             &text,
@@ -436,7 +437,7 @@ fn create_overlay_window(overlay: *mut WindowsOverlay) -> Result<HWND> {
             WS_POPUP,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            L::constants::WIDTH as i32,
+            crate::config::theme::CoreOverlayCfg::default().width as i32,
             L::constants::BASE_HEIGHT as i32,
             null_mut(),
             null_mut(),
@@ -483,13 +484,7 @@ fn screen_panel_frame(
     let screen = work_area_layout(metrics);
     let height = L::constants::BASE_HEIGHT;
     let anchor = screen;
-    let mut frame = L::panel_frame(
-        anchor,
-        cfg.core.position,
-        L::constants::WIDTH,
-        height,
-        screen,
-    );
+    let mut frame = L::panel_frame(anchor, cfg.core.position, cfg.core.width, height, screen);
     frame.y = screen.h - frame.y - frame.h;
     frame.x = frame.x * metrics.scale + metrics.work_area.left as f64;
     frame.y = frame.y * metrics.scale + metrics.work_area.top as f64;
@@ -526,9 +521,10 @@ pub(super) fn overlay_height(
     let (_, lines) = L::display_text_plan(
         &model.display_text(),
         cfg.core.max_text_lines,
-        L::constants::CHARS_PER_LINE,
+        L::chars_per_line(cfg.core.width, cfg.core.text_scale),
     );
-    L::constants::BASE_HEIGHT + (lines.saturating_sub(1) as f64 * L::constants::BODY_LINE_H)
+    L::constants::BASE_HEIGHT
+        + (lines.saturating_sub(1) as f64 * L::body_line_height(cfg.core.text_scale))
 }
 
 unsafe fn draw_text(hdc: HDC, rect: &mut RECT, text: &str, rgb: u32, format: u32) {
@@ -682,7 +678,8 @@ mod tests {
 
     #[test]
     fn screen_panel_frame_uses_work_area_origin_and_scale() {
-        let cfg = crate::config::theme::EffectiveOverlayCfg::default();
+        let mut cfg = crate::config::theme::EffectiveOverlayCfg::default();
+        cfg.core.width = 720.0;
         let metrics = WindowMetrics {
             dpi: 144,
             scale: 1.5,
@@ -696,7 +693,7 @@ mod tests {
 
         let frame = screen_panel_frame(&cfg, metrics);
 
-        assert_eq!(frame.w, L::constants::WIDTH * 1.5);
+        assert_eq!(frame.w, 720.0 * 1.5);
         assert!(frame.x >= 100.0);
         assert!(frame.y >= 50.0);
         assert!(frame.x + frame.w <= 2500.0);

@@ -969,6 +969,56 @@ fn windows_overlay_backend_uses_minimal_win32_window() {
 }
 
 #[test]
+fn overlay_size_preferences_live_in_main_config_not_theme() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let main_config = std::fs::read_to_string(root.join("src/config/main.rs")).unwrap();
+    let schema = std::fs::read_to_string(root.join("src/config/schema.rs")).unwrap();
+    let template = std::fs::read_to_string(root.join("src/config/template/registry.rs")).unwrap();
+    let theme = std::fs::read_to_string(root.join("src/config/theme.rs")).unwrap();
+    let doc = std::fs::read_to_string(root.join("docs/cross-platform/config-theme.md")).unwrap();
+
+    for token in [
+        "pub width: f64",
+        "pub text_scale: f64",
+        "default_overlay_width",
+        "default_overlay_text_scale",
+    ] {
+        assert!(
+            main_config.contains(token),
+            "main overlay config should own user preference token `{token}`"
+        );
+    }
+
+    for token in ["overlay.width", "overlay.text_scale"] {
+        assert!(
+            schema.contains(token),
+            "main config schema should declare `{token}`"
+        );
+        assert!(
+            doc.contains(token),
+            "config/theme policy should document `{token}`"
+        );
+    }
+
+    for token in [
+        "(\"width\", TemplateValue::Float(572.0))",
+        "(\"text_scale\", TemplateValue::Float(1.0))",
+    ] {
+        assert!(
+            template.contains(token),
+            "starter config should emit overlay preference token `{token}`"
+        );
+    }
+
+    for forbidden in ["pub width: Option", "pub text_scale: Option"] {
+        assert!(
+            !theme.contains(forbidden),
+            "theme parser must not own overlay size preference `{forbidden}`"
+        );
+    }
+}
+
+#[test]
 fn windows_overlay_capability_reports_minimal_partial_backend() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let backend = std::fs::read_to_string(root.join("src/overlay/windows.rs")).unwrap();

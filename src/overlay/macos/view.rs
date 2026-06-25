@@ -189,7 +189,7 @@ impl OverlayView {
     fn new(mtm: MainThreadMarker, cfg: EffectiveOverlayCfg) -> Self {
         let initial_frame = NSRect::new(
             NSPoint::new(80.0, 860.0),
-            NSSize::new(L::constants::WIDTH, L::constants::BASE_HEIGHT),
+            NSSize::new(cfg.core.width, L::constants::BASE_HEIGHT),
         );
         let panel = make_panel(mtm, initial_frame);
         apply_panel_background_blur(&panel, cfg.macos.background_blur_radius);
@@ -199,7 +199,7 @@ impl OverlayView {
             tracing::warn!(area = "overlay_chrome", message = %error);
         }
 
-        let row = L::first_row_frames(0.0);
+        let row = L::first_row_frames(cfg.core.width, 0.0);
         let icon_fx_view = NSView::new(mtm);
         icon_fx_view.setFrame(to_nsrect(row.icon));
         icon_fx_view.setWantsLayer(true);
@@ -209,21 +209,21 @@ impl OverlayView {
         let status = label(
             mtm,
             to_nsrect(row.status),
-            typography::STATE,
+            L::scaled_font_size(typography::STATE, cfg.core.text_scale),
             true,
             cfg.core.text.primary,
         );
         let stats = label(
             mtm,
             to_nsrect(row.stats),
-            typography::META,
+            L::scaled_font_size(typography::META, cfg.core.text_scale),
             false,
             cfg.core.text.secondary,
         );
         let meta = label(
             mtm,
             to_nsrect(row.meta),
-            typography::META,
+            L::scaled_font_size(typography::META, cfg.core.text_scale),
             false,
             cfg.core.text.tertiary,
         );
@@ -232,9 +232,12 @@ impl OverlayView {
             mtm,
             NSRect::new(
                 NSPoint::new(L::constants::H_PAD, L::constants::BOTTOM_PAD),
-                NSSize::new(L::constants::BODY_W, L::constants::BODY_LINE_H),
+                NSSize::new(
+                    L::body_width(cfg.core.width),
+                    L::body_line_height(cfg.core.text_scale),
+                ),
             ),
-            typography::BODY,
+            L::scaled_font_size(typography::BODY, cfg.core.text_scale),
             false,
             cfg.core.text.primary,
         );
@@ -365,7 +368,7 @@ impl OverlayView {
             let (_, current_lines) = L::display_text_plan(
                 &full_text,
                 self.cfg.core.max_text_lines,
-                L::constants::CHARS_PER_LINE,
+                L::chars_per_line(self.cfg.core.width, self.cfg.core.text_scale),
             );
             let lines = if self.model.state == OverlayState::Recording {
                 self.peak_text_lines = self.peak_text_lines.max(current_lines);
@@ -374,7 +377,7 @@ impl OverlayView {
                 current_lines
             };
             let height = L::constants::BASE_HEIGHT
-                + (lines.saturating_sub(1) as f64 * L::constants::BODY_LINE_H);
+                + (lines.saturating_sub(1) as f64 * L::body_line_height(self.cfg.core.text_scale));
             let height_changed = self.last_height != Some(height);
             self.last_height = Some(height);
 
@@ -420,13 +423,13 @@ impl OverlayView {
                 &self.model.segments,
                 &self.model.partial,
                 self.cfg.core.max_text_lines,
-                L::constants::CHARS_PER_LINE,
+                L::chars_per_line(self.cfg.core.width, self.cfg.core.text_scale),
             )
         } else {
             let (display_text, lines) = L::display_text_plan(
                 &full_text,
                 self.cfg.core.max_text_lines,
-                L::constants::CHARS_PER_LINE,
+                L::chars_per_line(self.cfg.core.width, self.cfg.core.text_scale),
             );
             L::LiveTextPlan {
                 segments: String::new(),
@@ -630,7 +633,7 @@ impl OverlayView {
         let top_offset = height - L::constants::BASE_HEIGHT;
         let full = NSRect::new(
             NSPoint::new(0.0, 0.0),
-            NSSize::new(L::constants::WIDTH, height),
+            NSSize::new(self.cfg.core.width, height),
         );
         // 材质层和色层必须跟 root 同步动画，避免 Liquid Glass 边缘与实际外框短暂错位。
         set_view_frame(&self.container, full, animated);
@@ -638,7 +641,7 @@ impl OverlayView {
             set_view_frame(glass, full, animated);
         }
         set_view_frame(&self.background, full, animated);
-        let row = L::first_row_frames(top_offset);
+        let row = L::first_row_frames(self.cfg.core.width, top_offset);
         set_view_frame(&self.state_icon, to_nsrect(row.icon), animated);
         set_view_frame(&self.icon_fx_view, to_nsrect(row.icon), animated);
         set_view_frame(&self.status, to_nsrect(row.status), animated);
@@ -649,9 +652,10 @@ impl OverlayView {
             NSRect::new(
                 NSPoint::new(L::constants::H_PAD, L::constants::BOTTOM_PAD),
                 NSSize::new(
-                    L::constants::BODY_W,
-                    L::constants::BODY_LINE_H
-                        + (lines.saturating_sub(1) as f64 * L::constants::BODY_LINE_H),
+                    L::body_width(self.cfg.core.width),
+                    L::body_line_height(self.cfg.core.text_scale)
+                        + (lines.saturating_sub(1) as f64
+                            * L::body_line_height(self.cfg.core.text_scale)),
                 ),
             ),
             animated,
@@ -667,7 +671,7 @@ impl OverlayView {
         let frame = to_nsrect(L::panel_frame(
             from_nsrect(anchor),
             self.cfg.core.position,
-            L::constants::WIDTH,
+            self.cfg.core.width,
             height,
             from_nsrect(screen),
         ));
@@ -689,6 +693,7 @@ impl OverlayView {
         if cfg == self.cfg {
             return;
         }
+        let old_text_scale = self.cfg.core.text_scale;
         if let Some(glass) = &self.glass {
             let missing = apply_glass_settings(glass, &cfg);
             if !missing.is_empty() {
@@ -702,6 +707,9 @@ impl OverlayView {
         apply_panel_background_blur(&self.panel, cfg.macos.background_blur_radius);
         apply_background_settings(&self.background, &cfg);
         self.cfg = cfg;
+        if (old_text_scale - self.cfg.core.text_scale).abs() > f64::EPSILON {
+            self.apply_text_scale();
+        }
         self.model.state_color = self.model.state.color_rgb(&self.cfg.core.state);
         self.last_status_text.clear();
         self.last_visible_text.clear();
@@ -712,6 +720,29 @@ impl OverlayView {
             self.peak_text_lines = cap;
         }
         self.render();
+    }
+
+    fn apply_text_scale(&self) {
+        set_label_font(
+            &self.status,
+            L::scaled_font_size(typography::STATE, self.cfg.core.text_scale),
+            true,
+        );
+        set_label_font(
+            &self.stats,
+            L::scaled_font_size(typography::META, self.cfg.core.text_scale),
+            false,
+        );
+        set_label_font(
+            &self.meta,
+            L::scaled_font_size(typography::META, self.cfg.core.text_scale),
+            false,
+        );
+        set_label_font(
+            &self.text,
+            L::scaled_font_size(typography::BODY, self.cfg.core.text_scale),
+            false,
+        );
     }
 }
 
@@ -762,6 +793,15 @@ fn label(
     field.setFont(Some(&font));
     field.setAlignment(NSTextAlignment::Left);
     field
+}
+
+fn set_label_font(field: &NSTextField, font_size: f64, bold: bool) {
+    let font = if bold {
+        NSFont::boldSystemFontOfSize(font_size)
+    } else {
+        NSFont::systemFontOfSize(font_size)
+    };
+    field.setFont(Some(&font));
 }
 
 fn make_state_icon(mtm: MainThreadMarker, color_rgb: u32) -> Retained<NSImageView> {

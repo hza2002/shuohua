@@ -18,9 +18,24 @@ product config root；package/app 私有目录只能保存 GUI/runtime 私有状
 - profile routing。
 - ASR/post 链接关系。
 - UI language/theme 选择。
-- overlay 行为：position、max_text_lines 等。
+- overlay 行为和用户偏好：position、max_text_lines、width、text_scale 等。
 
 不把平台视觉实现细节放进主配置。
+
+Overlay 尺寸和文字大小属于用户偏好，不属于 theme。用户切换 theme 时，颜色和材质可以变化，但
+浮层宽度、最多行数和文字大小应保持稳定。对应字段是 `overlay.width`、`overlay.text_scale` 和
+已有的 `overlay.max_text_lines`：
+
+```toml
+[overlay]
+position = "bottom"
+max_text_lines = 5
+width = 572.0
+text_scale = 1.0
+```
+
+Renderer 使用 `width` 和 `text_scale` 推导每行容量、行高和实际高度；不暴露 `height` 或
+`chars_per_line`，避免这些字段与 `max_text_lines` / 字体渲染产生冲突。
 
 Profile 内容三端共享，route matcher 按平台分段。`profile.routes` 使用 profile 名作为动态 key，
 每个 profile 下只读取当前平台段；同一 app identity 命中多个 profile 是配置错误：

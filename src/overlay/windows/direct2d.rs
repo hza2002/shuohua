@@ -65,7 +65,7 @@ impl Direct2dRenderer {
         cfg: &crate::config::theme::EffectiveOverlayCfg,
         metrics: WindowMetrics,
     ) -> Result<()> {
-        let width = metrics.px(L::constants::WIDTH).max(1);
+        let width = metrics.px(cfg.core.width).max(1);
         let height = metrics.px(super::overlay_height(model, cfg)).max(1);
         self.ensure_surface(width, height, metrics)?;
         let surface = self.surface.as_ref().context("Direct2D layered surface")?;
@@ -94,9 +94,21 @@ impl Direct2dRenderer {
                 &background,
             );
 
-            let state_format = self.text_format(13.0, true, false)?;
-            let meta_format = self.text_format(12.0, false, false)?;
-            let body_format = self.text_format(14.0, false, true)?;
+            let meta_format = self.text_format(
+                L::scaled_font_size(12.0, cfg.core.text_scale) as f32,
+                false,
+                false,
+            )?;
+            let state_format = self.text_format(
+                L::scaled_font_size(13.0, cfg.core.text_scale) as f32,
+                true,
+                false,
+            )?;
+            let body_format = self.text_format(
+                L::scaled_font_size(14.0, cfg.core.text_scale) as f32,
+                false,
+                true,
+            )?;
 
             self.draw_text(
                 &surface.target,
@@ -129,7 +141,7 @@ impl Direct2dRenderer {
                 &surface.target,
                 &meta_format,
                 meta,
-                metrics.rect_f(430.0, 11.0, L::constants::WIDTH - 16.0, 34.0),
+                metrics.rect_f(430.0, 11.0, cfg.core.width - 16.0, 34.0),
                 meta_color,
             )?;
 
@@ -141,7 +153,7 @@ impl Direct2dRenderer {
             let (text, _) = L::display_text_plan(
                 &model.display_text(),
                 cfg.core.max_text_lines,
-                L::constants::CHARS_PER_LINE,
+                L::chars_per_line(cfg.core.width, cfg.core.text_scale),
             );
             self.draw_text(
                 &surface.target,
@@ -150,7 +162,7 @@ impl Direct2dRenderer {
                 metrics.rect_f(
                     16.0,
                     36.0,
-                    L::constants::WIDTH - 16.0,
+                    cfg.core.width - 16.0,
                     super::overlay_height(model, cfg) - 8.0,
                 ),
                 text_color,

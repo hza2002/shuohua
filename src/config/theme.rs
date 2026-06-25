@@ -64,6 +64,8 @@ pub struct EffectiveOverlayCfg {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoreOverlayCfg {
     pub position: OverlayPosition,
+    pub width: f64,
+    pub text_scale: f64,
     pub background_rgb: u32,
     pub background_alpha: f64,
     pub corner_radius: f64,
@@ -279,6 +281,8 @@ impl Default for CoreOverlayCfg {
     fn default() -> Self {
         Self {
             position: OverlayPosition::default(),
+            width: crate::overlay::layout::constants::WIDTH,
+            text_scale: 1.0,
             background_rgb: 0x282828,
             background_alpha: 0.70,
             corner_radius: 18.0,
@@ -389,6 +393,8 @@ pub fn default_for_config(config: &crate::config::Config) -> EffectiveTheme {
         normalized_theme_name(non_empty_or(&config.ui.theme_overlay, &theme.theme)).to_string();
     theme.overlay.core.position = config.overlay.position;
     theme.overlay.core.max_text_lines = config.overlay.max_text_lines;
+    theme.overlay.core.width = config.overlay.width;
+    theme.overlay.core.text_scale = config.overlay.text_scale;
     theme
 }
 
@@ -738,6 +744,28 @@ theme = "missing-theme"
         assert_eq!(report.theme.theme, "missing-theme");
         assert_eq!(report.theme.overlay.core.text.primary, palette::FG0);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn overlay_user_preferences_come_from_main_config_not_theme() {
+        let cfg = crate::config::main::parse(
+            r#"
+[hotkey]
+trigger = "f16"
+
+[overlay]
+width = 720
+text_scale = 1.15
+max_text_lines = 6
+"#,
+        )
+        .unwrap();
+
+        let effective = default_for_config(&cfg);
+
+        assert_eq!(effective.overlay.core.width, 720.0);
+        assert_eq!(effective.overlay.core.text_scale, 1.15);
+        assert_eq!(effective.overlay.core.max_text_lines, 6);
     }
 
     #[test]

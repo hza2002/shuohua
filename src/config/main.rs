@@ -416,6 +416,10 @@ pub struct OverlayCfg {
     pub position: OverlayPosition,
     #[serde(default = "default_max_text_lines")]
     pub max_text_lines: usize,
+    #[serde(default = "default_overlay_width")]
+    pub width: f64,
+    #[serde(default = "default_overlay_text_scale")]
+    pub text_scale: f64,
 }
 
 impl Default for OverlayCfg {
@@ -423,6 +427,8 @@ impl Default for OverlayCfg {
         Self {
             position: OverlayPosition::default(),
             max_text_lines: default_max_text_lines(),
+            width: default_overlay_width(),
+            text_scale: default_overlay_text_scale(),
         }
     }
 }
@@ -438,6 +444,12 @@ pub enum OverlayPosition {
 
 fn default_max_text_lines() -> usize {
     5
+}
+fn default_overlay_width() -> f64 {
+    crate::overlay::layout::constants::WIDTH
+}
+fn default_overlay_text_scale() -> f64 {
+    1.0
 }
 
 /// `$XDG_CONFIG_HOME/shuohua/config.toml` or `~/.config/shuohua/config.toml`.
@@ -502,6 +514,8 @@ trigger = "f16"
         assert!(cfg.profile.routes.is_empty());
         assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
         assert_eq!(cfg.overlay.max_text_lines, 5);
+        assert_eq!(cfg.overlay.width, crate::overlay::layout::constants::WIDTH);
+        assert_eq!(cfg.overlay.text_scale, 1.0);
     }
 
     #[test]
@@ -623,10 +637,14 @@ trigger = "f16"
 [overlay]
 position          = "top"
 max_text_lines    = 6
+width             = 720
+text_scale        = 1.12
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.overlay.position, OverlayPosition::Top);
         assert_eq!(cfg.overlay.max_text_lines, 6);
+        assert_eq!(cfg.overlay.width, 720.0);
+        assert_eq!(cfg.overlay.text_scale, 1.12);
     }
 
     #[test]
@@ -745,6 +763,8 @@ threshold = 1.5
 
 [overlay]
 max_text_lines = 0
+width = 2000
+text_scale = 0.1
 "#,
         )
         .unwrap_err()
@@ -752,6 +772,8 @@ max_text_lines = 0
 
         assert!(error.contains("voice.vad.threshold"), "{error}");
         assert!(error.contains("overlay.max_text_lines"), "{error}");
+        assert!(error.contains("overlay.width"), "{error}");
+        assert!(error.contains("overlay.text_scale"), "{error}");
     }
 
     #[test]

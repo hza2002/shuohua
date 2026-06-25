@@ -6,9 +6,9 @@
 
 ## 最近 commit
 
-HEAD: `docs: sync windows capability next steps`（Phase 10z 提交；精确 hash 以 `git log -1` 为准）。
+HEAD: `fix: record abandoned windows mutex recovery`（Phase 10aa 提交；精确 hash 以 `git log -1` 为准）。
 
-Previous commit: `test: add windows ipc smoke helper` (`9caa693`).
+Previous commit: `docs: sync windows capability next steps` (`348cceb`).
 
 当前分支已 rebase 到 `v0.2.0` / `release: v0.2.0` 基底（commit `7fff199`）。
 

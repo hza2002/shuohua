@@ -139,7 +139,11 @@ mod imp {
         }
         let handle = Handle(handle);
         match wait_for_mutex(handle.raw()) {
-            Ok(()) => Ok(DaemonLockGuard(handle)),
+            Ok(MutexAcquire::Acquired) => Ok(DaemonLockGuard(handle)),
+            Ok(MutexAcquire::AbandonedRecovered) => {
+                tracing::warn!("recovered abandoned Windows daemon mutex");
+                Ok(DaemonLockGuard(handle))
+            }
             Err(error) => {
                 if error.kind() == std::io::ErrorKind::WouldBlock {
                     anyhow::bail!("another shuo daemon is already starting or running");
@@ -153,9 +157,20 @@ mod imp {
         format!("Local\\shuohua-daemon-{scope}")
     }
 
-    fn wait_for_mutex(handle: HANDLE) -> std::io::Result<()> {
-        match unsafe { WaitForSingleObject(handle, 0) } {
-            WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(()),
+    #[derive(Debug)]
+    enum MutexAcquire {
+        Acquired,
+        AbandonedRecovered,
+    }
+
+    fn wait_for_mutex(handle: HANDLE) -> std::io::Result<MutexAcquire> {
+        wait_for_mutex_result(unsafe { WaitForSingleObject(handle, 0) })
+    }
+
+    fn wait_for_mutex_result(result: u32) -> std::io::Result<MutexAcquire> {
+        match result {
+            WAIT_OBJECT_0 => Ok(MutexAcquire::Acquired),
+            WAIT_ABANDONED => Ok(MutexAcquire::AbandonedRecovered),
             WAIT_TIMEOUT => Err(std::io::Error::from(std::io::ErrorKind::WouldBlock)),
             WAIT_FAILED => Err(std::io::Error::last_os_error()),
             code => Err(std::io::Error::other(format!(
@@ -246,6 +261,22 @@ mod imp {
             assert!(
                 process_exists_with_open_result(Err(std::io::Error::from_raw_os_error(123)))
                     .is_err()
+            );
+        }
+
+        #[test]
+        fn mutex_wait_result_recovers_abandoned_mutex_explicitly() {
+            assert!(matches!(
+                wait_for_mutex_result(WAIT_OBJECT_0).unwrap(),
+                MutexAcquire::Acquired
+            ));
+            assert!(matches!(
+                wait_for_mutex_result(WAIT_ABANDONED).unwrap(),
+                MutexAcquire::AbandonedRecovered
+            ));
+            assert_eq!(
+                wait_for_mutex_result(WAIT_TIMEOUT).unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
             );
         }
     }

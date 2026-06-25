@@ -167,8 +167,8 @@ Rules:
 
 - Use a named mutex for daemon startup exclusion.
 - The mutex name must use the same user/session identity material as the pipe name.
-- Treat abandoned mutex behavior explicitly during runtime testing; document whether it is recovered or treated
-  as a warning.
+- Treat abandoned mutex behavior explicitly: the current backend recovers `WAIT_ABANDONED` and logs a warning;
+  a real crash/abandon smoke still needs Windows runtime validation.
 - Use `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, ...)` for process probe only as a liveness hint.
 - Do not build correctness on PID liveness alone; process reuse remains a risk.
 - A second daemon should fail before opening a second runtime endpoint. The final guard is named mutex plus pipe

@@ -15,6 +15,15 @@ Previous commit: `test: add windows ipc smoke helper` (`9caa693`).
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10aa Windows abandoned mutex behavior 已完成：
+
+- Windows `platform::lifecycle` 不再把 `WAIT_ABANDONED` 静默当作普通 acquire；现在映射为
+  `AbandonedRecovered` 并记录 warning，然后继续持有 guard。这符合 Win32 mutex 被 abandoned 后
+  当前线程获得所有权的语义。
+- 新增纯函数单测固定 `WAIT_OBJECT_0` / `WAIT_ABANDONED` / `WAIT_TIMEOUT` 映射。
+- docs/cross-platform/windows.md 和 platform-capabilities.md 已同步：真实 crash/abandon smoke 仍待
+  Windows runtime 验证，但行为边界已不再未定义。
+
 Phase 10z Windows capability next-step sync 已完成：
 
 - Windows `ipc.transport` / `daemon.single_instance` capability 仍保持 `partial/runtime_not_verified`，

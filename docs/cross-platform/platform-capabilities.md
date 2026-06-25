@@ -185,7 +185,8 @@ Windows lifecycle no longer needs to be a pure unsupported placeholder for compi
 
 - `daemon.single_instance`：`partial`，backend `named_mutex`。`platform::lifecycle` uses a
   named Win32 mutex to model the daemon single-instance guard. Same-user and elevated/non-elevated smoke has
-  passed, but cross-user isolation and abandoned mutex behavior still need Windows validation.
+  passed. The backend maps `WAIT_ABANDONED` to an explicit warning/recovery path, but cross-user isolation and
+  real crash/abandon smoke still need Windows validation.
 - `process.probe`：`partial`，backend `open_process_probe`。`OpenProcess` is used as a compile backend
   for process existence probing, but PID reuse and permission behavior still need Windows validation.
 

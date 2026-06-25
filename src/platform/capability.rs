@@ -294,9 +294,9 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
             platform: PlatformKind::Windows,
             backend: "named_pipe",
             status: CapabilityStatusKind::Partial,
-            summary: "Named Pipe transport passed same-user smoke but still needs cross-user and access-mask validation",
+            summary: "Named Pipe transport passed same-user smoke with explicit client access masks but still needs cross-user validation",
             reason: "runtime_not_verified",
-            next_step: Some("Validate cross-user isolation and narrow client access masks"),
+            next_step: Some("Validate cross-user isolation and longer Windows IPC soak"),
         },
         CapabilityStatus {
             id: CapabilityId::DaemonSingleInstance,

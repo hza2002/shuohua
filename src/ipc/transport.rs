@@ -156,6 +156,8 @@ mod imp {
 
 #[cfg(windows)]
 mod imp {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
     use std::pin::Pin;
     use std::task::{Context as TaskContext, Poll};
@@ -163,10 +165,13 @@ mod imp {
 
     use anyhow::{Context, Result};
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-    use tokio::net::windows::named_pipe::{
-        ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
-    };
+    use tokio::net::windows::named_pipe::{NamedPipeClient, NamedPipeServer, ServerOptions};
     use tokio::time;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_OVERLAPPED, FILE_READ_DATA, FILE_WRITE_DATA, OPEN_EXISTING,
+        SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
+    };
 
     use crate::windows_identity::{SecurityAttributes, WindowsSessionIdentity};
 
@@ -282,7 +287,7 @@ mod imp {
         let path = path.as_ref();
         let mut attempts = 1;
         loop {
-            match ClientOptions::new().open(path.as_os_str()) {
+            match open_client_raw(path.as_os_str()) {
                 Ok(client) => {
                     return Ok(Stream {
                         inner: PipeStream::Client(client),
@@ -307,6 +312,39 @@ mod imp {
 
     fn pipe_busy_retry_delay(attempt: u32) -> Option<Duration> {
         (attempt < PIPE_BUSY_MAX_ATTEMPTS).then_some(PIPE_BUSY_RETRY_DELAY)
+    }
+
+    fn open_client_raw(path: &OsStr) -> std::io::Result<NamedPipeClient> {
+        let path = wide_null(path);
+        let handle = unsafe {
+            CreateFileW(
+                path.as_ptr(),
+                client_desired_access(),
+                0,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                client_flags_and_attributes(),
+                std::ptr::null_mut(),
+            )
+        };
+
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        unsafe { NamedPipeClient::from_raw_handle(handle as _) }
+    }
+
+    fn wide_null(value: &OsStr) -> Vec<u16> {
+        value.encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    fn client_desired_access() -> u32 {
+        FILE_READ_DATA | FILE_WRITE_DATA
+    }
+
+    fn client_flags_and_attributes() -> u32 {
+        FILE_FLAG_OVERLAPPED | SECURITY_IDENTIFICATION | SECURITY_SQOS_PRESENT
     }
 
     pub async fn bind_default() -> Result<Listener> {
@@ -370,6 +408,21 @@ mod imp {
                 Some(Duration::from_millis(50))
             );
             assert_eq!(pipe_busy_retry_delay(PIPE_BUSY_MAX_ATTEMPTS), None);
+        }
+
+        #[test]
+        fn client_open_uses_narrow_explicit_access_mask() {
+            assert_eq!(client_desired_access(), FILE_READ_DATA | FILE_WRITE_DATA);
+            assert_eq!(
+                client_desired_access() & windows_sys::Win32::Foundation::GENERIC_WRITE,
+                0
+            );
+            assert_eq!(
+                client_desired_access() & windows_sys::Win32::Foundation::GENERIC_READ,
+                0
+            );
+            assert_ne!(client_flags_and_attributes() & FILE_FLAG_OVERLAPPED, 0);
+            assert_ne!(client_flags_and_attributes() & SECURITY_SQOS_PRESENT, 0);
         }
     }
 }

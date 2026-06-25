@@ -107,7 +107,8 @@ platform 按编译目标设置为 Linux/Windows/Unknown，reason 使用 `backend
 
 - Windows `ipc.transport`：`partial`，backend `named_pipe`，reason `runtime_not_verified`。
   这表示 Tokio Named Pipe transport 已通过 Windows target compile check 和 same-user/elevation
-  smoke，但 cross-user 隔离和 client access-mask narrowing 仍未完成。
+  smoke，且 client connect 已收窄到 raw `CreateFileW` explicit access mask；cross-user 隔离和
+  longer runtime soak 仍未完成。
 
 ## Phase 10d Linux Compile-Time Capability Sync
 

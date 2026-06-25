@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `fix: support windows service start over ipc`（以 `git log -1` 为准）。
+Latest phase commit: `fix: narrow windows named pipe client access`（以 `git log -1` 为准）。
 
-Previous phase commit: `fix: probe windows ipc for smart fallback` (`4b707ec`).
+Previous phase commit: `fix: support windows service start over ipc` (`44bd8ee`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,22 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10af Windows raw Named Pipe client access mask 已完成：
+
+- Windows IPC client connect 不再使用 Tokio `ClientOptions::new().open(...)` 的
+  `GENERIC_READ` / `GENERIC_WRITE` 路径。
+- 新路径使用 raw `CreateFileW` 打开 scoped Named Pipe，desired access 为
+  `FILE_READ_DATA | FILE_WRITE_DATA`，保留 `FILE_FLAG_OVERLAPPED` 和
+  `SECURITY_IDENTIFICATION | SECURITY_SQOS_PRESENT`，随后用 `NamedPipeClient::from_raw_handle` 接回
+  Tokio I/O。
+- 既有 `ERROR_PIPE_BUSY` bounded retry policy 保持不变；access/scope/security 错误仍保持可见。
+- Windows same-user elevated runtime smoke 通过：`service start/status/restart/stop` 正常，第二个
+  `--daemon` 仍失败，stop 后无残留同路径 `shuo` 进程。
+- `scripts/windows-ipc-smoke.ps1 -StopExisting` 通过：20/20 busy clients exit 0，
+  `service_stop_exit=0`，`after_stop_status_exit=0`，`failures=[]`。
+- Windows `ipc.transport` capability 仍为 `partial/runtime_not_verified`；cross-user 第二账号/VM
+  隔离和 longer runtime soak 仍是 deferred manual gate。
+
 Phase 10ae Windows user-session service start/restart 已完成：
 
 - Windows `shuo service start` 现在会先查询当前 scoped Named Pipe `DaemonStatus`；daemon 已运行时只打印
@@ -1460,6 +1476,8 @@ permission probe 或 active app runtime。
   - `shuo.exe --daemon` + scoped Named Pipe `DaemonStatus` 通过。
   - 第二个 `shuo.exe --daemon` 明确失败，单实例 guard 生效。
   - same-user medium/elevated 和 elevated/medium 交叉矩阵通过，修复后不再拆成两个 daemon runtime。
+  - Windows IPC client 已切到 raw `CreateFileW` explicit access mask；
+    `ipc::transport::imp::tests::client_open_uses_narrow_explicit_access_mask` 通过。
   - `scripts/windows-ipc-smoke.ps1 -StopExisting` 在 elevated session 通过：20/20 busy clients exit 0，
     `service_stop_exit=0`，`after_stop_status_exit=0`，helper 输出 `failures: []`。
   - Explorer direct open/reveal 工具会话仍返回 1，但用户目视确认窗口打开/reveal 生效；不要只看
@@ -1469,10 +1487,10 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10af：继续做不需要第二用户的 Windows IPC/lifecycle 小步 hardening；cross-user 第二账号/VM
+- Phase 10ag：继续做不需要第二用户的 Windows IPC/lifecycle 小步 hardening；cross-user 第二账号/VM
   隔离验证已后移为 deferred manual gate，没有第二用户前不要升级 Windows IPC/daemon capability。
-- 后续代码小步可选：在不改变 capability 结论的前提下，设计 raw `CreateFileW`/overlapped client
-  access-mask narrowing，或把 start/restart/busy/elevation smoke 脚本沉淀为开发者手动命令。
+- 后续代码小步可选：在不改变 capability 结论的前提下，把 start/restart/busy/elevation smoke 脚本沉淀
+  为开发者手动命令，或增加更长时间 same-user IPC soak。
 - audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability
   升级。
 - 不继续 GUI 产品化开发。

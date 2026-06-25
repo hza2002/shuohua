@@ -81,6 +81,17 @@ Phase 10x Windows Named Pipe client access-mask audit:
   的路径，或等待/引入支持 explicit desired access 的 Tokio API；这一步必须重新做 Windows runtime
   smoke，尤其是 client connect、busy retry、cross-elevation 和 cross-user 行为。
 
+Phase 10af Windows raw Named Pipe client access mask:
+
+- Windows client connect 改为 raw `CreateFileW` + `NamedPipeClient::from_raw_handle`，不再通过
+  `ClientOptions::new().open(...)` 取得 `GENERIC_READ` / `GENERIC_WRITE`。
+- Desired access 只包含 JSON-line client 需要的 `FILE_READ_DATA | FILE_WRITE_DATA`，并保留
+  `FILE_FLAG_OVERLAPPED` 和 `SECURITY_IDENTIFICATION | SECURITY_SQOS_PRESENT`。
+- `ERROR_PIPE_BUSY` 仍使用既有 bounded retry policy；access/scope/security 错误仍保持可见，不触发
+  service install/startup registration。
+- 该阶段必须在 Windows 重新跑 daemon/status/busy/service lifecycle smoke；cross-user 第二账号/VM
+  仍是 deferred manual gate。
+
 ## 单实例
 
 daemon 单实例锁和 stale endpoint 清理需要平台化：

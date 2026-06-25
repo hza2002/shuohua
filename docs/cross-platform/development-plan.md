@@ -862,6 +862,15 @@ Phase 10al Windows Clipboard Write Backend:
 - Capability may move from unsupported to partial/write-only after build and same-session runtime smoke, but must
   not imply paste injection or target-app parity.
 
+Phase 10am Windows Paste Injection Backend:
+
+- Implement only `platform::autotype::paste()` on Windows as a `SendInput` Ctrl+V sequence.
+- Keep clipboard write and paste injection as separate capabilities; paste depends on foreground focus and target
+  app behavior.
+- Add an explicit ignored runtime smoke because it sends real keyboard input to the foreground app.
+- Do not implement global hotkey, overlay, audio, or full record -> ASR -> post -> paste flow in this phase.
+- Capability may move to partial after same-session smoke, but must not imply target-app or UAC/elevation parity.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

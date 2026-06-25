@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: add windows clipboard write backend`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: add windows paste injection backend`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: add windows profile route diagnostics` (`ffd831c`).
+Previous phase commit: `feat: add windows clipboard write backend` (`e3fe940`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,20 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10am Windows paste injection backend 已完成：
+
+- Windows `platform::autotype::paste()` 现在调度到 Win32 `SendInput` backend，发送
+  Control down、V down、V up、Control up 的 Ctrl+V 序列。
+- 新增显式 ignored runtime smoke：
+  `cargo test --target x86_64-pc-windows-msvc platform::windows::autotype::tests::paste_runtime_smoke -- --ignored --exact`。
+  本机用临时 WinForms textbox 做前台目标验证：先写入剪贴板
+  `shuohua-paste-smoke-20260625-winforms`，再执行 ignored paste smoke，textbox 读回同一内容。
+- Windows `desktop.text_injection` capability 现在是
+  `partial/sendinput_ctrl_v/runtime_smoke_only`；`desktop.clipboard` 仍是独立的
+  `partial/win32_clipboard_unicode/write_only_runtime_smoke`。
+- 本阶段没有实现 hotkey、overlay、audio 或 record -> ASR -> post -> paste 全链路；paste capability
+  不能升级为 available，直到真实目标 App、UAC/elevation 边界和完整 session 验证完成。
+
 Phase 10al Windows clipboard write backend 已完成：
 
 - Windows `platform::clipboard::write_string` 现在调度到 Win32 backend，使用
@@ -1578,8 +1592,11 @@ permission probe 或 active app runtime。
   - Phase 10al clipboard write runtime smoke 通过：ignored test 写入
     `shuohua-clipboard-smoke-20260625-🙂`，PowerShell STA clipboard readback 返回同一内容。
     `doctor` capability summary 现在包含
-    `desktop.clipboard=partial backend=win32_clipboard_unicode reason=write_only_runtime_smoke`，同时
-    `desktop.text_injection` 仍为 unsupported。
+    `desktop.clipboard=partial backend=win32_clipboard_unicode reason=write_only_runtime_smoke`。
+  - Phase 10am paste injection runtime smoke 通过：临时 WinForms textbox 前台目标读回
+    `shuohua-paste-smoke-20260625-winforms`；Notepad smoke 尝试未作为结论，因为 Windows 11 Notepad
+    未暴露可用 `MainWindowHandle`。`doctor` capability summary 现在包含
+    `desktop.text_injection=partial backend=sendinput_ctrl_v reason=runtime_smoke_only`。
   - 无参数 `shuo.exe` smart fallback 在 daemon absent 时可启动当前 executable 的 `--daemon` 子进程，
     并等到 scoped Named Pipe ready。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。

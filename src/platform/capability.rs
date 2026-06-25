@@ -357,6 +357,15 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 next_step: Some("Validate Unicode clipboard writes across target Windows apps and elevation boundaries"),
             },
             CapabilityStatus {
+                id: CapabilityId::DesktopTextInjection,
+                platform: PlatformKind::Windows,
+                backend: "sendinput_ctrl_v",
+                status: CapabilityStatusKind::Partial,
+                summary: "SendInput Ctrl+V paste injection is implemented but needs target-app and elevation validation",
+                reason: "runtime_smoke_only",
+                next_step: Some("Validate Ctrl+V injection across target Windows apps and UAC/elevation boundaries"),
+            },
+            CapabilityStatus {
                 id: CapabilityId::DesktopActiveApp,
                 platform: PlatformKind::Windows,
                 backend: "foreground_window_process_exe",

@@ -306,10 +306,18 @@ Current clipboard baseline:
   `OpenClipboard` / `EmptyClipboard` / `SetClipboardData(CF_UNICODETEXT)`.
 - The backend writes `CF_UNICODETEXT` using movable global memory and transfers ownership to the system only after
   `SetClipboardData` succeeds.
-- Paste injection remains unsupported; this phase does not call `SendInput` and does not validate record -> paste
-  or target-app text insertion parity.
 - Capability is `partial/win32_clipboard_unicode/write_only_runtime_smoke` until broader target-app and elevation
   boundary validation is complete.
+
+Current paste injection baseline:
+
+- Phase 10am implements `platform::autotype::paste()` on Windows as `SendInput` Ctrl+V:
+  Control down, V down, V up, Control up.
+- This is only a backend primitive. It does not implement hotkey triggering, foreground target selection, overlay,
+  audio, or full record -> paste validation.
+- Capability is `partial/sendinput_ctrl_v/runtime_smoke_only` until Notepad/browser/editor/terminal and
+  UAC/elevation boundaries are validated.
+- If paste injection fails in a future full session, the clipboard write should still remain the durable fallback.
 
 Current active app identity baseline:
 

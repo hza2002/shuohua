@@ -1012,6 +1012,58 @@ fn windows_clipboard_capability_reports_write_only_partial() {
 }
 
 #[test]
+fn windows_paste_backend_uses_sendinput_ctrl_v() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let backend = std::fs::read_to_string(root.join("src/platform/windows/autotype.rs")).unwrap();
+
+    for token in [
+        "SendInput",
+        "INPUT_KEYBOARD",
+        "KEYBDINPUT",
+        "KEYEVENTF_KEYUP",
+        "VK_CONTROL",
+        "VK_V",
+        "ctrl_v_inputs",
+        "paste_runtime_smoke",
+    ] {
+        assert!(
+            backend.contains(token),
+            "Windows paste backend should contain token `{token}`"
+        );
+    }
+
+    let platform_autotype = std::fs::read_to_string(root.join("src/platform/autotype.rs")).unwrap();
+    assert!(
+        platform_autotype.contains("crate::platform::windows::autotype::paste()"),
+        "shared autotype facade should dispatch to the Windows backend"
+    );
+
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    assert!(
+        manifest.contains("Win32_UI_Input_KeyboardAndMouse"),
+        "Cargo.toml should enable KeyboardAndMouse APIs for Windows paste injection"
+    );
+}
+
+#[test]
+fn windows_text_injection_capability_reports_sendinput_partial() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+
+    for token in [
+        "CapabilityId::DesktopTextInjection",
+        "sendinput_ctrl_v",
+        "runtime_smoke_only",
+        "Validate Ctrl+V injection across target Windows apps and UAC/elevation boundaries",
+    ] {
+        assert!(
+            capability.contains(token),
+            "Windows desktop.text_injection capability should report SendInput partial token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn desktop_capabilities_live_behind_platform_desktop_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 

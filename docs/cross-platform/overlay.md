@@ -110,6 +110,25 @@ Phase 7b implementation status:
 - 在 macOS 主机 cross-check Windows target 时，当前先被既有 Unix-only `ipc::transport` 阻断；
   overlay skeleton 的真实 Windows 编译和视觉验证需要等 Named Pipe transport 或 Windows 环境可用后继续。
 
+### Windows Phase 10ao Minimal Backend
+
+Phase 10ao replaces the skeleton with a minimal native Win32 backend:
+
+- The renderer creates one `WS_POPUP` window with `WS_EX_LAYERED`, `WS_EX_TOPMOST`,
+  `WS_EX_TOOLWINDOW`, and `WS_EX_NOACTIVATE`.
+- The first backend uses only Win32/GDI: translucent layered-window background, basic text drawing, show/hide,
+  and `OverlayCmd::Quit` handling. It does not introduce Tauri, WebView, Direct2D, Skia, or wgpu.
+- The backend reuses shared `OverlayModel` and layout/text helpers. Windows-specific code owns only the message
+  pump, window creation, visibility, hit testing, and drawing.
+- Hit testing returns `HTTRANSPARENT`, but mouse/touch/pen passthrough still needs real foreground-app validation.
+- Anchoring is screen-only. Focused-window anchoring remains a later phase even though foreground process identity
+  diagnostics exist.
+- Capability is partial/degraded: renderer/topmost/input passthrough are smoke-only partial; material is degraded
+  translucent fallback only; window anchor is degraded screen-only.
+
+This phase does not validate audio, hotkey-triggered recording, clipboard/paste, advanced material, multi-monitor
+behavior, fullscreen apps, UAC prompts, or final visual quality.
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。

@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: add windows hotkey hook backend`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: add windows minimal overlay backend`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: add windows paste injection backend` (`7c29d88`).
+Previous phase commit: `feat: add windows hotkey hook backend` (`3a321d6`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,29 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10ao Windows minimal overlay backend 已完成：
+
+- Windows overlay 不再是 no-op skeleton；现在创建一个原生 Win32 `WS_POPUP` overlay window，使用
+  `WS_EX_LAYERED` / `WS_EX_TOPMOST` / `WS_EX_TOOLWINDOW` / `WS_EX_NOACTIVATE`。
+- 第一版只使用 Win32/GDI：translucent layered-window background、basic text drawing、show/hide、
+  `OverlayCmd::Quit`，不引入 Tauri/WebView、Direct2D、Skia 或 wgpu。
+- backend 复用共享 `OverlayModel` 和 layout/text helpers；Windows 代码只拥有 message pump、window
+  creation、visibility、hit testing 和 drawing。
+- 新增显式 ignored runtime smoke：
+  `cargo test --target x86_64-pc-windows-msvc overlay::windows::tests::runtime_smoke_creates_shows_hides_and_quits_window -- --ignored --exact`。
+  本机 smoke 通过：短暂创建/显示/隐藏 Win32 overlay window 并正常退出。
+- `doctor` capability summary 现在包含
+  `overlay.renderer=partial backend=win32_overlay_minimal reason=runtime_smoke_only`、
+  `overlay.always_on_top=partial backend=win32_overlay_minimal reason=runtime_smoke_only`、
+  `overlay.input_passthrough=partial backend=win32_overlay_minimal reason=runtime_smoke_only`、
+  `overlay.material=degraded backend=win32_overlay_minimal reason=translucent_fallback_only`、
+  `overlay.window_anchor=degraded backend=win32_overlay_minimal reason=screen_anchor_only`。
+- 本阶段没有验证最终视觉质量、真实 foreground App、mouse/touch/pen passthrough、fullscreen/UAC/
+  multi-monitor 或 hotkey/audio/full record -> paste flow；capability 不能升级为 available。
+- 用户随后完成手动 overlay smoke：临时把 hotkey 改为 `f16`，启动 daemon 后用合成 F16 触发；
+  目视确认 overlay 可见、位置大致正确、不抢焦点、可自动消失/随 daemon stop 消失，点击穿透符合预期。
+  这仍不覆盖 fullscreen/UAC/multi-monitor/touch/pen 或最终视觉质量。
+
 Phase 10an Windows hotkey hook backend 已完成：
 
 - Windows hotkey provider 现在使用 `WH_KEYBOARD_LL` low-level keyboard hook，运行在
@@ -1619,6 +1642,17 @@ permission probe 或 active app runtime。
     `desktop.hotkey_suppression=partial backend=wh_keyboard_ll reason=runtime_smoke_only`。
   - Phase 10an 后 `service start; service status; service stop` 单步 smoke 通过，daemon 可启动到
     `state=Idle` 并正常停止；该 smoke 未触发录音，因为本机仍无默认麦克风。
+  - Phase 10ao overlay runtime smoke 通过：ignored test 短暂创建/显示/隐藏 Win32 overlay window 并
+    正常退出。`doctor` capability summary 现在包含
+    `overlay.renderer=partial backend=win32_overlay_minimal reason=runtime_smoke_only`、
+    `overlay.material=degraded backend=win32_overlay_minimal reason=translucent_fallback_only`、
+    `overlay.input_passthrough=partial backend=win32_overlay_minimal reason=runtime_smoke_only` 和
+    `overlay.window_anchor=degraded backend=win32_overlay_minimal reason=screen_anchor_only`。
+  - Phase 10ao 后 `service start; service status; service stop` 单步 smoke 通过，确认新 Win32 overlay
+    backend 不阻塞 daemon 启停；该 smoke 未进入真实录音。
+  - 用户手动 overlay smoke 通过：临时 `trigger = "f16"` 后启动 daemon，用合成 F16 触发无麦克风错误路径；
+    目视确认 overlay 可见、位置大致正确、不抢焦点、可消失，点击穿透符合预期。该结论仍不覆盖
+    fullscreen/UAC/multi-monitor/touch/pen 或最终视觉质量。
   - 无参数 `shuo.exe` smart fallback 在 daemon absent 时可启动当前 executable 的 `--daemon` 子进程，
     并等到 scoped Named Pipe ready。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。

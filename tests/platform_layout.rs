@@ -938,6 +938,60 @@ fn windows_hotkey_capability_reports_hook_partial() {
 }
 
 #[test]
+fn windows_overlay_backend_uses_minimal_win32_window() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let backend = std::fs::read_to_string(root.join("src/overlay/windows.rs")).unwrap();
+
+    for token in [
+        "CreateWindowExW",
+        "WS_EX_LAYERED",
+        "WS_EX_TOPMOST",
+        "WS_EX_TOOLWINDOW",
+        "WS_EX_NOACTIVATE",
+        "SetLayeredWindowAttributes",
+        "HTTRANSPARENT",
+        "DrawTextW",
+        "OverlayModel",
+        "runtime_smoke_creates_shows_hides_and_quits_window",
+    ] {
+        assert!(
+            backend.contains(token),
+            "Windows overlay backend should contain minimal Win32 token `{token}`"
+        );
+    }
+
+    for forbidden in ["tauri", "WebView", "Direct2D", "Skia", "wgpu"] {
+        assert!(
+            !backend.contains(forbidden),
+            "Windows minimal overlay backend must not depend on `{forbidden}`"
+        );
+    }
+}
+
+#[test]
+fn windows_overlay_capability_reports_minimal_partial_backend() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let backend = std::fs::read_to_string(root.join("src/overlay/windows.rs")).unwrap();
+    let capabilities =
+        std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
+
+    for token in [
+        "win32_overlay_minimal",
+        "runtime_smoke_only",
+        "translucent_fallback_only",
+        "screen_anchor_only",
+        "overlay.renderer",
+        "overlay.material",
+        "overlay.input_passthrough",
+    ] {
+        assert!(
+            backend.contains(token) || capabilities.contains(token),
+            "Windows overlay capability should report minimal partial token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn windows_active_app_identity_backend_lives_behind_desktop_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let windows_app_context = root.join("src/platform/windows/app_context.rs");

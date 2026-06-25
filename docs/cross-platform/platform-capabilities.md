@@ -299,6 +299,20 @@ backend 存在并做过同会话 smoke：
   foreground App、remote desktop 或 UAC/elevation 边界可用。
 - 在真实目标 App 和完整 record -> paste session 验证前，不能升级为 `available`。
 
+## Phase 10ao Windows Minimal Overlay Backend
+
+Windows overlay 在 Phase 10ao 只表达最小 Win32 renderer 可以创建窗口并消费 `OverlayCmd`：
+
+- `overlay.renderer`：`partial`，backend `win32_overlay_minimal`，reason `runtime_smoke_only`。
+- `overlay.material`：`degraded`，backend `win32_overlay_minimal`，reason `translucent_fallback_only`。
+- `overlay.always_on_top`：`partial`，backend `win32_overlay_minimal`，reason `runtime_smoke_only`。
+- `overlay.input_passthrough`：`partial`，backend `win32_overlay_minimal`，reason `runtime_smoke_only`。
+- `overlay.window_anchor`：`degraded`，backend `win32_overlay_minimal`，reason `screen_anchor_only`。
+- 该 backend 不使用 Tauri/WebView，不引入 Direct2D/Skia/wgpu；先用 Win32/GDI 做 translucent
+  layered window、basic text、show/hide/quit。
+- 在真实 foreground App、UAC/fullscreen/multi-monitor、mouse/touch/pen passthrough 和最终视觉质量验证前，
+  不能升级为 `available`。
+
 ## Phase 10ah Windows Audio Capture Diagnostics
 
 Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：

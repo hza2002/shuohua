@@ -882,6 +882,18 @@ Phase 10an Windows Low-Level Hotkey Backend:
 - Capability may move to partial/runtime-smoke only after a same-session hook smoke, but suppression and target-app
   parity still require manual foreground-app validation.
 
+Phase 10ao Windows Minimal Overlay Backend:
+
+- Replace the Windows overlay skeleton with a minimal native Win32 renderer that creates one dedicated
+  no-activate/topmost/toolwindow/layered window and consumes the existing `OverlayCmd` channel.
+- Use only Win32/GDI for the first backend; do not introduce Tauri, WebView, Direct2D, Skia, wgpu, or a large
+  renderer stack in this phase.
+- Reuse shared `OverlayModel` and layout helpers; the Windows backend should only own window creation, message
+  pump, show/hide, and basic translucent text drawing.
+- Add a runtime smoke that can create/show/hide/quit the renderer without audio or full recording.
+- Capability may move to partial after smoke, but input passthrough, focused-window anchoring, advanced material,
+  multi-monitor behavior, and real visual quality remain manual validation gates.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

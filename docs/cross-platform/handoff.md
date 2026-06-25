@@ -4,11 +4,14 @@
 
 `feat/cross-platform-design`
 
-## 最近 commit
+## 最近阶段 commit
 
-HEAD: `fix: record abandoned windows mutex recovery`（Phase 10aa 提交；精确 hash 以 `git log -1` 为准）。
+Latest phase commit: `fix: record abandoned windows mutex recovery` (`292a166`).
 
 Previous commit: `docs: sync windows capability next steps` (`348cceb`).
+
+Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
+current HEAD.
 
 当前分支已 rebase 到 `v0.2.0` / `release: v0.2.0` 基底（commit `7fff199`）。
 

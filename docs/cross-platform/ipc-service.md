@@ -177,6 +177,16 @@ Phase 10ad Windows smart fallback Named Pipe probe:
 - 该路径只服务无参数 `shuo.exe` 进入 TUI 前的 developer/runtime convenience；Windows IPC capability
   仍不得在 cross-user 和更长 soak 前升级为 `available`。
 
+Phase 10ae Windows user-session service start/restart:
+
+- Windows `shuo service start` 可以显式启动当前 executable 的 `--daemon` 子进程，并等待当前用户/
+  登录会话 scoped Named Pipe 返回 `DaemonStatus`。
+- 如果 daemon 已运行，`start` 只报告当前 daemon status 和 already-running 信息，不生成第二个 daemon。
+- Windows `shuo service restart` 先查询当前 daemon；运行中则走既有 IPC `Shutdown` + PID exit wait，
+  然后再执行 `start`。daemon absent 时，`restart` 退化为 explicit start。
+- 这仍不是 install/auto-start registration：`install` / `uninstall` 继续 unsupported，不调用
+  Task Scheduler、SCM、PowerShell 或 registry APIs。
+
 ## Smart Fallback
 
 CLI/TUI/GUI 连接 daemon 时：

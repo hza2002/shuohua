@@ -195,6 +195,7 @@ Expected:
 - Status prints daemon availability plus Windows user-session dry-run strategy.
 - Only pipe-not-found style connect errors should be treated as `daemon: not running`; access/scope/security
   errors must remain visible.
+- It may report `start=explicit_process`, but startup registration must remain unsupported until a later phase.
 - It must not install a Task Scheduler task, write registry keys, call SCM service APIs, or require elevation.
 
 ## Service Stop IPC Shutdown
@@ -211,6 +212,27 @@ Expected:
 - `service stop` sends IPC `Shutdown`, waits for the daemon process to exit, and prints a stopped message.
 - Follow-up `service status` reports `daemon: not running`.
 - It must not install, unregister, start, or stop any Task Scheduler/SCM service.
+
+## Service Start/Restart User Session
+
+Run with no daemon running:
+
+```powershell
+.\shuo.exe service start
+.\shuo.exe service status
+.\shuo.exe service restart
+.\shuo.exe service status
+.\shuo.exe service stop
+```
+
+Expected:
+
+- `service start` spawns the current executable with `--daemon`, waits for `DaemonStatus`, and returns.
+- Re-running `service start` while the daemon is already running reports already-running and does not create a
+  second daemon.
+- `service restart` stops the current daemon over IPC when present, then starts a daemon in the same user
+  session. If no daemon is present, it behaves as an explicit start.
+- It must not install, register, enable, or call Task Scheduler/SCM/registry service management.
 
 ## Explorer Open/Reveal
 

@@ -21,7 +21,7 @@ pub async fn run(command: ServiceCommand) -> Result<()> {
     match command {
         ServiceCommand::Install => crate::platform::service::install(),
         ServiceCommand::Uninstall => crate::platform::service::uninstall(),
-        ServiceCommand::Start => crate::platform::service::start(),
+        ServiceCommand::Start => crate::platform::service::start().await,
         ServiceCommand::Stop => crate::platform::service::stop().await,
         ServiceCommand::Restart => crate::platform::service::restart().await,
         ServiceCommand::Status => crate::platform::service::status().await,

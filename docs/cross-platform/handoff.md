@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `fix: preserve windows service status ipc errors` (`6919630`).
+Latest phase commit: `fix: support windows service start over ipc`（以 `git log -1` 为准）。
 
-Previous commit: `fix: record abandoned windows mutex recovery` (`292a166`).
+Previous phase commit: `fix: probe windows ipc for smart fallback` (`4b707ec`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,21 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10ae Windows user-session service start/restart 已完成：
+
+- Windows `shuo service start` 现在会先查询当前 scoped Named Pipe `DaemonStatus`；daemon 已运行时只打印
+  status 和 `already running windows.user`，不会生成第二个 daemon。
+- daemon absent 时，`service start` 只 spawn 当前 executable 的 `--daemon` 子进程，重定向 stdout/stderr
+  到 `%LOCALAPPDATA%\Shuohua\service.start.*.log`，并有界等待当前用户/登录会话 Named Pipe ready。
+- Windows `shuo service restart` 先查询 daemon；运行中则复用既有 IPC `Shutdown` + PID exit wait，
+  然后再执行 `start`。daemon absent 时，`restart` 退化为 explicit start。
+- `install` / `uninstall` 仍 unsupported；没有调用 Task Scheduler、SCM、PowerShell 或 registry APIs。
+  `service status` dry-run 行现在明确 `start=explicit_process startup_registration=unsupported`。
+- Windows `service.manager` capability 仍为 `partial`，backend `windows_user_session`，reason
+  `user_session_start_stop_only`；这不代表 startup registration 或 cross-user runtime 已完成。
+- 本机 elevated runtime smoke 通过：`service start` 启动 daemon，重复 `service start` 不创建第二个
+  daemon，`service restart` 更换 PID，`service stop` 后无残留同路径 `shuo` 进程。
+
 Phase 10ad Windows smart fallback Named Pipe probe 已完成：
 
 - Windows `run_smart_fallback()` 不再把 endpoint 永远视为 absent；现在用现有 Named Pipe transport
@@ -1436,13 +1451,17 @@ permission probe 或 active app runtime。
   - 无参数 `shuo.exe` smart fallback 在 daemon absent 时可启动当前 executable 的 `--daemon` 子进程，
     并等到 scoped Named Pipe ready。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。
+  - `shuo.exe service start` 可在 daemon absent 时启动当前 executable 的 `--daemon` 子进程；daemon
+    已运行时重复 start 只报告 already-running，不创建第二个 daemon。
+  - `shuo.exe service restart` 可先 IPC stop 当前 daemon，再启动新 daemon；本机 smoke 中 restart 前后
+    PID 发生变化。
   - `shuo.exe service stop` 通过 IPC shutdown 停止运行中 daemon；after-stop `service status` 显示
     `daemon: not running`。
   - `shuo.exe --daemon` + scoped Named Pipe `DaemonStatus` 通过。
   - 第二个 `shuo.exe --daemon` 明确失败，单实例 guard 生效。
   - same-user medium/elevated 和 elevated/medium 交叉矩阵通过，修复后不再拆成两个 daemon runtime。
   - `scripts/windows-ipc-smoke.ps1 -StopExisting` 在 elevated session 通过：20/20 busy clients exit 0，
-    `service_stop_exit=0`，helper 输出 `failures: []`。
+    `service_stop_exit=0`，`after_stop_status_exit=0`，helper 输出 `failures: []`。
   - Explorer direct open/reveal 工具会话仍返回 1，但用户目视确认窗口打开/reveal 生效；不要只看
     `explorer.exe` exit code。
 - 未在本 Windows session 跑 `make check-windows` / `make check-linux-cross`；本阶段验证重点是
@@ -1450,10 +1469,10 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10ae：继续做不需要第二用户的 Windows IPC/lifecycle 小步 hardening；cross-user 第二账号/VM
-  隔离验证已后移为 deferred manual gate，没有第二用户前不要升级 Windows IPC capability。
+- Phase 10af：继续做不需要第二用户的 Windows IPC/lifecycle 小步 hardening；cross-user 第二账号/VM
+  隔离验证已后移为 deferred manual gate，没有第二用户前不要升级 Windows IPC/daemon capability。
 - 后续代码小步可选：在不改变 capability 结论的前提下，设计 raw `CreateFileW`/overlapped client
-  access-mask narrowing，或把 busy/elevation smoke 脚本沉淀为开发者手动命令。
+  access-mask narrowing，或把 start/restart/busy/elevation smoke 脚本沉淀为开发者手动命令。
 - audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability
   升级。
 - 不继续 GUI 产品化开发。

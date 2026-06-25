@@ -319,11 +319,11 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
         CapabilityStatus {
             id: CapabilityId::ServiceManager,
             platform: PlatformKind::Windows,
-            backend: "windows_user_dry_run",
+            backend: "windows_user_session",
             status: CapabilityStatusKind::Partial,
-            summary: "Windows user service status can report dry-run strategy information and stop a running daemon over IPC",
-            reason: "ipc_stop_only",
-            next_step: Some("Validate Windows user service install/start/restart strategy"),
+            summary: "Windows user service can start, stop, and restart the current user-session daemon without startup registration",
+            reason: "user_session_start_stop_only",
+            next_step: Some("Validate Windows user service install/startup registration strategy"),
         },
         CapabilityStatus {
             id: CapabilityId::PathOpenReveal,

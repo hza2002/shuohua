@@ -694,12 +694,15 @@ fn windows_service_manager_has_dry_run_status_skeleton() {
     for token in [
         "#[cfg(target_os = \"windows\")]",
         "Command::Shutdown",
+        "spawn_daemon_process",
+        "fn wait_for_daemon_ready",
         "fn request_daemon_shutdown",
         "fn wait_for_pid_exit",
         "fn service_strategy()",
         "fn daemon_command(",
         "windows.user: dry-run",
-        "install_start=unsupported",
+        "start=explicit_process",
+        "startup_registration=unsupported",
         "Task Scheduler, SCM, PowerShell, and registry APIs are intentionally not called",
     ] {
         assert!(
@@ -722,9 +725,9 @@ fn windows_service_manager_has_dry_run_status_skeleton() {
     let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
     for token in [
         "CapabilityId::ServiceManager",
-        "windows_user_dry_run",
-        "ipc_stop_only",
-        "Validate Windows user service install/start/restart strategy",
+        "windows_user_session",
+        "user_session_start_stop_only",
+        "Validate Windows user service install/startup registration strategy",
     ] {
         assert!(
             capability.contains(token),

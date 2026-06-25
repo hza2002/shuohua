@@ -100,7 +100,11 @@ mod imp {
         Ok(())
     }
 
-    pub fn start() -> Result<()> {
+    pub async fn start() -> Result<()> {
+        start_launchd()
+    }
+
+    fn start_launchd() -> Result<()> {
         run_launchctl(
             &["kickstart", "-k", &format!("{}/{}", gui_domain(), LABEL)],
             "cli.service.action_start",
@@ -623,7 +627,7 @@ mod imp {
         unsupported()
     }
 
-    pub fn start() -> Result<()> {
+    pub async fn start() -> Result<()> {
         unsupported()
     }
 
@@ -722,6 +726,7 @@ WantedBy=default.target
 mod imp {
     use std::ops::ControlFlow;
     use std::path::PathBuf;
+    use std::process::{Command as ProcessCommand, Stdio};
     use std::time::{Duration, Instant};
 
     use anyhow::{Context, Result};
@@ -729,7 +734,9 @@ mod imp {
     use crate::ipc::protocol::{Command, Event};
 
     const DAEMON_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
+    const DAEMON_START_TIMEOUT: Duration = Duration::from_secs(2);
     const DAEMON_EXIT_TIMEOUT: Duration = Duration::from_secs(20);
+    const DAEMON_START_POLL_INTERVAL: Duration = Duration::from_millis(50);
     const DAEMON_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
     const ERROR_FILE_NOT_FOUND: i32 = 2;
     const ERROR_PATH_NOT_FOUND: i32 = 3;
@@ -747,8 +754,32 @@ mod imp {
         unsupported()
     }
 
-    pub fn start() -> Result<()> {
-        unsupported()
+    pub async fn start() -> Result<()> {
+        start_with(
+            current_daemon_status,
+            spawn_daemon_process,
+            wait_for_daemon_ready,
+            |line| {
+                println!("{line}");
+                println!(
+                    "{}",
+                    crate::i18n::tr(
+                        "cli.service.already_running",
+                        &[("label", WINDOWS_SERVICE_LABEL.to_string())]
+                    )
+                );
+            },
+            |_line| {
+                println!(
+                    "{}",
+                    crate::i18n::tr(
+                        "cli.service.started",
+                        &[("label", WINDOWS_SERVICE_LABEL.to_string())]
+                    )
+                );
+            },
+        )
+        .await
     }
 
     pub async fn stop() -> Result<()> {
@@ -765,32 +796,69 @@ mod imp {
     }
 
     pub async fn restart() -> Result<()> {
-        unsupported()
+        restart_with(current_daemon_status, stop, start).await
     }
 
     pub async fn status() -> Result<()> {
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("shuo"));
-        match tokio::time::timeout(DAEMON_STATUS_TIMEOUT, ipc_status()).await {
-            Ok(Ok(Some(line))) => println!("{line}"),
-            Ok(Ok(None)) => println!(
+        match current_daemon_status().await {
+            Ok(Some(line)) => println!("{line}"),
+            Ok(None) => println!(
                 "daemon: {}",
                 crate::i18n::tr("cli.service.not_running", &[])
             ),
-            Ok(Err(error)) => return Err(error),
-            Err(_) => anyhow::bail!(
-                "{}",
-                crate::i18n::tr(
-                    "cli.service.status_timeout",
-                    &[("seconds", DAEMON_STATUS_TIMEOUT.as_secs().to_string())]
-                )
-            ),
+            Err(error) => return Err(error),
         }
         println!(
-            "windows.user: dry-run strategy={} command={} install_start=unsupported",
+            "windows.user: dry-run strategy={} command={} start=explicit_process startup_registration=unsupported",
             service_strategy(),
             daemon_command(&exe)
         );
         Ok(())
+    }
+
+    async fn start_with<FStatus, FStatusFuture, FSpawn, FWait, FWaitFuture>(
+        current_status: FStatus,
+        spawn_daemon: FSpawn,
+        wait_for_ready: FWait,
+        print_already_running: impl FnOnce(&str),
+        print_started: impl FnOnce(&str),
+    ) -> Result<()>
+    where
+        FStatus: FnOnce() -> FStatusFuture,
+        FStatusFuture: std::future::Future<Output = Result<Option<String>>>,
+        FSpawn: FnOnce() -> Result<()>,
+        FWait: FnOnce() -> FWaitFuture,
+        FWaitFuture: std::future::Future<Output = Result<String>>,
+    {
+        if let Some(line) = current_status().await? {
+            print_already_running(&line);
+            return Ok(());
+        }
+
+        spawn_daemon()?;
+        let line = wait_for_ready().await?;
+        print_started(&line);
+        Ok(())
+    }
+
+    async fn restart_with<FStatus, FStatusFuture, FStop, FStopFuture, FStart, FStartFuture>(
+        current_status: FStatus,
+        stop: FStop,
+        start: FStart,
+    ) -> Result<()>
+    where
+        FStatus: FnOnce() -> FStatusFuture,
+        FStatusFuture: std::future::Future<Output = Result<Option<String>>>,
+        FStop: FnOnce() -> FStopFuture,
+        FStopFuture: std::future::Future<Output = Result<()>>,
+        FStart: FnOnce() -> FStartFuture,
+        FStartFuture: std::future::Future<Output = Result<()>>,
+    {
+        if current_status().await?.is_some() {
+            stop().await?;
+        }
+        start().await
     }
 
     async fn stop_with<F>(
@@ -821,6 +889,64 @@ mod imp {
         })
         .await
         .context("shutdown IPC timed out")?
+    }
+
+    async fn current_daemon_status() -> Result<Option<String>> {
+        match tokio::time::timeout(DAEMON_STATUS_TIMEOUT, ipc_status()).await {
+            Ok(result) => result,
+            Err(_) => anyhow::bail!(
+                "{}",
+                crate::i18n::tr(
+                    "cli.service.status_timeout",
+                    &[("seconds", DAEMON_STATUS_TIMEOUT.as_secs().to_string())]
+                )
+            ),
+        }
+    }
+
+    fn spawn_daemon_process() -> Result<()> {
+        let stderr = service_log("service.start.stderr.log")?;
+        let stdout = service_log("service.start.stdout.log")?;
+        let child = ProcessCommand::new(std::env::current_exe().context("resolve current exe")?)
+            .arg("--daemon")
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
+            .spawn()
+            .context("spawn shuo --daemon")?;
+        drop(child);
+        Ok(())
+    }
+
+    fn service_log(name: &str) -> Result<std::fs::File> {
+        let dir = crate::paths::StateDirs::discover().root().to_path_buf();
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("create state dir {}", dir.display()))?;
+        let path = dir.join(name);
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("open {}", path.display()))
+    }
+
+    async fn wait_for_daemon_ready() -> Result<String> {
+        let deadline = Instant::now() + DAEMON_START_TIMEOUT;
+        loop {
+            match current_daemon_status().await {
+                Ok(Some(line)) => return Ok(line),
+                Ok(None) => {}
+                Err(error) => return Err(error).context("wait for Windows daemon IPC ready"),
+            }
+
+            if Instant::now() >= deadline {
+                anyhow::bail!(
+                    "daemon did not accept IPC connections within {:?}",
+                    DAEMON_START_TIMEOUT
+                );
+            }
+            tokio::time::sleep(DAEMON_START_POLL_INTERVAL).await;
+        }
     }
 
     fn parse_shutdown_reply(reply: Option<Event>) -> Result<crate::platform::lifecycle::Pid> {
@@ -951,6 +1077,7 @@ mod imp {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use std::cell::{Cell, RefCell};
 
         #[test]
         fn service_strategy_is_user_session_scoped() {
@@ -975,6 +1102,96 @@ mod imp {
                 format_daemon_status(42, 65_000, "Idle", "-"),
                 "daemon: running pid=42 uptime=1m5s state=Idle recording=-"
             );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn start_reports_existing_daemon_without_spawning() {
+            let spawned = Cell::new(false);
+            let calls = RefCell::new(Vec::new());
+
+            start_with(
+                || async { Ok(Some("daemon: running pid=42".to_string())) },
+                || {
+                    spawned.set(true);
+                    Ok(())
+                },
+                || async { Ok("daemon: running pid=43".to_string()) },
+                |line| calls.borrow_mut().push(format!("already:{line}")),
+                |line| calls.borrow_mut().push(format!("started:{line}")),
+            )
+            .await
+            .unwrap();
+
+            assert!(!spawned.get());
+            assert_eq!(&*calls.borrow(), &["already:daemon: running pid=42"]);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn start_spawns_then_waits_for_daemon_ready() {
+            let calls = RefCell::new(Vec::new());
+
+            start_with(
+                || async { Ok(None) },
+                || {
+                    calls.borrow_mut().push("spawn".to_string());
+                    Ok(())
+                },
+                || async {
+                    calls.borrow_mut().push("wait".to_string());
+                    Ok("daemon: running pid=43".to_string())
+                },
+                |line| calls.borrow_mut().push(format!("already:{line}")),
+                |line| calls.borrow_mut().push(format!("started:{line}")),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                &*calls.borrow(),
+                &["spawn", "wait", "started:daemon: running pid=43"]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn restart_stops_running_daemon_before_starting() {
+            let calls = RefCell::new(Vec::new());
+
+            restart_with(
+                || async { Ok(Some("daemon: running pid=42".to_string())) },
+                || async {
+                    calls.borrow_mut().push("stop");
+                    Ok(())
+                },
+                || async {
+                    calls.borrow_mut().push("start");
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(&*calls.borrow(), &["stop", "start"]);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn restart_starts_when_daemon_is_absent() {
+            let calls = RefCell::new(Vec::new());
+
+            restart_with(
+                || async { Ok(None) },
+                || async {
+                    calls.borrow_mut().push("stop");
+                    Ok(())
+                },
+                || async {
+                    calls.borrow_mut().push("start");
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(&*calls.borrow(), &["start"]);
         }
 
         #[test]
@@ -1090,7 +1307,7 @@ mod imp {
         unsupported()
     }
 
-    pub fn start() -> Result<()> {
+    pub async fn start() -> Result<()> {
         unsupported()
     }
 
@@ -1123,8 +1340,8 @@ pub fn uninstall() -> Result<()> {
     imp::uninstall()
 }
 
-pub fn start() -> Result<()> {
-    imp::start()
+pub async fn start() -> Result<()> {
+    imp::start().await
 }
 
 pub async fn stop() -> Result<()> {

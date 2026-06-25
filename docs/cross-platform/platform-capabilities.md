@@ -213,6 +213,14 @@ Phase 10ac adds Windows `service stop` as IPC shutdown only:
 - reason becomes `ipc_stop_only` once `service stop` can send `Command::Shutdown` and wait for PID exit.
 - This does not install, register, start, or manage a Task Scheduler/SCM service.
 
+Phase 10ae adds explicit user-session `service start` / `restart`:
+
+- `service.manager` remains `partial`; backend becomes `windows_user_session` because lifecycle control can
+  start/stop/restart the current executable but still does not install or register startup integration.
+- reason becomes `user_session_start_stop_only`.
+- This does not call Task Scheduler, SCM, PowerShell, or registry APIs, and does not make Windows service
+  lifecycle runtime-ready beyond the current user session.
+
 ## Phase 10l Non-macOS Desktop Capability Truthfulness
 
 Linux/Windows desktop facade behavior is currently conservative and should be reflected explicitly in the

@@ -311,6 +311,9 @@ Current active app identity baseline:
   matcher field until a separate AUMID lookup is implemented and runtime-tested.
 - Capability remains `partial/foreground_window_process_exe/exe_name_only`; foreground lookup failure falls back
   to the default profile.
+- `shuo doctor` reports both `desktop.active_app.current` and `profile.route.current` so route configuration can
+  be debugged before hotkey/audio runtime exists. This is read-only and must not trigger recording, provider
+  runtime, overlay, clipboard, or paste.
 
 ## Overlay
 

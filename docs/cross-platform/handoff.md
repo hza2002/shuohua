@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: add windows active app identity`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: add windows profile route diagnostics`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: add platform profile routes` (`4b618d0`).
+Previous phase commit: `feat: add windows active app identity` (`86c3d91`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,20 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10ak Windows profile route diagnostics 已完成：
+
+- `shuo doctor` 现在复用当前 foreground app `AppContext`，同时打印
+  `desktop.active_app.current` 和只读 `profile.route.current`。
+- `profile.route.current` 复用 daemon session start 的
+  `AppIdentity::current_from_app_context(&AppContext)` + `ProfileRouteCfg::matching_profiles` 语义，
+  可区分 default fallback、单一 route 命中和 duplicate-match 配置错误。
+- Windows 本机 runtime smoke 中，Windows Terminal 前台时输出
+  `profile.route.current: selected=agent source=route matches=agent`。
+- 本阶段未启动录音、provider runtime、hotkey、overlay、clipboard 或 paste；capability 不升级。
+- Windows `doctor` 的麦克风、daemon/service 和 permissions next-step 已收窄为 Windows 语义：
+  无默认输入设备时提示 Windows Settings > System > Sound；Windows service install/startup registration
+  仍明确为未实现；Windows permission probe 仍诚实显示 unavailable。
+
 Phase 10aj Windows active app identity diagnostics 已完成：
 
 - Windows `platform::desktop::frontmost_app()` 现在通过 `GetForegroundWindow` /
@@ -1544,6 +1558,9 @@ permission probe 或 active app runtime。
     `desktop.active_app.current: exe_name=WindowsTerminal.exe app_name=WindowsTerminal`；capability summary
     包含
     `desktop.active_app=partial backend=foreground_window_process_exe reason=exe_name_only`。
+  - Phase 10ak doctor profile route diagnostics 通过执行：本机 Windows Terminal 前台时打印
+    `profile.route.current: selected=agent source=route matches=agent`。`doctor` 汇总的麦克风、daemon/
+    service、permissions next-step 已使用 Windows 语义；当前 `doctor` exit 1 仍只因无默认输入设备。
   - 无参数 `shuo.exe` smart fallback 在 daemon absent 时可启动当前 executable 的 `--daemon` 子进程，
     并等到 scoped Named Pipe ready。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。

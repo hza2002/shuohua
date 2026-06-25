@@ -258,6 +258,14 @@ Windows `desktop.active_app` 第一版只实现 foreground window owner process 
 `profile.default`。在真实录音 session 中验证 profile 命中、AUMID 查询和更多前台窗口类型之前，
 不能把 `desktop.active_app` 升级为 `available`。
 
+Phase 10ak extends the same diagnostic surface with `profile.route.current` in `shuo doctor`:
+
+- It uses the current `AppContext` and the same platform `AppIdentity` conversion used by daemon session start.
+- It reports whether route selection falls back to `profile.default`, matches exactly one route, or would fail
+  because the app identity matches multiple profiles.
+- It is a read-only config/identity diagnostic. It does not open profile provider runtime, start recording, or
+  exercise hotkey/overlay/clipboard/paste.
+
 ## Phase 10ah Windows Audio Capture Diagnostics
 
 Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：

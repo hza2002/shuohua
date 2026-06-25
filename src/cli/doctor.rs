@@ -35,15 +35,14 @@ pub async fn run(args: DoctorArgs) -> Result<()> {
     report.record_with_step(check_config(), "cli.doctor.next_step_config");
     report.record_with_step(check_i18n(), "cli.doctor.next_step_report_issue");
     report.record_with_step(check_hotkey(), "cli.doctor.next_step_hotkey");
-    report.record_with_step(
-        check_microphone_input(),
-        "cli.doctor.next_step_microphone_input",
-    );
-    report.record_with_step(check_uds().await, "cli.doctor.next_step_daemon");
-    report.record_with_step(check_launchd(), "cli.doctor.next_step_launchd");
+    report.record_with_step(check_microphone_input(), microphone_input_next_step_key());
+    report.record_with_step(check_uds().await, daemon_next_step_key());
+    report.record_with_step(check_launchd(), service_manager_next_step_key());
     print_platform_capabilities();
-    print_active_app_diagnostics();
-    report.record_with_step(check_permissions(), "cli.doctor.next_step_permissions");
+    let active_app_context = crate::platform::desktop::frontmost_app();
+    print_active_app_diagnostics(&active_app_context);
+    print_profile_route_diagnostics(&active_app_context);
+    report.record_with_step(check_permissions(), permissions_next_step_key());
     if args.runtime {
         report.record_with_step(check_runtime().await, "cli.doctor.next_step_runtime_config");
     } else {
@@ -55,6 +54,65 @@ pub async fn run(args: DoctorArgs) -> Result<()> {
 
 fn tr(key: &str, vars: &[(&str, String)]) -> String {
     crate::i18n::tr(key, vars)
+}
+
+fn microphone_input_hint_key() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "cli.doctor.hint_microphone_input_windows"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "cli.doctor.hint_microphone_input"
+    }
+}
+
+fn microphone_input_next_step_key() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "cli.doctor.next_step_microphone_input_windows"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "cli.doctor.next_step_microphone_input"
+    }
+}
+
+fn permissions_next_step_key() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "cli.doctor.next_step_permissions"
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "cli.doctor.next_step_permissions_windows"
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        "cli.doctor.next_step_permissions_unavailable"
+    }
+}
+
+fn daemon_next_step_key() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "cli.doctor.next_step_daemon_windows"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "cli.doctor.next_step_daemon"
+    }
+}
+
+fn service_manager_next_step_key() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "cli.doctor.next_step_service_manager_windows"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "cli.doctor.next_step_launchd"
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,7 +296,7 @@ fn check_microphone_input() -> CheckStatus {
                         "microphone.input: backend={} ERROR {error}",
                         diagnostics.backend
                     );
-                    println!("hint: {}", tr("cli.doctor.hint_microphone_input", &[]));
+                    println!("hint: {}", tr(microphone_input_hint_key(), &[]));
                     CheckStatus::Error
                 }
             };
@@ -256,7 +314,7 @@ fn check_microphone_input() -> CheckStatus {
         }
         Err(e) => {
             println!("microphone.input: ERROR {e:#}");
-            println!("hint: {}", tr("cli.doctor.hint_microphone_input", &[]));
+            println!("hint: {}", tr(microphone_input_hint_key(), &[]));
             CheckStatus::Error
         }
     }
@@ -683,6 +741,22 @@ fn check_launchd() -> CheckStatus {
 }
 
 fn check_permissions() -> CheckStatus {
+    #[cfg(target_os = "macos")]
+    {
+        check_macos_permissions()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        check_windows_permissions()
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        check_non_macos_permissions()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn check_macos_permissions() -> CheckStatus {
     let mut status = CheckStatus::Ok;
     if accessibility_trusted() {
         println!("permissions.accessibility: OK");
@@ -743,16 +817,54 @@ fn check_permissions() -> CheckStatus {
     status
 }
 
+#[cfg(target_os = "windows")]
+fn check_windows_permissions() -> CheckStatus {
+    let mut status = CheckStatus::Ok;
+    if accessibility_trusted() {
+        println!("permissions.accessibility: OK");
+    } else {
+        println!("permissions.accessibility: unavailable on this platform");
+        status = CheckStatus::Warning;
+    }
+    match microphone_authorization() {
+        Some(MicrophoneAuthorization::Authorized) => println!("permissions.microphone: OK"),
+        Some(MicrophoneAuthorization::NotDetermined) => {
+            println!("permissions.microphone: unavailable on this platform");
+            status = CheckStatus::Warning;
+        }
+        Some(MicrophoneAuthorization::Denied) => {
+            println!("permissions.microphone: unavailable on this platform");
+            status = CheckStatus::Warning;
+        }
+        Some(MicrophoneAuthorization::Restricted) => {
+            println!("permissions.microphone: unavailable on this platform");
+            status = CheckStatus::Warning;
+        }
+        None => {
+            println!("permissions.microphone: unavailable on this platform");
+            status = CheckStatus::Warning;
+        }
+    }
+    status
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+fn check_non_macos_permissions() -> CheckStatus {
+    println!("permissions.accessibility: unavailable on this platform");
+    println!("permissions.microphone: unavailable on this platform");
+    CheckStatus::Warning
+}
+
 fn print_platform_capabilities() {
     for line in platform_capability_summary_lines() {
         println!("{line}");
     }
 }
 
-fn print_active_app_diagnostics() {
+fn print_active_app_diagnostics(ctx: &crate::post::AppContext) {
     println!(
         "desktop.active_app.current: {}",
-        active_app_diagnostic_line(&crate::platform::desktop::frontmost_app())
+        active_app_diagnostic_line(ctx)
     );
 }
 
@@ -775,6 +887,33 @@ fn active_app_diagnostic_line(ctx: &crate::post::AppContext) -> String {
         "unavailable".to_string()
     } else {
         fields.join(" ")
+    }
+}
+
+fn print_profile_route_diagnostics(ctx: &crate::post::AppContext) {
+    let path = crate::config::default_path();
+    match crate::config::load_from(&path) {
+        Ok(cfg) => println!(
+            "profile.route.current: {}",
+            profile_route_diagnostic_line(&cfg.profile, ctx)
+        ),
+        Err(error) => println!("profile.route.current: unavailable error={error:#}"),
+    }
+}
+
+fn profile_route_diagnostic_line(
+    routes: &crate::config::ProfileRouteCfg,
+    ctx: &crate::post::AppContext,
+) -> String {
+    let app = crate::config::AppIdentity::current_from_app_context(ctx);
+    let matches = routes.matching_profiles(&app);
+    match matches.as_slice() {
+        [] => format!("selected={} source=default matches=-", routes.default),
+        [profile] => format!("selected={} source=route matches={profile}", profile),
+        _ => format!(
+            "ERROR app identity matches multiple profiles: {}",
+            matches.join(",")
+        ),
     }
 }
 
@@ -1022,6 +1161,100 @@ mod tests {
             super::active_app_diagnostic_line(&crate::post::AppContext::default()),
             "unavailable"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn profile_route_diagnostic_line_reports_default_fallback() {
+        let routes = crate::config::ProfileRouteCfg {
+            default: "default".to_string(),
+            routes: crate::config::ProfileRoutes::from_iter([(
+                "agent".to_string(),
+                crate::config::ProfileRouteMatchers {
+                    windows: crate::config::WindowsProfileMatchers {
+                        exe_name: vec!["Code.exe".to_string()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )]),
+        };
+
+        let line =
+            super::profile_route_diagnostic_line(&routes, &crate::post::AppContext::default());
+
+        assert_eq!(line, "selected=default source=default matches=-");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn profile_route_diagnostic_line_reports_windows_exe_match() {
+        let routes = crate::config::ProfileRouteCfg {
+            default: "default".to_string(),
+            routes: crate::config::ProfileRoutes::from_iter([(
+                "agent".to_string(),
+                crate::config::ProfileRouteMatchers {
+                    windows: crate::config::WindowsProfileMatchers {
+                        exe_name: vec!["Code.exe".to_string()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )]),
+        };
+        let ctx = crate::post::AppContext {
+            windows_exe_name: Some("code.EXE".to_string()),
+            ..crate::post::AppContext::default()
+        };
+
+        let line = super::profile_route_diagnostic_line(&routes, &ctx);
+
+        assert_eq!(line, "selected=agent source=route matches=agent");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn profile_route_diagnostic_line_reports_duplicate_matches() {
+        let routes = crate::config::ProfileRouteCfg {
+            default: "default".to_string(),
+            routes: crate::config::ProfileRoutes::from_iter([
+                (
+                    "agent".to_string(),
+                    crate::config::ProfileRouteMatchers {
+                        windows: crate::config::WindowsProfileMatchers {
+                            exe_name: vec!["Code.exe".to_string()],
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "coding".to_string(),
+                    crate::config::ProfileRouteMatchers {
+                        windows: crate::config::WindowsProfileMatchers {
+                            exe_name: vec!["Code.exe".to_string()],
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                ),
+            ]),
+        };
+        let ctx = crate::post::AppContext {
+            windows_exe_name: Some("Code.exe".to_string()),
+            ..crate::post::AppContext::default()
+        };
+
+        let line = super::profile_route_diagnostic_line(&routes, &ctx);
+
+        assert!(line.contains("ERROR app identity matches multiple profiles"));
+        assert!(line.contains("agent"));
+        assert!(line.contains("coding"));
+    }
+
+    #[test]
+    fn permission_check_helper_stays_platform_appropriate() {
+        let _ = super::check_permissions();
     }
 
     #[test]

@@ -844,6 +844,15 @@ Phase 10aj Windows Active App Identity Diagnostics:
   `desktop.active_app` at `partial/foreground_window_process_exe/exe_name_only`.
 - Do not start audio, overlay, hotkey, clipboard, paste, or full recording validation in this phase.
 
+Phase 10ak Windows Profile Route Diagnostics:
+
+- Add a read-only `shuo doctor` diagnostic for the current active app identity -> profile route decision.
+- Reuse the same `ProfileRouteCfg::matching_profiles` and `AppIdentity::current_from_app_context` path as
+  daemon session start; do not duplicate route semantics.
+- Print default fallback, single route match, or duplicate-match error clearly enough to debug config before
+  audio/hotkey runtime exists.
+- Do not start recording, touch provider runtime, or trigger overlay/hotkey/clipboard/paste.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

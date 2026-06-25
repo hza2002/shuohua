@@ -46,6 +46,9 @@ process_name = ["code"]
 要等 Linux active app identity backend 验证后才会命中。旧的 `[profile] agent = [...]` 顶层数组格式不再
 是有效配置。
 
+`shuo doctor` 会打印只读的 `profile.route.current`，用于在不启动录音、不触发 hotkey/overlay/
+clipboard/paste 的情况下检查当前 active app identity 会落到哪个 profile。
+
 ## 内置 processors
 
 `build_processor` 只构造两种；透传 = 空 chain（无 processor 类型）：

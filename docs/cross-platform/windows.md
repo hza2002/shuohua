@@ -181,16 +181,18 @@ Windows service management means user-session lifecycle, not SCM service by defa
 Phased route:
 
 1. `shuo service status`: dry-run and daemon IPC status only.
-2. `shuo service install --dry-run` or equivalent preview: show intended user logon task/startup registration.
-3. Runtime-tested Task Scheduler logon trigger for current user.
-4. Optional Startup Apps registration if it provides a better user experience.
+2. `shuo service stop`: IPC `Shutdown` for an already-running user-session daemon, with bounded process-exit wait.
+3. `shuo service install --dry-run` or equivalent preview: show intended user logon task/startup registration.
+4. Runtime-tested Task Scheduler logon trigger for current user.
+5. Optional Startup Apps registration if it provides a better user experience.
 
 Hard boundaries:
 
 - No SCM Windows Service for the desktop daemon unless a future split creates a non-desktop helper.
 - No admin requirement for normal install/start.
 - No registry writes until the exact key, ownership, rollback, and uninstall behavior are documented.
-- `stop` should prefer IPC shutdown and bounded wait, mirroring macOS semantics.
+- `stop` uses IPC shutdown and bounded wait, mirroring macOS semantics; it must not be used as a hidden
+  Task Scheduler/SCM stop path.
 - Do not use interactive services. Modern Windows services cannot directly interact with the user desktop, and
   the desktop-facing daemon needs microphone, overlay, clipboard, text injection, and foreground-window context.
 - Do not use `schtasks`/COM registration until install/uninstall idempotency, task name, task folder, trigger,

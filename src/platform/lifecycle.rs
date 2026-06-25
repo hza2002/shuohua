@@ -112,13 +112,15 @@ mod imp {
 mod imp {
     use anyhow::{Context, Result};
     use windows_sys::Win32::Foundation::{
-        CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, HANDLE, WAIT_ABANDONED,
-        WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+        CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, HANDLE, STILL_ACTIVE,
+        WAIT_ABANDONED, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::System::Threading::{
-        CreateMutexW, OpenProcess, ReleaseMutex, WaitForSingleObject,
+        CreateMutexW, GetExitCodeProcess, OpenProcess, ReleaseMutex, WaitForSingleObject,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
+
+    const STILL_ACTIVE_EXIT_CODE: u32 = STILL_ACTIVE as u32;
 
     pub(crate) type Pid = u32;
 
@@ -181,7 +183,10 @@ mod imp {
 
     pub(crate) fn process_exists(pid: Pid) -> Result<bool> {
         debug_assert!(pid > 0);
-        process_exists_with_open_result(open_process_for_probe(pid))
+        match open_process_for_probe(pid) {
+            Ok(handle) => process_exists_from_exit_code(query_process_exit_code(&handle)),
+            Err(error) => process_exists_from_open_error(error),
+        }
     }
 
     fn open_process_for_probe(pid: Pid) -> std::io::Result<Handle> {
@@ -193,14 +198,29 @@ mod imp {
         }
     }
 
-    fn process_exists_with_open_result(result: std::io::Result<Handle>) -> Result<bool> {
+    fn query_process_exit_code(handle: &Handle) -> std::io::Result<u32> {
+        let mut exit_code = 0;
+        let ok = unsafe { GetExitCodeProcess(handle.raw(), &mut exit_code) };
+        if ok == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(exit_code)
+        }
+    }
+
+    fn process_exists_from_open_error(error: std::io::Error) -> Result<bool> {
+        match error.raw_os_error().map(|code| code as u32) {
+            Some(ERROR_INVALID_PARAMETER) => Ok(false),
+            Some(ERROR_ACCESS_DENIED) => Ok(true),
+            _ => Err(error).context("check daemon process failed"),
+        }
+    }
+
+    fn process_exists_from_exit_code(result: std::io::Result<u32>) -> Result<bool> {
         match result {
-            Ok(_) => Ok(true),
-            Err(error) => match error.raw_os_error().map(|code| code as u32) {
-                Some(ERROR_INVALID_PARAMETER) => Ok(false),
-                Some(ERROR_ACCESS_DENIED) => Ok(true),
-                _ => Err(error).context("check daemon process failed"),
-            },
+            Ok(STILL_ACTIVE_EXIT_CODE) => Ok(true),
+            Ok(_) => Ok(false),
+            Err(error) => Err(error).context("check daemon process exit code failed"),
         }
     }
 
@@ -247,20 +267,29 @@ mod imp {
         #[test]
         fn process_probe_treats_invalid_pid_as_exited_and_access_denied_as_running() {
             assert!(
-                !process_exists_with_open_result(Err(std::io::Error::from_raw_os_error(
+                !process_exists_from_open_error(std::io::Error::from_raw_os_error(
                     ERROR_INVALID_PARAMETER as i32
-                )))
+                ))
                 .unwrap()
             );
             assert!(
-                process_exists_with_open_result(Err(std::io::Error::from_raw_os_error(
+                process_exists_from_open_error(std::io::Error::from_raw_os_error(
                     ERROR_ACCESS_DENIED as i32
-                )))
+                ))
                 .unwrap()
             );
             assert!(
-                process_exists_with_open_result(Err(std::io::Error::from_raw_os_error(123)))
-                    .is_err()
+                process_exists_from_open_error(std::io::Error::from_raw_os_error(123)).is_err()
+            );
+        }
+
+        #[test]
+        fn process_probe_requires_still_active_exit_code() {
+            assert!(process_exists_from_exit_code(Ok(STILL_ACTIVE_EXIT_CODE)).unwrap());
+            assert!(!process_exists_from_exit_code(Ok(0)).unwrap());
+            assert!(!process_exists_from_exit_code(Ok(1)).unwrap());
+            assert!(
+                process_exists_from_exit_code(Err(std::io::Error::from_raw_os_error(123))).is_err()
             );
         }
 

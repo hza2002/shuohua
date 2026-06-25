@@ -321,9 +321,9 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
             platform: PlatformKind::Windows,
             backend: "windows_user_dry_run",
             status: CapabilityStatusKind::Partial,
-            summary: "Windows user service status can report dry-run strategy information",
-            reason: "dry_run_status_only",
-            next_step: Some("Validate Windows user service install/start/stop strategy"),
+            summary: "Windows user service status can report dry-run strategy information and stop a running daemon over IPC",
+            reason: "ipc_stop_only",
+            next_step: Some("Validate Windows user service install/start/restart strategy"),
         },
         CapabilityStatus {
             id: CapabilityId::PathOpenReveal,

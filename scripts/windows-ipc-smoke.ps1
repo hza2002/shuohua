@@ -125,6 +125,27 @@ try {
         }
     }
 
+    & $exe service stop > (Join-Path $LogDir "service-stop.out.txt") 2> (Join-Path $LogDir "service-stop.err.txt")
+    $serviceStopCode = $LASTEXITCODE
+    if ($serviceStopCode -ne 0) {
+        $failures.Add("service stop exited $serviceStopCode")
+    }
+    Start-Sleep -Milliseconds 500
+    $daemonRunningAfterStop = $false
+    if ($null -ne $daemon) {
+        $daemon.Refresh()
+        $daemonRunningAfterStop = -not $daemon.HasExited
+        if ($daemonRunningAfterStop) {
+            $failures.Add("daemon was still running after service stop")
+        }
+    }
+
+    & $exe service status > (Join-Path $LogDir "after-stop-status.out.txt") 2> (Join-Path $LogDir "after-stop-status.err.txt")
+    $afterStopStatusCode = $LASTEXITCODE
+    if ($afterStopStatusCode -ne 0) {
+        $failures.Add("after-stop service status exited $afterStopStatusCode")
+    }
+
     $summary = [ordered]@{
         exe = $exe
         log = $LogDir
@@ -139,9 +160,14 @@ try {
         busy_exit_0 = $busyExit0
         busy_nonzero = $busyNonzero
         after_busy_status_exit = $afterBusyStatusCode
+        service_stop_exit = $serviceStopCode
+        daemon_running_after_stop = $daemonRunningAfterStop
+        after_stop_status_exit = $afterStopStatusCode
         status_out = Get-Content (Join-Path $LogDir "status.out.txt") -Raw -ErrorAction SilentlyContinue
         second_daemon_err = Get-Content (Join-Path $LogDir "second-daemon.err.txt") -Raw -ErrorAction SilentlyContinue
         after_busy_status_out = Get-Content (Join-Path $LogDir "after-busy-status.out.txt") -Raw -ErrorAction SilentlyContinue
+        service_stop_out = Get-Content (Join-Path $LogDir "service-stop.out.txt") -Raw -ErrorAction SilentlyContinue
+        after_stop_status_out = Get-Content (Join-Path $LogDir "after-stop-status.out.txt") -Raw -ErrorAction SilentlyContinue
         failures = @($failures)
     }
 

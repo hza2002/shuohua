@@ -206,6 +206,13 @@ structured dry-run status instead of falling through the generic unsupported bac
 Phase 10k 不调用 Task Scheduler、SCM、PowerShell 或 registry APIs，不写文件，不实现 smart fallback，
 也不声明 Windows service lifecycle runtime-ready。
 
+Phase 10ac adds Windows `service stop` as IPC shutdown only:
+
+- `service.manager` remains `partial`; backend stays `windows_user_dry_run` because install/start/restart are
+  still unsupported.
+- reason becomes `ipc_stop_only` once `service stop` can send `Command::Shutdown` and wait for PID exit.
+- This does not install, register, start, or manage a Task Scheduler/SCM service.
+
 ## Phase 10l Non-macOS Desktop Capability Truthfulness
 
 Linux/Windows desktop facade behavior is currently conservative and should be reflected explicitly in the

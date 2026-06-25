@@ -186,7 +186,7 @@ fn windows_path_open_reveal_capability_reports_explorer_partial() {
         "CapabilityId::PathOpenReveal",
         "explorer",
         "CapabilityStatusKind::Partial",
-        "Validate explorer.exe open/reveal behavior on Windows",
+        "Validate Explorer open/reveal with UNC, missing paths, and non-interactive sessions",
     ] {
         assert!(
             capability.contains(token),
@@ -693,6 +693,9 @@ fn windows_service_manager_has_dry_run_status_skeleton() {
 
     for token in [
         "#[cfg(target_os = \"windows\")]",
+        "Command::Shutdown",
+        "fn request_daemon_shutdown",
+        "fn wait_for_pid_exit",
         "fn service_strategy()",
         "fn daemon_command(",
         "windows.user: dry-run",
@@ -720,8 +723,8 @@ fn windows_service_manager_has_dry_run_status_skeleton() {
     for token in [
         "CapabilityId::ServiceManager",
         "windows_user_dry_run",
-        "dry_run_status_only",
-        "Validate Windows user service install/start/stop strategy",
+        "ipc_stop_only",
+        "Validate Windows user service install/start/restart strategy",
     ] {
         assert!(
             capability.contains(token),

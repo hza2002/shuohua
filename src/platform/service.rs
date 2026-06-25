@@ -722,15 +722,18 @@ WantedBy=default.target
 mod imp {
     use std::ops::ControlFlow;
     use std::path::PathBuf;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
-    use anyhow::Result;
+    use anyhow::{Context, Result};
 
     use crate::ipc::protocol::{Command, Event};
 
     const DAEMON_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
+    const DAEMON_EXIT_TIMEOUT: Duration = Duration::from_secs(20);
+    const DAEMON_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
     const ERROR_FILE_NOT_FOUND: i32 = 2;
     const ERROR_PATH_NOT_FOUND: i32 = 3;
+    const WINDOWS_SERVICE_LABEL: &str = "windows.user";
 
     pub fn launchd_status() -> super::LaunchdStatus {
         super::LaunchdStatus::Unsupported
@@ -749,7 +752,16 @@ mod imp {
     }
 
     pub async fn stop() -> Result<()> {
-        unsupported()
+        stop_with(request_daemon_shutdown, wait_for_pid_exit, || {
+            println!(
+                "{}",
+                crate::i18n::tr(
+                    "cli.service.stopped",
+                    &[("label", WINDOWS_SERVICE_LABEL.to_string())]
+                )
+            );
+        })
+        .await
     }
 
     pub async fn restart() -> Result<()> {
@@ -779,6 +791,84 @@ mod imp {
             daemon_command(&exe)
         );
         Ok(())
+    }
+
+    async fn stop_with<F>(
+        request_shutdown: impl FnOnce() -> F,
+        wait_for_exit: impl FnOnce(crate::platform::lifecycle::Pid) -> Result<()>,
+        print_stopped: impl FnOnce(),
+    ) -> Result<()>
+    where
+        F: std::future::Future<Output = Result<crate::platform::lifecycle::Pid>>,
+    {
+        let pid = request_shutdown().await?;
+        wait_for_exit(pid)?;
+        print_stopped();
+        Ok(())
+    }
+
+    async fn request_daemon_shutdown() -> Result<crate::platform::lifecycle::Pid> {
+        tokio::time::timeout(DAEMON_STATUS_TIMEOUT, async {
+            let mut client = match crate::ipc::client::IpcClient::connect_default().await {
+                Ok(client) => client,
+                Err(error) if is_daemon_absent_connect_error(&error) => {
+                    anyhow::bail!("daemon is not running")
+                }
+                Err(error) => return Err(error.context("connect Windows daemon for shutdown")),
+            };
+            client.send(&Command::Shutdown).await?;
+            parse_shutdown_reply(client.recv().await?)
+        })
+        .await
+        .context("shutdown IPC timed out")?
+    }
+
+    fn parse_shutdown_reply(reply: Option<Event>) -> Result<crate::platform::lifecycle::Pid> {
+        let pid = match reply {
+            Some(Event::DaemonStatus { pid, .. }) => pid,
+            Some(event) => {
+                anyhow::bail!("expected DaemonStatus shutdown reply, received {event:?}")
+            }
+            None => anyhow::bail!("daemon closed IPC before sending DaemonStatus"),
+        };
+        if pid == 0 {
+            anyhow::bail!("invalid daemon PID in shutdown reply: {pid}");
+        }
+        Ok(pid as crate::platform::lifecycle::Pid)
+    }
+
+    fn wait_for_pid_exit(pid: crate::platform::lifecycle::Pid) -> Result<()> {
+        wait_for_pid_exit_with(
+            pid,
+            DAEMON_EXIT_TIMEOUT,
+            DAEMON_EXIT_POLL_INTERVAL,
+            crate::platform::lifecycle::process_exists,
+            std::thread::sleep,
+            Instant::now,
+        )
+    }
+
+    fn wait_for_pid_exit_with(
+        pid: crate::platform::lifecycle::Pid,
+        timeout: Duration,
+        poll_interval: Duration,
+        mut process_exists: impl FnMut(crate::platform::lifecycle::Pid) -> Result<bool>,
+        mut sleep: impl FnMut(Duration),
+        mut now: impl FnMut() -> Instant,
+    ) -> Result<()> {
+        let deadline = now() + timeout;
+        loop {
+            if !process_exists(pid)? {
+                return Ok(());
+            }
+            if now() >= deadline {
+                anyhow::bail!(
+                    "timed out after {}s waiting for Windows daemon PID {pid} to exit",
+                    timeout.as_secs()
+                );
+            }
+            sleep(poll_interval);
+        }
     }
 
     async fn ipc_status() -> Result<Option<String>> {
@@ -885,6 +975,89 @@ mod imp {
                 format_daemon_status(42, 65_000, "Idle", "-"),
                 "daemon: running pid=42 uptime=1m5s state=Idle recording=-"
             );
+        }
+
+        #[test]
+        fn shutdown_reply_returns_daemon_pid() {
+            let pid = parse_shutdown_reply(Some(Event::DaemonStatus {
+                pid: 42,
+                uptime_ms: 1,
+                state: crate::ipc::protocol::WireState::Idle,
+                recording_id: None,
+            }))
+            .unwrap();
+
+            assert_eq!(pid, 42);
+        }
+
+        #[test]
+        fn shutdown_reply_rejects_other_event_and_eof() {
+            let other = parse_shutdown_reply(Some(Event::ConfigReloaded {
+                path: "config.toml".to_string(),
+            }))
+            .unwrap_err();
+            let eof = parse_shutdown_reply(None).unwrap_err();
+
+            assert!(other.to_string().contains("DaemonStatus"), "{other:#}");
+            assert!(eof.to_string().contains("closed"), "{eof:#}");
+        }
+
+        #[test]
+        fn shutdown_reply_rejects_invalid_pid() {
+            let error = parse_shutdown_reply(Some(Event::DaemonStatus {
+                pid: 0,
+                uptime_ms: 1,
+                state: crate::ipc::protocol::WireState::Idle,
+                recording_id: None,
+            }))
+            .unwrap_err();
+
+            assert!(
+                error.to_string().contains("invalid daemon PID"),
+                "{error:#}"
+            );
+        }
+
+        #[test]
+        fn wait_for_pid_exit_stops_after_process_disappears() {
+            let mut probes = vec![true, true, false].into_iter();
+            let mut sleeps = 0;
+            let now = Instant::now();
+
+            wait_for_pid_exit_with(
+                42,
+                Duration::from_secs(20),
+                Duration::from_millis(100),
+                |_| Ok(probes.next().unwrap()),
+                |_| sleeps += 1,
+                || now,
+            )
+            .unwrap();
+
+            assert_eq!(sleeps, 2);
+        }
+
+        #[test]
+        fn wait_for_pid_exit_times_out_without_killing() {
+            let start = Instant::now();
+            let mut times = vec![start, start, start + Duration::from_secs(21)].into_iter();
+            let mut probes = 0;
+
+            let error = wait_for_pid_exit_with(
+                42,
+                Duration::from_secs(20),
+                Duration::from_millis(100),
+                |_| {
+                    probes += 1;
+                    Ok(true)
+                },
+                |_| {},
+                || times.next().unwrap(),
+            )
+            .unwrap_err();
+
+            assert!(error.to_string().contains("timed out"), "{error:#}");
+            assert_eq!(probes, 2);
         }
 
         #[test]

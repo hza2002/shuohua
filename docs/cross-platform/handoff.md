@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `fix: record abandoned windows mutex recovery` (`292a166`).
+Latest phase commit: `fix: preserve windows service status ipc errors` (`6919630`).
 
-Previous commit: `docs: sync windows capability next steps` (`348cceb`).
+Previous commit: `fix: record abandoned windows mutex recovery` (`292a166`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,18 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10ac Windows service stop IPC shutdown 已完成：
+
+- Windows `shuo service stop` 现在只通过当前用户/登录会话的 Named Pipe 发送既有
+  `Command::Shutdown`，收到 `DaemonStatus` 后有界等待 daemon PID 退出。
+- `install` / `uninstall` / `start` / `restart` 仍返回 unsupported；没有调用 Task Scheduler、SCM、
+  PowerShell 或 registry APIs，也没有实现 daemon auto-start。
+- Runtime smoke 首次暴露 `OpenProcess` 句柄成功不能代表进程仍 active；Windows
+  `platform::lifecycle::process_exists` 已改为 `OpenProcess` 后调用 `GetExitCodeProcess`，只把
+  `STILL_ACTIVE` 视为 running。
+- `scripts/windows-ipc-smoke.ps1` 现在覆盖 `service stop` 和 after-stop status；elevated same-user
+  smoke 通过，`service_stop_exit=0`、`daemon_running_after_stop=false`、`failures=[]`。
+
 Phase 10ab Windows service status IPC error classification 已完成：
 
 - Windows `service status` 不再把所有 `connect_default()` 失败都当成 `daemon: not running`。
@@ -1412,11 +1424,13 @@ permission probe 或 active app runtime。
   - `shuo.exe --version` 通过。
   - `shuo.exe doctor` 能运行并使用 `%APPDATA%\Shuohua`，但因本机配置/设备/权限返回 1。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。
+  - `shuo.exe service stop` 通过 IPC shutdown 停止运行中 daemon；after-stop `service status` 显示
+    `daemon: not running`。
   - `shuo.exe --daemon` + scoped Named Pipe `DaemonStatus` 通过。
   - 第二个 `shuo.exe --daemon` 明确失败，单实例 guard 生效。
   - same-user medium/elevated 和 elevated/medium 交叉矩阵通过，修复后不再拆成两个 daemon runtime。
   - `scripts/windows-ipc-smoke.ps1 -StopExisting` 在 elevated session 通过：20/20 busy clients exit 0，
-    helper 输出 `failures: []`。
+    `service_stop_exit=0`，helper 输出 `failures: []`。
   - Explorer direct open/reveal 工具会话仍返回 1，但用户目视确认窗口打开/reveal 生效；不要只看
     `explorer.exe` exit code。
 - 未在本 Windows session 跑 `make check-windows` / `make check-linux-cross`；本阶段验证重点是
@@ -1424,7 +1438,7 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10z：继续做不需要第二用户的 Windows IPC/lifecycle 小步 hardening；cross-user 第二账号/VM
+- Phase 10ad：继续做不需要第二用户的 Windows IPC/lifecycle 小步 hardening；cross-user 第二账号/VM
   隔离验证已后移为 deferred manual gate，没有第二用户前不要升级 Windows IPC capability。
 - 后续代码小步可选：在不改变 capability 结论的前提下，设计 raw `CreateFileW`/overlapped client
   access-mask narrowing，或把 busy/elevation smoke 脚本沉淀为开发者手动命令。

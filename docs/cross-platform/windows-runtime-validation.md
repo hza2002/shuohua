@@ -182,6 +182,21 @@ Expected:
   errors must remain visible.
 - It must not install a Task Scheduler task, write registry keys, call SCM service APIs, or require elevation.
 
+## Service Stop IPC Shutdown
+
+Keep a daemon running, then run:
+
+```powershell
+.\shuo.exe service stop
+.\shuo.exe service status
+```
+
+Expected:
+
+- `service stop` sends IPC `Shutdown`, waits for the daemon process to exit, and prints a stopped message.
+- Follow-up `service status` reports `daemon: not running`.
+- It must not install, unregister, start, or stop any Task Scheduler/SCM service.
+
 ## Explorer Open/Reveal
 
 Use the TUI or CLI action that opens/reveals config/audio paths when available. For the first manual smoke, also
@@ -206,6 +221,7 @@ Stop and report results after this checklist if any of the following happens:
 - A second daemon can run independently.
 - Product data resolves to package-private data or the executable directory.
 - `service status` performs real install/start/stop work instead of dry-run status.
+- `service stop` leaves the daemon running or performs Task Scheduler/SCM work.
 
 Do not continue to audio, overlay, hotkey, clipboard, paste, or end-to-end recording validation until the
 corresponding backend phase provides a new checklist.

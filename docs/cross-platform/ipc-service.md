@@ -159,6 +159,15 @@ Phase 10k Windows service manager dry-run/status skeleton:
 - `install` / `uninstall` / `start` / `stop` / `restart` 仍返回明确 unsupported。
 - Phase 10k 不调用 Task Scheduler、SCM、PowerShell 或 registry APIs，不写文件，不实现 smart fallback。
 
+Phase 10ac Windows service stop IPC shutdown:
+
+- Windows `shuo service stop` 可以连接当前用户/登录会话的 Named Pipe，发送既有 `Command::Shutdown`，
+  收到 `DaemonStatus` 后用 `OpenProcess` probe 做有界等待。
+- 这只是停止已经运行的 user-session daemon；不安装、不注册、不启动 daemon，也不调用 Task Scheduler、
+  SCM、PowerShell 或 registry APIs。
+- `install` / `uninstall` / `start` / `restart` 仍返回明确 unsupported；`service.manager` capability
+  仍保持 `partial`，不能据此声明 Windows service lifecycle runtime-ready。
+
 ## Smart Fallback
 
 CLI/TUI/GUI 连接 daemon 时：

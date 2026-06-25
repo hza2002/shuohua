@@ -31,6 +31,9 @@ Phase 10ag Windows service lifecycle smoke helper 已完成：
 - 本机 elevated helper 输出通过：`service_start_exit=0`、`service_start_again_exit=0`、
   `service_restart_exit=0`、`after_start_again_pid == daemon_pid`、`after_restart_pid != daemon_pid`、
   `busy_exit_0=20`、`service_stop_exit=0`、`failures=[]`。
+- 追加 same-user elevated soak：`.\scripts\windows-ipc-smoke.ps1 -StopExisting -ClientCount 100`
+  通过，`busy_exit_0=100`、`busy_exit_files=100`、`busy_nonzero=[]`、`service_stop_exit=0`、
+  `failures=[]`。
 
 Phase 10af Windows raw Named Pipe client access mask 已完成：
 
@@ -1496,6 +1499,8 @@ permission probe 或 active app runtime。
     start/idempotent start/restart/status/busy/stop：20/20 busy clients exit 0，
     `service_restart_exit=0`，`service_stop_exit=0`，`after_stop_status_exit=0`，helper 输出
     `failures: []`。
+  - `scripts/windows-ipc-smoke.ps1 -StopExisting -ClientCount 100` 通过，100/100 busy clients exit 0，
+    helper 输出 `failures: []`。
   - Explorer direct open/reveal 工具会话仍返回 1，但用户目视确认窗口打开/reveal 生效；不要只看
     `explorer.exe` exit code。
 - 未在本 Windows session 跑 `make check-windows` / `make check-linux-cross`；本阶段验证重点是

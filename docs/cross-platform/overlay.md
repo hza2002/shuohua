@@ -147,6 +147,20 @@ Phase 10ap fixes the first visual correctness layer before material polish:
 Remaining gates: per-monitor work area on secondary displays, DirectWrite/Direct2D text quality, rounded/shadowed
 surface polish, fullscreen/UAC behavior, and final multi-monitor visual QA.
 
+### Windows Phase 10aq Rounded GDI Baseline
+
+Phase 10aq keeps the renderer native Win32/GDI, but fixes the most visible shape mismatch:
+
+- The overlay applies the shared `overlay.surface.corner_radius` to the actual Win32 window region via
+  `CreateRoundRectRgn` / `SetWindowRgn`.
+- The layered-window alpha now uses the shared `overlay.surface.background_alpha` instead of a Windows-only fixed
+  opacity.
+- GDI font creation requests `CLEARTYPE_QUALITY` for the `Segoe UI` baseline.
+
+This is still not the final text/material renderer. If Windows text remains visibly softer than system UI, the next
+quality step should be a DirectWrite/Direct2D renderer foundation, not more GDI tuning. Shadow, Acrylic/Mica,
+animation, focused-window anchoring, fullscreen/UAC behavior, and multi-monitor visual QA remain open.
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。

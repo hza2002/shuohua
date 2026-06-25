@@ -1032,6 +1032,51 @@ fn windows_overlay_records_dpi_and_font_baseline() {
 }
 
 #[test]
+fn windows_overlay_records_rounded_gdi_baseline() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let backend = std::fs::read_to_string(root.join("src/overlay/windows.rs")).unwrap();
+    let overlay_doc = std::fs::read_to_string(root.join("docs/cross-platform/overlay.md")).unwrap();
+    let capability_doc =
+        std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
+
+    for token in [
+        "CreateRoundRectRgn",
+        "SetWindowRgn",
+        "CLEARTYPE_QUALITY",
+        "background_alpha",
+        "corner_radius",
+        "apply_rounded_window_region",
+    ] {
+        assert!(
+            backend.contains(token),
+            "Windows overlay rounded GDI baseline should contain token `{token}`"
+        );
+    }
+
+    for token in [
+        "Windows Phase 10aq Rounded GDI Baseline",
+        "DirectWrite/Direct2D renderer foundation",
+        "not the final text/material renderer",
+    ] {
+        assert!(
+            overlay_doc.contains(token),
+            "overlay rounded GDI policy should document `{token}`"
+        );
+    }
+
+    for token in [
+        "Phase 10aq Windows Overlay Rounded GDI Baseline",
+        "does not change Windows overlay capability levels",
+        "still uses GDI `DrawTextW`",
+    ] {
+        assert!(
+            capability_doc.contains(token),
+            "platform capability doc should document `{token}`"
+        );
+    }
+}
+
+#[test]
 fn windows_active_app_identity_backend_lives_behind_desktop_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let windows_app_context = root.join("src/platform/windows/app_context.rs");

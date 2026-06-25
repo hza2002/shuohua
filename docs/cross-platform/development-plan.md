@@ -908,6 +908,18 @@ Phase 10ap Windows Overlay DPI And Font Baseline:
 - Capability remains partial/degraded until high-DPI, multi-monitor, and final visual quality are manually
   validated.
 
+Phase 10aq Windows Overlay Rounded GDI Baseline:
+
+- Close the biggest parity gap visible after Phase 10ap without changing renderer architecture: apply the shared
+  `overlay.surface.corner_radius` to the Win32 window shape and use shared `background_alpha` for layered-window
+  opacity.
+- Keep this as a GDI baseline: use ClearType font quality for `CreateFontW`, but do not introduce Direct2D,
+  DirectWrite, Acrylic/Mica, DWM shadow experiments, or animation in this phase.
+- This phase may improve obvious rectangle/text roughness, but it is not a final visual-quality claim. If text
+  still looks softer than Windows system UI, the next renderer-quality step should be DirectWrite/Direct2D.
+- Capability remains partial/degraded until user-visible QA covers real foreground apps, multi-monitor,
+  fullscreen/UAC, and final material/text quality.
+
 ## 持续维护
 
 - 每完成一个 phase，更新 `overview.md` 的阶段状态。

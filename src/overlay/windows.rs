@@ -5,11 +5,11 @@ use std::ptr::null_mut;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{GetLastError, COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect,
-    GetStockObject, InvalidateRect, SelectObject, SetBkMode, SetTextColor, CLIP_DEFAULT_PRECIS,
-    DEFAULT_CHARSET, DEFAULT_QUALITY, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_TOP,
-    DT_WORDBREAK, FF_DONTCARE, FW_BOLD, FW_NORMAL, HBRUSH, HDC, HGDIOBJ, OUT_DEFAULT_PRECIS,
-    PAINTSTRUCT, TRANSPARENT, WHITE_BRUSH,
+    BeginPaint, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, DrawTextW,
+    EndPaint, FillRect, GetStockObject, InvalidateRect, SelectObject, SetBkMode, SetTextColor,
+    SetWindowRgn, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_END_ELLIPSIS,
+    DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_TOP, DT_WORDBREAK, FF_DONTCARE, FW_BOLD, FW_NORMAL,
+    HBRUSH, HDC, HGDIOBJ, HRGN, OUT_DEFAULT_PRECIS, PAINTSTRUCT, TRANSPARENT, WHITE_BRUSH,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
@@ -150,6 +150,7 @@ impl WindowsOverlay {
                 }
                 Ok(OverlayCmd::ReloadConfig { cfg }) => {
                     self.cfg = cfg;
+                    self.apply_surface_shape();
                     self.invalidate();
                 }
                 Ok(cmd) => {
@@ -191,6 +192,9 @@ impl WindowsOverlay {
                 height,
                 SWP_NOACTIVATE,
             );
+        }
+        self.apply_surface_shape();
+        unsafe {
             ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
         }
         self.visible = true;
@@ -209,6 +213,17 @@ impl WindowsOverlay {
     fn invalidate(&self) {
         unsafe {
             InvalidateRect(self.hwnd, std::ptr::null(), 1);
+        }
+    }
+
+    fn apply_surface_shape(&self) {
+        let metrics = WindowMetrics::for_window(self.hwnd);
+        let width = metrics.px(L::constants::WIDTH);
+        let height = metrics.px(overlay_height(&self.model, &self.cfg));
+        let radius = metrics.px(self.cfg.core.corner_radius).max(0);
+        unsafe {
+            apply_window_alpha(self.hwnd, self.cfg.core.background_alpha);
+            apply_rounded_window_region(self.hwnd, width, height, radius);
         }
     }
 
@@ -371,7 +386,6 @@ fn register_window_class() -> Result<()> {
 fn create_overlay_window(overlay: *mut WindowsOverlay) -> Result<HWND> {
     let class_name = wide_null(CLASS_NAME);
     let title = wide_null("Shuohua");
-    let alpha = (255.0_f64 * 0.88).round() as u8;
     let hwnd = unsafe {
         CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -392,10 +406,32 @@ fn create_overlay_window(overlay: *mut WindowsOverlay) -> Result<HWND> {
         return Err(last_error("CreateWindowExW"));
     }
     unsafe {
-        SetLayeredWindowAttributes(hwnd, 0 as COLORREF, alpha, LWA_ALPHA);
         ShowWindow(hwnd, SW_HIDE);
     }
     Ok(hwnd)
+}
+
+unsafe fn apply_window_alpha(hwnd: HWND, alpha: f64) {
+    let alpha = (255.0 * alpha.clamp(0.0, 1.0)).round() as u8;
+    SetLayeredWindowAttributes(hwnd, 0 as COLORREF, alpha, LWA_ALPHA);
+}
+
+unsafe fn apply_rounded_window_region(hwnd: HWND, width: i32, height: i32, radius: i32) {
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    if radius <= 0 {
+        SetWindowRgn(hwnd, null_mut(), 1);
+        return;
+    }
+    let diameter = radius.saturating_mul(2);
+    let region: HRGN = CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter);
+    if region.is_null() {
+        return;
+    }
+    if SetWindowRgn(hwnd, region, 1) == 0 {
+        DeleteObject(region as HGDIOBJ);
+    }
 }
 
 fn screen_panel_frame(
@@ -474,7 +510,7 @@ unsafe fn create_ui_font(metrics: WindowMetrics, point_size: f64, bold: bool) ->
         DEFAULT_CHARSET.into(),
         OUT_DEFAULT_PRECIS.into(),
         CLIP_DEFAULT_PRECIS.into(),
-        DEFAULT_QUALITY.into(),
+        CLEARTYPE_QUALITY.into(),
         FF_DONTCARE.into(),
         face.as_ptr(),
     ) as HGDIOBJ

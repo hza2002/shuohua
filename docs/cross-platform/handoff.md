@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: add windows overlay dpi baseline`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: add windows overlay rounded baseline`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: add windows minimal overlay backend` (`ae5abe6`).
+Previous phase commit: `feat: add windows overlay dpi baseline` (`131c358`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,18 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10aq Windows overlay rounded GDI baseline 已完成：
+
+- Windows overlay 现在把共享 `overlay.surface.corner_radius` 应用到 Win32 window region：
+  `CreateRoundRectRgn` + `SetWindowRgn`。
+- layered-window opacity 改用共享 `overlay.surface.background_alpha`，不再使用 Windows backend 私有固定
+  alpha。
+- `CreateFontW` 请求 `CLEARTYPE_QUALITY`，仍使用系统 UI 字体 `Segoe UI` 和 GDI `DrawTextW`。
+- Capability 不升级：这只是 rounded/ClearType GDI baseline，不是 DirectWrite/Direct2D，不包含 shadow、
+  Acrylic/Mica、动画、focused-window anchoring、fullscreen/UAC 或 multi-monitor 最终视觉 QA。
+- 如果用户目视仍觉得 Windows 字体明显比系统 UI 糊，下一步应进入 DirectWrite/Direct2D renderer
+  foundation，而不是继续微调 GDI。
+
 Phase 10ap Windows overlay DPI and font baseline 已完成：
 
 - Windows overlay 现在用 `GetDpiForWindow` 计算当前 window DPI scale，并把共享 logical layout 的窗口尺寸、
@@ -1672,6 +1684,10 @@ permission probe 或 active app runtime。
     当前 `doctor` exit 1 仍是无默认输入设备；overlay capability 仍保持 partial/degraded。
   - Phase 10ap 字体决策：三端优先使用系统 UI 字体；macOS 不 bundle SF Pro，Windows 不要求
     JetBrains Mono。后续若需要额外 fallback，只选择可再分发字体并作为 optional packaged fallback。
+  - Phase 10aq overlay rounded GDI baseline 通过 Windows native 验证：`platform_layout windows_overlay`
+    guard、Windows overlay unit tests、ignored overlay runtime smoke、Windows target tests/build 均通过。
+    `service start; service status; service stop` 单步 smoke 通过，确认 rounded region / ClearType GDI
+    改动不阻塞 daemon lifecycle。该结论仍需要用户目视确认真实 overlay 质感；capability 不升级。
   - 无参数 `shuo.exe` smart fallback 在 daemon absent 时可启动当前 executable 的 `--daemon` 子进程，
     并等到 scoped Named Pipe ready。
   - `shuo.exe service status` 在 daemon running/not running 两种状态下均通过，且只做 dry-run/status。

@@ -325,6 +325,19 @@ Phase 10ap does not change Windows overlay capability levels, but narrows the re
 - Capability remains partial/degraded until per-monitor secondary-display behavior, DirectWrite/Direct2D text,
   material/shadow/rounding, fullscreen/UAC behavior, and final visual QA are complete.
 
+## Phase 10aq Windows Overlay Rounded GDI Baseline
+
+Phase 10aq narrows the visual gap but does not change Windows overlay capability levels:
+
+- `win32_overlay_minimal` now applies `overlay.surface.corner_radius` with `CreateRoundRectRgn` /
+  `SetWindowRgn`.
+- Layered-window opacity uses shared `overlay.surface.background_alpha`.
+- Text creation requests `CLEARTYPE_QUALITY`, but the backend still uses GDI `DrawTextW`; this is not
+  DirectWrite/Direct2D parity.
+- `overlay.renderer` remains `partial`; `overlay.material` and `overlay.window_anchor` remain `degraded` until
+  DirectWrite/Direct2D or equivalent text quality, material/shadow, focused anchoring, fullscreen/UAC, and
+  multi-monitor visual QA are complete.
+
 ## Phase 10ah Windows Audio Capture Diagnostics
 
 Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：

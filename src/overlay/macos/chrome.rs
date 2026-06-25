@@ -15,9 +15,10 @@ use crate::config::theme::{EffectiveOverlayCfg, GlassStyle};
 use crate::overlay::layout as L;
 
 pub(super) fn root_frame(cfg: &EffectiveOverlayCfg) -> NSRect {
+    let frames = L::overlay_frames(cfg.core.width, cfg.core.text_scale, 1);
     NSRect::new(
         NSPoint::new(0.0, 0.0),
-        NSSize::new(cfg.core.width, L::constants::BASE_HEIGHT),
+        NSSize::new(cfg.core.width, frames.height),
     )
 }
 

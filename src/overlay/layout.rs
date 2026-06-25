@@ -43,17 +43,40 @@ pub mod constants {
     pub const META_MIN_W: f64 = 180.0;
 }
 
+pub fn text_scale(value: f64) -> f64 {
+    value.clamp(0.8, 1.6)
+}
+
 pub fn body_width(width: f64) -> f64 {
     (width - constants::H_PAD * 2.0).max(120.0)
 }
 
 pub fn body_line_height(text_scale: f64) -> f64 {
-    constants::BODY_LINE_H * text_scale.clamp(0.8, 1.6)
+    constants::BODY_LINE_H * self::text_scale(text_scale)
+}
+
+pub fn header_row_height(text_scale: f64) -> f64 {
+    constants::ICON_BOX
+        .max(constants::STATE_BOX_H * self::text_scale(text_scale))
+        .max(constants::META_BOX_H * self::text_scale(text_scale))
+}
+
+pub fn base_height(text_scale: f64) -> f64 {
+    let top_pad = constants::BASE_HEIGHT
+        - constants::BOTTOM_PAD
+        - constants::BODY_LINE_H
+        - constants::HEADER_BODY_GAP
+        - constants::ICON_BOX;
+    top_pad
+        + header_row_height(text_scale)
+        + constants::HEADER_BODY_GAP
+        + body_line_height(text_scale)
+        + constants::BOTTOM_PAD
 }
 
 pub fn chars_per_line(width: f64, text_scale: f64) -> usize {
     let default_body = constants::BODY_W;
-    let scale = text_scale.clamp(0.8, 1.6);
+    let scale = self::text_scale(text_scale);
     let estimate = constants::CHARS_PER_LINE as f64 * body_width(width) / default_body / scale;
     estimate.round().clamp(12.0, 96.0) as usize
 }
@@ -70,9 +93,11 @@ pub struct FirstRow {
     pub meta: LayoutFrame,
 }
 
-pub fn first_row_frames(width: f64, top_offset: f64) -> FirstRow {
+pub fn first_row_frames(width: f64, text_scale: f64, top_offset: f64) -> FirstRow {
     use constants::*;
-    let center_y = HEADER_CENTER_Y + top_offset;
+    let row_h = header_row_height(text_scale);
+    let center_y =
+        BOTTOM_PAD + body_line_height(text_scale) + HEADER_BODY_GAP + row_h / 2.0 + top_offset;
     let mut x = H_PAD;
     let icon = LayoutFrame::new(
         x,
@@ -81,18 +106,20 @@ pub fn first_row_frames(width: f64, top_offset: f64) -> FirstRow {
         ICON_BOX,
     );
     x += ICON_BOX + ICON_STATE_GAP;
+    let state_h = STATE_BOX_H * self::text_scale(text_scale);
     let status = LayoutFrame::new(
         x,
-        frame_y_for_visual_center(center_y, STATE_BOX_H, STATE_OPTICAL_Y),
+        frame_y_for_visual_center(center_y, state_h, STATE_OPTICAL_Y),
         STATE_W,
-        STATE_BOX_H,
+        state_h,
     );
     x += STATE_W + STATE_STATS_GAP;
+    let meta_h = META_BOX_H * self::text_scale(text_scale);
     let stats = LayoutFrame::new(
         x,
-        frame_y_for_visual_center(center_y, META_BOX_H, META_OPTICAL_Y),
+        frame_y_for_visual_center(center_y, meta_h, META_OPTICAL_Y),
         STATS_W,
-        META_BOX_H,
+        meta_h,
     );
     x += STATS_W + META_GAP;
     let right = width - H_PAD;
@@ -103,15 +130,39 @@ pub fn first_row_frames(width: f64, top_offset: f64) -> FirstRow {
         stats,
         meta: LayoutFrame::new(
             x,
-            frame_y_for_visual_center(center_y, META_BOX_H, META_OPTICAL_Y),
+            frame_y_for_visual_center(center_y, meta_h, META_OPTICAL_Y),
             meta_w,
-            META_BOX_H,
+            meta_h,
         ),
     }
 }
 
 pub fn scaled_font_size(base: f64, text_scale: f64) -> f64 {
-    base * text_scale.clamp(0.8, 1.6)
+    base * self::text_scale(text_scale)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct OverlayFrames {
+    pub height: f64,
+    pub row: FirstRow,
+    pub body: LayoutFrame,
+}
+
+pub fn overlay_frames(width: f64, text_scale: f64, lines: usize) -> OverlayFrames {
+    let lines = lines.clamp(1, 8);
+    let line_h = body_line_height(text_scale);
+    let height = base_height(text_scale) + (lines.saturating_sub(1) as f64 * line_h);
+    let top_offset = height - base_height(text_scale);
+    OverlayFrames {
+        height,
+        row: first_row_frames(width, text_scale, top_offset),
+        body: LayoutFrame::new(
+            constants::H_PAD,
+            constants::BOTTOM_PAD,
+            body_width(width),
+            line_h * lines as f64,
+        ),
+    }
 }
 
 pub fn display_text_plan(text: &str, max_lines: usize, chars_per_line: usize) -> (String, usize) {
@@ -333,7 +384,7 @@ mod tests {
 
     #[test]
     fn first_row_clusters_stats_and_app_on_left_with_wide_meta() {
-        let row = first_row_frames(constants::WIDTH, 0.0);
+        let row = first_row_frames(constants::WIDTH, 1.0, 0.0);
         assert!(row.stats.x - (row.status.x + row.status.w) <= 6.0);
         assert!(row.stats.w >= 210.0);
         assert!(row.stats.x < row.meta.x);
@@ -351,7 +402,7 @@ mod tests {
 
     #[test]
     fn first_row_uses_shared_visual_center() {
-        let row = first_row_frames(constants::WIDTH, 0.0);
+        let row = first_row_frames(constants::WIDTH, 1.0, 0.0);
         let center = constants::HEADER_CENTER_Y;
         assert!((visual_center(row.icon, constants::ICON_OPTICAL_Y) - center).abs() < 0.1);
         assert!((visual_center(row.status, constants::STATE_OPTICAL_Y) - center).abs() < 0.1);
@@ -373,6 +424,22 @@ mod tests {
         assert!(chars_per_line(constants::WIDTH * 1.2, 1.0) > constants::CHARS_PER_LINE);
         assert!(chars_per_line(constants::WIDTH, 1.2) < constants::CHARS_PER_LINE);
         assert!(body_line_height(1.2) > constants::BODY_LINE_H);
+        assert!(base_height(1.5) > constants::BASE_HEIGHT);
+        assert!(overlay_frames(constants::WIDTH, 1.5, 1).body.h > constants::BODY_LINE_H);
+    }
+
+    #[test]
+    fn scaled_overlay_frames_keep_header_above_body() {
+        let normal = overlay_frames(constants::WIDTH, 1.0, 1);
+        assert_eq!(normal.height, constants::BASE_HEIGHT);
+
+        let large = overlay_frames(constants::WIDTH, 1.5, 1);
+        assert!(large.height > normal.height);
+        assert!(large.row.status.h > constants::STATE_BOX_H);
+        assert!(large.row.stats.h > constants::META_BOX_H);
+        assert!(large.body.h > constants::BODY_LINE_H);
+        assert!(large.row.status.y >= large.body.y + large.body.h + constants::HEADER_BODY_GAP);
+        assert!(large.row.meta.y >= large.body.y + large.body.h + constants::HEADER_BODY_GAP);
     }
 
     #[test]

@@ -187,9 +187,10 @@ struct OverlayView {
 
 impl OverlayView {
     fn new(mtm: MainThreadMarker, cfg: EffectiveOverlayCfg) -> Self {
+        let frames = L::overlay_frames(cfg.core.width, cfg.core.text_scale, 1);
         let initial_frame = NSRect::new(
             NSPoint::new(80.0, 860.0),
-            NSSize::new(cfg.core.width, L::constants::BASE_HEIGHT),
+            NSSize::new(cfg.core.width, frames.height),
         );
         let panel = make_panel(mtm, initial_frame);
         apply_panel_background_blur(&panel, cfg.macos.background_blur_radius);
@@ -199,7 +200,7 @@ impl OverlayView {
             tracing::warn!(area = "overlay_chrome", message = %error);
         }
 
-        let row = L::first_row_frames(cfg.core.width, 0.0);
+        let row = frames.row;
         let icon_fx_view = NSView::new(mtm);
         icon_fx_view.setFrame(to_nsrect(row.icon));
         icon_fx_view.setWantsLayer(true);
@@ -230,13 +231,7 @@ impl OverlayView {
         meta.setAlignment(NSTextAlignment::Right);
         let text = label(
             mtm,
-            NSRect::new(
-                NSPoint::new(L::constants::H_PAD, L::constants::BOTTOM_PAD),
-                NSSize::new(
-                    L::body_width(cfg.core.width),
-                    L::body_line_height(cfg.core.text_scale),
-                ),
-            ),
+            to_nsrect(frames.body),
             L::scaled_font_size(typography::BODY, cfg.core.text_scale),
             false,
             cfg.core.text.primary,
@@ -376,8 +371,8 @@ impl OverlayView {
             } else {
                 current_lines
             };
-            let height = L::constants::BASE_HEIGHT
-                + (lines.saturating_sub(1) as f64 * L::body_line_height(self.cfg.core.text_scale));
+            let height =
+                L::overlay_frames(self.cfg.core.width, self.cfg.core.text_scale, lines).height;
             let height_changed = self.last_height != Some(height);
             self.last_height = Some(height);
 
@@ -630,7 +625,7 @@ impl OverlayView {
     }
 
     fn layout(&mut self, height: f64, lines: usize, animated: bool) {
-        let top_offset = height - L::constants::BASE_HEIGHT;
+        let frames = L::overlay_frames(self.cfg.core.width, self.cfg.core.text_scale, lines);
         let full = NSRect::new(
             NSPoint::new(0.0, 0.0),
             NSSize::new(self.cfg.core.width, height),
@@ -641,25 +636,13 @@ impl OverlayView {
             set_view_frame(glass, full, animated);
         }
         set_view_frame(&self.background, full, animated);
-        let row = L::first_row_frames(self.cfg.core.width, top_offset);
+        let row = frames.row;
         set_view_frame(&self.state_icon, to_nsrect(row.icon), animated);
         set_view_frame(&self.icon_fx_view, to_nsrect(row.icon), animated);
         set_view_frame(&self.status, to_nsrect(row.status), animated);
         set_view_frame(&self.stats, to_nsrect(row.stats), animated);
         set_view_frame(&self.meta, to_nsrect(row.meta), animated);
-        set_view_frame(
-            &self.text,
-            NSRect::new(
-                NSPoint::new(L::constants::H_PAD, L::constants::BOTTOM_PAD),
-                NSSize::new(
-                    L::body_width(self.cfg.core.width),
-                    L::body_line_height(self.cfg.core.text_scale)
-                        + (lines.saturating_sub(1) as f64
-                            * L::body_line_height(self.cfg.core.text_scale)),
-                ),
-            ),
-            animated,
-        );
+        set_view_frame(&self.text, to_nsrect(frames.body), animated);
     }
 
     fn place(&mut self, height: f64, animated: bool) {

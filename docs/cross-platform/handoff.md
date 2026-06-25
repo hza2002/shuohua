@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: add overlay size preferences`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `fix: scale overlay frames with text size`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `fix: preserve windows overlay position` (`2d2be24`).
+Previous phase commit: `feat: add overlay size preferences` (`4efe794`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,17 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10au Overlay shared scaled layout 已完成：
+
+- `overlay.text_scale` 现在不是单独放大字体；共享 `overlay::layout::overlay_frames(...)` 会同时推导
+  overlay 高度、header row frame、body frame、body line height 和字体大小。
+- Windows GDI fallback、Windows Direct2D renderer、macOS AppKit renderer 都消费同一套 frame 计算，避免
+  `text_scale=1.5` 时文字被旧固定 body/header 矩形挤压。
+- Windows 初始 window size、screen placement 高度和 rounded region 也跟随共享高度；底部居中位置仍由
+  work area + `panel_frame` 决定。
+- macOS 默认 `text_scale=1.0` 时仍保持原始 `BASE_HEIGHT=64.0`，避免默认视觉回退。
+- 本阶段只修 layout model 和 renderer 消费，不升级 overlay capability；Windows 4K 视觉仍需要用户目视 QA。
+
 Phase 10at Overlay size preferences 已完成：
 
 - 主配置 `[overlay]` 新增用户偏好 `width` 和 `text_scale`；已有 `max_text_lines` 继续负责最多显示行数。

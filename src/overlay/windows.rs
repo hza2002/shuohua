@@ -81,6 +81,17 @@ impl WindowMetrics {
             bottom: self.px(bottom) as f32,
         }
     }
+
+    fn rect_from_frame(self, frame: L::LayoutFrame) -> RECT {
+        self.rect(frame.x, frame.y, frame.x + frame.w, frame.y + frame.h)
+    }
+
+    fn rect_f_from_frame(
+        self,
+        frame: L::LayoutFrame,
+    ) -> windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F {
+        self.rect_f(frame.x, frame.y, frame.x + frame.w, frame.y + frame.h)
+    }
 }
 
 pub(super) fn renderer_capabilities() -> &'static [CapabilityStatus] {
@@ -120,7 +131,7 @@ impl WindowsOverlay {
             direct2d: None,
         });
         let raw = overlay.as_mut() as *mut Self;
-        let hwnd = create_overlay_window(raw)?;
+        let hwnd = create_overlay_window(&overlay.cfg, raw)?;
         overlay.hwnd = hwnd;
         overlay.direct2d = match direct2d::Direct2dRenderer::new(hwnd) {
             Ok(renderer) => Some(renderer),
@@ -270,12 +281,14 @@ impl WindowsOverlay {
         }
 
         let metrics = WindowMetrics::for_window(self.hwnd);
+        let lines = overlay_line_count(&self.model, &self.cfg);
+        let frames = L::overlay_frames(self.cfg.core.width, self.cfg.core.text_scale, lines);
         apply_window_alpha(self.hwnd, self.cfg.core.background_alpha);
         let rect = RECT {
             left: 0,
             top: 0,
             right: metrics.px(self.cfg.core.width),
-            bottom: metrics.px(overlay_height(&self.model, &self.cfg)),
+            bottom: metrics.px(frames.height),
         };
         let brush = CreateSolidBrush(to_colorref(self.cfg.core.background_rgb));
         FillRect(hdc, &rect, brush);
@@ -289,7 +302,7 @@ impl WindowsOverlay {
         let old_font = SelectObject(hdc, state_font);
         draw_text(
             hdc,
-            &mut metrics.rect(16.0, 11.0, 128.0, 34.0),
+            &mut metrics.rect_from_frame(frames.row.status),
             &self.model.state_label,
             self.model.state_color,
             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
@@ -304,7 +317,7 @@ impl WindowsOverlay {
         SelectObject(hdc, meta_font);
         draw_text(
             hdc,
-            &mut metrics.rect(132.0, 11.0, 430.0, 34.0),
+            &mut metrics.rect_from_frame(frames.row.stats),
             &stats,
             self.cfg.core.text.secondary,
             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
@@ -320,7 +333,7 @@ impl WindowsOverlay {
         };
         draw_text(
             hdc,
-            &mut metrics.rect(430.0, 11.0, self.cfg.core.width - 16.0, 34.0),
+            &mut metrics.rect_from_frame(frames.row.meta),
             meta,
             meta_color,
             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
@@ -339,12 +352,7 @@ impl WindowsOverlay {
         SelectObject(hdc, body_font);
         draw_text(
             hdc,
-            &mut metrics.rect(
-                16.0,
-                36.0,
-                self.cfg.core.width - 16.0,
-                overlay_height(&self.model, &self.cfg) - 8.0,
-            ),
+            &mut metrics.rect_from_frame(frames.body),
             &text,
             text_color,
             DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX,
@@ -426,9 +434,13 @@ fn register_window_class() -> Result<()> {
     Ok(())
 }
 
-fn create_overlay_window(overlay: *mut WindowsOverlay) -> Result<HWND> {
+fn create_overlay_window(
+    cfg: &crate::config::theme::EffectiveOverlayCfg,
+    overlay: *mut WindowsOverlay,
+) -> Result<HWND> {
     let class_name = wide_null(CLASS_NAME);
     let title = wide_null("Shuohua");
+    let frames = L::overlay_frames(cfg.core.width, cfg.core.text_scale, 1);
     let hwnd = unsafe {
         CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -437,8 +449,8 @@ fn create_overlay_window(overlay: *mut WindowsOverlay) -> Result<HWND> {
             WS_POPUP,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            crate::config::theme::CoreOverlayCfg::default().width as i32,
-            L::constants::BASE_HEIGHT as i32,
+            cfg.core.width.round() as i32,
+            frames.height.round() as i32,
             null_mut(),
             null_mut(),
             GetModuleHandleW(std::ptr::null()),
@@ -482,7 +494,7 @@ fn screen_panel_frame(
     metrics: WindowMetrics,
 ) -> L::LayoutFrame {
     let screen = work_area_layout(metrics);
-    let height = L::constants::BASE_HEIGHT;
+    let height = L::overlay_frames(cfg.core.width, cfg.core.text_scale, 1).height;
     let anchor = screen;
     let mut frame = L::panel_frame(anchor, cfg.core.position, cfg.core.width, height, screen);
     frame.y = screen.h - frame.y - frame.h;
@@ -518,13 +530,20 @@ pub(super) fn overlay_height(
     model: &OverlayModel,
     cfg: &crate::config::theme::EffectiveOverlayCfg,
 ) -> f64 {
+    let lines = overlay_line_count(model, cfg);
+    L::overlay_frames(cfg.core.width, cfg.core.text_scale, lines).height
+}
+
+pub(super) fn overlay_line_count(
+    model: &OverlayModel,
+    cfg: &crate::config::theme::EffectiveOverlayCfg,
+) -> usize {
     let (_, lines) = L::display_text_plan(
         &model.display_text(),
         cfg.core.max_text_lines,
         L::chars_per_line(cfg.core.width, cfg.core.text_scale),
     );
-    L::constants::BASE_HEIGHT
-        + (lines.saturating_sub(1) as f64 * L::body_line_height(cfg.core.text_scale))
+    lines
 }
 
 unsafe fn draw_text(hdc: HDC, rect: &mut RECT, text: &str, rgb: u32, format: u32) {
@@ -697,6 +716,27 @@ mod tests {
         assert!(frame.x >= 100.0);
         assert!(frame.y >= 50.0);
         assert!(frame.x + frame.w <= 2500.0);
+    }
+
+    #[test]
+    fn screen_panel_frame_height_follows_text_scale() {
+        let mut cfg = crate::config::theme::EffectiveOverlayCfg::default();
+        let metrics = WindowMetrics {
+            dpi: 144,
+            scale: 1.5,
+            work_area: RECT {
+                left: 0,
+                top: 0,
+                right: 2400,
+                bottom: 1800,
+            },
+        };
+
+        let normal = screen_panel_frame(&cfg, metrics);
+        cfg.core.text_scale = 1.5;
+        let scaled = screen_panel_frame(&cfg, metrics);
+
+        assert!(scaled.h > normal.h);
     }
 
     #[test]

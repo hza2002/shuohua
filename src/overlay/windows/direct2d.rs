@@ -67,6 +67,8 @@ impl Direct2dRenderer {
     ) -> Result<()> {
         let width = metrics.px(cfg.core.width).max(1);
         let height = metrics.px(super::overlay_height(model, cfg)).max(1);
+        let lines = super::overlay_line_count(model, cfg);
+        let frames = L::overlay_frames(cfg.core.width, cfg.core.text_scale, lines);
         self.ensure_surface(width, height, metrics)?;
         let surface = self.surface.as_ref().context("Direct2D layered surface")?;
         surface.clear_pixels();
@@ -114,7 +116,7 @@ impl Direct2dRenderer {
                 &surface.target,
                 &state_format,
                 &model.state_label,
-                metrics.rect_f(16.0, 11.0, 128.0, 34.0),
+                metrics.rect_f_from_frame(frames.row.status),
                 model.state_color,
             )?;
 
@@ -128,7 +130,7 @@ impl Direct2dRenderer {
                 &surface.target,
                 &meta_format,
                 &stats,
-                metrics.rect_f(132.0, 11.0, 430.0, 34.0),
+                metrics.rect_f_from_frame(frames.row.stats),
                 cfg.core.text.secondary,
             )?;
 
@@ -141,7 +143,7 @@ impl Direct2dRenderer {
                 &surface.target,
                 &meta_format,
                 meta,
-                metrics.rect_f(430.0, 11.0, cfg.core.width - 16.0, 34.0),
+                metrics.rect_f_from_frame(frames.row.meta),
                 meta_color,
             )?;
 
@@ -159,12 +161,7 @@ impl Direct2dRenderer {
                 &surface.target,
                 &body_format,
                 &text,
-                metrics.rect_f(
-                    16.0,
-                    36.0,
-                    cfg.core.width - 16.0,
-                    super::overlay_height(model, cfg) - 8.0,
-                ),
+                metrics.rect_f_from_frame(frames.body),
                 text_color,
             )?;
 

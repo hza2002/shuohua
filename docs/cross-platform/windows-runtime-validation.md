@@ -99,6 +99,20 @@ Expected:
 
 ## Named Pipe Busy Smoke
 
+Same-user non-elevated or elevated smoke can be run with the repository helper:
+
+```powershell
+.\scripts\windows-ipc-smoke.ps1 -StopExisting
+```
+
+Expected:
+
+- The helper prints JSON with `failures: []`.
+- `busy_exit_0` equals `busy_total`.
+- The daemon remains running until the helper stops it during cleanup.
+
+The manual commands below are still useful when debugging a specific window/session:
+
 Keep window A running the daemon. Open another PowerShell window in the directory containing `shuo.exe`:
 
 ```powershell
@@ -141,6 +155,10 @@ Expected:
 ## Cross-User Smoke
 
 Run only when a second local Windows user account or VM snapshot is available.
+
+This is a deferred manual gate. Same-user and elevated/non-elevated validation can continue without it, but do
+not promote Windows IPC or daemon single-instance capability to `available` until cross-user behavior is
+recorded.
 
 Expected:
 

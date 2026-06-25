@@ -15,6 +15,19 @@ Previous commit: `fix: share windows ipc scope across elevation` (`e7d8965`).
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10y Windows IPC same-user smoke helper 已完成：
+
+- 用户确认 cross-user 第二账号/VM 验证可以后移；它现在是 deferred manual gate，不阻塞继续做
+  same-user Windows IPC/lifecycle hardening，但 Windows IPC / daemon single-instance capability 仍不得升级
+  为 `available`。
+- 新增 `scripts/windows-ipc-smoke.ps1`，用于重复跑 same-user IPC smoke：artifact identity、
+  daemon start、`service status`、second daemon rejection、20 并发 busy smoke、after-busy status，
+  并输出 `summary.json`。
+- `docs/cross-platform/windows-runtime-validation.md` 已指向该 helper，并在 Cross-User Smoke 中明确
+  deferred manual gate 语义。
+- 该 helper 只覆盖当前 Windows 用户/当前 integrity shell；elevated/non-elevated 交叉仍需要分别从
+  normal/admin shell 调用或手动跑矩阵，cross-user 仍需要第二 Windows 用户或 VM。
+
 Phase 10x Windows Named Pipe client access-mask audit 已完成：
 
 - 复查 Tokio 1.52 `tokio::net::windows::named_pipe::ClientOptions`：当前公开 client `read`/`write`
@@ -1376,8 +1389,8 @@ permission probe 或 active app runtime。
 
 下一步：
 
-- Phase 10y 或手动停点：优先做 cross-user 第二账号/VM 隔离验证；没有第二用户前不要升级
-  Windows IPC capability。
+- Phase 10z：继续做不需要第二用户的 Windows IPC/lifecycle 小步 hardening；cross-user 第二账号/VM
+  隔离验证已后移为 deferred manual gate，没有第二用户前不要升级 Windows IPC capability。
 - 后续代码小步可选：在不改变 capability 结论的前提下，设计 raw `CreateFileW`/overlapped client
   access-mask narrowing，或把 busy/elevation smoke 脚本沉淀为开发者手动命令。
 - audio、overlay、hotkey、clipboard/paste 都必须在 Windows runtime 上手动验证后才允许 capability

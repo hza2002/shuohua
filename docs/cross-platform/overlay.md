@@ -199,6 +199,20 @@ This is the correct foundation before evaluating Acrylic/Mica/DirectComposition:
 if the whole window is globally alpha-composited. It still is not a complete Liquid Glass equivalent; native backdrop,
 shadow, animation, focused-window anchoring, fullscreen/UAC behavior, and multi-monitor visual QA remain open.
 
+### Windows Phase 10aw DWM Backdrop Probe
+
+Phase 10aw adds an automatic material probe without adding user configuration:
+
+- The Win32 overlay requests `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW`, which is the Windows 11
+  short-lived-window / Desktop Acrylic-style backdrop route.
+- It also requests immersive dark mode so the DWM backdrop matches the dark translucent overlay baseline.
+- The request is best-effort. DWM may ignore or reject the backdrop for layered/tool/no-activate overlay windows,
+  older Windows builds, battery/performance settings, or system policy.
+- Failure keeps the existing Direct2D per-pixel translucent surface; it must not make the overlay invisible or
+  block daemon startup.
+- Do not expose a config field yet. Material selection remains renderer-owned `auto` behavior until real Windows
+  visual QA proves multiple stable user-selectable material routes.
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。

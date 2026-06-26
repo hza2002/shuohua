@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: draw windows overlay state icons`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: probe windows overlay dwm backdrop`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `fix: flip windows overlay frame coordinates` (`1bac1e6`).
+Previous phase commit: `feat: draw windows overlay state icons` (`2c4d641`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,16 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10aw Windows overlay DWM backdrop probe 已完成：
+
+- Windows overlay 创建后会 best-effort 请求 `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW`，即
+  Windows 11 短生命周期窗口 / Desktop Acrylic-style backdrop 路线，并请求 immersive dark mode。
+- 该 probe 不新增配置项；material 仍是 renderer-owned `auto` 行为。
+- DWM 对 layered/no-activate/tool overlay window 可能忽略或拒绝 backdrop；失败时继续使用当前
+  Direct2D per-pixel translucent surface，daemon 启动和 overlay 可见性不受影响。
+- Capability 不升级：`overlay.material` 仍保持 degraded，直到用户在 Windows 11/10 上目视确认
+  backdrop 是否实际生效，并记录 fullscreen/UAC/multi-monitor 行为。
+
 Phase 10av Windows overlay state icons 已完成：
 
 - `overlay.text_scale` 允许范围扩大为 `0.8..=2.4`，schema 和 runtime layout clamp 使用同一组常量。

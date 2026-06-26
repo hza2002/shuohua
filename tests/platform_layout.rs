@@ -1273,6 +1273,51 @@ fn windows_overlay_records_per_pixel_layered_surface() {
 }
 
 #[test]
+fn windows_overlay_records_dwm_backdrop_probe() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let backend = std::fs::read_to_string(root.join("src/overlay/windows.rs")).unwrap();
+    let overlay_doc = std::fs::read_to_string(root.join("docs/cross-platform/overlay.md")).unwrap();
+    let capability_doc =
+        std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
+
+    for token in [
+        "Win32_Graphics_Dwm",
+        "DwmSetWindowAttribute",
+        "DWMWA_SYSTEMBACKDROP_TYPE",
+        "DWMSBT_TRANSIENTWINDOW",
+        "TranslucentFallback",
+    ] {
+        assert!(
+            manifest.contains(token) || backend.contains(token),
+            "Windows DWM backdrop probe should contain token `{token}`"
+        );
+    }
+
+    for token in [
+        "Windows Phase 10aw DWM Backdrop Probe",
+        "without adding user configuration",
+        "best-effort",
+    ] {
+        assert!(
+            overlay_doc.contains(token),
+            "overlay DWM backdrop policy should document `{token}`"
+        );
+    }
+
+    for token in [
+        "Phase 10aw Windows DWM Backdrop Probe",
+        "does not change Windows overlay capability levels",
+        "overlay.material",
+    ] {
+        assert!(
+            capability_doc.contains(token),
+            "capability doc should preserve DWM fallback boundary `{token}`"
+        );
+    }
+}
+
+#[test]
 fn windows_active_app_identity_backend_lives_behind_desktop_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let windows_app_context = root.join("src/platform/windows/app_context.rs");

@@ -82,15 +82,18 @@ impl WindowMetrics {
         }
     }
 
-    fn rect_from_frame(self, frame: L::LayoutFrame) -> RECT {
-        self.rect(frame.x, frame.y, frame.x + frame.w, frame.y + frame.h)
+    fn rect_from_frame(self, surface_height: f64, frame: L::LayoutFrame) -> RECT {
+        let top = surface_height - frame.y - frame.h;
+        self.rect(frame.x, top, frame.x + frame.w, top + frame.h)
     }
 
     fn rect_f_from_frame(
         self,
+        surface_height: f64,
         frame: L::LayoutFrame,
     ) -> windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F {
-        self.rect_f(frame.x, frame.y, frame.x + frame.w, frame.y + frame.h)
+        let top = surface_height - frame.y - frame.h;
+        self.rect_f(frame.x, top, frame.x + frame.w, top + frame.h)
     }
 }
 
@@ -302,7 +305,7 @@ impl WindowsOverlay {
         let old_font = SelectObject(hdc, state_font);
         draw_text(
             hdc,
-            &mut metrics.rect_from_frame(frames.row.status),
+            &mut metrics.rect_from_frame(frames.height, frames.row.status),
             &self.model.state_label,
             self.model.state_color,
             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
@@ -317,7 +320,7 @@ impl WindowsOverlay {
         SelectObject(hdc, meta_font);
         draw_text(
             hdc,
-            &mut metrics.rect_from_frame(frames.row.stats),
+            &mut metrics.rect_from_frame(frames.height, frames.row.stats),
             &stats,
             self.cfg.core.text.secondary,
             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
@@ -333,7 +336,7 @@ impl WindowsOverlay {
         };
         draw_text(
             hdc,
-            &mut metrics.rect_from_frame(frames.row.meta),
+            &mut metrics.rect_from_frame(frames.height, frames.row.meta),
             meta,
             meta_color,
             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
@@ -352,7 +355,7 @@ impl WindowsOverlay {
         SelectObject(hdc, body_font);
         draw_text(
             hdc,
-            &mut metrics.rect_from_frame(frames.body),
+            &mut metrics.rect_from_frame(frames.height, frames.body),
             &text,
             text_color,
             DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX,
@@ -693,6 +696,22 @@ mod tests {
         assert_eq!(rect.bottom, 60);
         assert_eq!(work_area_layout(metrics).w, 1600.0);
         assert_eq!(work_area_layout(metrics).h, 1200.0);
+    }
+
+    #[test]
+    fn windows_rect_conversion_flips_shared_bottom_left_y_axis() {
+        let metrics = WindowMetrics {
+            dpi: 96,
+            scale: 1.0,
+            work_area: RECT::default(),
+        };
+
+        let rect = metrics.rect_from_frame(64.0, L::LayoutFrame::new(16.0, 8.0, 100.0, 20.0));
+
+        assert_eq!(rect.left, 16);
+        assert_eq!(rect.top, 36);
+        assert_eq!(rect.right, 116);
+        assert_eq!(rect.bottom, 56);
     }
 
     #[test]

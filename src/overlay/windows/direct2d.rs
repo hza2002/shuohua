@@ -116,7 +116,7 @@ impl Direct2dRenderer {
                 &surface.target,
                 &state_format,
                 &model.state_label,
-                metrics.rect_f_from_frame(frames.row.status),
+                metrics.rect_f_from_frame(frames.height, frames.row.status),
                 model.state_color,
             )?;
 
@@ -130,7 +130,7 @@ impl Direct2dRenderer {
                 &surface.target,
                 &meta_format,
                 &stats,
-                metrics.rect_f_from_frame(frames.row.stats),
+                metrics.rect_f_from_frame(frames.height, frames.row.stats),
                 cfg.core.text.secondary,
             )?;
 
@@ -143,7 +143,7 @@ impl Direct2dRenderer {
                 &surface.target,
                 &meta_format,
                 meta,
-                metrics.rect_f_from_frame(frames.row.meta),
+                metrics.rect_f_from_frame(frames.height, frames.row.meta),
                 meta_color,
             )?;
 
@@ -161,7 +161,7 @@ impl Direct2dRenderer {
                 &surface.target,
                 &body_format,
                 &text,
-                metrics.rect_f_from_frame(frames.body),
+                metrics.rect_f_from_frame(frames.height, frames.body),
                 text_color,
             )?;
 

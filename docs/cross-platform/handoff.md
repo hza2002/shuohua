@@ -18,6 +18,26 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10bj Windows optional retained-audio conversion 已完成：
+
+- Windows `platform::audio_convert` 现在有可选外部 `ffmpeg` backend：`lossless` 转 FLAC，`compact` 转
+  AAC/M4A 32 kbps。
+- 本阶段不新增配置项，不打包/安装 ffmpeg；`ffmpeg.exe` 必须在 PATH 中。缺少 ffmpeg 时 retained audio
+  save 失败并清理临时文件，文本 dispatch/history 不应依赖 retained audio 成功。
+- `audio.convert` capability 从 Windows 默认 unsupported 收窄为
+  `partial backend=ffmpeg_external reason=external_ffmpeg_optional`；在 full hotkey-triggered Windows
+  recording 生成并回放 `.flac`/`.m4a` 前不能升级为 available。
+- 本机 `where.exe ffmpeg` 命中 `C:\Users\hza2002\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe`，ignored
+  runtime smoke 已验证 ffmpeg 能把测试 WAV 生成 FLAC 和 M4A。
+- 顺手修正了 overlay 文档/guard 的陈旧描述：当前 DirectWrite path 使用 `Microsoft YaHei UI` 和
+  `ID2D1DCRenderTarget`/DIB per-pixel route；这不是继续打磨 overlay，只是让文档/测试与当前 baseline 一致。
+- 验证已通过：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、
+  `cargo test --target x86_64-pc-windows-msvc`、`cargo build --target x86_64-pc-windows-msvc`、
+  `cargo test --target x86_64-pc-windows-msvc platform::audio_convert`、Windows ffmpeg ignored runtime smoke。
+- 下一步建议：继续非 overlay 能力闭环，优先做 full Windows recording retained-audio smoke
+  (`voice.record_audio=lossless/compact`) 或检查 TUI/history/audio deletion/open path 在 Windows 的真实行为；
+  overlay modernization 和 cross-user 仍 deferred。
+
 Phase 10bi Windows overlay baseline closure 已完成：
 
 - 用户确认 Windows overlay 现在“总体上勉强可用/看起来还可以”，但阴影生硬、文字不够原生清晰，

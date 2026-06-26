@@ -185,6 +185,19 @@ command behind `platform::audio_convert`:
 该阶段不改变 retained audio 文件命名、history schema、recorder WAV 写入、`record_audio = "off"`，
 也不让 daemon 热路径引入外部转码依赖。
 
+## Phase 10bj Windows Optional FFmpeg Retained Audio Backend
+
+Windows retained audio conversion now has a pragmatic optional backend:
+
+- `audio.convert`：`partial`，backend `ffmpeg_external`，reason `external_ffmpeg_optional`。
+- `lossless` 使用 PATH 中的 `ffmpeg.exe` 把 recorder WAV 转为 FLAC。
+- `compact` 使用 PATH 中的 `ffmpeg.exe` 把 recorder WAV 转为 AAC/M4A，码率仍为 32 kbps。
+- 本阶段不新增配置项，不打包 ffmpeg，不安装外部依赖；缺少 ffmpeg 时 retained audio 保存失败并清理临时
+  WAV/目标文件。
+- 文本 dispatch、clipboard/paste 和 history append 不能依赖 retained audio conversion 成功。
+- 在 full Windows recording session 验证 `.flac` / `.m4a` 生成和回放之前，不能把 capability 升级为
+  `available`。
+
 ## Phase 10j Windows Lifecycle Primitive Compile Backend
 
 Windows lifecycle no longer needs to be a pure unsupported placeholder for compile checks:

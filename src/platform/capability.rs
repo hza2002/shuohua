@@ -357,6 +357,15 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 ),
             },
             CapabilityStatus {
+                id: CapabilityId::AudioConvert,
+                platform: PlatformKind::Windows,
+                backend: "ffmpeg_external",
+                status: CapabilityStatusKind::Partial,
+                summary: "Retained audio conversion can use ffmpeg from PATH but the external dependency is not bundled",
+                reason: "external_ffmpeg_optional",
+                next_step: Some("Validate retained FLAC/M4A files from a full Windows recording session"),
+            },
+            CapabilityStatus {
                 id: CapabilityId::PathOpenReveal,
                 platform: PlatformKind::Windows,
                 backend: "explorer",

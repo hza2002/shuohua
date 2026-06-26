@@ -253,7 +253,19 @@ Runtime validation must cover:
 - 16 kHz mono pipeline invariants after resampling.
 - Retained audio behavior when `record_audio` is compact/lossless/off.
 
-Audio conversion remains unsupported on Windows until a converter backend is chosen and runtime-tested.
+Retained audio conversion on Windows currently uses an optional external `ffmpeg` backend:
+
+- `lossless` converts the recorder WAV to FLAC with `ffmpeg -c:a flac`.
+- `compact` converts the recorder WAV to AAC/M4A with `ffmpeg -c:a aac -b:a 32k`.
+- `ffmpeg.exe` must be discoverable on `PATH`; the daemon does not bundle or install it in this phase.
+- Missing `ffmpeg` is reported as an audio-save error and temporary audio files are cleaned up; text dispatch and
+  history behavior must not depend on retained audio succeeding.
+- Capability remains `partial` until a full hotkey-triggered Windows recording produces retained FLAC/M4A files
+  and those files are opened/played back on the target machine.
+
+This is a pragmatic Windows runtime backend, not the final packaging policy. A future installer may either bundle
+a redistributable converter, switch to Media Foundation, or keep `ffmpeg` as an explicitly documented optional
+dependency.
 
 Silero VAD / ONNX Runtime is also not provisioned on Windows in the current build/test phase. Windows builds
 use the local Silero unavailable stub and do not compile `voice_activity_detector` until the ONNX Runtime

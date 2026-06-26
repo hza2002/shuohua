@@ -137,8 +137,9 @@ Phase 10ap fixes the first visual correctness layer before material polish:
   units to physical pixels using the current window DPI.
 - Placement uses the Windows work area instead of raw primary-screen bounds, so the overlay avoids the taskbar in
   the common single-monitor case.
-- Windows text uses the platform UI font path (`Segoe UI`) at DPI-scaled point sizes. This is still a GDI baseline,
-  not the final text renderer.
+- Windows text uses Windows-provided UI fonts at DPI-scaled point sizes. The GDI fallback currently requests
+  `Segoe UI`; the DirectWrite path currently requests `Microsoft YaHei UI` to keep Chinese/English overlay text
+  readable without bundling a font. This is not a final typography decision.
 - Windows status icons must not depend on SF Symbols or a bundled Apple font. The Windows renderer should use
   platform-native drawing or Windows-provided assets; the current backend draws small state glyphs itself in GDI
   fallback and Direct2D.
@@ -172,9 +173,10 @@ Phase 10ar moves the renderer-quality foundation to the modern Windows 2D stack:
   hit-test passthrough stay owned by `src/overlay/windows.rs`.
 - Direct2D/DirectWrite live in a Windows-only renderer module and do not leak into shared overlay model/layout,
   daemon runtime, IPC, hotkey, audio, clipboard, or paste code.
-- The first renderer uses `ID2D1HwndRenderTarget` plus DirectWrite `IDWriteTextFormat` for text. This follows the
-  stable desktop Direct2D/DirectWrite path and avoids adding DirectComposition/D3D/DXGI device ownership before it
-  is needed.
+- The current renderer uses a top-down 32bpp DIB section through `ID2D1DCRenderTarget` plus DirectWrite
+  `IDWriteTextFormat` for text, then publishes the per-pixel surface with `UpdateLayeredWindow`. This follows a
+  low-dependency desktop Direct2D/DirectWrite path and avoids adding DirectComposition/D3D/DXGI device ownership
+  before the Windows core runtime is complete.
 - Existing GDI drawing stays as a fallback when Direct2D/DirectWrite initialization or painting fails.
 
 This phase is a text and rounded-surface foundation, not a full material system. `UpdateLayeredWindow` per-pixel

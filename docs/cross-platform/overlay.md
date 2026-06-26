@@ -252,6 +252,19 @@ Phase 10ba tunes the Direct2D per-pixel shadow after manual QA reported the firs
 - Capability does not change: this is visual tuning of the translucent fallback, not blur, Acrylic/Mica, Liquid Glass
   parity, or final visual QA.
 
+### Windows Phase 10bb Overlay Capability Diagnostics
+
+Phase 10bb makes the existing doctor/TUI capability snapshot describe the current Windows overlay path more precisely:
+
+- `overlay.renderer` uses backend `win32_direct2d_per_pixel` and reason `direct2d_per_pixel_runtime_smoke`.
+- `overlay.material` uses backend `win32_direct2d_per_pixel` and reason `translucent_shadow_no_blur`.
+- `overlay.always_on_top` uses backend `win32_topmost_noactivate`.
+- `overlay.input_passthrough` uses backend `win32_httransparent`.
+- `overlay.window_anchor` uses backend `win32_foreground_monitor_work_area` and reason
+  `foreground_monitor_screen_anchor_only`.
+
+This is diagnostics only. It does not create windows, probe monitors, run visual QA, or upgrade any capability.
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。

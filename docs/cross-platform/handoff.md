@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `fix: soften windows overlay shadow`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `docs: clarify windows overlay capability diagnostics`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `fix: anchor windows overlay to foreground monitor` (`a072691`).
+Previous phase commit: `fix: soften windows overlay shadow` (`4a77237`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,16 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10bb Windows overlay capability diagnostics 已完成：
+
+- Windows overlay capability snapshot 不再用泛化 `win32_overlay_minimal` 描述所有维度。
+- doctor/TUI 现在能看到更具体的 backend/reason：
+  `win32_direct2d_per_pixel`、`direct2d_per_pixel_runtime_smoke`、`translucent_shadow_no_blur`、
+  `win32_topmost_noactivate`、`win32_httransparent`、`win32_foreground_monitor_work_area`、
+  `foreground_monitor_screen_anchor_only`。
+- 这只是静态诊断文案精确化，不创建 overlay window、不 probe monitor、不升级 capability。
+- 用户当前没有音频设备；继续开发时仍优先做不依赖麦克风的 overlay/diagnostics/service/IPC/config 小步。
+
 Phase 10ba Windows shadow tuning 已完成：
 
 - 用户目视反馈 Phase 10ay 阴影“很干净但是有点生硬”。

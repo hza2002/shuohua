@@ -754,25 +754,25 @@ static WINDOWS_RENDERER_CAPABILITIES: [CapabilityStatus; 5] = {
         CapabilityStatus {
             id: Id::OverlayRenderer,
             platform: PlatformKind::Windows,
-            backend: "win32_overlay_minimal",
+            backend: "win32_direct2d_per_pixel",
             status: Kind::Partial,
-            summary: "Windows Win32 overlay window backend is implemented but visual/runtime parity needs validation",
-            reason: "runtime_smoke_only",
-            next_step: Some("Validate visible overlay behavior on Windows 11/10 foreground apps"),
+            summary: "Windows overlay uses a Win32 no-activate topmost window with Direct2D/DirectWrite per-pixel rendering",
+            reason: "direct2d_per_pixel_runtime_smoke",
+            next_step: Some("Validate visible overlay behavior on real Windows 11/10 foreground apps, fullscreen modes, and multi-monitor setups"),
         },
         CapabilityStatus {
             id: Id::OverlayMaterial,
             platform: PlatformKind::Windows,
-            backend: "win32_overlay_minimal",
+            backend: "win32_direct2d_per_pixel",
             status: Kind::Degraded,
-            summary: "Windows overlay currently uses translucent layered-window fallback only",
-            reason: "translucent_fallback_only",
-            next_step: Some("Evaluate Acrylic/Mica/blur only after the solid/translucent baseline is stable"),
+            summary: "Windows overlay uses translucent per-pixel surface with renderer-owned shadow; DWM backdrop is disabled",
+            reason: "translucent_shadow_no_blur",
+            next_step: Some("Evaluate DirectComposition or Windows Composition blur only after the per-pixel baseline is stable"),
         },
         CapabilityStatus {
             id: Id::OverlayAlwaysOnTop,
             platform: PlatformKind::Windows,
-            backend: "win32_overlay_minimal",
+            backend: "win32_topmost_noactivate",
             status: Kind::Partial,
             summary: "Windows overlay uses WS_EX_TOPMOST but broader foreground-app validation is pending",
             reason: "runtime_smoke_only",
@@ -781,7 +781,7 @@ static WINDOWS_RENDERER_CAPABILITIES: [CapabilityStatus; 5] = {
         CapabilityStatus {
             id: Id::OverlayInputPassthrough,
             platform: PlatformKind::Windows,
-            backend: "win32_overlay_minimal",
+            backend: "win32_httransparent",
             status: Kind::Partial,
             summary: "Windows overlay returns HTTRANSPARENT for hit testing but click-through needs real app validation",
             reason: "runtime_smoke_only",
@@ -790,10 +790,10 @@ static WINDOWS_RENDERER_CAPABILITIES: [CapabilityStatus; 5] = {
         CapabilityStatus {
             id: Id::OverlayWindowAnchor,
             platform: PlatformKind::Windows,
-            backend: "win32_overlay_minimal",
+            backend: "win32_foreground_monitor_work_area",
             status: Kind::Degraded,
-            summary: "Windows overlay uses screen anchoring; focused-window anchoring is not implemented",
-            reason: "screen_anchor_only",
+            summary: "Windows overlay uses foreground-monitor work-area anchoring; focused-window anchoring is not implemented",
+            reason: "foreground_monitor_screen_anchor_only",
             next_step: Some("Add focused-window anchoring after foreground-window geometry is designed"),
         },
     ]
@@ -931,12 +931,18 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_report_minimal_win32_backend() {
+    fn capabilities_report_current_win32_backend_details() {
         let capabilities = renderer_capabilities();
         assert!(capabilities
             .iter()
-            .any(|status| status.backend == "win32_overlay_minimal"
+            .any(|status| status.backend == "win32_direct2d_per_pixel"
+                && status.reason == "direct2d_per_pixel_runtime_smoke"
                 && status.status == CapabilityStatusKind::Partial));
+        assert!(capabilities
+            .iter()
+            .any(|status| status.backend == "win32_foreground_monitor_work_area"
+                && status.reason == "foreground_monitor_screen_anchor_only"
+                && status.status == CapabilityStatusKind::Degraded));
     }
 
     #[test]

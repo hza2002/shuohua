@@ -1026,10 +1026,14 @@ fn windows_overlay_capability_reports_minimal_partial_backend() {
         std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
 
     for token in [
-        "win32_overlay_minimal",
+        "win32_direct2d_per_pixel",
+        "direct2d_per_pixel_runtime_smoke",
+        "translucent_shadow_no_blur",
+        "win32_topmost_noactivate",
+        "win32_httransparent",
+        "win32_foreground_monitor_work_area",
+        "foreground_monitor_screen_anchor_only",
         "runtime_smoke_only",
-        "translucent_fallback_only",
-        "screen_anchor_only",
         "overlay.renderer",
         "overlay.material",
         "overlay.input_passthrough",

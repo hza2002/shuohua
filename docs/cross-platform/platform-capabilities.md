@@ -407,8 +407,24 @@ Phase 10ba does not change Windows overlay capability levels:
 - Manual QA reported the first per-pixel shadow was clean but too hard.
 - The Direct2D renderer now uses separate ambient and key shadow passes with tapered layer alpha.
 - Shadow parameters remain renderer-owned and are not exposed as user configuration.
-- `overlay.material` stays `degraded/translucent_fallback_only`; this phase is visual tuning, not blur,
+- `overlay.material` stays degraded; this phase is visual tuning, not blur,
   Acrylic/Mica, Liquid Glass parity, or final visual QA.
+
+## Phase 10bb Windows Overlay Capability Diagnostics
+
+Phase 10bb changes the wording of the existing Windows overlay capability snapshot but does not change capability
+levels:
+
+- `overlay.renderer`: `partial`, backend `win32_direct2d_per_pixel`,
+  reason `direct2d_per_pixel_runtime_smoke`.
+- `overlay.material`: `degraded`, backend `win32_direct2d_per_pixel`, reason `translucent_shadow_no_blur`.
+- `overlay.always_on_top`: `partial`, backend `win32_topmost_noactivate`.
+- `overlay.input_passthrough`: `partial`, backend `win32_httransparent`.
+- `overlay.window_anchor`: `degraded`, backend `win32_foreground_monitor_work_area`,
+  reason `foreground_monitor_screen_anchor_only`.
+
+The snapshot remains static and read-only. It is consumed by doctor/TUI diagnostics and does not run visual probes or
+upgrade Windows overlay capability.
 
 ## Phase 10ah Windows Audio Capture Diagnostics
 

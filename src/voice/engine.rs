@@ -46,7 +46,6 @@ impl RecordingMode {
 fn vad_backend_available(backend: crate::config::VoiceVadBackend) -> bool {
     match backend {
         crate::config::VoiceVadBackend::Off => false,
-        crate::config::VoiceVadBackend::Energy => true,
         crate::config::VoiceVadBackend::Silero => crate::voice::silero::is_available(),
     }
 }
@@ -79,96 +78,30 @@ impl<'a> SessionOpener<'a> {
 }
 
 struct VadPauseState {
-    backend: VadRuntime,
+    silero: crate::voice::silero::SileroVad,
     controller: crate::voice::vad::VadController,
     timeline: crate::voice::timeline::PcmTimeline,
     pre_roll_samples: u64,
     max_overlap_samples: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct VadRuntimeFrame {
-    start_sample: u64,
-    probability: f32,
-    frame: crate::voice::vad::VadFrame,
-}
-
-enum VadRuntime {
-    Energy(crate::voice::energy_vad::EnergyVad),
-    Silero(crate::voice::silero::SileroVad),
-}
-
-impl VadRuntime {
-    fn new(config: &crate::config::VoiceVadCfg) -> anyhow::Result<Self> {
-        match config.backend {
-            crate::config::VoiceVadBackend::Off => {
-                anyhow::bail!("VAD backend is off")
-            }
-            crate::config::VoiceVadBackend::Energy => {
-                Ok(Self::Energy(crate::voice::energy_vad::EnergyVad::new(
-                    crate::voice::energy_vad::EnergyVadConfig {
-                        threshold: config.threshold,
-                    },
-                )))
-            }
-            crate::config::VoiceVadBackend::Silero => Ok(Self::Silero(
-                crate::voice::silero::SileroVad::new(crate::voice::silero::SileroConfig {
-                    threshold: config.threshold,
-                })?,
-            )),
-        }
-    }
-
-    fn frame_ms(config: &crate::config::VoiceVadCfg) -> u32 {
-        match config.backend {
-            crate::config::VoiceVadBackend::Energy => {
-                crate::voice::energy_vad::EnergyVadConfig::frame_ms()
-            }
-            crate::config::VoiceVadBackend::Silero => {
-                crate::voice::silero::SileroConfig::frame_ms()
-            }
-            crate::config::VoiceVadBackend::Off => crate::voice::silero::SileroConfig::frame_ms(),
-        }
-    }
-
-    fn accept(&mut self, samples: &[i16]) -> Vec<VadRuntimeFrame> {
-        match self {
-            Self::Energy(vad) => vad
-                .accept(samples)
-                .into_iter()
-                .map(|frame| VadRuntimeFrame {
-                    start_sample: frame.start_sample,
-                    probability: frame.probability,
-                    frame: frame.frame,
-                })
-                .collect(),
-            Self::Silero(vad) => vad
-                .accept(samples)
-                .into_iter()
-                .map(|frame| VadRuntimeFrame {
-                    start_sample: frame.start_sample,
-                    probability: frame.probability,
-                    frame: frame.frame,
-                })
-                .collect(),
-        }
-    }
-}
-
 impl VadPauseState {
     fn new(config: &crate::config::VoiceVadCfg) -> anyhow::Result<Self> {
+        use crate::voice::silero::{SileroConfig, SileroVad};
         use crate::voice::timeline::{ms_to_samples, PcmTimeline};
         use crate::voice::vad::{VadController, VadPolicy};
 
-        let backend = VadRuntime::new(config)?;
+        let silero = SileroVad::new(SileroConfig {
+            threshold: config.threshold,
+        })?;
         let controller = VadController::new(VadPolicy {
             min_start_voiced_frames: config.min_start_voiced_frames,
             pause_silence_ms: config.pause_silence_ms,
-            frame_ms: VadRuntime::frame_ms(config),
+            frame_ms: SileroConfig::frame_ms(),
         });
         let retention_ms = config.pre_roll_ms + config.max_overlap_ms + 100;
         Ok(Self {
-            backend,
+            silero,
             controller,
             timeline: PcmTimeline::new(retention_ms),
             pre_roll_samples: ms_to_samples(config.pre_roll_ms),
@@ -460,7 +393,7 @@ pub(crate) async fn run_with_recorder(
 
                                 if let Some(vad) = vad_pause.as_mut() {
                                     use crate::voice::vad::{VadFrame, VadTransition};
-                                    for frame in vad.backend.accept(&samples) {
+                                    for frame in vad.silero.accept(&samples) {
                                         meter.observe_vad(
                                             frame.probability,
                                             matches!(frame.frame, VadFrame::Speech),
@@ -683,7 +616,7 @@ pub(crate) async fn run_with_recorder(
                                 };
                                 vad.timeline.push(&samples);
                                 use crate::voice::vad::{VadFrame, VadTransition};
-                                for frame in vad.backend.accept(&samples) {
+                                for frame in vad.silero.accept(&samples) {
                                     meter.observe_vad(
                                         frame.probability,
                                         matches!(frame.frame, VadFrame::Speech),
@@ -1254,22 +1187,6 @@ mod tests {
             RecordingMode::Continuous
         };
         assert_eq!(RecordingMode::select(true, &vad), expected);
-    }
-
-    #[test]
-    fn recording_mode_can_use_energy_vad_when_idle_pause_is_enabled() {
-        let mut vad = crate::config::VoiceVadCfg {
-            backend: crate::config::VoiceVadBackend::Energy,
-            ..Default::default()
-        };
-        assert_eq!(
-            RecordingMode::select(false, &vad),
-            RecordingMode::Continuous
-        );
-        assert_eq!(RecordingMode::select(true, &vad), RecordingMode::VadPause);
-
-        vad.backend = crate::config::VoiceVadBackend::Off;
-        assert_eq!(RecordingMode::select(true, &vad), RecordingMode::Continuous);
     }
 
     #[test]

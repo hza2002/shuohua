@@ -9,7 +9,7 @@ const SAMPLE_RATE: u64 = 16_000;
 const SILERO_CHUNK_SAMPLES: usize = 512;
 
 pub const fn is_available() -> bool {
-    cfg!(target_os = "macos")
+    cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -19,7 +19,6 @@ pub struct SileroConfig {
 
 impl SileroConfig {
     /// 每一帧的样本数（固定 512）。
-    #[cfg(any(test, feature = "dev"))]
     pub const fn frame_samples() -> usize {
         SILERO_CHUNK_SAMPLES
     }
@@ -40,21 +39,33 @@ pub struct SileroFrame {
     pub frame: VadFrame,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub struct SileroVad {
+    #[cfg(target_os = "macos")]
     detector: voice_activity_detector::VoiceActivityDetector,
+    #[cfg(target_os = "windows")]
+    detector: voice_activity_detector_windows::VoiceActivityDetector,
     threshold: f32,
     buffer: Vec<i16>,
     sample_offset: u64,
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub struct SileroVad;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl SileroVad {
     pub fn new(config: SileroConfig) -> anyhow::Result<Self> {
+        #[cfg(target_os = "macos")]
         let detector = voice_activity_detector::VoiceActivityDetector::builder()
+            .sample_rate(SAMPLE_RATE as i64)
+            .chunk_size(SILERO_CHUNK_SAMPLES)
+            .build()
+            .map_err(|e| anyhow::anyhow!("create Silero VAD: {e}"))?;
+        #[cfg(target_os = "windows")]
+        crate::voice::silero_runtime::init()?;
+        #[cfg(target_os = "windows")]
+        let detector = voice_activity_detector_windows::VoiceActivityDetector::builder()
             .sample_rate(SAMPLE_RATE as i64)
             .chunk_size(SILERO_CHUNK_SAMPLES)
             .build()
@@ -98,7 +109,7 @@ impl SileroVad {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 impl SileroVad {
     pub fn new(_config: SileroConfig) -> anyhow::Result<Self> {
         Err(anyhow::anyhow!(
@@ -111,7 +122,7 @@ impl SileroVad {
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 mod tests {
     use super::*;
 

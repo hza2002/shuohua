@@ -34,10 +34,8 @@ voice 只负责把一次 recording 的 capture/ASR/post 结果翻译成 `History
 
 `RecordingMode::{Continuous, VadPause}` 是固定模式，运行态由 engine 内的 Active/Idle 表达：
 
-- **VadPause 仅当** `asr/<provider>.toml.idle_pause = true` 且 `[voice.vad] backend` 指向当前平台
-  可用的 VAD runtime 时成立，否则 Continuous。`silero` 需要 Silero/ONNX runtime 可用；`energy` 是
-  dependency-free 的本地能量门限 backend，用于 Windows-first runtime parity 和状态机验证，质量不等价于
-  Silero。
+- **VadPause 仅当** `[voice.vad] backend = "silero"`、`asr/<provider>.toml.idle_pause = true`
+  且当前平台已提供 Silero runtime 时同时成立，否则 Continuous。
 - **Continuous**：始终向一个 provider session 发 PCM，不构造 Silero/timeline/pre-roll，不进 Idle，`sessions[]` ≤ 1。
 - **VadPause**：Active↔Idle 自动切换。静音关 ASR（final 追加到 `pending_output`），有声开新 session（先 dump pre-roll 再喂当前帧）。段间无分隔符——provider 保证 emit 的 segment 直接 concat 即最终文本。
 

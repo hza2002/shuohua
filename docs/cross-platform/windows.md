@@ -267,17 +267,21 @@ This is a pragmatic Windows runtime backend, not the final packaging policy. A f
 a redistributable converter, switch to Media Foundation, or keep `ffmpeg` as an explicitly documented optional
 dependency.
 
-Silero VAD / ONNX Runtime is also not provisioned on Windows in the current build/test phase. Windows builds
-use the local Silero unavailable stub and do not compile `voice_activity_detector` until the ONNX Runtime
-distribution and MSVC toolchain compatibility are designed and validated. If `[voice.vad] backend = "silero"`
-and a provider profile enables `idle_pause`, Windows selects Continuous recording while Silero is unavailable.
+Silero VAD / ONNX Runtime on Windows follows the same Silero VAD model/API route as macOS during the Windows-first
+runtime phase. This intentionally prioritizes matching macOS behavior over a temporary RMS/energy fallback.
 
-Windows now has a dependency-free `[voice.vad] backend = "energy"` route for Phase 10bo runtime validation. It
-uses the same Active/Idle, pre-roll, overlap, ASR session resume, meter, trace, and history session machinery as
-Silero, but its frame decision is a simple RMS energy threshold. This backend is acceptable for proving Windows
-VAD lifecycle behavior without build-time ONNX downloads; it must not be treated as final Silero-quality VAD.
-Future high-quality Windows VAD should use an explicitly provisioned ONNX Runtime or Windows ML backend with a
-documented DLL/model distribution strategy. This does not promote Windows audio or VAD capability to available.
+Windows uses a renamed vendored `voice_activity_detector` dependency with explicit `ort/load-dynamic` and no ORT
+default `download-binaries` / `copy-dylibs` features. The executable embeds the official ONNX Runtime 1.22 DLL,
+extracts it to product-local cache, and initializes `ort` from that explicit path before constructing Silero. This
+avoids both the MSVC static-link mismatch seen with ORT's prebuilt static import path and accidental loading of
+older `onnxruntime.dll` copies from `System32` or `PATH`.
+
+Release packaging still needs a separate single-executable acceptance gate: build a Windows release, copy only
+`shuo.exe` into a clean directory, and verify `shuo.exe --version`, `shuo.exe doctor`, and a Silero VAD
+initialization smoke (`shuo.exe diagnostics silero-vad`) without manually copying ORT DLLs or asking the user to
+install extra runtime components.
+Passing build/tests alone does not promote Windows VAD capability to available; real microphone VadPause smoke is
+still required.
 
 Stop point for user intervention:
 

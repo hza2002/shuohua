@@ -27,8 +27,16 @@ pub enum Command {
     Completions(completions::CompletionsArgs),
     #[command(subcommand)]
     Service(service::ServiceCommand),
+    #[command(subcommand, hide = true)]
+    Diagnostics(DiagnosticsCommand),
     Update(app::UpdateArgs),
     Version,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
+pub enum DiagnosticsCommand {
+    /// Initialize Silero VAD and run a one-frame silence smoke.
+    SileroVad,
 }
 
 pub fn parse() -> Cli {
@@ -52,9 +60,30 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::ConfigTemplate(args) => config_template::run(args),
         Command::Completions(args) => completions::run(args),
         Command::Service(command) => service::run(command).await,
+        Command::Diagnostics(command) => run_diagnostics(command),
         Command::Update(args) => app::update(args).await,
         Command::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+    }
+}
+
+fn run_diagnostics(command: DiagnosticsCommand) -> Result<()> {
+    match command {
+        DiagnosticsCommand::SileroVad => {
+            let mut vad =
+                crate::voice::silero::SileroVad::new(crate::voice::silero::SileroConfig {
+                    threshold: 0.5,
+                })?;
+            let frames = vad.accept(&[0i16; crate::voice::silero::SileroConfig::frame_samples()]);
+            let frame = frames
+                .first()
+                .context("Silero VAD did not emit a frame for one chunk")?;
+            println!(
+                "silero-vad: OK frame={:?} probability={:.6}",
+                frame.frame, frame.probability
+            );
             Ok(())
         }
     }
@@ -188,6 +217,16 @@ mod tests {
         match cli.command {
             Some(Command::Update(args)) => assert!(args.allow_major),
             other => panic!("expected update command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hidden_diagnostics_parse_silero_vad_smoke() {
+        let cli = Cli::try_parse_from(["shuo", "diagnostics", "silero-vad"]).unwrap();
+
+        match cli.command {
+            Some(Command::Diagnostics(DiagnosticsCommand::SileroVad)) => {}
+            other => panic!("expected diagnostics silero-vad, got {other:?}"),
         }
     }
 

@@ -18,22 +18,32 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
-Phase 10bo Windows energy VAD backend 已完成：
+Phase 10bp Windows Silero VAD parity 已完成 build/test 与单 exe init smoke：
 
-- 目标是在不引入 `voice_activity_detector`/ONNX Runtime 构建期下载的前提下，先让 Windows 能验证共享
-  VadPause 状态机：Active/Idle、pre-roll、overlap、provider resume、meter、trace 和 history sessions。
-- `[voice.vad] backend = "energy"` 是 dependency-free 的本地 RMS 能量门限 backend；它用于 Windows-first
-  runtime parity，不等价于最终 Silero/ONNX VAD 质量。
-- `[voice.vad] backend = "silero"` 在 Windows 仍保持不可用 fallback，直到 ONNX Runtime / Windows ML
-  模型和 DLL 供应策略被单独设计、实现、验证。
-- 本阶段新增跨平台 engine lifecycle 覆盖：`vad_pause_provider_done_does_not_double_finalize` 现在在
-  Windows target 下通过 `energy` backend 验证 VadPause provider-Done 不重复 finalize。
+- 用户明确产品目标：最终安装/分发体验应是用户拿到一个单 binary 即可运行，不需要手动安装 ORT/DLL/
+  模型；内部是否依赖 Rust 以外 runtime 不重要。
+- 因此废弃上一轮 `energy` 临时 backend 作为产品路径，Windows 直接对标 macOS 的 Silero 模型/API。
+  `[voice.vad] backend` 继续只暴露 `off` / `silero`。
+- Windows 不直接使用 crates.io 默认 `voice_activity_detector` ORT 装配；当前实现使用 renamed vendored
+  `voice_activity_detector`，关闭 `ort` 默认特性并启用 `load-dynamic`。`shuo.exe` 内嵌官方 ONNX Runtime
+  1.22.0 x64 DLL，启动 Silero 前释放到 `%LOCALAPPDATA%\Shuohua\cache\runtime\onnxruntime\...` 并显式
+  `ort::init_from(path)`，避免链接失败和 `System32\onnxruntime.dll` 旧版本抢先加载。
+- 本阶段新增隐藏诊断命令 `shuo diagnostics silero-vad`，用于不依赖麦克风地初始化 Silero、喂一帧静音、
+  输出 frame/probability，作为 release 单 exe smoke 的二进制入口。
+- Release 单 exe smoke 已通过：`cargo build --release --target x86_64-pc-windows-msvc` 后只复制
+  `target\x86_64-pc-windows-msvc\release\shuo.exe` 到
+  `%TEMP%\shuohua-single-exe-smoke`，运行 `--version`、`doctor`、`diagnostics silero-vad`。其中
+  `diagnostics silero-vad` 输出 `silero-vad: OK frame=Silence probability=0.044263`，并确认释放出
+  `%LOCALAPPDATA%\Shuohua\cache\runtime\onnxruntime\1.22.0\579b63640398\onnxruntime.dll`。
+- `doctor` 在单 exe smoke 中可运行且未崩溃，但因当前用户配置
+  `%APPDATA%\Shuohua\config.toml` 的 `voice.record_audio` 被写成无效值
+  `compact测试一下压缩能不能实现？`，按预期返回配置错误。这是本机配置问题，不是 Silero/ORT
+  provisioning 失败。
 - 验证已通过：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、
-  `cargo test --target x86_64-pc-windows-msvc`、`cargo build --target x86_64-pc-windows-msvc`、Windows
-  target 精确 VAD/config/platform guard 测试。
-- 下一步：让用户把 Windows `%APPDATA%\Shuohua\config.toml` 的 `[voice.vad] backend` 改为 `energy`，
-  并用真实麦克风手动验证多段语音/停顿能在 history `asr.sessions` 中体现；通过前不要升级 VAD
-  capability。
+  `cargo test --target x86_64-pc-windows-msvc`、`cargo build --target x86_64-pc-windows-msvc`、
+  `cargo build --release --target x86_64-pc-windows-msvc`、clean-dir single exe
+  `shuo.exe diagnostics silero-vad`。
+- 未完成：真实 Windows 麦克风 VadPause 录音 smoke。通过前不升级 Windows VAD capability。
 
 Phase 10bl Windows retained-audio IPC deletion smoke 已完成：
 

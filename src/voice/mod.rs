@@ -9,7 +9,6 @@
 pub(crate) mod audio;
 pub(crate) mod capture;
 pub mod dispatch;
-pub(crate) mod energy_vad;
 pub(crate) mod engine;
 #[cfg(test)]
 mod engine_lifecycle_tests;
@@ -21,6 +20,8 @@ pub mod observer;
 pub(crate) mod post_dispatch;
 pub mod recorder;
 pub mod silero;
+#[cfg(target_os = "windows")]
+mod silero_runtime;
 pub mod timeline;
 pub mod vad;
 

@@ -185,7 +185,7 @@ pub fn main_spec() -> ConfigSpec {
         .field(
             field(FieldSpec::string, "voice.vad.backend")
                 .optional()
-                .allowed_values(["off", "energy", "silero"]),
+                .allowed_values(["off", "silero"]),
         )
         .field(
             field(FieldSpec::float, "voice.vad.threshold")

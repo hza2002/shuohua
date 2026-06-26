@@ -97,6 +97,8 @@ objc2-foundation = { version = "0.3", features = [
 objc2-quartz-core = { version = "0.3", features = ["CAAnimation", "CAGradientLayer", "CALayer", "CAMediaTiming", "CAShapeLayer", "objc2-core-graphics"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["load-dynamic", "ndarray"] }
+voice_activity_detector_windows = { package = "voice_activity_detector", path = "vendor/voice_activity_detector", features = ["load-dynamic"] }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct2D",

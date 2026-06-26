@@ -152,10 +152,6 @@ fn signal_frame(len: usize) -> Vec<i16> {
     vec![1_000; len]
 }
 
-fn vad_speech_frame(len: usize) -> Vec<i16> {
-    vec![8_000; len]
-}
-
 fn make_recorder() -> (RecordingStream, mpsc::UnboundedSender<Vec<i16>>) {
     let (tx, rx) = mpsc::unbounded_channel();
     (RecordingStream::for_test(rx), tx)
@@ -175,7 +171,7 @@ fn make_params(
         finalize_timeout_ms,
         vad: VoiceVadCfg {
             backend: if idle_pause {
-                VoiceVadBackend::Energy
+                VoiceVadBackend::Silero
             } else {
                 VoiceVadBackend::Off
             },
@@ -387,7 +383,7 @@ async fn vad_pause_provider_done_does_not_double_finalize() {
     let control = SessionControl::new();
     let (rec, pcm_tx) = make_recorder();
 
-    pcm_tx.send(vad_speech_frame(512)).unwrap();
+    pcm_tx.send(signal_frame(512)).unwrap();
 
     let engine_task = tokio::spawn(drive_engine(
         provider.clone(),

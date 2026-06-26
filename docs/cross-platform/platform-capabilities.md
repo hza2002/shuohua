@@ -441,11 +441,25 @@ upgrade Windows overlay capability.
 
 Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：
 
-- `audio.capture`：`partial`，backend `cpal_wasapi`，reason `diagnostic_probe_only`。
+- 初始 reason 是 `diagnostic_probe_only`。
 - `shuo doctor` 可以打印默认输入设备 config 和 input device count。
 - 该探针不启动录音流、不写 retained audio、不触发 ASR、overlay、hotkey、clipboard 或 paste。
 - 在用户完成真实麦克风录音、权限/隐私设置、采样格式转换、静音/噪声底和持续采集测试前，
   Windows `audio.capture` 不能升级到 `degraded` 或 `available`。
+
+## Phase 10bg Windows Audio Input Stream Runtime Smoke
+
+Windows `audio.capture` 在 Phase 10bg 仍保持 `partial`，但 reason 从纯诊断探针收窄：
+
+- `audio.capture`：`partial`，backend `cpal_wasapi`，reason `input_stream_runtime_smoke`。
+- ignored runtime smoke
+  `voice::recorder::tests::windows_input_stream_runtime_smoke_receives_pcm_chunks`
+  已在 Windows 本机打开真实默认输入设备，并收到 16 kHz mono PCM chunks。
+- 该 smoke 默认只证明 cpal/WASAPI stream startup 和 callback delivery；不证明输入不是静音。
+- 设置 `SHUOHUA_WINDOWS_AUDIO_REQUIRE_SIGNAL=1` 后运行同一测试，可要求用户对着麦克风发声并验证
+  non-silent peak。
+- 该阶段仍不验证 ASR、Silero/VAD 质量、retained audio conversion、hotkey-triggered session、
+  clipboard/paste 或 end-to-end record -> history。
 
 ## 设计约束
 

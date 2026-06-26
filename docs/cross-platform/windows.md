@@ -238,6 +238,12 @@ First implementation route:
   input device config and input device count without starting a recording stream. This is
   `diagnostic_probe_only`, not evidence that recording, permission prompts, silence detection, or retained
   audio work on Windows.
+- Phase 10bg adds an ignored Windows runtime smoke for the default input stream:
+  `cargo test --target x86_64-pc-windows-msvc voice::recorder::tests::windows_input_stream_runtime_smoke_receives_pcm_chunks -- --ignored --exact`.
+  It opens the real default input device, waits for 16 kHz mono PCM chunks, then discards the stream. Set
+  `SHUOHUA_WINDOWS_AUDIO_REQUIRE_SIGNAL=1` before the test to require a non-silent peak while speaking into the
+  microphone. Passing without that variable proves stream startup/callback delivery only; it does not validate
+  ASR, VAD quality, retained audio conversion, hotkey-triggered sessions, paste, or full record -> history.
 
 Runtime validation must cover:
 

@@ -293,32 +293,38 @@ fn audio_capture_diagnostics_live_behind_platform_facade() {
 }
 
 #[test]
-fn windows_audio_capture_capability_reports_diagnostic_probe_only() {
+fn windows_audio_capture_capability_reports_input_stream_smoke() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+    let recorder = std::fs::read_to_string(root.join("src/voice/recorder.rs")).unwrap();
 
     for token in [
         "CapabilityId::AudioCapture",
         "cpal_wasapi",
-        "diagnostic_probe_only",
-        "Validate microphone permission behavior and sustained recording on Windows",
+        "input_stream_runtime_smoke",
+        "Validate non-silent microphone input, sustained recording, ASR, and retained audio behavior on Windows",
     ] {
         assert!(
             capability.contains(token),
-            "Windows audio.capture capability should report diagnostic-only token `{token}`"
+            "Windows audio.capture capability should report input stream smoke token `{token}`"
         );
     }
+    assert!(
+        recorder.contains("windows_input_stream_runtime_smoke_receives_pcm_chunks"),
+        "Windows recorder should keep an ignored runtime smoke for default input stream callbacks"
+    );
 
     let platform_doc =
         std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
     for token in [
+        "Phase 10bg Windows Audio Input Stream Runtime Smoke",
+        "`partial`，backend `cpal_wasapi`，reason `input_stream_runtime_smoke`",
+        "SHUOHUA_WINDOWS_AUDIO_REQUIRE_SIGNAL",
         "Phase 10ah Windows Audio Capture Diagnostics",
-        "`partial`，backend `cpal_wasapi`，reason `diagnostic_probe_only`",
-        "不启动录音流",
     ] {
         assert!(
             platform_doc.contains(token),
-            "platform capability docs should record audio diagnostic token `{token}`"
+            "platform capability docs should record audio stream smoke token `{token}`"
         );
     }
 }

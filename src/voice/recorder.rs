@@ -660,6 +660,7 @@ fn resample_mono_chunks_to_16k_i16(
 mod tests {
     use super::*;
     use crate::config::RecordAudioMode;
+    use std::time::Duration;
 
     #[test]
     fn resample_passthrough_when_rates_match() {
@@ -744,5 +745,55 @@ mod tests {
         assert!(result.is_none());
         assert!(!wav_path.exists());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "opens the default Windows input device; run only during Windows audio runtime smoke"]
+    fn windows_input_stream_runtime_smoke_receives_pcm_chunks() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("test runtime");
+
+        runtime.block_on(async {
+            let mut recording = start(None).expect("start default input stream");
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+            let mut chunk_count = 0usize;
+            let mut sample_count = 0usize;
+            let mut peak = 0i16;
+
+            while tokio::time::Instant::now() < deadline && chunk_count < 3 {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                match tokio::time::timeout(remaining, recording.recv()).await {
+                    Ok(Some(chunk)) => {
+                        chunk_count += 1;
+                        sample_count += chunk.len();
+                        let chunk_peak = chunk
+                            .iter()
+                            .map(|sample| sample.saturating_abs())
+                            .max()
+                            .unwrap_or(0);
+                        peak = peak.max(chunk_peak);
+                    }
+                    Ok(None) => break,
+                    Err(_) => break,
+                }
+            }
+
+            recording.discard_audio().await.expect("discard audio");
+
+            assert!(
+                chunk_count > 0 && sample_count > 0,
+                "expected PCM chunks from default Windows input device"
+            );
+
+            if std::env::var_os("SHUOHUA_WINDOWS_AUDIO_REQUIRE_SIGNAL").is_some() {
+                assert!(
+                    peak > 256,
+                    "expected non-silent microphone signal, peak={peak}; speak near the microphone or disable SHUOHUA_WINDOWS_AUDIO_REQUIRE_SIGNAL"
+                );
+            }
+        });
     }
 }

@@ -350,10 +350,10 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 platform: PlatformKind::Windows,
                 backend: "cpal_wasapi",
                 status: CapabilityStatusKind::Partial,
-                summary: "cpal/WASAPI input diagnostics can report the default device but recording is not runtime-verified",
-                reason: "diagnostic_probe_only",
+                summary: "cpal/WASAPI input can enumerate the default device and a runtime smoke received PCM chunks",
+                reason: "input_stream_runtime_smoke",
                 next_step: Some(
-                    "Validate microphone permission behavior and sustained recording on Windows",
+                    "Validate non-silent microphone input, sustained recording, ASR, and retained audio behavior on Windows",
                 ),
             },
             CapabilityStatus {

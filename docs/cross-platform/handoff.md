@@ -18,6 +18,19 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10bg Windows audio stream runtime smoke 已完成：
+
+- 用户已接入麦克风；Windows `doctor` 现在能看到 `麦克风 (Realtek USB Audio) (48000Hz, 2ch, F32)`，
+  `microphone.input.devices: count=1`。
+- 本阶段新增 ignored Windows runtime smoke：
+  `cargo test --target x86_64-pc-windows-msvc voice::recorder::tests::windows_input_stream_runtime_smoke_receives_pcm_chunks -- --ignored --exact`。
+- 该 smoke 在 Windows 本机通过：打开真实默认输入设备，收到 16 kHz mono PCM chunks，然后 discard；默认只证明
+  WASAPI/cpal stream start 和 callback delivery。
+- 可设置 `SHUOHUA_WINDOWS_AUDIO_REQUIRE_SIGNAL=1` 后运行同一测试，要求录到非静音 peak；这需要用户在测试时对着麦克风发声。
+- Capability 仍保持 `partial`，但 reason 从 `diagnostic_probe_only` 收窄为 `input_stream_runtime_smoke`。
+- 该阶段仍不验证 ASR、VAD 质量、retained audio conversion、hotkey-triggered full session、clipboard/paste
+  或 end-to-end record -> history。
+
 Phase 10bf Windows overlay DPI-aware adaptive width 已完成：
 
 - 用户在接入麦克风后反馈 Windows overlay 右侧被截断，且 4K 显示器大小正常但 1080p 下显得过大。

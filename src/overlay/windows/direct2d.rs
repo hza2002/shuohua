@@ -71,14 +71,21 @@ impl Direct2dRenderer {
         model: &OverlayModel,
         cfg: &crate::config::theme::EffectiveOverlayCfg,
         metrics: WindowMetrics,
+        panel_width_logical: f64,
     ) -> Result<()> {
-        let panel_width = metrics.px(cfg.core.width).max(1);
-        let panel_height = metrics.px(super::overlay_height(model, cfg)).max(1);
+        let panel_width = metrics.px(panel_width_logical).max(1);
+        let panel_height = metrics
+            .px(super::overlay_height_for_width(
+                model,
+                cfg,
+                panel_width_logical,
+            ))
+            .max(1);
         let outset = metrics.px(super::DIRECT2D_SHADOW_OUTSET).max(0);
         let width = panel_width + outset * 2;
         let height = panel_height + outset * 2;
-        let lines = super::overlay_line_count(model, cfg);
-        let frames = L::overlay_frames(cfg.core.width, cfg.core.text_scale, lines);
+        let lines = super::overlay_line_count_for_width(model, cfg, panel_width_logical);
+        let frames = L::overlay_frames(panel_width_logical, cfg.core.text_scale, lines);
         self.ensure_surface(width, height, metrics)?;
         let surface = self.surface.as_ref().context("Direct2D layered surface")?;
         surface.clear_pixels();
@@ -188,7 +195,7 @@ impl Direct2dRenderer {
             let (text, _) = L::display_text_plan(
                 &model.display_text(),
                 cfg.core.max_text_lines,
-                L::chars_per_line(cfg.core.width, cfg.core.text_scale),
+                L::chars_per_line(panel_width_logical, cfg.core.text_scale),
             );
             self.draw_text(
                 &surface.target,

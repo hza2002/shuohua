@@ -265,6 +265,21 @@ Phase 10bb makes the existing doctor/TUI capability snapshot describe the curren
 
 This is diagnostics only. It does not create windows, probe monitors, run visual QA, or upgrade any capability.
 
+### Windows Phase 10bf DPI-Aware Adaptive Width
+
+Phase 10bf fixes a visual correctness issue found on 1080p displays: the previous Windows renderer treated
+`overlay.width` as an absolute logical width even when the current foreground monitor work area was too narrow.
+That could make the right side of the overlay extend past the monitor edge.
+
+- `overlay.width` remains a user preference and keeps the macOS/default visual size on roomy displays.
+- At Windows render time, the renderer resolves an effective panel width from the current foreground monitor work
+  area after DPI conversion.
+- The effective width is capped to a readable fraction of the monitor work area and to the taskbar-aware fit width,
+  then reused consistently for placement, window size, Direct2D per-pixel surface size, GDI fallback rectangles, and
+  text wrapping.
+- This does not add a new config field and does not change theme semantics.
+- Capability does not change: this is layout correctness, not final multi-monitor/fullscreen/UAC visual QA.
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。

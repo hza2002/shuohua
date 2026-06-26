@@ -38,6 +38,7 @@ const CLASS_NAME: &str = "ShuohuaOverlayWindow";
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const DEFAULT_DPI: f64 = 96.0;
 pub(super) const DIRECT2D_SHADOW_OUTSET: f64 = 14.0;
+const MAX_WORK_AREA_WIDTH_FRACTION: f64 = 0.62;
 
 #[derive(Clone, Copy)]
 pub(super) struct WindowMetrics {
@@ -227,9 +228,11 @@ impl WindowsOverlay {
             return;
         }
         let metrics = WindowMetrics::for_window(self.hwnd);
-        let frame = screen_panel_frame(&self.cfg, metrics);
+        let panel_width = resolved_overlay_width(&self.cfg, metrics);
+        let panel_height = overlay_height_for_width(&self.model, &self.cfg, panel_width);
+        let frame = screen_panel_frame(&self.cfg, metrics, panel_width, panel_height);
         let outset = metrics.px(self.surface_outset());
-        let height = metrics.px(overlay_height(&self.model, &self.cfg)) + outset * 2;
+        let height = metrics.px(panel_height) + outset * 2;
         let width = frame.w as i32 + outset * 2;
         unsafe {
             SetWindowPos(
@@ -267,8 +270,13 @@ impl WindowsOverlay {
 
     fn apply_surface_shape(&self) {
         let metrics = WindowMetrics::for_window(self.hwnd);
-        let width = metrics.px(self.cfg.core.width);
-        let height = metrics.px(overlay_height(&self.model, &self.cfg));
+        let panel_width = resolved_overlay_width(&self.cfg, metrics);
+        let width = metrics.px(panel_width);
+        let height = metrics.px(overlay_height_for_width(
+            &self.model,
+            &self.cfg,
+            panel_width,
+        ));
         let radius = metrics.px(self.cfg.core.corner_radius).max(0);
         unsafe {
             if self.direct2d.is_none() {
@@ -292,7 +300,8 @@ impl WindowsOverlay {
         let mut disable_direct2d = false;
         if let Some(renderer) = &mut self.direct2d {
             let metrics = WindowMetrics::for_window(self.hwnd);
-            match renderer.paint(&self.model, &self.cfg, metrics) {
+            let panel_width = resolved_overlay_width(&self.cfg, metrics);
+            match renderer.paint(&self.model, &self.cfg, metrics, panel_width) {
                 Ok(()) => return,
                 Err(error) => {
                     tracing::warn!(?error, "Direct2D overlay paint failed; falling back to GDI");
@@ -306,13 +315,14 @@ impl WindowsOverlay {
         }
 
         let metrics = WindowMetrics::for_window(self.hwnd);
-        let lines = overlay_line_count(&self.model, &self.cfg);
-        let frames = L::overlay_frames(self.cfg.core.width, self.cfg.core.text_scale, lines);
+        let panel_width = resolved_overlay_width(&self.cfg, metrics);
+        let lines = overlay_line_count_for_width(&self.model, &self.cfg, panel_width);
+        let frames = L::overlay_frames(panel_width, self.cfg.core.text_scale, lines);
         apply_window_alpha(self.hwnd, self.cfg.core.background_alpha);
         let rect = RECT {
             left: 0,
             top: 0,
-            right: metrics.px(self.cfg.core.width),
+            right: metrics.px(panel_width),
             bottom: metrics.px(frames.height),
         };
         let brush = CreateSolidBrush(to_colorref(self.cfg.core.background_rgb));
@@ -378,7 +388,7 @@ impl WindowsOverlay {
         let (text, _) = L::display_text_plan(
             &self.model.display_text(),
             self.cfg.core.max_text_lines,
-            L::chars_per_line(self.cfg.core.width, self.cfg.core.text_scale),
+            L::chars_per_line(panel_width, self.cfg.core.text_scale),
         );
         SelectObject(hdc, body_font);
         draw_text(
@@ -527,11 +537,12 @@ unsafe fn clear_window_region(hwnd: HWND) {
 fn screen_panel_frame(
     cfg: &crate::config::theme::EffectiveOverlayCfg,
     metrics: WindowMetrics,
+    width: f64,
+    height: f64,
 ) -> L::LayoutFrame {
     let screen = work_area_layout(metrics);
-    let height = L::overlay_frames(cfg.core.width, cfg.core.text_scale, 1).height;
     let anchor = screen;
-    let mut frame = L::panel_frame(anchor, cfg.core.position, cfg.core.width, height, screen);
+    let mut frame = L::panel_frame(anchor, cfg.core.position, width, height, screen);
     frame.y = screen.h - frame.y - frame.h;
     frame.x = frame.x * metrics.scale + metrics.work_area.left as f64;
     frame.y = frame.y * metrics.scale + metrics.work_area.top as f64;
@@ -544,6 +555,17 @@ fn work_area_layout(metrics: WindowMetrics) -> L::LayoutFrame {
     let width = (metrics.work_area.right - metrics.work_area.left) as f64 / metrics.scale;
     let height = (metrics.work_area.bottom - metrics.work_area.top) as f64 / metrics.scale;
     L::LayoutFrame::new(0.0, 0.0, width, height)
+}
+
+pub(super) fn resolved_overlay_width(
+    cfg: &crate::config::theme::EffectiveOverlayCfg,
+    metrics: WindowMetrics,
+) -> f64 {
+    let work_area = work_area_layout(metrics);
+    let margin = L::constants::WINDOW_MARGIN * 2.0;
+    let fit_width = (work_area.w - margin).max(360.0);
+    let readable_width = (work_area.w * MAX_WORK_AREA_WIDTH_FRACTION).max(360.0);
+    cfg.core.width.min(readable_width).min(fit_width)
 }
 
 fn anchor_window(overlay: HWND) -> HWND {
@@ -600,18 +622,34 @@ pub(super) fn overlay_height(
     model: &OverlayModel,
     cfg: &crate::config::theme::EffectiveOverlayCfg,
 ) -> f64 {
-    let lines = overlay_line_count(model, cfg);
-    L::overlay_frames(cfg.core.width, cfg.core.text_scale, lines).height
+    overlay_height_for_width(model, cfg, cfg.core.width)
+}
+
+pub(super) fn overlay_height_for_width(
+    model: &OverlayModel,
+    cfg: &crate::config::theme::EffectiveOverlayCfg,
+    width: f64,
+) -> f64 {
+    let lines = overlay_line_count_for_width(model, cfg, width);
+    L::overlay_frames(width, cfg.core.text_scale, lines).height
 }
 
 pub(super) fn overlay_line_count(
     model: &OverlayModel,
     cfg: &crate::config::theme::EffectiveOverlayCfg,
 ) -> usize {
+    overlay_line_count_for_width(model, cfg, cfg.core.width)
+}
+
+pub(super) fn overlay_line_count_for_width(
+    model: &OverlayModel,
+    cfg: &crate::config::theme::EffectiveOverlayCfg,
+    width: f64,
+) -> usize {
     let (_, lines) = L::display_text_plan(
         &model.display_text(),
         cfg.core.max_text_lines,
-        L::chars_per_line(cfg.core.width, cfg.core.text_scale),
+        L::chars_per_line(width, cfg.core.text_scale),
     );
     lines
 }
@@ -877,12 +915,59 @@ mod tests {
             },
         };
 
-        let frame = screen_panel_frame(&cfg, metrics);
+        let width = resolved_overlay_width(&cfg, metrics);
+        let height = overlay_height_for_width(&OverlayModel::new(&cfg.core.state), &cfg, width);
+        let frame = screen_panel_frame(&cfg, metrics, width, height);
 
         assert_eq!(frame.w, 720.0 * 1.5);
         assert!(frame.x >= 100.0);
         assert!(frame.y >= 50.0);
         assert!(frame.x + frame.w <= 2500.0);
+    }
+
+    #[test]
+    fn resolved_overlay_width_shrinks_to_current_monitor_work_area() {
+        let mut cfg = crate::config::theme::EffectiveOverlayCfg::default();
+        cfg.core.width = 1200.0;
+        let metrics = WindowMetrics {
+            dpi: 96,
+            scale: 1.0,
+            work_area: RECT {
+                left: 0,
+                top: 0,
+                right: 1080,
+                bottom: 900,
+            },
+        };
+
+        let width = resolved_overlay_width(&cfg, metrics);
+        let frame = screen_panel_frame(
+            &cfg,
+            metrics,
+            width,
+            L::overlay_frames(width, cfg.core.text_scale, 1).height,
+        );
+
+        assert_eq!(width, 669.6);
+        assert!(frame.x >= L::constants::WINDOW_MARGIN);
+        assert!(frame.x + frame.w <= 1080.0 - L::constants::WINDOW_MARGIN);
+    }
+
+    #[test]
+    fn resolved_overlay_width_keeps_default_size_on_roomy_work_area() {
+        let cfg = crate::config::theme::EffectiveOverlayCfg::default();
+        let metrics = WindowMetrics {
+            dpi: 192,
+            scale: 2.0,
+            work_area: RECT {
+                left: 0,
+                top: 0,
+                right: 7680,
+                bottom: 4200,
+            },
+        };
+
+        assert_eq!(resolved_overlay_width(&cfg, metrics), cfg.core.width);
     }
 
     #[test]
@@ -899,9 +984,21 @@ mod tests {
             },
         };
 
-        let normal = screen_panel_frame(&cfg, metrics);
+        let width = resolved_overlay_width(&cfg, metrics);
+        let normal = screen_panel_frame(
+            &cfg,
+            metrics,
+            width,
+            L::overlay_frames(width, cfg.core.text_scale, 1).height,
+        );
         cfg.core.text_scale = 1.5;
-        let scaled = screen_panel_frame(&cfg, metrics);
+        let scaled_width = resolved_overlay_width(&cfg, metrics);
+        let scaled = screen_panel_frame(
+            &cfg,
+            metrics,
+            scaled_width,
+            L::overlay_frames(scaled_width, cfg.core.text_scale, 1).height,
+        );
 
         assert!(scaled.h > normal.h);
     }
@@ -920,13 +1017,16 @@ mod tests {
             },
         };
 
-        let panel = screen_panel_frame(&cfg, metrics);
+        let width = resolved_overlay_width(&cfg, metrics);
+        let panel = screen_panel_frame(
+            &cfg,
+            metrics,
+            width,
+            L::overlay_frames(width, cfg.core.text_scale, 1).height,
+        );
         let outset = metrics.px(DIRECT2D_SHADOW_OUTSET);
 
-        assert_eq!(
-            panel.w as i32 + outset * 2,
-            metrics.px(cfg.core.width) + outset * 2
-        );
+        assert_eq!(panel.w as i32 + outset * 2, metrics.px(width) + outset * 2);
         assert_eq!(outset, 21);
     }
 

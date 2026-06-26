@@ -18,6 +18,16 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10bf Windows overlay DPI-aware adaptive width 已完成：
+
+- 用户在接入麦克风后反馈 Windows overlay 右侧被截断，且 4K 显示器大小正常但 1080p 下显得过大。
+- Windows renderer 现在把 `overlay.width` 解释为首选逻辑宽度，而不是必须使用的绝对宽度。
+- 实际绘制时会根据当前 foreground monitor 的 DPI-aware work area 解析 effective panel width，并将其同时用于
+  bottom/center placement、Win32 window size、Direct2D per-pixel surface、GDI fallback rectangles 和 text
+  wrapping。
+- 这不新增配置项、不改变 theme 字段、不改变 macOS 默认视觉；roomy work area 仍使用用户配置的宽度。
+- Capability 不升级：这只是 Windows overlay 布局正确性修复，不覆盖 fullscreen/UAC/multi-monitor 最终 QA。
+
 Phase 10be Windows startup registration error boundary 已完成：
 
 - Windows `shuo service install` / `uninstall` 仍不实现 Task Scheduler、SCM、PowerShell 或 registry

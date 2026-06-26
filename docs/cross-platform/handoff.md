@@ -47,6 +47,16 @@ Phase 10bm Windows full FLAC retained-audio recording smoke 已验证：
 - VAD/Silero 仍未在 Windows 完成：Windows 当前因 ONNX Runtime provisioning 未定义而退回 Continuous
   recording；不要把 Windows VAD 或 `idle_pause` 视为完成。
 
+Phase 10bn Windows full M4A retained-audio recording smoke 已验证：
+
+- 用户在 Windows 本机把 `[voice] record_audio = "compact"` 后完成真实麦克风录音；本 session 复核
+  `%LOCALAPPDATA%\Shuohua\audio\01KW2P08PZZYRW7DT2DXXBHVV2.m4a` 存在，大小约 20 KB。
+- 对应 history shard `%LOCALAPPDATA%\Shuohua\history\2026-06.jsonl` 最新记录 id 为
+  `01KW2P08PZZYRW7DT2DXXBHVV2`，status `submitted`，provider `doubao`，`audio_ms` 约 4.57s，
+  文本为“测试一下压缩能不能实现？”。
+- 至此 Windows full recording -> retained audio 的 `lossless`/FLAC 和 `compact`/M4A 路径均已通过真实
+  手动 smoke；这仍不验证 VAD/Silero，也不升级 Windows VAD capability。
+
 Phase 10bk Windows AppUserModelID active app identity 已完成：
 
 - Windows `platform::desktop::frontmost_app()` 现在在 foreground window owner process 上同时尝试

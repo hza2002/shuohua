@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HANDLE, HWND,
+};
+use windows_sys::Win32::Storage::Packaging::Appx::GetApplicationUserModelId;
 use windows_sys::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -11,20 +14,35 @@ use crate::post::AppContext;
 const PROCESS_IMAGE_BUFFER_LEN: usize = 32_768;
 
 pub(crate) fn frontmost_app() -> AppContext {
-    match frontmost_exe_name() {
-        Some(exe_name) => AppContext {
-            app_name: Some(app_name_from_exe_name(&exe_name)),
-            windows_exe_name: Some(exe_name),
-            ..AppContext::default()
-        },
-        None => AppContext::default(),
+    let Some(identity) = frontmost_identity() else {
+        return AppContext::default();
+    };
+    AppContext {
+        app_name: identity.exe_name.as_deref().map(app_name_from_exe_name),
+        windows_app_user_model_id: identity.app_user_model_id,
+        windows_exe_name: identity.exe_name,
+        ..AppContext::default()
     }
 }
 
-fn frontmost_exe_name() -> Option<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowsAppIdentity {
+    app_user_model_id: Option<String>,
+    exe_name: Option<String>,
+}
+
+fn frontmost_identity() -> Option<WindowsAppIdentity> {
     let hwnd = unsafe { GetForegroundWindow() };
     let pid = foreground_window_pid(hwnd)?;
-    process_image_path(pid).and_then(|path| exe_name_from_path(&path))
+    let handle = ProcessHandle::open(pid)?;
+    Some(identity_from_process(&handle))
+}
+
+fn identity_from_process(handle: &ProcessHandle) -> WindowsAppIdentity {
+    WindowsAppIdentity {
+        app_user_model_id: process_app_user_model_id(handle),
+        exe_name: process_image_path(handle).and_then(|path| exe_name_from_path(&path)),
+    }
 }
 
 fn foreground_window_pid(hwnd: HWND) -> Option<u32> {
@@ -38,8 +56,7 @@ fn foreground_window_pid(hwnd: HWND) -> Option<u32> {
     (pid != 0).then_some(pid)
 }
 
-fn process_image_path(pid: u32) -> Option<String> {
-    let handle = ProcessHandle::open(pid)?;
+fn process_image_path(handle: &ProcessHandle) -> Option<String> {
     let mut buffer = vec![0u16; PROCESS_IMAGE_BUFFER_LEN];
     let mut len = buffer.len() as u32;
     let ok = unsafe { QueryFullProcessImageNameW(handle.raw(), 0, buffer.as_mut_ptr(), &mut len) };
@@ -48,6 +65,21 @@ fn process_image_path(pid: u32) -> Option<String> {
     }
     buffer.truncate(len as usize);
     Some(String::from_utf16_lossy(&buffer))
+}
+
+fn process_app_user_model_id(handle: &ProcessHandle) -> Option<String> {
+    let mut len = 0u32;
+    let first = unsafe { GetApplicationUserModelId(handle.raw(), &mut len, std::ptr::null_mut()) };
+    if first != ERROR_INSUFFICIENT_BUFFER || len == 0 {
+        return None;
+    }
+
+    let mut buffer = vec![0u16; len as usize];
+    let second = unsafe { GetApplicationUserModelId(handle.raw(), &mut len, buffer.as_mut_ptr()) };
+    if second != ERROR_SUCCESS || len == 0 {
+        return None;
+    }
+    utf16_nul_terminated_to_string(buffer.get(..len as usize).unwrap_or(&buffer))
 }
 
 fn exe_name_from_path(path: &str) -> Option<String> {
@@ -64,6 +96,14 @@ fn app_name_from_exe_name(exe_name: &str) -> String {
         .or_else(|| exe_name.strip_suffix(".EXE"))
         .unwrap_or(exe_name)
         .to_string()
+}
+
+fn utf16_nul_terminated_to_string(buffer: &[u16]) -> Option<String> {
+    let without_nul = buffer
+        .split_last()
+        .map(|(last, rest)| if *last == 0 { rest } else { buffer })
+        .unwrap_or(&[]);
+    (!without_nul.is_empty()).then(|| String::from_utf16_lossy(without_nul))
 }
 
 struct ProcessHandle(HANDLE);
@@ -105,5 +145,18 @@ mod tests {
         assert_eq!(app_name_from_exe_name("Code.exe"), "Code");
         assert_eq!(app_name_from_exe_name("POWERPNT.EXE"), "POWERPNT");
         assert_eq!(app_name_from_exe_name("wezterm-gui"), "wezterm-gui");
+    }
+
+    #[test]
+    fn app_user_model_id_utf16_trims_terminal_nul() {
+        let encoded = [
+            'M' as u16, 'i' as u16, 'c' as u16, 'r' as u16, 'o' as u16, 's' as u16, 'o' as u16,
+            'f' as u16, 't' as u16, '.' as u16, 'A' as u16, 'p' as u16, 'p' as u16, 0,
+        ];
+
+        assert_eq!(
+            utf16_nul_terminated_to_string(&encoded).as_deref(),
+            Some("Microsoft.App")
+        );
     }
 }

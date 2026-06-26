@@ -395,11 +395,11 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
             CapabilityStatus {
                 id: CapabilityId::DesktopActiveApp,
                 platform: PlatformKind::Windows,
-                backend: "foreground_window_process_exe",
+                backend: "foreground_window_process_identity",
                 status: CapabilityStatusKind::Partial,
-                summary: "Foreground window lookup can resolve the owning process executable name but not AppUserModelID",
-                reason: "exe_name_only",
-                next_step: Some("Validate foreground app route matching and add AppUserModelID lookup on Windows"),
+                summary: "Foreground window lookup can resolve process executable name and best-effort AppUserModelID",
+                reason: "exe_name_and_optional_aumid",
+                next_step: Some("Validate foreground app route matching across packaged and unpackaged Windows apps"),
             },
         ])
     {

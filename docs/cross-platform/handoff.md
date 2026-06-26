@@ -18,6 +18,24 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10bk Windows AppUserModelID active app identity 已完成：
+
+- Windows `platform::desktop::frontmost_app()` 现在在 foreground window owner process 上同时尝试
+  `QueryFullProcessImageNameW` 和 `GetApplicationUserModelId`。
+- `AppContext.windows_exe_name` 继续作为 unpackaged Win32 fallback；`windows_app_user_model_id` 在 Windows
+  能提供 AUMID 时填充。完整进程路径仍不进入 doctor/history/IPC。
+- `desktop.active_app` capability 更新为
+  `partial backend=foreground_window_process_identity reason=exe_name_and_optional_aumid`；AUMID 为空是正常
+  降级，不能因此阻断 route fallback。
+- 本机 `shuo.exe doctor` 通过，当前 Windows Terminal 前台输出：
+  `exe_name=WindowsTerminal.exe app_user_model_id=Microsoft.WindowsTerminal_8wekyb3d8bbwe!App
+  app_name=WindowsTerminal`，`profile.route.current` 仍命中 `agent`。
+- 验证已通过：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、
+  `cargo test --target x86_64-pc-windows-msvc`、`cargo build --target x86_64-pc-windows-msvc`、
+  `cargo test --target x86_64-pc-windows-msvc platform::windows::app_context`、`shuo.exe doctor`。
+- 下一步建议：继续非 overlay 能力闭环；可做 retained audio full recording smoke、TUI/history audio 操作
+  Windows runtime smoke，或在真实目标 App 中验证 route/hotkey/clipboard/paste 矩阵。
+
 Phase 10bj Windows optional retained-audio conversion 已完成：
 
 - Windows `platform::audio_convert` 现在有可选外部 `ffmpeg` backend：`lossless` 转 FLAC，`compact` 转

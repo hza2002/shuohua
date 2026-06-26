@@ -282,6 +282,20 @@ Windows `desktop.active_app` 第一版只实现 foreground window owner process 
 `profile.default`。在真实录音 session 中验证 profile 命中、AUMID 查询和更多前台窗口类型之前，
 不能把 `desktop.active_app` 升级为 `available`。
 
+## Phase 10bk Windows AppUserModelID Active App Identity
+
+Windows active app identity now also attempts AppUserModelID lookup from the foreground process handle:
+
+- `desktop.active_app`：`partial`，backend `foreground_window_process_identity`，reason
+  `exe_name_and_optional_aumid`。
+- 实现路径在既有 `GetForegroundWindow` / `GetWindowThreadProcessId` /
+  `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` 基础上增加 `GetApplicationUserModelId`。
+- `QueryFullProcessImageNameW` 继续只用于派生 `windows_exe_name`；完整路径不进入 doctor、history 或 IPC。
+- AUMID 为空是正常降级，尤其是 unpackaged Win32 apps；route matching 仍应落回 `exe_name` 或
+  `profile.default`。
+- 在真实 packaged app / Store app / terminal/editor/browser 矩阵中验证 profile route 命中前，不能升级为
+  `available`。
+
 Phase 10ak extends the same diagnostic surface with `profile.route.current` in `shuo doctor`:
 
 - It uses the current `AppContext` and the same platform `AppIdentity` conversion used by daemon session start.

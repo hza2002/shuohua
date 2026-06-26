@@ -360,12 +360,14 @@ Current active app identity baseline:
 - Phase 10aj implements the first Windows active app backend with `GetForegroundWindow`,
   `GetWindowThreadProcessId`, `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`, and
   `QueryFullProcessImageNameW`.
-- The backend exposes only `exe_name` such as `Code.exe` plus a display `app_name`; it does not expose or store
-  the full process path.
-- `profile.routes.<profile>.windows.exe_name` can use this identity. `app_user_model_id` remains a reserved
-  matcher field until a separate AUMID lookup is implemented and runtime-tested.
-- Capability remains `partial/foreground_window_process_exe/exe_name_only`; foreground lookup failure falls back
-  to the default profile.
+- Phase 10bk extends the same process handle with best-effort `GetApplicationUserModelId`.
+- The backend exposes `exe_name` such as `Code.exe` plus a display `app_name`, and fills
+  `windows_app_user_model_id` when Windows reports an AppUserModelID for the foreground process. It does not expose
+  or store the full process path.
+- `profile.routes.<profile>.windows.exe_name` and `.app_user_model_id` can use this identity. AUMID is optional
+  because normal unpackaged Win32 apps often do not have one.
+- Capability remains `partial/foreground_window_process_identity/exe_name_and_optional_aumid`; foreground lookup
+  failure falls back to the default profile.
 - `shuo doctor` reports both `desktop.active_app.current` and `profile.route.current` so route configuration can
   be debugged before hotkey/audio runtime exists. This is read-only and must not trigger recording, provider
   runtime, overlay, clipboard, or paste.

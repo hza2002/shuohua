@@ -1534,7 +1534,9 @@ fn windows_active_app_identity_backend_lives_behind_desktop_facade() {
         "GetWindowThreadProcessId",
         "OpenProcess",
         "QueryFullProcessImageNameW",
+        "GetApplicationUserModelId",
         "PROCESS_QUERY_LIMITED_INFORMATION",
+        "windows_app_user_model_id",
         "windows_exe_name",
         "app_name_from_exe_name",
     ] {
@@ -1545,26 +1547,57 @@ fn windows_active_app_identity_backend_lives_behind_desktop_facade() {
     }
 
     let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
-    assert!(
-        manifest.contains("Win32_UI_WindowsAndMessaging"),
-        "Cargo.toml should enable foreground-window APIs for Windows active app lookup"
-    );
+    for token in [
+        "Win32_UI_WindowsAndMessaging",
+        "Win32_Storage_Packaging_Appx",
+    ] {
+        assert!(
+            manifest.contains(token),
+            "Cargo.toml should enable Windows active app lookup feature `{token}`"
+        );
+    }
 }
 
 #[test]
-fn windows_active_app_capability_reports_exe_name_only_partial() {
+fn windows_active_app_capability_reports_process_identity_partial() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
+    let platform_doc =
+        std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
+    let windows_doc = std::fs::read_to_string(root.join("docs/cross-platform/windows.md")).unwrap();
 
     for token in [
         "CapabilityId::DesktopActiveApp",
-        "foreground_window_process_exe",
-        "exe_name_only",
-        "Validate foreground app route matching and add AppUserModelID lookup on Windows",
+        "foreground_window_process_identity",
+        "exe_name_and_optional_aumid",
+        "Validate foreground app route matching across packaged and unpackaged Windows apps",
     ] {
         assert!(
             capability.contains(token),
-            "Windows desktop.active_app capability should report exe-name-only token `{token}`"
+            "Windows desktop.active_app capability should report process identity token `{token}`"
+        );
+    }
+
+    for token in [
+        "Phase 10bk Windows AppUserModelID Active App Identity",
+        "`partial`，backend `foreground_window_process_identity`，reason",
+        "`GetApplicationUserModelId`",
+        "AUMID 为空是正常降级",
+    ] {
+        assert!(
+            platform_doc.contains(token),
+            "platform capability docs should record Windows AUMID token `{token}`"
+        );
+    }
+
+    for token in [
+        "Phase 10bk extends the same process handle with best-effort `GetApplicationUserModelId`",
+        "`windows_app_user_model_id`",
+        "AUMID is optional",
+    ] {
+        assert!(
+            windows_doc.contains(token),
+            "Windows design doc should record active app identity token `{token}`"
         );
     }
 }

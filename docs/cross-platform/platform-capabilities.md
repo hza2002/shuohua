@@ -389,6 +389,17 @@ Phase 10ay does not change Windows overlay capability levels:
 - `overlay.material` stays `degraded/translucent_fallback_only`; this phase is surface polish, not blur,
   Acrylic/Mica, Liquid Glass parity, or final visual QA.
 
+## Phase 10az Windows Foreground Monitor Work Area
+
+Phase 10az does not change Windows overlay capability levels:
+
+- Windows overlay placement now selects the foreground window's nearest monitor work area before falling back to
+  `SPI_GETWORKAREA`.
+- This improves screen anchoring for common multi-monitor setups and mixed taskbar/work-area layouts.
+- It does not implement focused-window anchoring, caret anchoring, or foreground window geometry following.
+- `overlay.window_anchor` remains `degraded/screen_anchor_only` until focused anchoring and multi-monitor visual QA
+  are complete.
+
 ## Phase 10ah Windows Audio Capture Diagnostics
 
 Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：

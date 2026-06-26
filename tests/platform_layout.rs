@@ -1381,6 +1381,52 @@ fn windows_overlay_records_per_pixel_shadow_polish() {
 }
 
 #[test]
+fn windows_overlay_records_foreground_monitor_work_area() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let backend = std::fs::read_to_string(root.join("src/overlay/windows.rs")).unwrap();
+    let overlay_doc = std::fs::read_to_string(root.join("docs/cross-platform/overlay.md")).unwrap();
+    let capability_doc =
+        std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
+
+    for token in [
+        "GetForegroundWindow",
+        "MonitorFromWindow",
+        "GetMonitorInfoW",
+        "MONITOR_DEFAULTTONEAREST",
+        "anchor_window",
+        "monitor_work_area_rect",
+        "primary_work_area_rect",
+    ] {
+        assert!(
+            backend.contains(token),
+            "Windows overlay should select foreground monitor work area via `{token}`"
+        );
+    }
+
+    for token in [
+        "Windows Phase 10az Foreground Monitor Work Area",
+        "foreground window's nearest monitor",
+        "SPI_GETWORKAREA",
+    ] {
+        assert!(
+            overlay_doc.contains(token),
+            "overlay foreground-monitor policy should document `{token}`"
+        );
+    }
+
+    for token in [
+        "Phase 10az Windows Foreground Monitor Work Area",
+        "does not change Windows overlay capability levels",
+        "overlay.window_anchor",
+    ] {
+        assert!(
+            capability_doc.contains(token),
+            "capability doc should preserve monitor work-area boundary `{token}`"
+        );
+    }
+}
+
+#[test]
 fn windows_active_app_identity_backend_lives_behind_desktop_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let windows_app_context = root.join("src/platform/windows/app_context.rs");

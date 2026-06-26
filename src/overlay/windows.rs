@@ -6,17 +6,18 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{GetLastError, COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteObject,
-    DrawTextW, Ellipse, EndPaint, FillRect, GetStockObject, InvalidateRect, LineTo, MoveToEx,
-    Polygon, Rectangle, SelectObject, SetBkMode, SetTextColor, SetWindowRgn, CLEARTYPE_QUALITY,
-    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE,
-    DT_TOP, DT_WORDBREAK, FF_DONTCARE, FW_BOLD, FW_NORMAL, HBRUSH, HDC, HGDIOBJ, HRGN,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, TRANSPARENT, WHITE_BRUSH,
+    DrawTextW, Ellipse, EndPaint, FillRect, GetMonitorInfoW, GetStockObject, InvalidateRect,
+    LineTo, MonitorFromWindow, MoveToEx, Polygon, Rectangle, SelectObject, SetBkMode, SetTextColor,
+    SetWindowRgn, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_END_ELLIPSIS,
+    DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_TOP, DT_WORDBREAK, FF_DONTCARE, FW_BOLD, FW_NORMAL,
+    HBRUSH, HDC, HGDIOBJ, HRGN, MONITORINFO, MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS,
+    PAINTSTRUCT, PS_SOLID, TRANSPARENT, WHITE_BRUSH,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetSystemMetrics, LoadCursorW, PeekMessageW, PostQuitMessage, RegisterClassW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
+    GetMessageW, GetSystemMetrics, LoadCursorW, PeekMessageW, PostQuitMessage, RegisterClassW,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW,
     TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA,
     HTTRANSPARENT, IDC_ARROW, LWA_ALPHA, MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SPI_GETWORKAREA,
@@ -47,12 +48,13 @@ pub(super) struct WindowMetrics {
 
 impl WindowMetrics {
     fn for_window(hwnd: HWND) -> Self {
-        let dpi = unsafe { GetDpiForWindow(hwnd) };
+        let anchor = anchor_window(hwnd);
+        let dpi = unsafe { GetDpiForWindow(anchor) };
         let dpi = if dpi == 0 { DEFAULT_DPI as u32 } else { dpi };
         Self {
             dpi,
             scale: dpi as f64 / DEFAULT_DPI,
-            work_area: work_area_rect(),
+            work_area: work_area_rect(anchor),
         }
     }
 
@@ -544,7 +546,42 @@ fn work_area_layout(metrics: WindowMetrics) -> L::LayoutFrame {
     L::LayoutFrame::new(0.0, 0.0, width, height)
 }
 
-fn work_area_rect() -> RECT {
+fn anchor_window(overlay: HWND) -> HWND {
+    let foreground = unsafe { GetForegroundWindow() };
+    if !foreground.is_null() && foreground != overlay {
+        foreground
+    } else {
+        overlay
+    }
+}
+
+fn work_area_rect(hwnd: HWND) -> RECT {
+    if let Some(rect) = monitor_work_area_rect(hwnd) {
+        return rect;
+    }
+    primary_work_area_rect()
+}
+
+fn monitor_work_area_rect(hwnd: HWND) -> Option<RECT> {
+    if hwnd.is_null() {
+        return None;
+    }
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    if monitor.is_null() {
+        return None;
+    }
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let ok = unsafe { GetMonitorInfoW(monitor, &mut info) };
+    if ok == 0 {
+        return None;
+    }
+    Some(info.rcWork)
+}
+
+fn primary_work_area_rect() -> RECT {
     let mut rect = RECT::default();
     let ok =
         unsafe { SystemParametersInfoW(SPI_GETWORKAREA, 0, (&mut rect as *mut RECT).cast(), 0) };

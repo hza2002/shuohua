@@ -227,6 +227,20 @@ Phase 10ay improves the translucent fallback without re-enabling DWM backdrop:
 - This is not blur or Liquid Glass parity. `overlay.material` remains degraded translucent fallback; future blur still
   needs a composition route that owns blur, rounded clipping, shadow, and text together.
 
+### Windows Phase 10az Foreground Monitor Work Area
+
+Phase 10az improves placement correctness before focused-window anchoring:
+
+- The Windows overlay now chooses the foreground window's nearest monitor work area via
+  `GetForegroundWindow` + `MonitorFromWindow` + `GetMonitorInfoW`.
+- `SPI_GETWORKAREA` remains the fallback if monitor lookup fails.
+- This keeps bottom/top/middle screen anchoring on the same monitor as the active app in common multi-monitor
+  setups, while still using the shared `overlay.position` semantics.
+- This is not focused-window anchoring. The overlay still does not follow a foreground window frame, caret, text
+  field, or app-specific geometry.
+- Capability does not change: `overlay.window_anchor` remains degraded `screen_anchor_only` until focused-window
+  geometry and multi-monitor visual QA are complete.
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。

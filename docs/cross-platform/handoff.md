@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: draw windows overlay per-pixel shadow`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `fix: anchor windows overlay to foreground monitor`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `fix: disable windows overlay dwm backdrop` (`ab14417`).
+Previous phase commit: `feat: draw windows overlay per-pixel shadow` (`4508204`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,16 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10az Windows foreground monitor work area 已完成：
+
+- Windows overlay placement 现在优先用 foreground window 的 nearest monitor work area：
+  `GetForegroundWindow` + `MonitorFromWindow` + `GetMonitorInfoW`。
+- `SPI_GETWORKAREA` 只作为 monitor lookup 失败时的 fallback。
+- 这只是 screen anchoring 的多显示器基础修正；不会跟随 foreground window frame、caret、文本框或
+  app-specific geometry。
+- Capability 不升级：`overlay.window_anchor` 仍是 degraded `screen_anchor_only`，直到 focused-window
+  anchoring 和多显示器目视 QA 完成。
+
 Phase 10ay Windows Direct2D per-pixel shadow polish 已完成：
 
 - Windows Direct2D renderer 现在把 `UpdateLayeredWindow` per-pixel surface 扩大一个 renderer-owned shadow

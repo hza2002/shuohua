@@ -207,6 +207,8 @@ Hard boundaries:
   Task Scheduler/SCM stop path.
 - `start` / `restart` may only spawn the current executable in the current interactive session until a real
   install/startup registration phase is designed and approved.
+- `install` / `uninstall` must fail with a clear startup-registration unsupported error until Task Scheduler or
+  Startup Apps registration is designed, approved, and tested.
 - Do not use interactive services. Modern Windows services cannot directly interact with the user desktop, and
   the desktop-facing daemon needs microphone, overlay, clipboard, text injection, and foreground-window context.
 - Do not use `schtasks`/COM registration until install/uninstall idempotency, task name, task folder, trigger,

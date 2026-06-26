@@ -228,6 +228,11 @@ Phase 10ae adds explicit user-session `service start` / `restart`:
 - This does not call Task Scheduler, SCM, PowerShell, or registry APIs, and does not make Windows service
   lifecycle runtime-ready beyond the current user session.
 
+Phase 10be keeps the same capability level and reason, but tightens unsupported errors for Windows
+`service install` / `uninstall`: the error now says startup registration is not implemented and points to the
+implemented current user-session commands. It still does not call Task Scheduler, SCM, PowerShell, or registry
+APIs.
+
 ## Phase 10l Non-macOS Desktop Capability Truthfulness
 
 Linux/Windows desktop facade behavior is currently conservative and should be reflected explicitly in the

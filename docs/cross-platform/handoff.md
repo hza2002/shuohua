@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `docs: refine windows path capability diagnostics`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `fix: clarify windows service registration errors`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `docs: refine windows ipc capability diagnostics` (`ed0e7cf`).
+Previous phase commit: `docs: refine windows path capability diagnostics` (`cabaa9a`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,15 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10be Windows startup registration error boundary 已完成：
+
+- Windows `shuo service install` / `uninstall` 仍不实现 Task Scheduler、SCM、PowerShell 或 registry
+  startup registration。
+- 错误文案从泛化 “service management is not implemented” 收窄为 “startup registration is not
+  implemented”，并提示当前已实现的 user-session lifecycle 命令：
+  `service start/status/restart/stop`。
+- 这只是错误边界和诊断清晰度修复，不改变 start/status/restart/stop 行为，不升级 capability。
+
 Phase 10bd Windows path capability diagnostics 已完成：
 
 - Windows `path.open_reveal` capability reason 从 `runtime_not_verified` 收窄为

@@ -620,11 +620,11 @@ mod imp {
     }
 
     pub fn install() -> Result<()> {
-        unsupported()
+        startup_registration_unsupported()
     }
 
     pub fn uninstall() -> Result<()> {
-        unsupported()
+        startup_registration_unsupported()
     }
 
     pub async fn start() -> Result<()> {
@@ -747,11 +747,11 @@ mod imp {
     }
 
     pub fn install() -> Result<()> {
-        unsupported()
+        startup_registration_unsupported()
     }
 
     pub fn uninstall() -> Result<()> {
-        unsupported()
+        startup_registration_unsupported()
     }
 
     pub async fn start() -> Result<()> {
@@ -1069,9 +1069,11 @@ mod imp {
         }
     }
 
-    fn unsupported<T>() -> Result<T> {
+    fn startup_registration_unsupported<T>() -> Result<T> {
         // Task Scheduler, SCM, PowerShell, and registry APIs are intentionally not called.
-        anyhow::bail!("Windows service management is not implemented yet")
+        anyhow::bail!(
+            "Windows startup registration is not implemented yet; use `shuo service start`, `shuo service status`, `shuo service restart`, or `shuo service stop` for the current user-session daemon"
+        )
     }
 
     #[cfg(test)]
@@ -1102,6 +1104,20 @@ mod imp {
                 format_daemon_status(42, 65_000, "Idle", "-"),
                 "daemon: running pid=42 uptime=1m5s state=Idle recording=-"
             );
+        }
+
+        #[test]
+        fn install_uninstall_report_startup_registration_boundary() {
+            for error in [
+                super::install().unwrap_err(),
+                super::uninstall().unwrap_err(),
+            ] {
+                let msg = error.to_string();
+                assert!(msg.contains("startup registration"), "{msg}");
+                assert!(msg.contains("service start"), "{msg}");
+                assert!(msg.contains("service stop"), "{msg}");
+                assert!(!msg.contains("SCM"), "{msg}");
+            }
         }
 
         #[tokio::test(flavor = "current_thread")]

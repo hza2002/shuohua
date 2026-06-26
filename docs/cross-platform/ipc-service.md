@@ -210,6 +210,14 @@ Phase 10ae Windows user-session service start/restart:
 - 这仍不是 install/auto-start registration：`install` / `uninstall` 继续 unsupported，不调用
   Task Scheduler、SCM、PowerShell 或 registry APIs。
 
+Phase 10be Windows startup registration error boundary:
+
+- Windows `shuo service install` / `uninstall` 仍不创建或删除 Task Scheduler、SCM、PowerShell 或
+  registry startup registration。
+- Unsupported error wording now names startup registration specifically and points users to the implemented
+  current user-session lifecycle commands: `service start/status/restart/stop`.
+- This is diagnostics/error-boundary polish only; it does not implement install/uninstall or auto-start.
+
 ## Smart Fallback
 
 CLI/TUI/GUI 连接 daemon 时：

@@ -315,7 +315,7 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 backend: "named_pipe",
                 status: CapabilityStatusKind::Partial,
                 summary: "Named Pipe transport passed same-user smoke with explicit client access masks but still needs cross-user validation",
-                reason: "runtime_not_verified",
+                reason: "same_user_elevation_smoke_only",
                 next_step: Some("Validate cross-user isolation and longer Windows IPC soak"),
             },
             CapabilityStatus {
@@ -324,7 +324,7 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 backend: "named_mutex",
                 status: CapabilityStatusKind::Partial,
                 summary: "Named mutex daemon guard passed same-user and elevation smoke but still needs cross-user validation",
-                reason: "runtime_not_verified",
+                reason: "same_user_elevation_smoke_only",
                 next_step: Some("Validate cross-user daemon isolation on Windows"),
             },
             CapabilityStatus {
@@ -332,9 +332,9 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 platform: PlatformKind::Windows,
                 backend: "open_process_probe",
                 status: CapabilityStatusKind::Partial,
-                summary: "OpenProcess process probe compiles but is not runtime-verified",
-                reason: "runtime_not_verified",
-                next_step: Some("Validate Windows process probing semantics"),
+                summary: "OpenProcess process probe is used by same-user service lifecycle smoke but still needs crash and PID-reuse validation",
+                reason: "service_lifecycle_smoke_only",
+                next_step: Some("Validate Windows process probing after daemon crash, abandoned mutex, and PID reuse"),
             },
             CapabilityStatus {
                 id: CapabilityId::ServiceManager,

@@ -589,7 +589,7 @@ fn windows_capability_snapshot_marks_named_pipe_transport_partial() {
         "CapabilityId::IpcTransport",
         "CapabilityStatusKind::Partial",
         "named_pipe",
-        "runtime_not_verified",
+        "same_user_elevation_smoke_only",
         "same-user smoke",
         "Validate cross-user isolation and longer Windows IPC soak",
         "Validate cross-user daemon isolation on Windows",
@@ -638,6 +638,8 @@ fn windows_lifecycle_primitives_have_compile_backend() {
         "named_mutex",
         "CapabilityId::ProcessProbe",
         "open_process_probe",
+        "service_lifecycle_smoke_only",
+        "Validate Windows process probing after daemon crash, abandoned mutex, and PID reuse",
     ] {
         assert!(
             capability.contains(token),

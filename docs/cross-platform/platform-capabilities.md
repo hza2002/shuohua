@@ -105,7 +105,7 @@ macOS 当前快照先把现有能力映射为 current status：
 platform 按编译目标设置为 Linux/Windows/Unknown，reason 使用 `backend_not_implemented`。
 后续阶段已落地的编译级 backend 可以覆盖默认项，但必须如实表达未实机验证的范围。
 
-- Windows `ipc.transport`：`partial`，backend `named_pipe`，reason `runtime_not_verified`。
+- Windows `ipc.transport`：`partial`，backend `named_pipe`，reason `same_user_elevation_smoke_only`。
   这表示 Tokio Named Pipe transport 已通过 Windows target compile check 和 same-user/elevation
   smoke，且 client connect 已收窄到 raw `CreateFileW` explicit access mask；cross-user 隔离和
   longer runtime soak 仍未完成。
@@ -189,7 +189,8 @@ Windows lifecycle no longer needs to be a pure unsupported placeholder for compi
   passed. The backend maps `WAIT_ABANDONED` to an explicit warning/recovery path, but cross-user isolation and
   real crash/abandon smoke still need Windows validation.
 - `process.probe`：`partial`，backend `open_process_probe`。`OpenProcess` is used as a compile backend
-  for process existence probing, but PID reuse and permission behavior still need Windows validation.
+  for process existence probing and has been exercised by same-user service lifecycle smoke, but daemon crash,
+  abandoned mutex, PID reuse, and permission edge cases still need Windows validation.
 
 Phase 10j 不实现 Windows service install/start/stop、smart fallback、daemon auto-start、Named Pipe ACL，
 也不声明 Windows daemon lifecycle runtime-ready。

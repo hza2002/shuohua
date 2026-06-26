@@ -18,6 +18,17 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10bc Windows IPC/lifecycle capability diagnostics 已完成：
+
+- Windows `ipc.transport` 和 `daemon.single_instance` capability reason 从旧的
+  `runtime_not_verified` 收窄为 `same_user_elevation_smoke_only`。
+- Windows `process.probe` capability reason 从 `runtime_not_verified` 收窄为
+  `service_lifecycle_smoke_only`。
+- 这只同步既有 Windows same-user/elevation/busy/service lifecycle smoke 结论到 doctor/TUI 静态诊断；
+  不改 IPC/service/lifecycle 行为，不升级 status。
+- cross-user 第二账号/VM 隔离和 longer soak 仍是 deferred manual gate；完成前不得标
+  `available`。
+
 Phase 10bb Windows overlay capability diagnostics 已完成：
 
 - Windows overlay capability snapshot 不再用泛化 `win32_overlay_minimal` 描述所有维度。

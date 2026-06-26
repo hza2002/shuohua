@@ -938,11 +938,10 @@ mod tests {
             .any(|status| status.backend == "win32_direct2d_per_pixel"
                 && status.reason == "direct2d_per_pixel_runtime_smoke"
                 && status.status == CapabilityStatusKind::Partial));
-        assert!(capabilities
-            .iter()
-            .any(|status| status.backend == "win32_foreground_monitor_work_area"
-                && status.reason == "foreground_monitor_screen_anchor_only"
-                && status.status == CapabilityStatusKind::Degraded));
+        assert!(capabilities.iter().any(|status| status.backend
+            == "win32_foreground_monitor_work_area"
+            && status.reason == "foreground_monitor_screen_anchor_only"
+            && status.status == CapabilityStatusKind::Degraded));
     }
 
     #[test]

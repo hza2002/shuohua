@@ -60,8 +60,10 @@ Phase 10r Windows Named Pipe endpoint scoping/security descriptor hardening:
   Named Pipe security descriptor。
 - 已在当前 Windows session 验证：daemon 能启动、`service status` 能通过 Named Pipe 取得
   `DaemonStatus`，第二个 daemon 被 named mutex 拒绝。
-- 仍未完成：cross-user 验证、elevated/non-elevated 行为矩阵、busy-pipe 压力测试、client
-  access mask 收窄和长时间 runtime soak。因此 capability 仍保持 `partial/runtime_not_verified`。
+- 后续阶段已完成 elevated/non-elevated 行为矩阵、busy-pipe smoke 和 client access mask 收窄。因此
+  capability reason 已收窄为 `same_user_elevation_smoke_only`，但 status 仍保持 `partial`。
+- 仍未完成：cross-user 验证和长时间 runtime soak；完成前不得把 Windows IPC capability 升级为
+  `available`。
 
 Phase 10t Windows Named Pipe busy retry policy:
 
@@ -91,6 +93,16 @@ Phase 10af Windows raw Named Pipe client access mask:
   service install/startup registration。
 - 该阶段必须在 Windows 重新跑 daemon/status/busy/service lifecycle smoke；cross-user 第二账号/VM
   仍是 deferred manual gate。
+
+Phase 10bc Windows IPC/lifecycle capability diagnostics:
+
+- Windows `ipc.transport` 和 `daemon.single_instance` capability reason 从旧的 `runtime_not_verified`
+  收窄为 `same_user_elevation_smoke_only`，表达 same-user、elevated/non-elevated、busy clients 和
+  raw access-mask smoke 已通过。
+- Windows `process.probe` reason 收窄为 `service_lifecycle_smoke_only`，因为 `service stop` /
+  `restart` 已通过 `OpenProcess` probe 做 bounded exit wait。
+- 这只是诊断真实性更新，不改变 IPC/service/lifecycle 代码，不升级 capability；cross-user 和 longer
+  soak 仍是 deferred manual gate。
 
 ## 单实例
 

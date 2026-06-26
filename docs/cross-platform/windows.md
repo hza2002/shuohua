@@ -14,11 +14,11 @@ Current status:
 - `make check-windows` proves `x86_64-pc-windows-msvc` cfg/type boundaries only.
 - Named Pipe IPC, named mutex lifecycle primitives, path open/reveal, service dry-run status, and capability
   truthfulness have compile-checked skeletons.
-- Windows Phase 10q/10r smoke on a native Windows 11 machine verified daemon/client `DaemonStatus`,
-  single-instance rejection, scoped pipe/mutex names, and explicit current-user pipe DACL creation for the
-  current Windows session. The final Phase 10r smoke shell was elevated; do not mark Windows capabilities
-  `available` until elevated/non-elevated, cross-user, busy-pipe, and longer runtime behavior are tested on
-  Windows.
+- Windows native smoke has verified daemon/client `DaemonStatus`, single-instance rejection, scoped pipe/mutex
+  names, explicit current-user pipe DACL creation, same-user elevated/non-elevated IPC, busy clients, raw
+  client access masks, and service start/status/restart/stop for the current Windows session. Do not mark
+  Windows IPC/lifecycle capabilities `available` until cross-user isolation and longer runtime behavior are
+  tested on Windows.
 
 Primary baseline:
 
@@ -179,6 +179,9 @@ Rules:
 - Do not build correctness on PID liveness alone; process reuse remains a risk.
 - A second daemon should fail before opening a second runtime endpoint. The final guard is named mutex plus pipe
   first-instance behavior, not one primitive alone.
+- Current capability reason is `same_user_elevation_smoke_only` for the mutex guard and
+  `service_lifecycle_smoke_only` for process probe; these are still partial until cross-user, crash/abandon,
+  PID reuse, and longer soak are validated.
 
 ## Service And Startup
 

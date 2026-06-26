@@ -163,10 +163,15 @@ compile backend：
 
 - `open_path(path)`：`explorer.exe <path>`。
 - `reveal_path(path)`：`explorer.exe /select,<path>`。
-- `path.open_reveal`：`partial`，backend `explorer`，reason `runtime_not_verified`。
+- `path.open_reveal`：`partial`，backend `explorer`，reason `basic_manual_smoke_only`。
 
-真实 Windows shell 行为、路径 quoting、UNC 路径、焦点和多用户会话仍需 Windows VM/实机验证。
+基础 Windows shell open/reveal 已人工确认可打开对应目录；`explorer.exe` exit code 不可靠，不能只用
+工具返回码判断失败。UNC 路径、missing path、焦点和非交互/多用户会话仍需 Windows VM/实机验证。
 Phase 10h 不引入 COM Shell API，也不实现 Windows daemon lifecycle、desktop injection 或 overlay。
+
+Phase 10bd updates the diagnostic reason only: Windows `path.open_reveal` remains `partial/explorer`, but its
+reason is narrowed from `runtime_not_verified` to `basic_manual_smoke_only` after manual Explorer smoke
+confirmed open/reveal behavior for the product config/state roots.
 
 ## Phase 10i Audio Convert Facade
 

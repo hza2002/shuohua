@@ -186,6 +186,7 @@ fn windows_path_open_reveal_capability_reports_explorer_partial() {
         "CapabilityId::PathOpenReveal",
         "explorer",
         "CapabilityStatusKind::Partial",
+        "basic_manual_smoke_only",
         "Validate Explorer open/reveal with UNC, missing paths, and non-interactive sessions",
     ] {
         assert!(

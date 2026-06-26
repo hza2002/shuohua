@@ -362,7 +362,7 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 backend: "explorer",
                 status: CapabilityStatusKind::Partial,
                 summary: "explorer.exe path open/reveal passed basic manual smoke but still needs broader path/session validation",
-                reason: "runtime_not_verified",
+                reason: "basic_manual_smoke_only",
                 next_step: Some("Validate Explorer open/reveal with UNC, missing paths, and non-interactive sessions"),
             },
             CapabilityStatus {

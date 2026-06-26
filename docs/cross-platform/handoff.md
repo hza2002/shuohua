@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `docs: clarify windows overlay capability diagnostics`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `docs: refine windows path capability diagnostics`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `fix: soften windows overlay shadow` (`4a77237`).
+Previous phase commit: `docs: refine windows ipc capability diagnostics` (`ed0e7cf`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,14 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10bd Windows path capability diagnostics 已完成：
+
+- Windows `path.open_reveal` capability reason 从 `runtime_not_verified` 收窄为
+  `basic_manual_smoke_only`。
+- 这只同步用户已确认的 Explorer open/reveal 基础目视结果；不改变 `explorer.exe` backend，不升级
+  status。
+- UNC、missing path、焦点行为和非交互/多用户会话仍未验证；`explorer.exe` exit code 仍不能作为唯一判断。
+
 Phase 10bc Windows IPC/lifecycle capability diagnostics 已完成：
 
 - Windows `ipc.transport` 和 `daemon.single_instance` capability reason 从旧的

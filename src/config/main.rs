@@ -102,6 +102,7 @@ pub struct DevCfg {
 #[serde(rename_all = "lowercase")]
 pub enum VoiceVadBackend {
     Off,
+    Energy,
     Silero,
 }
 
@@ -695,14 +696,14 @@ trigger = "f16"
     }
 
     #[test]
-    fn voice_vad_can_parse_silero_settings() {
+    fn voice_vad_can_parse_settings() {
         let cfg: Config = toml::from_str(
             r#"
 [hotkey]
 trigger = "f16"
 
 [voice.vad]
-backend = "silero"
+backend = "energy"
 threshold = 0.42
 pause_silence_ms = 1200
 pre_roll_ms = 250
@@ -712,7 +713,7 @@ min_start_voiced_frames = 3
         )
         .unwrap();
 
-        assert_eq!(cfg.voice.vad.backend, VoiceVadBackend::Silero);
+        assert_eq!(cfg.voice.vad.backend, VoiceVadBackend::Energy);
         assert!((cfg.voice.vad.threshold - 0.42).abs() < 1e-6);
         assert_eq!(cfg.voice.vad.pause_silence_ms, 1200);
         assert_eq!(cfg.voice.vad.pre_roll_ms, 250);

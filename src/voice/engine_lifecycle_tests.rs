@@ -152,6 +152,10 @@ fn signal_frame(len: usize) -> Vec<i16> {
     vec![1_000; len]
 }
 
+fn vad_speech_frame(len: usize) -> Vec<i16> {
+    vec![8_000; len]
+}
+
 fn make_recorder() -> (RecordingStream, mpsc::UnboundedSender<Vec<i16>>) {
     let (tx, rx) = mpsc::unbounded_channel();
     (RecordingStream::for_test(rx), tx)
@@ -171,7 +175,7 @@ fn make_params(
         finalize_timeout_ms,
         vad: VoiceVadCfg {
             backend: if idle_pause {
-                VoiceVadBackend::Silero
+                VoiceVadBackend::Energy
             } else {
                 VoiceVadBackend::Off
             },
@@ -363,7 +367,6 @@ async fn provider_done_during_stop_drain_skips_finalize() {
 
 /// VadPause + provider 主动 Done：当前实现重复 finalize 并触发 asr_timeout。
 /// 修复后：跳过 finalize，进入 Idle，stop 后 1 个 session、无错误。
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn vad_pause_provider_done_does_not_double_finalize() {
     let (event_tx, event_rx) = mpsc::channel(8);
@@ -384,7 +387,7 @@ async fn vad_pause_provider_done_does_not_double_finalize() {
     let control = SessionControl::new();
     let (rec, pcm_tx) = make_recorder();
 
-    pcm_tx.send(signal_frame(480)).unwrap();
+    pcm_tx.send(vad_speech_frame(512)).unwrap();
 
     let engine_task = tokio::spawn(drive_engine(
         provider.clone(),

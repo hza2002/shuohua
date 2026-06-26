@@ -18,6 +18,23 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10bo Windows energy VAD backend 已完成：
+
+- 目标是在不引入 `voice_activity_detector`/ONNX Runtime 构建期下载的前提下，先让 Windows 能验证共享
+  VadPause 状态机：Active/Idle、pre-roll、overlap、provider resume、meter、trace 和 history sessions。
+- `[voice.vad] backend = "energy"` 是 dependency-free 的本地 RMS 能量门限 backend；它用于 Windows-first
+  runtime parity，不等价于最终 Silero/ONNX VAD 质量。
+- `[voice.vad] backend = "silero"` 在 Windows 仍保持不可用 fallback，直到 ONNX Runtime / Windows ML
+  模型和 DLL 供应策略被单独设计、实现、验证。
+- 本阶段新增跨平台 engine lifecycle 覆盖：`vad_pause_provider_done_does_not_double_finalize` 现在在
+  Windows target 下通过 `energy` backend 验证 VadPause provider-Done 不重复 finalize。
+- 验证已通过：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、
+  `cargo test --target x86_64-pc-windows-msvc`、`cargo build --target x86_64-pc-windows-msvc`、Windows
+  target 精确 VAD/config/platform guard 测试。
+- 下一步：让用户把 Windows `%APPDATA%\Shuohua\config.toml` 的 `[voice.vad] backend` 改为 `energy`，
+  并用真实麦克风手动验证多段语音/停顿能在 history `asr.sessions` 中体现；通过前不要升级 VAD
+  capability。
+
 Phase 10bl Windows retained-audio IPC deletion smoke 已完成：
 
 - Windows target 下新增 IPC server 层 retained-audio 删除测试，覆盖 `Command::DeleteAudio` 通过

@@ -269,9 +269,15 @@ dependency.
 
 Silero VAD / ONNX Runtime is also not provisioned on Windows in the current build/test phase. Windows builds
 use the local Silero unavailable stub and do not compile `voice_activity_detector` until the ONNX Runtime
-distribution and MSVC toolchain compatibility are designed and validated. If a provider profile enables
-`idle_pause`, Windows selects Continuous recording instead of VadPause while Silero is unavailable. This does
-not promote Windows audio or VAD capability.
+distribution and MSVC toolchain compatibility are designed and validated. If `[voice.vad] backend = "silero"`
+and a provider profile enables `idle_pause`, Windows selects Continuous recording while Silero is unavailable.
+
+Windows now has a dependency-free `[voice.vad] backend = "energy"` route for Phase 10bo runtime validation. It
+uses the same Active/Idle, pre-roll, overlap, ASR session resume, meter, trace, and history session machinery as
+Silero, but its frame decision is a simple RMS energy threshold. This backend is acceptable for proving Windows
+VAD lifecycle behavior without build-time ONNX downloads; it must not be treated as final Silero-quality VAD.
+Future high-quality Windows VAD should use an explicitly provisioned ONNX Runtime or Windows ML backend with a
+documented DLL/model distribution strategy. This does not promote Windows audio or VAD capability to available.
 
 Stop point for user intervention:
 

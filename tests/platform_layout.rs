@@ -390,6 +390,62 @@ fn windows_audio_convert_capability_reports_optional_ffmpeg_backend() {
 }
 
 #[test]
+fn windows_energy_vad_backend_keeps_onnx_runtime_optional() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let config = std::fs::read_to_string(root.join("src/config/main.rs")).unwrap();
+    let schema = std::fs::read_to_string(root.join("src/config/schema.rs")).unwrap();
+    let voice_mod = std::fs::read_to_string(root.join("src/voice/mod.rs")).unwrap();
+    let engine = std::fs::read_to_string(root.join("src/voice/engine.rs")).unwrap();
+    let energy = std::fs::read_to_string(root.join("src/voice/energy_vad.rs")).unwrap();
+    let lifecycle =
+        std::fs::read_to_string(root.join("src/voice/engine_lifecycle_tests.rs")).unwrap();
+    let windows_doc = std::fs::read_to_string(root.join("docs/cross-platform/windows.md")).unwrap();
+    let voice_doc = std::fs::read_to_string(root.join("docs/modules/voice.md")).unwrap();
+
+    for token in [
+        "VoiceVadBackend",
+        "Energy",
+        "allowed_values([\"off\", \"energy\", \"silero\"])",
+    ] {
+        assert!(
+            config.contains(token) || schema.contains(token),
+            "VAD config/schema should expose energy backend token `{token}`"
+        );
+    }
+
+    for token in [
+        "pub(crate) mod energy_vad",
+        "struct EnergyVad",
+        "speech_probability",
+        "VoiceVadBackend::Energy => true",
+        "enum VadRuntime",
+        "Energy(crate::voice::energy_vad::EnergyVad)",
+        "VoiceVadBackend::Energy",
+    ] {
+        assert!(
+            voice_mod.contains(token)
+                || energy.contains(token)
+                || engine.contains(token)
+                || lifecycle.contains(token),
+            "Windows energy VAD implementation should contain token `{token}`"
+        );
+    }
+
+    for token in [
+        "[voice.vad] backend = \"energy\"",
+        "dependency-free",
+        "simple RMS energy threshold",
+        "must not be treated as final Silero-quality VAD",
+        "Silero/ONNX runtime",
+    ] {
+        assert!(
+            windows_doc.contains(token) || voice_doc.contains(token),
+            "docs should record Windows energy VAD boundary token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn shared_macos_adapters_live_under_platform_module() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for file in [

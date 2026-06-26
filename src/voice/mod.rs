@@ -9,6 +9,7 @@
 pub(crate) mod audio;
 pub(crate) mod capture;
 pub mod dispatch;
+pub(crate) mod energy_vad;
 pub(crate) mod engine;
 #[cfg(test)]
 mod engine_lifecycle_tests;

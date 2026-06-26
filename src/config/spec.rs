@@ -542,7 +542,7 @@ mod tests {
             .field(
                 FieldSpec::string("voice.vad.backend")
                     .default("off")
-                    .allowed_values(["off", "silero"]),
+                    .allowed_values(["off", "energy", "silero"]),
             );
         let value: toml::Value = toml::toml! {
             [hotkey]

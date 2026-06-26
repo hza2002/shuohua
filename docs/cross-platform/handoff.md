@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: probe windows overlay dwm backdrop`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `fix: disable windows overlay dwm backdrop`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: draw windows overlay state icons` (`2c4d641`).
+Previous phase commit: `feat: probe windows overlay dwm backdrop` (`34c9cb6`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,15 +18,21 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10ax Windows overlay DWM backdrop disabled 已完成：
+
+- 用户目视发现 DWM backdrop probe 后圆角矩形外出现未知背景图像。
+- 判断为 DWM rectangular backdrop 与当前 `WS_EX_LAYERED` / `UpdateLayeredWindow` per-pixel rounded surface
+  组合不干净；圆角外边界必须优先保证透明。
+- 已禁用 `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW` 路线，Windows overlay 回到 Direct2D
+  per-pixel translucent surface。
+- 后续若继续做 blur/material，应评估 DirectComposition/Windows Composition 等能同时控制 blur、rounded
+  clipping 和文字合成的路线；不要在当前 layered window 上继续堆 DWM backdrop 参数。
+
 Phase 10aw Windows overlay DWM backdrop probe 已完成：
 
-- Windows overlay 创建后会 best-effort 请求 `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW`，即
+- Windows overlay 曾尝试 best-effort 请求 `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW`，即
   Windows 11 短生命周期窗口 / Desktop Acrylic-style backdrop 路线，并请求 immersive dark mode。
-- 该 probe 不新增配置项；material 仍是 renderer-owned `auto` 行为。
-- DWM 对 layered/no-activate/tool overlay window 可能忽略或拒绝 backdrop；失败时继续使用当前
-  Direct2D per-pixel translucent surface，daemon 启动和 overlay 可见性不受影响。
-- Capability 不升级：`overlay.material` 仍保持 degraded，直到用户在 Windows 11/10 上目视确认
-  backdrop 是否实际生效，并记录 fullscreen/UAC/multi-monitor 行为。
+- 该 probe 后续在 Phase 10ax 被禁用；不要把 Phase 10aw 当作当前启用状态。
 
 Phase 10av Windows overlay state icons 已完成：
 

@@ -1281,38 +1281,37 @@ fn windows_overlay_records_dwm_backdrop_probe() {
     let capability_doc =
         std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
 
-    for token in [
+    for forbidden in [
         "Win32_Graphics_Dwm",
         "DwmSetWindowAttribute",
         "DWMWA_SYSTEMBACKDROP_TYPE",
         "DWMSBT_TRANSIENTWINDOW",
-        "TranslucentFallback",
     ] {
         assert!(
-            manifest.contains(token) || backend.contains(token),
-            "Windows DWM backdrop probe should contain token `{token}`"
+            !manifest.contains(forbidden) && !backend.contains(forbidden),
+            "Windows DWM backdrop route should stay disabled in code: `{forbidden}`"
         );
     }
 
     for token in [
-        "Windows Phase 10aw DWM Backdrop Probe",
-        "without adding user configuration",
-        "best-effort",
+        "Windows Phase 10aw DWM Backdrop Probe Disabled",
+        "unknown backdrop content outside the rounded overlay surface",
+        "DirectComposition/Windows Composition",
     ] {
         assert!(
             overlay_doc.contains(token),
-            "overlay DWM backdrop policy should document `{token}`"
+            "overlay DWM backdrop disable policy should document `{token}`"
         );
     }
 
     for token in [
-        "Phase 10aw Windows DWM Backdrop Probe",
+        "Phase 10aw Windows DWM Backdrop Probe Disabled",
         "does not change Windows overlay capability levels",
         "overlay.material",
     ] {
         assert!(
             capability_doc.contains(token),
-            "capability doc should preserve DWM fallback boundary `{token}`"
+            "capability doc should preserve disabled DWM boundary `{token}`"
         );
     }
 }

@@ -199,19 +199,18 @@ This is the correct foundation before evaluating Acrylic/Mica/DirectComposition:
 if the whole window is globally alpha-composited. It still is not a complete Liquid Glass equivalent; native backdrop,
 shadow, animation, focused-window anchoring, fullscreen/UAC behavior, and multi-monitor visual QA remain open.
 
-### Windows Phase 10aw DWM Backdrop Probe
+### Windows Phase 10aw DWM Backdrop Probe Disabled
 
-Phase 10aw adds an automatic material probe without adding user configuration:
+Phase 10aw tried the Windows 11 `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW` route and then disabled it:
 
-- The Win32 overlay requests `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW`, which is the Windows 11
-  short-lived-window / Desktop Acrylic-style backdrop route.
-- It also requests immersive dark mode so the DWM backdrop matches the dark translucent overlay baseline.
-- The request is best-effort. DWM may ignore or reject the backdrop for layered/tool/no-activate overlay windows,
-  older Windows builds, battery/performance settings, or system policy.
-- Failure keeps the existing Direct2D per-pixel translucent surface; it must not make the overlay invisible or
-  block daemon startup.
-- Do not expose a config field yet. Material selection remains renderer-owned `auto` behavior until real Windows
-  visual QA proves multiple stable user-selectable material routes.
+- Manual QA showed unknown backdrop content outside the rounded overlay surface.
+- The likely cause is a mismatch between DWM's rectangular backdrop layer and the current
+  `WS_EX_LAYERED` / `UpdateLayeredWindow` per-pixel rounded overlay surface.
+- The current renderer must prioritize a clean rounded boundary over blur. Windows therefore stays on the
+  Direct2D per-pixel translucent surface.
+- Do not expose a config field for this route. A future blur/material attempt should evaluate
+  DirectComposition/Windows Composition or another architecture that owns blur, rounded clipping, and text
+  composition in one pipeline.
 
 ### Linux
 

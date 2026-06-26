@@ -4,10 +4,6 @@ use std::os::windows::ffi::OsStrExt;
 use std::ptr::null_mut;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{GetLastError, COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Dwm::{
-    DwmSetWindowAttribute, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
-    DWMWA_USE_IMMERSIVE_DARK_MODE,
-};
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CreateFontW, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteObject,
     DrawTextW, Ellipse, EndPaint, FillRect, GetStockObject, InvalidateRect, LineTo, MoveToEx,
@@ -106,12 +102,6 @@ pub(super) fn renderer_capabilities() -> &'static [CapabilityStatus] {
     &WINDOWS_RENDERER_CAPABILITIES
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WindowsOverlayMaterial {
-    DwmTransientBackdrop,
-    TranslucentFallback,
-}
-
 pub(super) fn run(
     rx: OverlayReceiver,
     cfg: crate::config::theme::EffectiveOverlayCfg,
@@ -127,7 +117,6 @@ struct WindowsOverlay {
     visible: bool,
     quit: bool,
     direct2d: Option<direct2d::Direct2dRenderer>,
-    material: WindowsOverlayMaterial,
 }
 
 impl WindowsOverlay {
@@ -144,12 +133,10 @@ impl WindowsOverlay {
             visible: false,
             quit: false,
             direct2d: None,
-            material: WindowsOverlayMaterial::TranslucentFallback,
         });
         let raw = overlay.as_mut() as *mut Self;
         let hwnd = create_overlay_window(&overlay.cfg, raw)?;
         overlay.hwnd = hwnd;
-        overlay.material = apply_window_material(hwnd);
         overlay.direct2d = match direct2d::Direct2dRenderer::new(hwnd) {
             Ok(renderer) => Some(renderer),
             Err(error) => {
@@ -492,42 +479,6 @@ fn create_overlay_window(
 unsafe fn apply_window_alpha(hwnd: HWND, alpha: f64) {
     let alpha = (255.0 * alpha.clamp(0.0, 1.0)).round() as u8;
     SetLayeredWindowAttributes(hwnd, 0 as COLORREF, alpha, LWA_ALPHA);
-}
-
-fn apply_window_material(hwnd: HWND) -> WindowsOverlayMaterial {
-    let dark_mode: i32 = 1;
-    let backdrop = DWMSBT_TRANSIENTWINDOW;
-    let dark_ok = unsafe {
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
-            (&dark_mode as *const i32).cast(),
-            std::mem::size_of_val(&dark_mode) as u32,
-        )
-    };
-    let backdrop_ok = unsafe {
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_SYSTEMBACKDROP_TYPE as u32,
-            (&backdrop as *const i32).cast(),
-            std::mem::size_of_val(&backdrop) as u32,
-        )
-    };
-    if backdrop_ok >= 0 {
-        tracing::debug!(
-            dark_mode_hr = dark_ok,
-            backdrop_hr = backdrop_ok,
-            "Windows overlay DWM transient backdrop requested"
-        );
-        WindowsOverlayMaterial::DwmTransientBackdrop
-    } else {
-        tracing::debug!(
-            dark_mode_hr = dark_ok,
-            backdrop_hr = backdrop_ok,
-            "Windows overlay DWM transient backdrop unavailable; using translucent fallback"
-        );
-        WindowsOverlayMaterial::TranslucentFallback
-    }
 }
 
 unsafe fn apply_rounded_window_region(hwnd: HWND, width: i32, height: i32, radius: i32) {

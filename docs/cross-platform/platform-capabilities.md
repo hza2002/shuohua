@@ -365,17 +365,18 @@ Phase 10as changes Windows overlay compositing but does not upgrade capability l
   manual visual QA, native backdrop/shadow decisions, focused anchoring, fullscreen/UAC, and multi-monitor behavior
   are complete.
 
-## Phase 10aw Windows DWM Backdrop Probe
+## Phase 10aw Windows DWM Backdrop Probe Disabled
 
 Phase 10aw does not change Windows overlay capability levels:
 
-- The Windows overlay now best-effort requests `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW`, the DWM
-  transient-window/Desktop Acrylic-style backdrop route.
-- This is an automatic renderer-owned material probe, not a new user config field.
-- DWM may ignore or reject the backdrop for the current layered/no-activate/tool overlay window, older Windows
-  versions, or system policy.
-- The existing Direct2D per-pixel translucent surface remains the fallback, so `overlay.material` stays
-  `degraded/translucent_fallback_only` until manual visual QA proves a stable backdrop path.
+- The Windows overlay briefly tried `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW`.
+- Manual QA showed backdrop/desktop content outside the rounded overlay boundary, likely because DWM backdrop
+  composition remains rectangular while the current overlay uses `WS_EX_LAYERED` / `UpdateLayeredWindow` with
+  rounded per-pixel content.
+- The DWM backdrop route is disabled. The existing Direct2D per-pixel translucent surface remains the current
+  renderer path.
+- `overlay.material` stays `degraded/translucent_fallback_only`; future blur work should evaluate a composition
+  route that owns blur and rounded clipping together.
 
 ## Phase 10ah Windows Audio Capture Diagnostics
 

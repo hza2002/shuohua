@@ -241,6 +241,17 @@ Phase 10az improves placement correctness before focused-window anchoring:
 - Capability does not change: `overlay.window_anchor` remains degraded `screen_anchor_only` until focused-window
   geometry and multi-monitor visual QA are complete.
 
+### Windows Phase 10ba Shadow Tuning
+
+Phase 10ba tunes the Direct2D per-pixel shadow after manual QA reported the first shadow looked clean but too hard:
+
+- Shadow remains renderer-owned and config-free.
+- The Direct2D renderer now draws two passes: a wide low-alpha ambient shadow and a lower, narrower key shadow.
+- Each pass uses tapered per-layer alpha so the outer edge fades more gradually.
+- The shadow still lives inside the same premultiplied-alpha `UpdateLayeredWindow` surface as the panel and text.
+- Capability does not change: this is visual tuning of the translucent fallback, not blur, Acrylic/Mica, Liquid Glass
+  parity, or final visual QA.
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。

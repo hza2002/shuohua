@@ -32,9 +32,13 @@ use crate::overlay::{OverlayModel, OverlayState};
 
 const FONT_FAMILY: &str = "Segoe UI";
 const LOCALE: &str = "en-us";
-const SHADOW_LAYERS: usize = 5;
-const SHADOW_ALPHA: f32 = 0.11;
-const SHADOW_Y: f64 = 2.0;
+const AMBIENT_SHADOW_LAYERS: usize = 8;
+const AMBIENT_SHADOW_ALPHA: f32 = 0.045;
+const AMBIENT_SHADOW_SPREAD: f64 = 1.45;
+const KEY_SHADOW_LAYERS: usize = 5;
+const KEY_SHADOW_ALPHA: f32 = 0.055;
+const KEY_SHADOW_SPREAD: f64 = 1.15;
+const KEY_SHADOW_Y: f64 = 3.0;
 
 pub(super) struct Direct2dRenderer {
     hwnd: HWND,
@@ -214,30 +218,78 @@ impl Direct2dRenderer {
         radius: f32,
         metrics: WindowMetrics,
     ) -> Result<()> {
-        let y_offset = metrics.px(SHADOW_Y) as f32;
-        for layer in (1..=SHADOW_LAYERS).rev() {
-            let spread = metrics.px(layer as f64 * 1.7).max(1) as f32;
-            let alpha = SHADOW_ALPHA * (layer as f32 / SHADOW_LAYERS as f32).powf(1.7);
-            let brush = unsafe {
-                target
-                    .CreateSolidColorBrush(&color(0x000000, alpha), None)
-                    .context("CreateSolidColorBrush shadow")?
-            };
-            unsafe {
-                target.FillRoundedRectangle(
-                    &D2D1_ROUNDED_RECT {
-                        rect: D2D_RECT_F {
-                            left: panel.left - spread,
-                            top: panel.top - spread + y_offset,
-                            right: panel.right + spread,
-                            bottom: panel.bottom + spread + y_offset,
-                        },
-                        radiusX: radius + spread,
-                        radiusY: radius + spread,
+        self.draw_shadow_pass(
+            target,
+            ShadowPass {
+                panel,
+                radius,
+                layers: AMBIENT_SHADOW_LAYERS,
+                alpha: AMBIENT_SHADOW_ALPHA,
+                spread_step: AMBIENT_SHADOW_SPREAD,
+                y_offset: 0.0,
+                falloff: 2.2,
+            },
+            metrics,
+        )?;
+        self.draw_shadow_pass(
+            target,
+            ShadowPass {
+                panel,
+                radius,
+                layers: KEY_SHADOW_LAYERS,
+                alpha: KEY_SHADOW_ALPHA,
+                spread_step: KEY_SHADOW_SPREAD,
+                y_offset: KEY_SHADOW_Y,
+                falloff: 1.8,
+            },
+            metrics,
+        )?;
+        Ok(())
+    }
+
+    fn draw_shadow_pass(
+        &self,
+        target: &ID2D1DCRenderTarget,
+        pass: ShadowPass,
+        metrics: WindowMetrics,
+    ) -> Result<()> {
+        let y_offset = metrics.px(pass.y_offset) as f32;
+        for layer in (1..=pass.layers).rev() {
+            let spread = metrics.px(layer as f64 * pass.spread_step).max(1) as f32;
+            let alpha = shadow_layer_alpha(pass.alpha, layer, pass.layers, pass.falloff);
+            self.fill_shadow_layer(target, pass.panel, pass.radius, spread, y_offset, alpha)?;
+        }
+        Ok(())
+    }
+
+    fn fill_shadow_layer(
+        &self,
+        target: &ID2D1DCRenderTarget,
+        panel: D2D_RECT_F,
+        radius: f32,
+        spread: f32,
+        y_offset: f32,
+        alpha: f32,
+    ) -> Result<()> {
+        let brush = unsafe {
+            target
+                .CreateSolidColorBrush(&color(0x000000, alpha), None)
+                .context("CreateSolidColorBrush shadow")?
+        };
+        unsafe {
+            target.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: D2D_RECT_F {
+                        left: panel.left - spread,
+                        top: panel.top - spread + y_offset,
+                        right: panel.right + spread,
+                        bottom: panel.bottom + spread + y_offset,
                     },
-                    &brush,
-                );
-            }
+                    radiusX: radius + spread,
+                    radiusY: radius + spread,
+                },
+                &brush,
+            );
         }
         Ok(())
     }
@@ -400,6 +452,17 @@ impl Direct2dRenderer {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Copy)]
+struct ShadowPass {
+    panel: D2D_RECT_F,
+    radius: f32,
+    layers: usize,
+    alpha: f32,
+    spread_step: f64,
+    y_offset: f64,
+    falloff: f32,
 }
 
 fn inset_rect(rect: D2D_RECT_F, inset: i32) -> D2D_RECT_F {
@@ -619,6 +682,13 @@ fn color(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
     }
 }
 
+fn shadow_layer_alpha(alpha: f32, layer: usize, layers: usize, falloff: f32) -> f32 {
+    if layers == 0 {
+        return 0.0;
+    }
+    alpha * (layer as f32 / layers as f32).powf(falloff)
+}
+
 fn utf16(text: &str) -> Vec<u16> {
     OsStr::new(text).encode_wide().collect()
 }
@@ -666,5 +736,14 @@ mod tests {
         assert_eq!(rect.top, 12.0);
         assert_eq!(rect.right, 21.0);
         assert_eq!(rect.bottom, 32.0);
+    }
+
+    #[test]
+    fn shadow_layer_alpha_tapers_outer_layers() {
+        let inner = shadow_layer_alpha(0.1, 5, 5, 2.0);
+        let outer = shadow_layer_alpha(0.1, 1, 5, 2.0);
+
+        assert!((inner - 0.1).abs() < 0.001);
+        assert!(outer < 0.01);
     }
 }

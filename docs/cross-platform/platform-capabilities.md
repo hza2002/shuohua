@@ -400,6 +400,16 @@ Phase 10az does not change Windows overlay capability levels:
 - `overlay.window_anchor` remains `degraded/screen_anchor_only` until focused anchoring and multi-monitor visual QA
   are complete.
 
+## Phase 10ba Windows Shadow Tuning
+
+Phase 10ba does not change Windows overlay capability levels:
+
+- Manual QA reported the first per-pixel shadow was clean but too hard.
+- The Direct2D renderer now uses separate ambient and key shadow passes with tapered layer alpha.
+- Shadow parameters remain renderer-owned and are not exposed as user configuration.
+- `overlay.material` stays `degraded/translucent_fallback_only`; this phase is visual tuning, not blur,
+  Acrylic/Mica, Liquid Glass parity, or final visual QA.
+
 ## Phase 10ah Windows Audio Capture Diagnostics
 
 Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：

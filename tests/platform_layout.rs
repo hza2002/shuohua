@@ -1338,8 +1338,11 @@ fn windows_overlay_records_per_pixel_shadow_polish() {
     }
 
     for token in [
-        "SHADOW_LAYERS",
-        "SHADOW_ALPHA",
+        "AMBIENT_SHADOW_LAYERS",
+        "AMBIENT_SHADOW_ALPHA",
+        "KEY_SHADOW_LAYERS",
+        "KEY_SHADOW_ALPHA",
+        "shadow_layer_alpha",
         "draw_shadow",
         "inset_rect",
         "UpdateLayeredWindow",

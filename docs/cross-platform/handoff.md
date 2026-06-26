@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `fix: anchor windows overlay to foreground monitor`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `fix: soften windows overlay shadow`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: draw windows overlay per-pixel shadow` (`4508204`).
+Previous phase commit: `fix: anchor windows overlay to foreground monitor` (`a072691`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,16 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10ba Windows shadow tuning 已完成：
+
+- 用户目视反馈 Phase 10ay 阴影“很干净但是有点生硬”。
+- Windows Direct2D shadow 改为两组 renderer-owned pass：wide low-alpha ambient shadow + lower/narrower key
+  shadow，并用 tapered per-layer alpha 让外缘更柔和。
+- `DIRECT2D_SHADOW_OUTSET` 从 10 logical px 增至 14 logical px，给更宽 ambient shadow 留透明 surface 空间。
+- 未新增用户配置项，未升级 capability：`overlay.material` 仍是 degraded translucent fallback；这不是 blur/
+  Acrylic/Mica/Liquid Glass parity。
+- 用户当前没有音频设备；继续开发时优先做不依赖麦克风的 overlay/diagnostics/service/IPC/config 小步。
+
 Phase 10az Windows foreground monitor work area 已完成：
 
 - Windows overlay placement 现在优先用 foreground window 的 nearest monitor work area：

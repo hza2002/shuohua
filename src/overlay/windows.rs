@@ -37,7 +37,7 @@ mod direct2d;
 const CLASS_NAME: &str = "ShuohuaOverlayWindow";
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const DEFAULT_DPI: f64 = 96.0;
-pub(super) const DIRECT2D_SHADOW_OUTSET: f64 = 10.0;
+pub(super) const DIRECT2D_SHADOW_OUTSET: f64 = 14.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct WindowMetrics {
@@ -927,7 +927,7 @@ mod tests {
             panel.w as i32 + outset * 2,
             metrics.px(cfg.core.width) + outset * 2
         );
-        assert_eq!(outset, 15);
+        assert_eq!(outset, 21);
     }
 
     #[test]

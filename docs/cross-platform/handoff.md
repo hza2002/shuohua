@@ -47,11 +47,15 @@ Phase 10bj Windows optional retained-audio conversion 已完成：
   recording 生成并回放 `.flac`/`.m4a` 前不能升级为 available。
 - 本机 `where.exe ffmpeg` 命中 `C:\Users\hza2002\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe`，ignored
   runtime smoke 已验证 ffmpeg 能把测试 WAV 生成 FLAC 和 M4A。
+- Windows retained-audio finish smoke
+  `voice::audio::tests::ffmpeg_finish_creates_retained_audio_and_removes_temporary_wav` 已通过，覆盖
+  `prepare -> tmp.wav -> finish -> final .flac/.m4a -> temp cleanup` 路径。
 - 顺手修正了 overlay 文档/guard 的陈旧描述：当前 DirectWrite path 使用 `Microsoft YaHei UI` 和
   `ID2D1DCRenderTarget`/DIB per-pixel route；这不是继续打磨 overlay，只是让文档/测试与当前 baseline 一致。
 - 验证已通过：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、
   `cargo test --target x86_64-pc-windows-msvc`、`cargo build --target x86_64-pc-windows-msvc`、
-  `cargo test --target x86_64-pc-windows-msvc platform::audio_convert`、Windows ffmpeg ignored runtime smoke。
+  `cargo test --target x86_64-pc-windows-msvc platform::audio_convert`、Windows ffmpeg ignored runtime smoke、
+  Windows retained-audio finish ignored runtime smoke。
 - 下一步建议：继续非 overlay 能力闭环，优先做 full Windows recording retained-audio smoke
   (`voice.record_audio=lossless/compact`) 或检查 TUI/history/audio deletion/open path 在 Windows 的真实行为；
   overlay modernization 和 cross-user 仍 deferred。

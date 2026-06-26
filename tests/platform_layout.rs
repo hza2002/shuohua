@@ -334,6 +334,7 @@ fn windows_audio_convert_capability_reports_optional_ffmpeg_backend() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
     let facade = std::fs::read_to_string(root.join("src/platform/audio_convert.rs")).unwrap();
+    let voice_audio = std::fs::read_to_string(root.join("src/voice/audio.rs")).unwrap();
     let platform_doc =
         std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
     let windows_doc = std::fs::read_to_string(root.join("docs/cross-platform/windows.md")).unwrap();
@@ -356,10 +357,11 @@ fn windows_audio_convert_capability_reports_optional_ffmpeg_backend() {
         "ffmpeg_args",
         "retain audio on Windows",
         "ffmpeg_runtime_smoke_creates_flac_and_m4a",
+        "ffmpeg_finish_creates_retained_audio_and_removes_temporary_wav",
     ] {
         assert!(
-            facade.contains(token),
-            "Windows audio conversion facade should contain token `{token}`"
+            facade.contains(token) || voice_audio.contains(token),
+            "Windows retained audio code should contain token `{token}`"
         );
     }
 
@@ -367,6 +369,7 @@ fn windows_audio_convert_capability_reports_optional_ffmpeg_backend() {
         "Phase 10bj Windows Optional FFmpeg Retained Audio Backend",
         "`partial`，backend `ffmpeg_external`，reason `external_ffmpeg_optional`",
         "不打包 ffmpeg",
+        "ffmpeg_finish_creates_retained_audio_and_removes_temporary_wav",
     ] {
         assert!(
             platform_doc.contains(token),

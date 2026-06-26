@@ -233,4 +233,31 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    #[cfg(target_os = "windows")]
+    #[ignore = "requires ffmpeg on PATH; run only during Windows retained-audio runtime smoke"]
+    #[test]
+    fn ffmpeg_finish_creates_retained_audio_and_removes_temporary_wav() {
+        for (mode, extension) in [
+            (RecordAudioMode::Lossless, "flac"),
+            (RecordAudioMode::Compact, "m4a"),
+        ] {
+            let dir =
+                std::env::temp_dir().join(format!("shuohua-audio-finish-{}", ulid::Ulid::new()));
+            let output = prepare_in_dir(&dir, "01HXYZ", mode).unwrap().unwrap();
+            write_test_wav(&output.wav_path);
+            let wav = output.wav_path.clone();
+            let temp = output.temp_path.clone();
+
+            let final_path = output.finish().unwrap();
+
+            assert_eq!(final_path, dir.join(format!("01HXYZ.{extension}")));
+            assert!(final_path.is_file());
+            assert!(std::fs::metadata(&final_path).unwrap().len() > 0);
+            assert!(!wav.exists());
+            assert!(!temp.exists());
+
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 }

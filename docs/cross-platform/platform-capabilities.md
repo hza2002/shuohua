@@ -195,6 +195,9 @@ Windows retained audio conversion now has a pragmatic optional backend:
 - 本阶段不新增配置项，不打包 ffmpeg，不安装外部依赖；缺少 ffmpeg 时 retained audio 保存失败并清理临时
   WAV/目标文件。
 - 文本 dispatch、clipboard/paste 和 history append 不能依赖 retained audio conversion 成功。
+- Windows ignored runtime smoke
+  `voice::audio::tests::ffmpeg_finish_creates_retained_audio_and_removes_temporary_wav` 已验证
+  `prepare -> tmp.wav -> finish -> final .flac/.m4a -> temp cleanup` 路径能通过 ffmpeg 完成。
 - 在 full Windows recording session 验证 `.flac` / `.m4a` 生成和回放之前，不能把 capability 升级为
   `available`。
 

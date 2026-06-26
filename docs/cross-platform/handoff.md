@@ -31,6 +31,22 @@ Phase 10bl Windows retained-audio IPC deletion smoke 已完成：
 - 下一步建议：继续非 overlay 能力闭环；可做 full Windows recording retained-audio manual smoke，或继续补
   history/audio open/reveal、route/clipboard/paste 的可自动 Windows guard。
 
+Phase 10bm Windows full FLAC retained-audio recording smoke 已验证：
+
+- 用户在 Windows 本机完成多段真实麦克风录音；本 session 复核 `%LOCALAPPDATA%\Shuohua\audio` 下存在
+  `01KW2NRZ209KWYV6JFNCJK92HF.flac`、`01KW2NSYTQH9YT3KKYWFT9BQX7.flac`、
+  `01KW2NTNGFQ360YZR8BXP9JDPE.flac`。
+- 对应 history shard `%LOCALAPPDATA%\Shuohua\history\2026-06.jsonl` 中三条记录均为 `submitted`，
+  provider 为 `doubao`，`audio_ms` 分别约 5.86s、21.43s、20.01s，文本内容与用户刚才录音相符。
+- 当前生效配置仍是 `[voice] record_audio = "lossless"`，因此该 smoke 验证的是 full recording -> FLAC
+  retained audio，不验证 compact/M4A full recording。
+- Windows compact/M4A backend 仍已通过自动 ignored smoke：
+  `platform::audio_convert::imp::tests::ffmpeg_runtime_smoke_creates_flac_and_m4a` 和
+  `voice::audio::tests::ffmpeg_finish_creates_retained_audio_and_removes_temporary_wav`；full recording
+  compact 模式还需要把 `record_audio = "compact"` 后再手动录一段确认 `.m4a`。
+- VAD/Silero 仍未在 Windows 完成：Windows 当前因 ONNX Runtime provisioning 未定义而退回 Continuous
+  recording；不要把 Windows VAD 或 `idle_pause` 视为完成。
+
 Phase 10bk Windows AppUserModelID active app identity 已完成：
 
 - Windows `platform::desktop::frontmost_app()` 现在在 foreground window owner process 上同时尝试

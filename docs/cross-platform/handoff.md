@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `fix: scale overlay frames with text size`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: draw windows overlay state icons`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: add overlay size preferences` (`4efe794`).
+Previous phase commit: `fix: flip windows overlay frame coordinates` (`1bac1e6`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,15 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10av Windows overlay state icons 已完成：
+
+- `overlay.text_scale` 允许范围扩大为 `0.8..=2.4`，schema 和 runtime layout clamp 使用同一组常量。
+- Windows overlay 的预留 icon 列现在会绘制状态 glyph；GDI fallback 和 Direct2D renderer 都使用
+  renderer 自绘形状，不依赖 SF Symbols、SF Pro、Segoe Fluent Icons codepoint 或用户额外安装字体。
+- macOS 继续使用 SF Symbols 系统能力；Windows 不追求复刻 SF Symbols 名称，先保证状态语义、可读性和
+  无额外字体依赖。
+- 本阶段不升级 overlay capability；Windows icon 仍需要用户目视确认大小、对齐和高分屏观感。
+
 Phase 10au Overlay shared scaled layout 已完成：
 
 - `overlay.text_scale` 现在不是单独放大字体；共享 `overlay::layout::overlay_frames(...)` 会同时推导

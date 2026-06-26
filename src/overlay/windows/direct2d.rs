@@ -28,7 +28,7 @@ use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 
 use super::{to_colorref, wide_null, WindowMetrics};
 use crate::overlay::layout as L;
-use crate::overlay::OverlayModel;
+use crate::overlay::{OverlayModel, OverlayState};
 
 const FONT_FAMILY: &str = "Segoe UI";
 const LOCALE: &str = "en-us";
@@ -112,6 +112,13 @@ impl Direct2dRenderer {
                 true,
             )?;
 
+            self.draw_state_icon(
+                &surface.target,
+                metrics.rect_f_from_frame(frames.height, frames.row.icon),
+                model.state,
+                model.state_color,
+            )?;
+
             self.draw_text(
                 &surface.target,
                 &state_format,
@@ -172,6 +179,88 @@ impl Direct2dRenderer {
         }
 
         surface.update_window(self.hwnd)?;
+        Ok(())
+    }
+
+    fn draw_state_icon(
+        &self,
+        target: &ID2D1DCRenderTarget,
+        rect: D2D_RECT_F,
+        state: OverlayState,
+        rgb: u32,
+    ) -> Result<()> {
+        let brush = unsafe {
+            target
+                .CreateSolidColorBrush(&color(rgb, 1.0), None)
+                .context("CreateSolidColorBrush state icon")?
+        };
+        let white = unsafe {
+            target
+                .CreateSolidColorBrush(&color(0xffffff, 1.0), None)
+                .context("CreateSolidColorBrush state icon mark")?
+        };
+        let size = (rect.right - rect.left)
+            .min(rect.bottom - rect.top)
+            .max(1.0);
+        let cx = (rect.left + rect.right) / 2.0;
+        let cy = (rect.top + rect.bottom) / 2.0;
+        let r = (size / 2.0 - 3.0).max(3.0);
+
+        unsafe {
+            match state {
+                OverlayState::Idle | OverlayState::Connecting => {
+                    fill_round_rect(target, square(cx, cy, r), r, &brush);
+                }
+                OverlayState::Recording => {
+                    let bar_w = (size / 7.0).max(2.0);
+                    let gap = (bar_w / 2.0).max(1.0);
+                    for (idx, h) in [r, r * 2.0, r * 1.5].into_iter().enumerate() {
+                        let x = cx - bar_w - gap + idx as f32 * (bar_w + gap);
+                        fill_round_rect(
+                            target,
+                            D2D_RECT_F {
+                                left: x,
+                                top: cy - h / 2.0,
+                                right: x + bar_w,
+                                bottom: cy + h / 2.0,
+                            },
+                            bar_w / 2.0,
+                            &brush,
+                        );
+                    }
+                }
+                OverlayState::Thinking => {
+                    let dot_r = (r / 3.0).max(2.0);
+                    for (x, y) in [(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)] {
+                        fill_round_rect(target, square(x, y, dot_r), dot_r, &brush);
+                    }
+                }
+                OverlayState::Stopping => {
+                    fill_round_rect(target, square(cx, cy, r), 2.0, &brush);
+                }
+                OverlayState::Error => {
+                    fill_round_rect(target, square(cx, cy, r), 3.0, &brush);
+                    target.FillRectangle(
+                        &D2D_RECT_F {
+                            left: cx - 1.0,
+                            top: cy - r / 2.0,
+                            right: cx + 1.0,
+                            bottom: cy + r / 4.0,
+                        },
+                        &white,
+                    );
+                    target.FillRectangle(
+                        &D2D_RECT_F {
+                            left: cx - 1.0,
+                            top: cy + r / 2.0,
+                            right: cx + 1.0,
+                            bottom: cy + r / 2.0 + 2.0,
+                        },
+                        &white,
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -251,6 +340,31 @@ impl Direct2dRenderer {
         }
         Ok(())
     }
+}
+
+fn square(cx: f32, cy: f32, radius: f32) -> D2D_RECT_F {
+    D2D_RECT_F {
+        left: cx - radius,
+        top: cy - radius,
+        right: cx + radius,
+        bottom: cy + radius,
+    }
+}
+
+unsafe fn fill_round_rect(
+    target: &ID2D1DCRenderTarget,
+    rect: D2D_RECT_F,
+    radius: f32,
+    brush: &windows::Win32::Graphics::Direct2D::ID2D1SolidColorBrush,
+) {
+    target.FillRoundedRectangle(
+        &D2D1_ROUNDED_RECT {
+            rect,
+            radiusX: radius,
+            radiusY: radius,
+        },
+        brush,
+    );
 }
 
 struct LayeredSurface {

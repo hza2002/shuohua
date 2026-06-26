@@ -35,7 +35,9 @@ text_scale = 1.0
 ```
 
 Renderer 使用 `width` 和 `text_scale` 推导每行容量、行高和实际高度；不暴露 `height` 或
-`chars_per_line`，避免这些字段与 `max_text_lines` / 字体渲染产生冲突。
+`chars_per_line`，避免这些字段与 `max_text_lines` / 字体渲染产生冲突。`text_scale` 接受
+`0.8..=2.4`，用于高分屏和可访问性场景；超过该范围应通过系统缩放或后续平台显示设置解决，
+不要让单个 overlay 字段变成无限制缩放。
 
 Profile 内容三端共享，route matcher 按平台分段。`profile.routes` 使用 profile 名作为动态 key，
 每个 profile 下只读取当前平台段；同一 app identity 命中多个 profile 是配置错误：

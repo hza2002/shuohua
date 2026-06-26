@@ -5,11 +5,12 @@ use std::ptr::null_mut;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{GetLastError, COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, DrawTextW,
-    EndPaint, FillRect, GetStockObject, InvalidateRect, SelectObject, SetBkMode, SetTextColor,
-    SetWindowRgn, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_END_ELLIPSIS,
-    DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_TOP, DT_WORDBREAK, FF_DONTCARE, FW_BOLD, FW_NORMAL,
-    HBRUSH, HDC, HGDIOBJ, HRGN, OUT_DEFAULT_PRECIS, PAINTSTRUCT, TRANSPARENT, WHITE_BRUSH,
+    BeginPaint, CreateFontW, CreatePen, CreateRoundRectRgn, CreateSolidBrush, DeleteObject,
+    DrawTextW, Ellipse, EndPaint, FillRect, GetStockObject, InvalidateRect, LineTo, MoveToEx,
+    Polygon, Rectangle, SelectObject, SetBkMode, SetTextColor, SetWindowRgn, CLEARTYPE_QUALITY,
+    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE,
+    DT_TOP, DT_WORDBREAK, FF_DONTCARE, FW_BOLD, FW_NORMAL, HBRUSH, HDC, HGDIOBJ, HRGN,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, TRANSPARENT, WHITE_BRUSH,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
@@ -25,7 +26,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::overlay::layout as L;
-use crate::overlay::{OverlayCmd, OverlayModel, OverlayReceiver};
+use crate::overlay::{OverlayCmd, OverlayModel, OverlayReceiver, OverlayState};
 use crate::platform::capability::{
     CapabilityId, CapabilityStatus, CapabilityStatusKind, PlatformKind,
 };
@@ -302,6 +303,12 @@ impl WindowsOverlay {
         let state_font = create_ui_font(metrics, L::scaled_font_size(13.0, text_scale), true);
         let meta_font = create_ui_font(metrics, L::scaled_font_size(12.0, text_scale), false);
         let body_font = create_ui_font(metrics, L::scaled_font_size(14.0, text_scale), false);
+        draw_state_icon_gdi(
+            hdc,
+            metrics.rect_from_frame(frames.height, frames.row.icon),
+            self.model.state,
+            self.model.state_color,
+        );
         let old_font = SelectObject(hdc, state_font);
         draw_text(
             hdc,
@@ -553,6 +560,87 @@ unsafe fn draw_text(hdc: HDC, rect: &mut RECT, text: &str, rgb: u32, format: u32
     SetTextColor(hdc, to_colorref(rgb));
     let wide = wide_null(text);
     DrawTextW(hdc, wide.as_ptr(), -1, rect, format);
+}
+
+unsafe fn draw_state_icon_gdi(hdc: HDC, rect: RECT, state: OverlayState, rgb: u32) {
+    let color = to_colorref(rgb);
+    let brush = CreateSolidBrush(color);
+    let pen = CreatePen(PS_SOLID, 2, color);
+    let old_brush = SelectObject(hdc, brush as HGDIOBJ);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+    let cx = (rect.left + rect.right) / 2;
+    let cy = (rect.top + rect.bottom) / 2;
+    let size = (rect.right - rect.left).min(rect.bottom - rect.top).max(1);
+    let r = (size / 2 - 3).max(3);
+
+    match state {
+        OverlayState::Idle | OverlayState::Connecting => {
+            Ellipse(hdc, cx - r, cy - r, cx + r, cy + r);
+        }
+        OverlayState::Recording => {
+            let bar_w = (size / 7).max(2);
+            let gap = (bar_w / 2).max(1);
+            for (idx, h) in [r, r * 2, r + r / 2].into_iter().enumerate() {
+                let x = cx - bar_w - gap + idx as i32 * (bar_w + gap);
+                Rectangle(hdc, x, cy - h / 2, x + bar_w, cy + h / 2);
+            }
+        }
+        OverlayState::Thinking => {
+            let points = [
+                windows_sys::Win32::Foundation::POINT { x: cx, y: cy - r },
+                windows_sys::Win32::Foundation::POINT {
+                    x: cx + r / 3,
+                    y: cy - r / 3,
+                },
+                windows_sys::Win32::Foundation::POINT { x: cx + r, y: cy },
+                windows_sys::Win32::Foundation::POINT {
+                    x: cx + r / 3,
+                    y: cy + r / 3,
+                },
+                windows_sys::Win32::Foundation::POINT { x: cx, y: cy + r },
+                windows_sys::Win32::Foundation::POINT {
+                    x: cx - r / 3,
+                    y: cy + r / 3,
+                },
+                windows_sys::Win32::Foundation::POINT { x: cx - r, y: cy },
+                windows_sys::Win32::Foundation::POINT {
+                    x: cx - r / 3,
+                    y: cy - r / 3,
+                },
+            ];
+            Polygon(hdc, points.as_ptr(), points.len() as i32);
+        }
+        OverlayState::Stopping => {
+            Rectangle(hdc, cx - r, cy - r, cx + r, cy + r);
+        }
+        OverlayState::Error => {
+            let points = [
+                windows_sys::Win32::Foundation::POINT { x: cx, y: cy - r },
+                windows_sys::Win32::Foundation::POINT {
+                    x: cx + r,
+                    y: cy + r,
+                },
+                windows_sys::Win32::Foundation::POINT {
+                    x: cx - r,
+                    y: cy + r,
+                },
+            ];
+            Polygon(hdc, points.as_ptr(), points.len() as i32);
+            let mark_pen = CreatePen(PS_SOLID, 2, to_colorref(0xffffff));
+            let old_mark_pen = SelectObject(hdc, mark_pen as HGDIOBJ);
+            MoveToEx(hdc, cx, cy - r / 2, std::ptr::null_mut());
+            LineTo(hdc, cx, cy + r / 4);
+            MoveToEx(hdc, cx, cy + r / 2, std::ptr::null_mut());
+            LineTo(hdc, cx, cy + r / 2 + 1);
+            SelectObject(hdc, old_mark_pen);
+            DeleteObject(mark_pen as HGDIOBJ);
+        }
+    }
+
+    SelectObject(hdc, old_pen);
+    SelectObject(hdc, old_brush);
+    DeleteObject(pen as HGDIOBJ);
+    DeleteObject(brush as HGDIOBJ);
 }
 
 unsafe fn create_ui_font(metrics: WindowMetrics, point_size: f64, bold: bool) -> HGDIOBJ {

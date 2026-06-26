@@ -648,6 +648,19 @@ text_scale        = 1.12
     }
 
     #[test]
+    fn overlay_text_scale_accepts_large_accessibility_values() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+
+[overlay]
+text_scale = 2.0
+"#;
+        let cfg = parse(body).unwrap();
+        assert_eq!(cfg.overlay.text_scale, 2.0);
+    }
+
+    #[test]
     fn rejects_removed_overlay_thinking_delay_ms() {
         let error = parse(
             r#"
@@ -764,7 +777,7 @@ threshold = 1.5
 [overlay]
 max_text_lines = 0
 width = 2000
-text_scale = 0.1
+text_scale = 3.0
 "#,
         )
         .unwrap_err()

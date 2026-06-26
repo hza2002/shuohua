@@ -41,10 +41,12 @@ pub mod constants {
     pub const STATS_W: f64 = 220.0;
     pub const META_GAP: f64 = 8.0;
     pub const META_MIN_W: f64 = 180.0;
+    pub const MIN_TEXT_SCALE: f64 = 0.8;
+    pub const MAX_TEXT_SCALE: f64 = 2.4;
 }
 
 pub fn text_scale(value: f64) -> f64 {
-    value.clamp(0.8, 1.6)
+    value.clamp(constants::MIN_TEXT_SCALE, constants::MAX_TEXT_SCALE)
 }
 
 pub fn body_width(width: f64) -> f64 {

@@ -139,6 +139,9 @@ Phase 10ap fixes the first visual correctness layer before material polish:
   the common single-monitor case.
 - Windows text uses the platform UI font path (`Segoe UI`) at DPI-scaled point sizes. This is still a GDI baseline,
   not the final text renderer.
+- Windows status icons must not depend on SF Symbols or a bundled Apple font. The Windows renderer should use
+  platform-native drawing or Windows-provided assets; the current backend draws small state glyphs itself in GDI
+  fallback and Direct2D.
 - macOS does not hard-require JetBrains Mono or bundled SF Pro; the current AppKit renderer uses
   `NSFont::systemFontOfSize` / `boldSystemFontOfSize`.
 - Do not bundle SF Pro. If a monospace or branded fallback becomes necessary, use an optional font with suitable

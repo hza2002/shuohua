@@ -1073,10 +1073,18 @@ fn windows_overlay_records_dpi_and_font_baseline() {
         "Do not bundle SF Pro",
         "does not hard-require JetBrains Mono",
         "DirectWrite/Direct2D text quality",
+        "must not depend on SF Symbols",
     ] {
         assert!(
             overlay_doc.contains(token),
             "overlay font/DPI policy should document `{token}`"
+        );
+    }
+
+    for token in ["draw_state_icon_gdi", "OverlayState"] {
+        assert!(
+            backend.contains(token),
+            "Windows overlay should draw state icons without relying on SF Symbols via `{token}`"
         );
     }
 }

@@ -1,4 +1,5 @@
 use crate::config::spec::{ConfigSpec, FieldSpec};
+use crate::overlay::layout;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchemaId {
@@ -250,7 +251,10 @@ pub fn main_spec() -> ConfigSpec {
         .field(
             field(FieldSpec::float, "overlay.text_scale")
                 .optional()
-                .range(0.8, 1.6),
+                .range(
+                    layout::constants::MIN_TEXT_SCALE,
+                    layout::constants::MAX_TEXT_SCALE,
+                ),
         )
 }
 

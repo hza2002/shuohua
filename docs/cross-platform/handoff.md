@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `fix: disable windows overlay dwm backdrop`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: draw windows overlay per-pixel shadow`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `feat: probe windows overlay dwm backdrop` (`34c9cb6`).
+Previous phase commit: `fix: disable windows overlay dwm backdrop` (`ab14417`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,16 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10ay Windows Direct2D per-pixel shadow polish 已完成：
+
+- Windows Direct2D renderer 现在把 `UpdateLayeredWindow` per-pixel surface 扩大一个 renderer-owned shadow
+  outset，并把实际 panel/text/icon 绘制进 inset panel rect。
+- 阴影由 Direct2D 在同一 premultiplied-alpha surface 内分层绘制；圆角外透明像素、panel、文字和阴影保持
+  同一 renderer 管线控制，不重新启用 DWM backdrop。
+- GDI fallback 仍走旧的 tight rounded region，不尝试 shadow。
+- 未新增用户配置项，未升级 capability：`overlay.material` 仍是 degraded translucent fallback；这只是
+  surface polish，不是 blur/Liquid Glass parity。
+
 Phase 10ax Windows overlay DWM backdrop disabled 已完成：
 
 - 用户目视发现 DWM backdrop probe 后圆角矩形外出现未知背景图像。

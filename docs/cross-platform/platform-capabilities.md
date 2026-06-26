@@ -378,6 +378,17 @@ Phase 10aw does not change Windows overlay capability levels:
 - `overlay.material` stays `degraded/translucent_fallback_only`; future blur work should evaluate a composition
   route that owns blur and rounded clipping together.
 
+## Phase 10ay Windows Direct2D Per-Pixel Shadow Polish
+
+Phase 10ay does not change Windows overlay capability levels:
+
+- The Direct2D renderer draws a renderer-owned soft shadow inside the existing premultiplied-alpha
+  `UpdateLayeredWindow` surface, using an expanded transparent surface and inset panel rect.
+- This avoids the DWM backdrop route that polluted pixels outside the rounded overlay boundary.
+- GDI remains a fallback without shadow.
+- `overlay.material` stays `degraded/translucent_fallback_only`; this phase is surface polish, not blur,
+  Acrylic/Mica, Liquid Glass parity, or final visual QA.
+
 ## Phase 10ah Windows Audio Capture Diagnostics
 
 Windows `audio.capture` 在 Phase 10ah 只表达 cpal/WASAPI 诊断探针存在：

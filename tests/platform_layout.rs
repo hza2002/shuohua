@@ -1317,6 +1317,70 @@ fn windows_overlay_records_dwm_backdrop_probe() {
 }
 
 #[test]
+fn windows_overlay_records_per_pixel_shadow_polish() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let backend = std::fs::read_to_string(root.join("src/overlay/windows.rs")).unwrap();
+    let direct2d = std::fs::read_to_string(root.join("src/overlay/windows/direct2d.rs")).unwrap();
+    let overlay_doc = std::fs::read_to_string(root.join("docs/cross-platform/overlay.md")).unwrap();
+    let capability_doc =
+        std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
+
+    for token in [
+        "DIRECT2D_SHADOW_OUTSET",
+        "surface_outset",
+        "clear_window_region",
+        "if self.direct2d.is_none()",
+    ] {
+        assert!(
+            backend.contains(token),
+            "Windows overlay shell should keep Direct2D shadow inset boundary token `{token}`"
+        );
+    }
+
+    for token in [
+        "SHADOW_LAYERS",
+        "SHADOW_ALPHA",
+        "draw_shadow",
+        "inset_rect",
+        "UpdateLayeredWindow",
+    ] {
+        assert!(
+            direct2d.contains(token),
+            "Windows Direct2D shadow polish should contain token `{token}`"
+        );
+    }
+
+    for forbidden in ["DWMWA_SYSTEMBACKDROP_TYPE", "DwmSetWindowAttribute"] {
+        assert!(
+            !direct2d.contains(forbidden),
+            "Direct2D shadow polish must not re-enable DWM backdrop token `{forbidden}`"
+        );
+    }
+
+    for token in [
+        "Windows Phase 10ay Direct2D Per-Pixel Shadow Polish",
+        "renderer-owned shadow outset",
+        "not blur or Liquid Glass parity",
+    ] {
+        assert!(
+            overlay_doc.contains(token),
+            "overlay shadow polish policy should document `{token}`"
+        );
+    }
+
+    for token in [
+        "Phase 10ay Windows Direct2D Per-Pixel Shadow Polish",
+        "does not change Windows overlay capability levels",
+        "overlay.material",
+    ] {
+        assert!(
+            capability_doc.contains(token),
+            "capability doc should preserve shadow polish boundary `{token}`"
+        );
+    }
+}
+
+#[test]
 fn windows_active_app_identity_backend_lives_behind_desktop_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let windows_app_context = root.join("src/platform/windows/app_context.rs");

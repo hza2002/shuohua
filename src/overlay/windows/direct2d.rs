@@ -32,6 +32,9 @@ use crate::overlay::{OverlayModel, OverlayState};
 
 const FONT_FAMILY: &str = "Segoe UI";
 const LOCALE: &str = "en-us";
+const SHADOW_LAYERS: usize = 5;
+const SHADOW_ALPHA: f32 = 0.11;
+const SHADOW_Y: f64 = 2.0;
 
 pub(super) struct Direct2dRenderer {
     hwnd: HWND,
@@ -65,8 +68,11 @@ impl Direct2dRenderer {
         cfg: &crate::config::theme::EffectiveOverlayCfg,
         metrics: WindowMetrics,
     ) -> Result<()> {
-        let width = metrics.px(cfg.core.width).max(1);
-        let height = metrics.px(super::overlay_height(model, cfg)).max(1);
+        let panel_width = metrics.px(cfg.core.width).max(1);
+        let panel_height = metrics.px(super::overlay_height(model, cfg)).max(1);
+        let outset = metrics.px(super::DIRECT2D_SHADOW_OUTSET).max(0);
+        let width = panel_width + outset * 2;
+        let height = panel_height + outset * 2;
         let lines = super::overlay_line_count(model, cfg);
         let frames = L::overlay_frames(cfg.core.width, cfg.core.text_scale, lines);
         self.ensure_surface(width, height, metrics)?;
@@ -78,20 +84,24 @@ impl Direct2dRenderer {
             surface.target.Clear(Some(&transparent_color()));
 
             let background_alpha = cfg.core.background_alpha.clamp(0.0, 1.0) as f32;
+            let panel_rect = D2D_RECT_F {
+                left: outset as f32,
+                top: outset as f32,
+                right: (outset + panel_width) as f32,
+                bottom: (outset + panel_height) as f32,
+            };
+            let radius = metrics.px(cfg.core.corner_radius) as f32;
+            self.draw_shadow(&surface.target, panel_rect, radius, metrics)?;
+
             let background = surface
                 .target
                 .CreateSolidColorBrush(&color(cfg.core.background_rgb, background_alpha), None)
                 .context("CreateSolidColorBrush background")?;
             surface.target.FillRoundedRectangle(
                 &D2D1_ROUNDED_RECT {
-                    rect: D2D_RECT_F {
-                        left: 0.0,
-                        top: 0.0,
-                        right: width as f32,
-                        bottom: height as f32,
-                    },
-                    radiusX: metrics.px(cfg.core.corner_radius) as f32,
-                    radiusY: metrics.px(cfg.core.corner_radius) as f32,
+                    rect: panel_rect,
+                    radiusX: radius,
+                    radiusY: radius,
                 },
                 &background,
             );
@@ -114,7 +124,10 @@ impl Direct2dRenderer {
 
             self.draw_state_icon(
                 &surface.target,
-                metrics.rect_f_from_frame(frames.height, frames.row.icon),
+                inset_rect(
+                    metrics.rect_f_from_frame(frames.height, frames.row.icon),
+                    outset,
+                ),
                 model.state,
                 model.state_color,
             )?;
@@ -123,7 +136,10 @@ impl Direct2dRenderer {
                 &surface.target,
                 &state_format,
                 &model.state_label,
-                metrics.rect_f_from_frame(frames.height, frames.row.status),
+                inset_rect(
+                    metrics.rect_f_from_frame(frames.height, frames.row.status),
+                    outset,
+                ),
                 model.state_color,
             )?;
 
@@ -137,7 +153,10 @@ impl Direct2dRenderer {
                 &surface.target,
                 &meta_format,
                 &stats,
-                metrics.rect_f_from_frame(frames.height, frames.row.stats),
+                inset_rect(
+                    metrics.rect_f_from_frame(frames.height, frames.row.stats),
+                    outset,
+                ),
                 cfg.core.text.secondary,
             )?;
 
@@ -150,7 +169,10 @@ impl Direct2dRenderer {
                 &surface.target,
                 &meta_format,
                 meta,
-                metrics.rect_f_from_frame(frames.height, frames.row.meta),
+                inset_rect(
+                    metrics.rect_f_from_frame(frames.height, frames.row.meta),
+                    outset,
+                ),
                 meta_color,
             )?;
 
@@ -168,7 +190,10 @@ impl Direct2dRenderer {
                 &surface.target,
                 &body_format,
                 &text,
-                metrics.rect_f_from_frame(frames.height, frames.body),
+                inset_rect(
+                    metrics.rect_f_from_frame(frames.height, frames.body),
+                    outset,
+                ),
                 text_color,
             )?;
 
@@ -179,6 +204,41 @@ impl Direct2dRenderer {
         }
 
         surface.update_window(self.hwnd)?;
+        Ok(())
+    }
+
+    fn draw_shadow(
+        &self,
+        target: &ID2D1DCRenderTarget,
+        panel: D2D_RECT_F,
+        radius: f32,
+        metrics: WindowMetrics,
+    ) -> Result<()> {
+        let y_offset = metrics.px(SHADOW_Y) as f32;
+        for layer in (1..=SHADOW_LAYERS).rev() {
+            let spread = metrics.px(layer as f64 * 1.7).max(1) as f32;
+            let alpha = SHADOW_ALPHA * (layer as f32 / SHADOW_LAYERS as f32).powf(1.7);
+            let brush = unsafe {
+                target
+                    .CreateSolidColorBrush(&color(0x000000, alpha), None)
+                    .context("CreateSolidColorBrush shadow")?
+            };
+            unsafe {
+                target.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F {
+                            left: panel.left - spread,
+                            top: panel.top - spread + y_offset,
+                            right: panel.right + spread,
+                            bottom: panel.bottom + spread + y_offset,
+                        },
+                        radiusX: radius + spread,
+                        radiusY: radius + spread,
+                    },
+                    &brush,
+                );
+            }
+        }
         Ok(())
     }
 
@@ -339,6 +399,16 @@ impl Direct2dRenderer {
             );
         }
         Ok(())
+    }
+}
+
+fn inset_rect(rect: D2D_RECT_F, inset: i32) -> D2D_RECT_F {
+    let inset = inset as f32;
+    D2D_RECT_F {
+        left: rect.left + inset,
+        top: rect.top + inset,
+        right: rect.right + inset,
+        bottom: rect.bottom + inset,
     }
 }
 
@@ -578,5 +648,23 @@ mod tests {
     #[test]
     fn utf16_has_no_trailing_nul_for_directwrite_slice() {
         assert_eq!(utf16("ab"), vec![97, 98]);
+    }
+
+    #[test]
+    fn inset_rect_moves_text_into_panel_rect_without_resizing() {
+        let rect = inset_rect(
+            D2D_RECT_F {
+                left: 1.0,
+                top: 2.0,
+                right: 11.0,
+                bottom: 22.0,
+            },
+            10,
+        );
+
+        assert_eq!(rect.left, 11.0);
+        assert_eq!(rect.top, 12.0);
+        assert_eq!(rect.right, 21.0);
+        assert_eq!(rect.bottom, 32.0);
     }
 }

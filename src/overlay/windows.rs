@@ -36,6 +36,7 @@ mod direct2d;
 const CLASS_NAME: &str = "ShuohuaOverlayWindow";
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const DEFAULT_DPI: f64 = 96.0;
+pub(super) const DIRECT2D_SHADOW_OUTSET: f64 = 10.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct WindowMetrics {
@@ -225,14 +226,16 @@ impl WindowsOverlay {
         }
         let metrics = WindowMetrics::for_window(self.hwnd);
         let frame = screen_panel_frame(&self.cfg, metrics);
-        let height = metrics.px(overlay_height(&self.model, &self.cfg));
+        let outset = metrics.px(self.surface_outset());
+        let height = metrics.px(overlay_height(&self.model, &self.cfg)) + outset * 2;
+        let width = frame.w as i32 + outset * 2;
         unsafe {
             SetWindowPos(
                 self.hwnd,
                 windows_sys::Win32::UI::WindowsAndMessaging::HWND_TOPMOST,
-                frame.x as i32,
-                frame.y as i32,
-                frame.w as i32,
+                frame.x as i32 - outset,
+                frame.y as i32 - outset,
+                width,
                 height,
                 SWP_NOACTIVATE,
             );
@@ -268,20 +271,36 @@ impl WindowsOverlay {
         unsafe {
             if self.direct2d.is_none() {
                 apply_window_alpha(self.hwnd, self.cfg.core.background_alpha);
+                apply_rounded_window_region(self.hwnd, width, height, radius);
+            } else {
+                clear_window_region(self.hwnd);
             }
-            apply_rounded_window_region(self.hwnd, width, height, radius);
+        }
+    }
+
+    fn surface_outset(&self) -> f64 {
+        if self.direct2d.is_some() {
+            DIRECT2D_SHADOW_OUTSET
+        } else {
+            0.0
         }
     }
 
     unsafe fn paint(&mut self, hdc: HDC) {
+        let mut disable_direct2d = false;
         if let Some(renderer) = &mut self.direct2d {
             let metrics = WindowMetrics::for_window(self.hwnd);
             match renderer.paint(&self.model, &self.cfg, metrics) {
                 Ok(()) => return,
                 Err(error) => {
                     tracing::warn!(?error, "Direct2D overlay paint failed; falling back to GDI");
+                    disable_direct2d = true;
                 }
             }
+        }
+        if disable_direct2d {
+            self.direct2d = None;
+            self.apply_surface_shape();
         }
 
         let metrics = WindowMetrics::for_window(self.hwnd);
@@ -497,6 +516,10 @@ unsafe fn apply_rounded_window_region(hwnd: HWND, width: i32, height: i32, radiu
     if SetWindowRgn(hwnd, region, 1) == 0 {
         DeleteObject(region as HGDIOBJ);
     }
+}
+
+unsafe fn clear_window_region(hwnd: HWND) {
+    SetWindowRgn(hwnd, null_mut(), 1);
 }
 
 fn screen_panel_frame(
@@ -844,6 +867,30 @@ mod tests {
         let scaled = screen_panel_frame(&cfg, metrics);
 
         assert!(scaled.h > normal.h);
+    }
+
+    #[test]
+    fn direct2d_shadow_outset_expands_window_without_changing_panel_size() {
+        let cfg = crate::config::theme::EffectiveOverlayCfg::default();
+        let metrics = WindowMetrics {
+            dpi: 144,
+            scale: 1.5,
+            work_area: RECT {
+                left: 0,
+                top: 0,
+                right: 2400,
+                bottom: 1800,
+            },
+        };
+
+        let panel = screen_panel_frame(&cfg, metrics);
+        let outset = metrics.px(DIRECT2D_SHADOW_OUTSET);
+
+        assert_eq!(
+            panel.w as i32 + outset * 2,
+            metrics.px(cfg.core.width) + outset * 2
+        );
+        assert_eq!(outset, 15);
     }
 
     #[test]

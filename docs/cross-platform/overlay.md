@@ -212,6 +212,21 @@ Phase 10aw tried the Windows 11 `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWIN
   DirectComposition/Windows Composition or another architecture that owns blur, rounded clipping, and text
   composition in one pipeline.
 
+### Windows Phase 10ay Direct2D Per-Pixel Shadow Polish
+
+Phase 10ay improves the translucent fallback without re-enabling DWM backdrop:
+
+- The Direct2D renderer expands its per-pixel layered surface by a small renderer-owned shadow outset, then draws the
+  panel and text inside that inset.
+- The shadow is drawn into the same premultiplied-alpha `UpdateLayeredWindow` surface as the panel. Rounded clipping,
+  transparent outside pixels, text, and shadow therefore stay under one renderer pipeline.
+- The GDI fallback keeps the old tight rounded window region and does not attempt shadow, because global alpha plus
+  region clipping is only a fallback path.
+- No user config is added. Shadow parameters remain renderer-owned until Windows visual QA proves a stable material
+  model worth exposing.
+- This is not blur or Liquid Glass parity. `overlay.material` remains degraded translucent fallback; future blur still
+  needs a composition route that owns blur, rounded clipping, shadow, and text together.
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。

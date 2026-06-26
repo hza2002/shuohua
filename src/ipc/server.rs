@@ -1232,6 +1232,10 @@ trigger = "f16"
         remove_test_endpoint(&sock);
         let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
         fs::create_dir_all(&dir).unwrap();
+        let audio_dir = dir.parent().unwrap().join("audio");
+        fs::create_dir_all(&audio_dir).unwrap();
+        let audio = audio_dir.join("01HXYZABCDEF0123456789AAA1.flac");
+        fs::write(&audio, [1, 2, 3]).unwrap();
         write_history_record(
             &dir.join("2026-06.jsonl"),
             history_record(
@@ -1263,16 +1267,67 @@ trigger = "f16"
 
         match client.recv().await.unwrap().unwrap() {
             Event::HistoryDeleted {
-                id, record_deleted, ..
+                id,
+                record_deleted,
+                audio_deleted,
+                audio_error,
             } => {
                 assert_eq!(id, "01HXYZABCDEF0123456789AAA1");
                 assert!(record_deleted);
+                assert!(audio_deleted);
+                assert!(audio_error.is_none());
+                assert!(!audio.exists());
             }
             event => panic!("expected history deleted, got {event:?}"),
         }
         server.abort();
         remove_test_endpoint(sock);
-        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn delete_audio_command_removes_retained_audio_without_history_record() {
+        let sock = ipc_test_endpoint("ipc-audio-delete");
+        remove_test_endpoint(&sock);
+        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        let audio_dir = dir.parent().unwrap().join("audio");
+        fs::create_dir_all(&audio_dir).unwrap();
+        let id = ulid::Ulid::new().to_string();
+        let audio = audio_dir.join(format!("{id}.m4a"));
+        fs::write(&audio, [1, 2, 3, 4]).unwrap();
+        let history = HistoryService::with_dir(dir.clone());
+        let listener = crate::ipc::transport::bind(&sock).await.unwrap();
+        let server = tokio::spawn(run(
+            listener,
+            StateStore::new(),
+            history,
+            ServerControl {
+                reload: test_reload_handle(),
+                started_at: Instant::now(),
+                shutdown: test_shutdown_sender(),
+            },
+        ));
+        let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
+
+        client
+            .send(&Command::DeleteAudio { id: id.clone() })
+            .await
+            .unwrap();
+
+        match client.recv().await.unwrap().unwrap() {
+            Event::AudioDeleted {
+                id: event_id,
+                deleted,
+            } => {
+                assert_eq!(event_id, id);
+                assert!(deleted);
+                assert!(!audio.exists());
+            }
+            event => panic!("expected audio deleted, got {event:?}"),
+        }
+        server.abort();
+        remove_test_endpoint(sock);
+        let _ = fs::remove_dir_all(dir.parent().unwrap());
     }
 
     #[tokio::test]

@@ -18,6 +18,19 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10bl Windows retained-audio IPC deletion smoke 已完成：
+
+- Windows target 下新增 IPC server 层 retained-audio 删除测试，覆盖 `Command::DeleteAudio` 通过
+  Named Pipe/IPC server 调用 `HistoryService::delete_audio` 并删除 fake `.m4a`。
+- 既有 `delete_response_includes_record_deleted` 扩展为同时创建 fake `.flac`，验证
+  `Command::DeleteHistory` 返回 `record_deleted=true`、`audio_deleted=true`、`audio_error=None`，且文件被删除。
+- 该阶段不改变 runtime 行为、不升级 capability；只是补齐 retained audio 生成之后的维护路径自动化覆盖。
+- 验证已通过：`cargo fmt --check`、
+  `cargo test --target x86_64-pc-windows-msvc ipc::server::tests::delete_audio_command_removes_retained_audio_without_history_record -- --exact`、
+  `cargo test --target x86_64-pc-windows-msvc ipc::server::tests::delete_response_includes_record_deleted -- --exact`。
+- 下一步建议：继续非 overlay 能力闭环；可做 full Windows recording retained-audio manual smoke，或继续补
+  history/audio open/reveal、route/clipboard/paste 的可自动 Windows guard。
+
 Phase 10bk Windows AppUserModelID active app identity 已完成：
 
 - Windows `platform::desktop::frontmost_app()` 现在在 foreground window owner process 上同时尝试

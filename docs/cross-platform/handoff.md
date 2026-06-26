@@ -18,6 +18,21 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10bi Windows overlay baseline closure 已完成：
+
+- 用户确认 Windows overlay 现在“总体上勉强可用/看起来还可以”，但阴影生硬、文字不够原生清晰，
+  与 macOS Liquid Glass 质感仍有明显差距。
+- 当前 Windows renderer 路线是 Win32 no-activate layered window + Direct2D/DirectWrite + 32bpp DIB +
+  `UpdateLayeredWindow`，GDI fallback 保留。该路线适合作为低依赖 daemon-hot-path baseline/fallback，
+  不是最终高质感路线。
+- 本阶段修正了 DPI/work-area/任务栏避让、Direct2D 96 DPI DIB 坐标、DirectWrite 物理字号、右侧 meta
+  对齐、DirectWrite text layout 行数测量和尾部文本截断，降低裁剪、提前空行、滚动不一致问题。
+- 决策：停止继续在当前 renderer 上追求最终视觉质感；待 Windows core runtime 其他能力补齐后，单独重写
+  Windows modern overlay renderer，优先评估 DirectComposition / Windows Composition / Windows App SDK 等路线。
+- Capability 不升级：`overlay.renderer` 仍 partial，`overlay.material`/`overlay.window_anchor` 仍 degraded。
+- 验证已通过：`cargo fmt --check`、Windows overlay/layout/direct2d 相关单测、
+  `cargo build --target x86_64-pc-windows-msvc`、`cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings`。
+
 Phase 10bh Windows Silero unavailable fallback 已完成：
 
 - 用户接入麦克风后进行 F3 full recording，overlay 显示 `asr interrupted -- nothing pasted`。

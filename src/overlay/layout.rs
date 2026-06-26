@@ -22,8 +22,8 @@ pub mod constants {
     pub const WIDTH: f64 = 572.0;
     pub const BASE_HEIGHT: f64 = 64.0;
     pub const WINDOW_MARGIN: f64 = 16.0;
-    pub const H_PAD: f64 = 16.0;
-    pub const BOTTOM_PAD: f64 = 7.0;
+    pub const H_PAD: f64 = 10.0;
+    pub const BOTTOM_PAD: f64 = 8.0;
     pub const HEADER_BODY_GAP: f64 = 2.0;
     pub const BODY_LINE_H: f64 = 21.0;
     pub const BODY_W: f64 = WIDTH - H_PAD * 2.0;
@@ -35,8 +35,8 @@ pub mod constants {
     pub const ICON_OPTICAL_Y: f64 = -0.5;
     pub const STATE_OPTICAL_Y: f64 = 0.0;
     pub const META_OPTICAL_Y: f64 = 0.0;
-    pub const ICON_STATE_GAP: f64 = 5.0;
-    pub const STATE_W: f64 = 56.0;
+    pub const ICON_STATE_GAP: f64 = 4.0;
+    pub const STATE_W: f64 = 68.0;
     pub const STATE_STATS_GAP: f64 = 5.0;
     pub const STATS_W: f64 = 220.0;
     pub const META_GAP: f64 = 8.0;
@@ -80,7 +80,7 @@ pub fn chars_per_line(width: f64, text_scale: f64) -> usize {
     let default_body = constants::BODY_W;
     let scale = self::text_scale(text_scale);
     let estimate = constants::CHARS_PER_LINE as f64 * body_width(width) / default_body / scale;
-    estimate.round().clamp(12.0, 96.0) as usize
+    estimate.floor().clamp(12.0, 96.0) as usize
 }
 
 pub fn frame_y_for_visual_center(center_y: f64, height: f64, optical_y: f64) -> f64 {

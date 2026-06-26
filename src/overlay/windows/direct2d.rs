@@ -16,7 +16,8 @@ use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD,
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
-    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
+    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS,
+    DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -30,15 +31,23 @@ use super::{to_colorref, wide_null, WindowMetrics};
 use crate::overlay::layout as L;
 use crate::overlay::{OverlayModel, OverlayState};
 
-const FONT_FAMILY: &str = "Segoe UI";
+const FONT_FAMILY: &str = "Microsoft YaHei UI";
 const LOCALE: &str = "en-us";
-const AMBIENT_SHADOW_LAYERS: usize = 8;
-const AMBIENT_SHADOW_ALPHA: f32 = 0.045;
-const AMBIENT_SHADOW_SPREAD: f64 = 1.45;
-const KEY_SHADOW_LAYERS: usize = 5;
-const KEY_SHADOW_ALPHA: f32 = 0.055;
-const KEY_SHADOW_SPREAD: f64 = 1.15;
-const KEY_SHADOW_Y: f64 = 3.0;
+const LAYERED_RENDER_TARGET_DPI: f32 = 96.0;
+const AMBIENT_SHADOW_LAYERS: usize = 22;
+const AMBIENT_SHADOW_ALPHA: f32 = 0.012;
+const AMBIENT_SHADOW_SPREAD: f64 = 0.86;
+const KEY_SHADOW_LAYERS: usize = 12;
+const KEY_SHADOW_ALPHA: f32 = 0.024;
+const KEY_SHADOW_SPREAD: f64 = 0.7;
+const KEY_SHADOW_Y: f64 = 6.0;
+const MEASURE_HEIGHT: f32 = 16_384.0;
+
+#[derive(Debug, Clone)]
+pub(super) struct TextPlan {
+    pub(super) text: String,
+    pub(super) lines: usize,
+}
 
 pub(super) struct Direct2dRenderer {
     hwnd: HWND,
@@ -73,19 +82,15 @@ impl Direct2dRenderer {
         metrics: WindowMetrics,
         panel_width_logical: f64,
     ) -> Result<()> {
+        let text_plan = self.text_plan(model, cfg, metrics, panel_width_logical)?;
         let panel_width = metrics.px(panel_width_logical).max(1);
         let panel_height = metrics
-            .px(super::overlay_height_for_width(
-                model,
-                cfg,
-                panel_width_logical,
-            ))
+            .px(L::overlay_frames(panel_width_logical, cfg.core.text_scale, text_plan.lines).height)
             .max(1);
         let outset = metrics.px(super::DIRECT2D_SHADOW_OUTSET).max(0);
         let width = panel_width + outset * 2;
         let height = panel_height + outset * 2;
-        let lines = super::overlay_line_count_for_width(model, cfg, panel_width_logical);
-        let frames = L::overlay_frames(panel_width_logical, cfg.core.text_scale, lines);
+        let frames = L::overlay_frames(panel_width_logical, cfg.core.text_scale, text_plan.lines);
         self.ensure_surface(width, height, metrics)?;
         let surface = self.surface.as_ref().context("Direct2D layered surface")?;
         surface.clear_pixels();
@@ -118,17 +123,26 @@ impl Direct2dRenderer {
             );
 
             let meta_format = self.text_format(
-                L::scaled_font_size(12.0, cfg.core.text_scale) as f32,
+                physical_font_size(metrics, L::scaled_font_size(12.0, cfg.core.text_scale)),
+                false,
                 false,
                 false,
             )?;
             let state_format = self.text_format(
-                L::scaled_font_size(13.0, cfg.core.text_scale) as f32,
+                physical_font_size(metrics, L::scaled_font_size(13.0, cfg.core.text_scale)),
                 true,
+                false,
                 false,
             )?;
             let body_format = self.text_format(
-                L::scaled_font_size(14.0, cfg.core.text_scale) as f32,
+                physical_font_size(metrics, L::scaled_font_size(14.0, cfg.core.text_scale)),
+                false,
+                true,
+                false,
+            )?;
+            let trailing_meta_format = self.text_format(
+                physical_font_size(metrics, L::scaled_font_size(12.0, cfg.core.text_scale)),
+                false,
                 false,
                 true,
             )?;
@@ -147,9 +161,13 @@ impl Direct2dRenderer {
                 &surface.target,
                 &state_format,
                 &model.state_label,
-                inset_rect(
-                    metrics.rect_f_from_frame(frames.height, frames.row.status),
-                    outset,
+                text_rect(
+                    inset_rect(
+                        metrics.rect_f_from_frame(frames.height, frames.row.status),
+                        outset,
+                    ),
+                    metrics,
+                    1.5,
                 ),
                 model.state_color,
             )?;
@@ -164,9 +182,13 @@ impl Direct2dRenderer {
                 &surface.target,
                 &meta_format,
                 &stats,
-                inset_rect(
-                    metrics.rect_f_from_frame(frames.height, frames.row.stats),
-                    outset,
+                text_rect(
+                    inset_rect(
+                        metrics.rect_f_from_frame(frames.height, frames.row.stats),
+                        outset,
+                    ),
+                    metrics,
+                    1.5,
                 ),
                 cfg.core.text.secondary,
             )?;
@@ -178,11 +200,15 @@ impl Direct2dRenderer {
             };
             self.draw_text(
                 &surface.target,
-                &meta_format,
+                &trailing_meta_format,
                 meta,
-                inset_rect(
-                    metrics.rect_f_from_frame(frames.height, frames.row.meta),
-                    outset,
+                text_rect(
+                    inset_rect(
+                        metrics.rect_f_from_frame(frames.height, frames.row.meta),
+                        outset,
+                    ),
+                    metrics,
+                    1.5,
                 ),
                 meta_color,
             )?;
@@ -192,18 +218,17 @@ impl Direct2dRenderer {
             } else {
                 cfg.core.text.error
             };
-            let (text, _) = L::display_text_plan(
-                &model.display_text(),
-                cfg.core.max_text_lines,
-                L::chars_per_line(panel_width_logical, cfg.core.text_scale),
-            );
             self.draw_text(
                 &surface.target,
                 &body_format,
-                &text,
-                inset_rect(
-                    metrics.rect_f_from_frame(frames.height, frames.body),
-                    outset,
+                &text_plan.text,
+                text_rect(
+                    inset_rect(
+                        metrics.rect_f_from_frame(frames.height, frames.body),
+                        outset,
+                    ),
+                    metrics,
+                    2.0,
                 ),
                 text_color,
             )?;
@@ -216,6 +241,49 @@ impl Direct2dRenderer {
 
         surface.update_window(self.hwnd)?;
         Ok(())
+    }
+
+    pub(super) fn text_plan(
+        &self,
+        model: &OverlayModel,
+        cfg: &crate::config::theme::EffectiveOverlayCfg,
+        metrics: WindowMetrics,
+        panel_width_logical: f64,
+    ) -> Result<TextPlan> {
+        let max_lines = cfg.core.max_text_lines.clamp(1, 8);
+        let format = self.text_format(
+            physical_font_size(metrics, L::scaled_font_size(14.0, cfg.core.text_scale)),
+            false,
+            true,
+            false,
+        )?;
+        let width = metrics.px(L::body_width(panel_width_logical)).max(1) as f32;
+        let full = model.display_text();
+        let full_lines = self.measure_line_count(&format, &full, width)?;
+        if full_lines <= max_lines {
+            return Ok(TextPlan {
+                text: full,
+                lines: full_lines.max(1),
+            });
+        }
+
+        let chars: Vec<char> = full.chars().collect();
+        let mut lo = 0usize;
+        let mut hi = chars.len();
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            let candidate = tail_text(&chars, mid);
+            if self.measure_line_count(&format, &candidate, width)? <= max_lines {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+
+        Ok(TextPlan {
+            text: tail_text(&chars, lo),
+            lines: max_lines,
+        })
     }
 
     fn draw_shadow(
@@ -395,7 +463,13 @@ impl Direct2dRenderer {
         Ok(())
     }
 
-    fn text_format(&self, point_size: f32, bold: bool, wrap: bool) -> Result<IDWriteTextFormat> {
+    fn text_format(
+        &self,
+        point_size: f32,
+        bold: bool,
+        wrap: bool,
+        align_trailing: bool,
+    ) -> Result<IDWriteTextFormat> {
         let family = wide_null(FONT_FAMILY);
         let locale = wide_null(LOCALE);
         let format = unsafe {
@@ -417,7 +491,11 @@ impl Direct2dRenderer {
         };
         unsafe {
             format
-                .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)
+                .SetTextAlignment(if align_trailing {
+                    DWRITE_TEXT_ALIGNMENT_TRAILING
+                } else {
+                    DWRITE_TEXT_ALIGNMENT_LEADING
+                })
                 .context("SetTextAlignment")?;
             format
                 .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)
@@ -431,6 +509,27 @@ impl Direct2dRenderer {
                 .context("SetWordWrapping")?;
         }
         Ok(format)
+    }
+
+    fn measure_line_count(
+        &self,
+        format: &IDWriteTextFormat,
+        text: &str,
+        width: f32,
+    ) -> Result<usize> {
+        let text = utf16(text);
+        let layout = unsafe {
+            self.dwrite
+                .CreateTextLayout(&text, format, width, MEASURE_HEIGHT)
+                .context("CreateTextLayout")?
+        };
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        unsafe {
+            layout
+                .GetMetrics(&mut metrics)
+                .context("IDWriteTextLayout::GetMetrics")?;
+        }
+        Ok(metrics.lineCount.max(1) as usize)
     }
 
     fn draw_text(
@@ -482,6 +581,16 @@ fn inset_rect(rect: D2D_RECT_F, inset: i32) -> D2D_RECT_F {
     }
 }
 
+fn text_rect(rect: D2D_RECT_F, metrics: WindowMetrics, vertical_pad: f64) -> D2D_RECT_F {
+    let pad = metrics.px(vertical_pad) as f32;
+    D2D_RECT_F {
+        left: rect.left,
+        top: rect.top - pad,
+        right: rect.right,
+        bottom: rect.bottom + pad,
+    }
+}
+
 fn square(cx: f32, cy: f32, radius: f32) -> D2D_RECT_F {
     D2D_RECT_F {
         left: cx - radius,
@@ -523,7 +632,7 @@ impl LayeredSurface {
         factory: &ID2D1Factory,
         width: i32,
         height: i32,
-        metrics: WindowMetrics,
+        _metrics: WindowMetrics,
     ) -> Result<Self> {
         let screen_dc = unsafe { GetDC(None) };
         if screen_dc.is_invalid() {
@@ -575,8 +684,8 @@ impl LayeredSurface {
                 format: DXGI_FORMAT_B8G8R8A8_UNORM,
                 alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
             },
-            dpiX: metrics.dpi as f32,
-            dpiY: metrics.dpi as f32,
+            dpiX: LAYERED_RENDER_TARGET_DPI,
+            dpiY: LAYERED_RENDER_TARGET_DPI,
             usage: D2D1_RENDER_TARGET_USAGE_NONE,
             minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
         };
@@ -689,6 +798,19 @@ fn color(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
     }
 }
 
+fn physical_font_size(metrics: WindowMetrics, logical_size: f64) -> f32 {
+    metrics.px(logical_size).max(1) as f32
+}
+
+fn tail_text(chars: &[char], keep: usize) -> String {
+    if keep >= chars.len() {
+        return chars.iter().collect();
+    }
+    let keep = keep.min(chars.len());
+    let tail: String = chars[chars.len() - keep..].iter().collect();
+    format!("…{tail}")
+}
+
 fn shadow_layer_alpha(alpha: f32, layer: usize, layers: usize, falloff: f32) -> f32 {
     if layers == 0 {
         return 0.0;
@@ -752,5 +874,21 @@ mod tests {
 
         assert!((inner - 0.1).abs() < 0.001);
         assert!(outer < 0.01);
+    }
+
+    #[test]
+    fn layered_dib_render_target_uses_physical_pixel_coordinates() {
+        assert_eq!(LAYERED_RENDER_TARGET_DPI, 96.0);
+    }
+
+    #[test]
+    fn layered_dib_text_uses_physical_pixel_font_sizes() {
+        let metrics = WindowMetrics {
+            dpi: 144,
+            scale: 1.5,
+            work_area: windows_sys::Win32::Foundation::RECT::default(),
+        };
+
+        assert_eq!(physical_font_size(metrics, 14.0), 21.0);
     }
 }

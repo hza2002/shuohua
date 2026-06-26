@@ -4,7 +4,7 @@
 
 > **何时读**：改浮层视觉/动画/材质、Notice/Error 反馈、平台 renderer。
 > **不在这里**：触发浮层的业务（voice/post/reload）在各自模块；i18n 文案见 [architecture](../architecture.md)。
-> **代码**：`src/overlay/`。`command.rs`(OverlayCmd+State+Handle) / `model.rs`(OverlayModel+tick) / `layout.rs`(LayoutFrame+纯几何/文本) 平台无关；`macos/`(view+chrome+icon_fx+debug) 是唯一 renderer。状态图标的自绘动效（光晕/雷达/跳点/彗星尾/电平条）都在 `macos/icon_fx.rs`，是纯视觉实现细节。
+> **代码**：`src/overlay/`。`command.rs`(OverlayCmd+State+Handle) / `model.rs`(OverlayModel+tick) / `layout.rs`(LayoutFrame+纯几何/文本) 平台无关；`macos/` 是 AppKit/Liquid Glass renderer，`windows.rs` + `windows/direct2d.rs` 是 Win32 baseline renderer。
 
 ## 材质与视图层级（不变）
 
@@ -25,7 +25,9 @@
 
 ## 平台边界
 
-command/model/layout 平台无关；`macos/` 是当前唯一 renderer（`view.rs` NSPanel+mpsc+动画，`chrome.rs` 集中 glass/SkyLight SPI/HUD fallback，`debug.rs` SPI 探针）。`renderer.rs` 拥有平台 renderer 选择，`mod.rs` 的 `run()` 只转发到 renderer。**加新平台 = 加 `overlay/<platform>/` 兄弟目录写自己的 view/chrome + 加 `MacosOverlayCfg` 兄弟 struct，不动 command/model/layout/上层。**
+command/model/layout 平台无关；`renderer.rs` 拥有平台 renderer 选择，`mod.rs` 的 `run()` 只转发到 renderer。macOS renderer 使用 NSPanel/AppKit glass；Windows 当前 renderer 是 Win32 no-activate layered window + Direct2D/DirectWrite per-pixel baseline，GDI 保留为 fallback。**加新平台 = 加 `overlay/<platform>/` 兄弟目录写自己的 view/chrome + 平台配置 struct，不动 command/model/layout/上层。**
+
+Windows baseline renderer 是当前可用 fallback，不是最终视觉路线。它避免 Tauri/WebView 进入 daemon 热路径，但 `UpdateLayeredWindow` + DIB + 手绘 shadow 的质感上限低于 macOS Liquid Glass；最终 Windows renderer 应在 core runtime 对齐后单独评估 DirectComposition / Windows Composition / Windows App SDK 等现代路线。
 
 `renderer.rs` 也持有 renderer capability skeleton：静态描述当前 renderer 是否可用、材质降级、
 置顶、输入穿透和窗口锚定状态。它复用 `platform::capability` 的 status 类型，不执行窗口创建、

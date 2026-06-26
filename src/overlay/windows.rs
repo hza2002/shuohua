@@ -37,8 +37,9 @@ mod direct2d;
 const CLASS_NAME: &str = "ShuohuaOverlayWindow";
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const DEFAULT_DPI: f64 = 96.0;
-pub(super) const DIRECT2D_SHADOW_OUTSET: f64 = 14.0;
+pub(super) const DIRECT2D_SHADOW_OUTSET: f64 = 22.0;
 const MAX_WORK_AREA_WIDTH_FRACTION: f64 = 0.62;
+const TASKBAR_CLEARANCE: f64 = 12.0;
 
 #[derive(Clone, Copy)]
 pub(super) struct WindowMetrics {
@@ -198,6 +199,9 @@ impl WindowsOverlay {
                 }
                 Ok(OverlayCmd::ReloadConfig { cfg }) => {
                     self.cfg = cfg;
+                    if self.visible {
+                        self.position_window();
+                    }
                     self.apply_surface_shape();
                     self.invalidate();
                 }
@@ -224,32 +228,44 @@ impl WindowsOverlay {
     }
 
     fn show(&mut self) {
+        self.position_window();
+        self.apply_surface_shape();
         if self.visible {
             return;
         }
+        unsafe {
+            ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+        }
+        self.visible = true;
+    }
+
+    fn position_window(&self) {
         let metrics = WindowMetrics::for_window(self.hwnd);
         let panel_width = resolved_overlay_width(&self.cfg, metrics);
-        let panel_height = overlay_height_for_width(&self.model, &self.cfg, panel_width);
+        let lines = self.overlay_line_count_for_width(metrics, panel_width);
+        let panel_height = L::overlay_frames(panel_width, self.cfg.core.text_scale, lines).height;
         let frame = screen_panel_frame(&self.cfg, metrics, panel_width, panel_height);
         let outset = metrics.px(self.surface_outset());
         let height = metrics.px(panel_height) + outset * 2;
-        let width = frame.w as i32 + outset * 2;
+        let width = metrics.px(panel_width) + outset * 2;
+        let (x, y) = fit_window_in_work_area(
+            metrics,
+            (frame.x.round() as i32) - outset,
+            (frame.y.round() as i32) - outset,
+            width,
+            height,
+        );
         unsafe {
             SetWindowPos(
                 self.hwnd,
                 windows_sys::Win32::UI::WindowsAndMessaging::HWND_TOPMOST,
-                frame.x as i32 - outset,
-                frame.y as i32 - outset,
+                x,
+                y,
                 width,
                 height,
                 SWP_NOACTIVATE,
             );
         }
-        self.apply_surface_shape();
-        unsafe {
-            ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
-        }
-        self.visible = true;
     }
 
     fn hide(&mut self) {
@@ -272,11 +288,9 @@ impl WindowsOverlay {
         let metrics = WindowMetrics::for_window(self.hwnd);
         let panel_width = resolved_overlay_width(&self.cfg, metrics);
         let width = metrics.px(panel_width);
-        let height = metrics.px(overlay_height_for_width(
-            &self.model,
-            &self.cfg,
-            panel_width,
-        ));
+        let lines = self.overlay_line_count_for_width(metrics, panel_width);
+        let height =
+            metrics.px(L::overlay_frames(panel_width, self.cfg.core.text_scale, lines).height);
         let radius = metrics.px(self.cfg.core.corner_radius).max(0);
         unsafe {
             if self.direct2d.is_none() {
@@ -294,6 +308,18 @@ impl WindowsOverlay {
         } else {
             0.0
         }
+    }
+
+    fn overlay_line_count_for_width(&self, metrics: WindowMetrics, panel_width: f64) -> usize {
+        if let Some(renderer) = &self.direct2d {
+            match renderer.text_plan(&self.model, &self.cfg, metrics, panel_width) {
+                Ok(plan) => return plan.lines,
+                Err(error) => {
+                    tracing::warn!(?error, "DirectWrite overlay text measurement failed");
+                }
+            }
+        }
+        overlay_line_count_for_width(&self.model, &self.cfg, panel_width)
     }
 
     unsafe fn paint(&mut self, hdc: HDC) {
@@ -551,6 +577,21 @@ fn screen_panel_frame(
     frame
 }
 
+fn fit_window_in_work_area(
+    metrics: WindowMetrics,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> (i32, i32) {
+    let clearance = metrics.px(TASKBAR_CLEARANCE).max(0);
+    let min_x = metrics.work_area.left;
+    let max_x = (metrics.work_area.right - width).max(min_x);
+    let min_y = metrics.work_area.top;
+    let max_y = (metrics.work_area.bottom - clearance - height).max(min_y);
+    (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
+}
+
 fn work_area_layout(metrics: WindowMetrics) -> L::LayoutFrame {
     let width = (metrics.work_area.right - metrics.work_area.left) as f64 / metrics.scale;
     let height = (metrics.work_area.bottom - metrics.work_area.top) as f64 / metrics.scale;
@@ -646,10 +687,13 @@ pub(super) fn overlay_line_count_for_width(
     cfg: &crate::config::theme::EffectiveOverlayCfg,
     width: f64,
 ) -> usize {
+    let chars_per_line = (L::chars_per_line(width, cfg.core.text_scale) as f64 * 1.18)
+        .floor()
+        .clamp(12.0, 120.0) as usize;
     let (_, lines) = L::display_text_plan(
         &model.display_text(),
         cfg.core.max_text_lines,
-        L::chars_per_line(width, cfg.core.text_scale),
+        chars_per_line,
     );
     lines
 }
@@ -1026,8 +1070,74 @@ mod tests {
         );
         let outset = metrics.px(DIRECT2D_SHADOW_OUTSET);
 
-        assert_eq!(panel.w as i32 + outset * 2, metrics.px(width) + outset * 2);
-        assert_eq!(outset, 21);
+        assert_eq!(
+            metrics.px(panel.w / metrics.scale) + outset * 2,
+            metrics.px(width) + outset * 2
+        );
+        assert_eq!(outset, 33);
+    }
+
+    #[test]
+    fn direct2d_layered_window_is_clamped_inside_work_area_with_clearance() {
+        let mut cfg = crate::config::theme::EffectiveOverlayCfg::default();
+        cfg.core.width = 900.0;
+        let metrics = WindowMetrics {
+            dpi: 96,
+            scale: 1.0,
+            work_area: RECT {
+                left: 0,
+                top: 0,
+                right: 900,
+                bottom: 860,
+            },
+        };
+
+        let width = resolved_overlay_width(&cfg, metrics);
+        let height = L::overlay_frames(width, cfg.core.text_scale, 1).height;
+        let panel = screen_panel_frame(&cfg, metrics, width, height);
+        let outset = metrics.px(DIRECT2D_SHADOW_OUTSET);
+        let window_width = metrics.px(width) + outset * 2;
+        let window_height = metrics.px(height) + outset * 2;
+        let (x, y) = fit_window_in_work_area(
+            metrics,
+            panel.x.round() as i32 - outset,
+            panel.y.round() as i32 - outset,
+            window_width,
+            window_height,
+        );
+
+        assert!(x >= metrics.work_area.left);
+        assert!(x + window_width <= metrics.work_area.right);
+        assert!(y >= metrics.work_area.top);
+        assert!(y + window_height <= metrics.work_area.bottom - metrics.px(TASKBAR_CLEARANCE));
+    }
+
+    #[test]
+    fn direct2d_layered_window_width_uses_dpi_rounded_panel_width() {
+        let mut cfg = crate::config::theme::EffectiveOverlayCfg::default();
+        cfg.core.width = 669.3;
+        let metrics = WindowMetrics {
+            dpi: 144,
+            scale: 1.5,
+            work_area: RECT {
+                left: 0,
+                top: 0,
+                right: 1620,
+                bottom: 1350,
+            },
+        };
+
+        let width = resolved_overlay_width(&cfg, metrics);
+        let panel = screen_panel_frame(
+            &cfg,
+            metrics,
+            width,
+            L::overlay_frames(width, cfg.core.text_scale, 1).height,
+        );
+        let outset = metrics.px(DIRECT2D_SHADOW_OUTSET);
+
+        assert_ne!(panel.w as i32, metrics.px(width));
+        assert_eq!(metrics.px(width) + outset * 2, 1004 + outset * 2);
     }
 
     #[test]

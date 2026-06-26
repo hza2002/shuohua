@@ -35,7 +35,10 @@ pub(crate) enum RecordingMode {
 
 impl RecordingMode {
     pub(crate) fn select(idle_pause: bool, vad: &crate::config::VoiceVadCfg) -> Self {
-        if idle_pause && matches!(vad.backend, crate::config::VoiceVadBackend::Silero) {
+        if idle_pause
+            && matches!(vad.backend, crate::config::VoiceVadBackend::Silero)
+            && crate::voice::silero::is_available()
+        {
             Self::VadPause
         } else {
             Self::Continuous
@@ -1174,7 +1177,12 @@ mod tests {
             RecordingMode::select(false, &vad),
             RecordingMode::Continuous
         );
-        assert_eq!(RecordingMode::select(true, &vad), RecordingMode::VadPause);
+        let expected = if crate::voice::silero::is_available() {
+            RecordingMode::VadPause
+        } else {
+            RecordingMode::Continuous
+        };
+        assert_eq!(RecordingMode::select(true, &vad), expected);
     }
 
     #[test]

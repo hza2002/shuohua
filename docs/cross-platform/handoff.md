@@ -18,6 +18,22 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+Phase 10bh Windows Silero unavailable fallback 已完成：
+
+- 用户接入麦克风后进行 F3 full recording，overlay 显示 `asr interrupted -- nothing pasted`。
+- 日志第一处真实错误是 Windows 上 `idle_pause=true` + `voice.vad.backend=silero` 选择了
+  `RecordingMode::VadPause`，随后初始化 Silero stub 失败：
+  `Silero VAD is not available on this platform until ONNX Runtime provisioning is defined`。
+- 本阶段新增 `voice::silero::is_available()`，`RecordingMode::select` 只有在 Silero backend、provider
+  `idle_pause=true` 且当前平台已提供 Silero runtime 时才进入 VadPause；Windows/Linux 退回 Continuous
+  recording。
+- Windows 仍不升级 VAD capability，也不引入 ONNX Runtime provisioning。
+- 验证已通过：`cargo fmt --check`、精确 Windows recording mode 单测、
+  `cargo test --target x86_64-pc-windows-msvc`、`cargo build --target x86_64-pc-windows-msvc`、
+  `cargo clippy --all-targets -- -D warnings`、`cargo test`。
+- 下一步需要用户手动重试 F3 full recording，确认不再命中 Silero unavailable，若仍失败再查 ASR/post/clipboard/paste
+  的下一处真实错误。
+
 Phase 10bg Windows audio stream runtime smoke 已完成：
 
 - 用户已接入麦克风；Windows `doctor` 现在能看到 `麦克风 (Realtek USB Audio) (48000Hz, 2ch, F32)`，

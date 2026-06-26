@@ -8,6 +8,10 @@ use crate::voice::vad::VadFrame;
 const SAMPLE_RATE: u64 = 16_000;
 const SILERO_CHUNK_SAMPLES: usize = 512;
 
+pub const fn is_available() -> bool {
+    cfg!(target_os = "macos")
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct SileroConfig {
     pub threshold: f32,

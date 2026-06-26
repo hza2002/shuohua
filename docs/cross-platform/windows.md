@@ -257,8 +257,9 @@ Audio conversion remains unsupported on Windows until a converter backend is cho
 
 Silero VAD / ONNX Runtime is also not provisioned on Windows in the current build/test phase. Windows builds
 use the local Silero unavailable stub and do not compile `voice_activity_detector` until the ONNX Runtime
-distribution and MSVC toolchain compatibility are designed and validated. This does not promote Windows audio
-or VAD capability.
+distribution and MSVC toolchain compatibility are designed and validated. If a provider profile enables
+`idle_pause`, Windows selects Continuous recording instead of VadPause while Silero is unavailable. This does
+not promote Windows audio or VAD capability.
 
 Stop point for user intervention:
 

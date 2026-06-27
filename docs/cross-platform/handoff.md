@@ -33,7 +33,7 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
   `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE` 探测 DirectComposition 初始化，但默认仍走 Direct2D
   fallback。Windows overlay scene 计划对象已抽出，Direct2D fallback 和后续 Composition renderer 应共享
   同一份状态/icon/meta/body 文本计划与 layout frames；Composition probe 已验证 root animation 创建/绑定/
-  commit 路径，但还未绘制实际 material/text surface。
+  commit 路径，以及透明 panel composition surface 创建/绑定路径，但还未绘制实际 material/text surface。
 - Cross-user 第二账号隔离验证延后；代码已有 user/session scoped pipe/mutex 方向，但不同用户实机
   smoke 未完成。
 - Windows release-grade 验收仍缺 multi-monitor、remote desktop/UAC/elevation、更多目标应用、

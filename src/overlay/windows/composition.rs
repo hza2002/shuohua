@@ -1,8 +1,11 @@
 use anyhow::{Context, Result};
 use windows::Win32::Foundation::HWND as WindowsHwnd;
 use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice, IDCompositionAnimation, IDCompositionDevice, IDCompositionTarget,
-    IDCompositionVisual,
+    DCompositionCreateDevice, IDCompositionAnimation, IDCompositionDevice, IDCompositionSurface,
+    IDCompositionTarget, IDCompositionVisual,
+};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM,
 };
 use windows_sys::Win32::Foundation::HWND;
 
@@ -75,6 +78,7 @@ impl CompositionRenderer {
 pub(super) struct CompositionVisualTree {
     root: IDCompositionVisual,
     animations: CompositionAnimations,
+    surfaces: CompositionSurfaces,
     shadow: IDCompositionVisual,
     panel: IDCompositionVisual,
     content: IDCompositionVisual,
@@ -88,6 +92,7 @@ pub(super) struct CompositionVisualTree {
 impl CompositionVisualTree {
     fn new(device: &IDCompositionDevice, root: IDCompositionVisual) -> Result<Self> {
         let animations = CompositionAnimations::new(device)?;
+        let surfaces = CompositionSurfaces::new(device)?;
         let shadow = create_visual(device, "shadow")?;
         let panel = create_visual(device, "panel")?;
         let content = create_visual(device, "content")?;
@@ -100,6 +105,9 @@ impl CompositionVisualTree {
         unsafe {
             root.SetOffsetX(&animations.root_static_offset)
                 .context("IDCompositionVisual::SetOffsetX root static animation")?;
+            panel
+                .SetContent(&surfaces.panel)
+                .context("IDCompositionVisual::SetContent panel surface")?;
             root.AddVisual(&shadow, false, None)
                 .context("IDCompositionVisual::AddVisual shadow")?;
             root.AddVisual(&panel, false, None)
@@ -126,6 +134,7 @@ impl CompositionVisualTree {
         Ok(Self {
             root,
             animations,
+            surfaces,
             shadow,
             panel,
             content,
@@ -143,6 +152,7 @@ impl CompositionVisualTree {
         metrics: WindowMetrics,
     ) -> Result<()> {
         self.animations.keep_alive();
+        self.surfaces.keep_alive();
         let icon = visual_offset(metrics, scene.frames.height, scene.frames.row.icon);
         let status = visual_offset(metrics, scene.frames.height, scene.frames.row.status);
         let stats = visual_offset(metrics, scene.frames.height, scene.frames.row.stats);
@@ -200,6 +210,28 @@ impl CompositionVisualTree {
         }
         Ok(())
     }
+}
+
+pub(super) struct CompositionSurfaces {
+    panel: IDCompositionSurface,
+}
+
+impl CompositionSurfaces {
+    fn new(device: &IDCompositionDevice) -> Result<Self> {
+        let panel = unsafe {
+            device
+                .CreateSurface(
+                    1,
+                    1,
+                    DXGI_FORMAT_B8G8R8A8_UNORM,
+                    DXGI_ALPHA_MODE_PREMULTIPLIED,
+                )
+                .context("IDCompositionDevice::CreateSurface panel")?
+        };
+        Ok(Self { panel })
+    }
+
+    fn keep_alive(&self) {}
 }
 
 pub(super) struct CompositionAnimations {
@@ -305,6 +337,7 @@ mod tests {
         let source = include_str!("composition.rs");
         for token in [
             "CompositionVisualTree",
+            "CompositionSurfaces",
             "shadow",
             "panel",
             "content",

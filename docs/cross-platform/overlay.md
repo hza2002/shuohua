@@ -326,7 +326,9 @@ Phase 10bg infrastructure status:
   DirectComposition or Windows Composition visuals, DirectWrite text, Segoe Fluent Icons glyphs, and Direct2D
   fallback. It currently initializes a hidden DirectComposition root visual only as a reserved handoff point for
   later compositor-owned shadow, rounded clipping, material, and animation work. The reserved visual tree already
-  separates `shadow`, `panel`, `content`, `icon`, `status`, `stats`, `meta`, and `body` layers.
+  separates `shadow`, `panel`, `content`, `icon`, `status`, `stats`, `meta`, and `body` layers. A no-op
+  `IDCompositionAnimation` probe is bound to the root visual to validate animation creation/binding/commit without
+  changing the visible fallback renderer.
 - `src/overlay/windows/icons.rs` records the state icon plan using Windows official icon fonts:
   `Segoe Fluent Icons` first, `Segoe MDL2 Assets` fallback. Icon bodies should come from system glyphs; animation
   belongs to composition opacity/scale/rotate/translate once that backend is enabled.

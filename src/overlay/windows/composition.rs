@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use windows::Win32::Foundation::HWND as WindowsHwnd;
 use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
+    DCompositionCreateDevice, IDCompositionAnimation, IDCompositionDevice, IDCompositionTarget,
+    IDCompositionVisual,
 };
 use windows_sys::Win32::Foundation::HWND;
 
@@ -73,6 +74,7 @@ impl CompositionRenderer {
 
 pub(super) struct CompositionVisualTree {
     root: IDCompositionVisual,
+    animations: CompositionAnimations,
     shadow: IDCompositionVisual,
     panel: IDCompositionVisual,
     content: IDCompositionVisual,
@@ -85,6 +87,7 @@ pub(super) struct CompositionVisualTree {
 
 impl CompositionVisualTree {
     fn new(device: &IDCompositionDevice, root: IDCompositionVisual) -> Result<Self> {
+        let animations = CompositionAnimations::new(device)?;
         let shadow = create_visual(device, "shadow")?;
         let panel = create_visual(device, "panel")?;
         let content = create_visual(device, "content")?;
@@ -95,6 +98,8 @@ impl CompositionVisualTree {
         let body = create_visual(device, "body")?;
 
         unsafe {
+            root.SetOffsetX(&animations.root_static_offset)
+                .context("IDCompositionVisual::SetOffsetX root static animation")?;
             root.AddVisual(&shadow, false, None)
                 .context("IDCompositionVisual::AddVisual shadow")?;
             root.AddVisual(&panel, false, None)
@@ -120,6 +125,7 @@ impl CompositionVisualTree {
 
         Ok(Self {
             root,
+            animations,
             shadow,
             panel,
             content,
@@ -136,6 +142,7 @@ impl CompositionVisualTree {
         scene: &WindowsOverlayScene,
         metrics: WindowMetrics,
     ) -> Result<()> {
+        self.animations.keep_alive();
         let icon = visual_offset(metrics, scene.frames.height, scene.frames.row.icon);
         let status = visual_offset(metrics, scene.frames.height, scene.frames.row.status);
         let stats = visual_offset(metrics, scene.frames.height, scene.frames.row.stats);
@@ -193,6 +200,40 @@ impl CompositionVisualTree {
         }
         Ok(())
     }
+}
+
+pub(super) struct CompositionAnimations {
+    root_static_offset: IDCompositionAnimation,
+}
+
+impl CompositionAnimations {
+    fn new(device: &IDCompositionDevice) -> Result<Self> {
+        Ok(Self {
+            root_static_offset: static_animation(device, "root static offset")?,
+        })
+    }
+
+    fn keep_alive(&self) {}
+}
+
+fn static_animation(
+    device: &IDCompositionDevice,
+    name: &'static str,
+) -> Result<IDCompositionAnimation> {
+    let animation = unsafe {
+        device
+            .CreateAnimation()
+            .with_context(|| format!("IDCompositionDevice::CreateAnimation {name}"))?
+    };
+    unsafe {
+        animation
+            .AddCubic(0.0, 0.0, 0.0, 0.0, 0.0)
+            .with_context(|| format!("IDCompositionAnimation::AddCubic {name}"))?;
+        animation
+            .End(1.0, 0.0)
+            .with_context(|| format!("IDCompositionAnimation::End {name}"))?;
+    }
+    Ok(animation)
 }
 
 fn visual_offset(

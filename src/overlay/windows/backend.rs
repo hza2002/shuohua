@@ -7,9 +7,11 @@ use super::{composition, WindowMetrics, DIRECT2D_SHADOW_OUTSET};
 use crate::overlay::OverlayModel;
 
 const COMPOSITION_PROBE_ENV: &str = "SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE";
+const COMPOSITION_VISIBLE_ENV: &str = "SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_VISIBLE";
 
 pub(super) enum RendererKind {
     CompositionPlanned,
+    CompositionVisible,
     Direct2dPerPixel,
     GdiFallback,
 }
@@ -18,6 +20,7 @@ pub(super) struct WindowsRendererBackend {
     composition: Option<composition::CompositionRenderer>,
     direct2d: Option<Direct2dRenderer>,
     composition_ready: composition::CompositionReadiness,
+    composition_visible: bool,
 }
 
 impl WindowsRendererBackend {
@@ -26,16 +29,20 @@ impl WindowsRendererBackend {
             composition: None,
             direct2d: None,
             composition_ready: composition::readiness(),
+            composition_visible: false,
         }
     }
 
     pub(super) fn new(hwnd: HWND) -> Self {
         let (composition, composition_ready) = probe_composition(hwnd);
+        let composition_visible =
+            composition.is_some() && std::env::var_os(COMPOSITION_VISIBLE_ENV).is_some();
         match Direct2dRenderer::new(hwnd) {
             Ok(direct2d) => Self {
                 composition,
                 direct2d: Some(direct2d),
                 composition_ready,
+                composition_visible,
             },
             Err(error) => {
                 tracing::warn!(
@@ -46,13 +53,16 @@ impl WindowsRendererBackend {
                     composition,
                     direct2d: None,
                     composition_ready,
+                    composition_visible,
                 }
             }
         }
     }
 
     pub(super) fn kind(&self) -> RendererKind {
-        if self.direct2d.is_some() {
+        if self.composition_visible {
+            RendererKind::CompositionVisible
+        } else if self.direct2d.is_some() {
             RendererKind::Direct2dPerPixel
         } else {
             RendererKind::GdiFallback
@@ -64,7 +74,10 @@ impl WindowsRendererBackend {
     }
 
     pub(super) fn uses_per_pixel_surface(&self) -> bool {
-        matches!(self.kind(), RendererKind::Direct2dPerPixel)
+        matches!(
+            self.kind(),
+            RendererKind::CompositionVisible | RendererKind::Direct2dPerPixel
+        )
     }
 
     pub(super) fn surface_outset(&self) -> f64 {
@@ -102,6 +115,7 @@ impl WindowsRendererBackend {
         } else {
             None
         };
+        let mut composition_painted = false;
         if let (Some(composition), Some(scene)) =
             (self.composition.as_mut(), composition_scene.as_ref())
         {
@@ -110,7 +124,12 @@ impl WindowsRendererBackend {
                     ?error,
                     "DirectComposition reserved scene update failed; keeping fallback renderer"
                 );
+            } else {
+                composition_painted = true;
             }
+        }
+        if self.composition_visible && composition_painted {
+            return Some(Ok(()));
         }
         self.direct2d
             .as_mut()
@@ -162,6 +181,10 @@ mod tests {
             RendererKind::CompositionPlanned
         ));
         assert!(matches!(
+            RendererKind::CompositionVisible,
+            RendererKind::CompositionVisible
+        ));
+        assert!(matches!(
             RendererKind::Direct2dPerPixel,
             RendererKind::Direct2dPerPixel
         ));
@@ -179,5 +202,6 @@ mod tests {
             composition::CompositionReadiness::Planned
         );
         assert!(matches!(backend.kind(), RendererKind::GdiFallback));
+        assert!(!backend.composition_visible);
     }
 }

@@ -1377,9 +1377,11 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
     for token in [
         "RendererKind",
         "CompositionPlanned",
+        "CompositionVisible",
         "Direct2dPerPixel",
         "GdiFallback",
         "SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE",
+        "SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_VISIBLE",
         "probe_composition",
         "uses_per_pixel_surface",
         "disable_accelerated_backend",
@@ -1482,6 +1484,7 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "composition shadow surface",
         "static animation binding",
         "state-driven opacity animation",
+        "manual visible backend gate",
         "DirectWrite text",
         "Direct2D fallback now renders state icons through DirectWrite icon glyphs",
     ] {

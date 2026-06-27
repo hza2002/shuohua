@@ -33,7 +33,8 @@ Windows 状态图标路线已经从手绘 primitive 转向系统 icon font：`Se
 `Segoe MDL2 Assets` fallback。当前 Direct2D fallback 只渲染静态 glyph；后续 Composition backend
 负责 opacity/scale/rotate/translate 动画，不自绘 icon 本体。
 
-Windows Composition backend 目前仍是 `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE` gated probe：已能创建
+Windows Composition backend 目前仍是 gated probe：`SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE` 只初始化旁路
+probe，`SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_VISIBLE` 是本地 QA 用 manual visible backend gate。它已能创建
 DirectComposition visual tree、绑定/resize panel surface，并用 Direct2D-on-DXGI-surface 绘制圆角半透明
 panel、系统 icon glyph 和文本；还验证了 compositor-owned rounded clipping 和 panel opacity binding。
 Composition probe 与 Direct2D fallback 共用 shadow outset geometry：surface 包含 renderer-owned outset，

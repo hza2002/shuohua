@@ -280,6 +280,9 @@ Release packaging still needs a separate single-executable acceptance gate: buil
 `shuo.exe` into a clean directory, and verify `shuo.exe --version`, `shuo.exe doctor`, and a Silero VAD
 initialization smoke (`shuo.exe diagnostics silero-vad`) without manually copying ORT DLLs or asking the user to
 install extra runtime components.
+Phase 10ca ran that gate locally for the current Windows x64 release artifact: a clean temp directory containing
+only `shuo.exe` passed `--version`, `diagnostics silero-vad`, and `doctor`. This validates the embedded ORT
+provisioning path for this build; future release candidates must still repeat the same copy-only gate.
 Passing build/tests alone does not promote Windows VAD capability to available; real microphone VadPause smoke is
 still required.
 

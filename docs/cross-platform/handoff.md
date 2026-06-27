@@ -19,6 +19,23 @@ current HEAD.
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
 
+Phase 10ca Windows single-executable release smoke 已完成：
+
+- 本机执行 `cargo build --release --target x86_64-pc-windows-msvc`，生成
+  `target\x86_64-pc-windows-msvc\release\shuo.exe`，大小约 21.96 MB。
+- 将且仅将 `shuo.exe` 复制到 clean temp 目录
+  `%LOCALAPPDATA%\Temp\shuohua-single-exe-smoke-2c967ad4dbee4e73aef7409fe7608d25`，目录内无
+  `onnxruntime.dll` 或其他伴随文件。
+- 从 clean temp 目录运行通过：
+  `.\shuo.exe --version` -> `shuo 0.2.0`；
+  `.\shuo.exe diagnostics silero-vad` -> `silero-vad: OK frame=Silence probability=0.044263`；
+  `.\shuo.exe doctor` -> exit 0，summary 为 `errors: 0, warnings: 3`。
+- doctor warning 来自当前本机配置/daemon/permission 诊断：draft LLM api_key 为空、daemon 未运行、
+  Windows permission probe unavailable；不是单二进制依赖或 ORT provisioning 失败。
+- 结论：当前 Windows release artifact 满足“用户只拿一个 `shuo.exe` 即可运行 Silero/doctor”的本机验收。
+  后续每个 release candidate 仍需重复 copy-only gate；这不等于 Windows VAD/audio capability 升级为
+  `available`。
+
 Phase 10bz Windows hotkey suppression target smoke 已完成：
 
 - 新增 Windows ignored runtime smoke

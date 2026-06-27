@@ -388,9 +388,9 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 platform: PlatformKind::Windows,
                 backend: "sendinput_ctrl_v",
                 status: CapabilityStatusKind::Partial,
-                summary: "SendInput Ctrl+V paste injection is implemented but needs target-app and elevation validation",
-                reason: "runtime_smoke_only",
-                next_step: Some("Validate Ctrl+V injection across target Windows apps and UAC/elevation boundaries"),
+                summary: "SendInput Ctrl+V can paste into a foreground Win32 edit control",
+                reason: "win32_edit_target_runtime_smoke",
+                next_step: Some("Validate Ctrl+V injection across real target Windows apps and UAC/elevation boundaries"),
             },
             CapabilityStatus {
                 id: CapabilityId::DesktopActiveApp,

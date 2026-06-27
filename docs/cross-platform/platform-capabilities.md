@@ -343,11 +343,25 @@ Phase 10bw 后，Windows `desktop.clipboard` reason 收窄为 `dispatch_clipboar
 - 该 smoke 不触发 `SendInput`，不验证目标 App 是否接收 paste，不覆盖 elevation/UAC 和更多 App 矩阵；
   `desktop.clipboard` 仍保持 `partial`。
 
+## Phase 10bx Windows Paste Target Smoke
+
+Phase 10bx 后，Windows `desktop.text_injection` reason 收窄为 `win32_edit_target_runtime_smoke`：
+
+- `desktop.text_injection`：`partial`，backend `sendinput_ctrl_v`，reason
+  `win32_edit_target_runtime_smoke`。
+- ignored runtime smoke 会创建一个临时 foreground Win32 `EDIT` control，把 Unicode 文本写入 clipboard，
+  调用真实 `platform::autotype::paste()`，再用 `GetWindowTextW` 读回目标控件文本。
+- 这比只验证 `SendInput` 返回成功更接近真实 paste，但目标仍是测试进程自己创建的基础 Win32 edit
+  control；它不覆盖 Notepad/browser/editor/terminal、IME、remote desktop、UAC/elevation 或完整
+  record -> paste session。
+- 在真实目标 App、elevation 边界和 full record -> paste session 验证前，不能升级为 `available`。
+
 ## Phase 10am Windows Paste Injection Backend
 
 Windows `desktop.text_injection` 在 Phase 10am 只表达 `SendInput` Ctrl+V backend 存在：
 
-- `desktop.text_injection`：`partial`，backend `sendinput_ctrl_v`，reason `runtime_smoke_only`。
+- `desktop.text_injection`：`partial`，backend `sendinput_ctrl_v`，reason
+  `win32_edit_target_runtime_smoke`。
 - backend 只发送 Control down、V down、V up、Control up，不负责选择目标窗口、不恢复 clipboard、
   不处理高完整性窗口/UAC 边界。
 - `desktop.clipboard` 和 `desktop.text_injection` 是分开的能力；前者可成功但后者被目标 App 拒收。

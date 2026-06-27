@@ -1768,6 +1768,10 @@ fn windows_paste_backend_uses_sendinput_ctrl_v() {
         "VK_V",
         "ctrl_v_inputs",
         "paste_runtime_smoke",
+        "paste_into_win32_edit_runtime_smoke",
+        "CreateWindowExW",
+        "GetWindowTextW",
+        "SHUOHUA_WINDOWS_PASTE_TARGET_SMOKE_TEXT",
     ] {
         assert!(
             backend.contains(token),
@@ -1796,8 +1800,8 @@ fn windows_text_injection_capability_reports_sendinput_partial() {
     for token in [
         "CapabilityId::DesktopTextInjection",
         "sendinput_ctrl_v",
-        "runtime_smoke_only",
-        "Validate Ctrl+V injection across target Windows apps and UAC/elevation boundaries",
+        "win32_edit_target_runtime_smoke",
+        "Validate Ctrl+V injection across real target Windows apps and UAC/elevation boundaries",
     ] {
         assert!(
             capability.contains(token),

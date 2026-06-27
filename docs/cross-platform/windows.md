@@ -386,8 +386,9 @@ Current paste injection baseline:
   Control down, V down, V up, Control up.
 - This is only a backend primitive. It does not implement hotkey triggering, foreground target selection, overlay,
   audio, or full record -> paste validation.
-- Capability is `partial/sendinput_ctrl_v/runtime_smoke_only` until Notepad/browser/editor/terminal and
-  UAC/elevation boundaries are validated.
+- Capability is `partial/sendinput_ctrl_v/win32_edit_target_runtime_smoke` after an ignored Windows runtime smoke
+  pastes Unicode text into a foreground Win32 `EDIT` control created by the test process. Notepad/browser/editor/
+  terminal, IME, remote desktop, and UAC/elevation boundaries are still unvalidated.
 - If paste injection fails in a future full session, the clipboard write should still remain the durable fallback.
 
 Current active app identity baseline:

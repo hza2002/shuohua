@@ -19,6 +19,25 @@ current HEAD.
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
 
+Phase 10bx Windows paste target smoke 已完成：
+
+- 新增 Windows ignored runtime smoke
+  `platform::windows::autotype::tests::paste_into_win32_edit_runtime_smoke`，它把 Unicode 文本写入 Win32
+  clipboard，创建 foreground Win32 `EDIT` control，调用真实 `platform::autotype::paste()` / `SendInput`
+  Ctrl+V，再用 `GetWindowTextW` 读回目标控件文本。
+- 本机已通过：
+  `SHUOHUA_WINDOWS_PASTE_TARGET_SMOKE_TEXT='shuohua paste target smoke 20260627 字🙂' cargo test --target
+  x86_64-pc-windows-msvc platform::windows::autotype::tests::paste_into_win32_edit_runtime_smoke -- --ignored
+  --exact`。
+- Windows `desktop.text_injection` capability 仍为 `partial/sendinput_ctrl_v`，reason 从
+  `runtime_smoke_only` 收窄为 `win32_edit_target_runtime_smoke`。这只证明 Ctrl+V 能进入测试进程创建的
+  Win32 EDIT control，不覆盖 Notepad/browser/editor/terminal、IME、remote desktop、UAC/elevation 或 full
+  record -> paste session。
+- 验证已通过：`cargo fmt --check`、
+  `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings`、
+  `cargo test --target x86_64-pc-windows-msvc`、
+  `cargo build --target x86_64-pc-windows-msvc`、`cargo test`。
+
 Phase 10bw Windows dispatch clipboard smoke 已完成：
 
 - 新增 Windows ignored runtime smoke

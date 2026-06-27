@@ -36,6 +36,7 @@ mod backend;
 mod composition;
 mod direct2d;
 mod icons;
+mod scene;
 
 const CLASS_NAME: &str = "ShuohuaOverlayWindow";
 const POLL_INTERVAL: Duration = Duration::from_millis(16);

@@ -1356,6 +1356,7 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
     let composition =
         std::fs::read_to_string(root.join("src/overlay/windows/composition.rs")).unwrap();
     let icons = std::fs::read_to_string(root.join("src/overlay/windows/icons.rs")).unwrap();
+    let scene = std::fs::read_to_string(root.join("src/overlay/windows/scene.rs")).unwrap();
     let direct2d = std::fs::read_to_string(root.join("src/overlay/windows/direct2d.rs")).unwrap();
     let overlay_doc = std::fs::read_to_string(root.join("docs/cross-platform/overlay.md")).unwrap();
 
@@ -1364,6 +1365,7 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "mod composition;",
         "mod direct2d;",
         "mod icons;",
+        "mod scene;",
         "WindowsRendererBackend",
     ] {
         assert!(
@@ -1426,10 +1428,12 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
     }
 
     assert!(
-        direct2d.contains("icon_font_fallback_order")
-            && direct2d.contains("state_icon_plan")
+        scene.contains("WindowsOverlayScene")
+            && scene.contains("state_icon_plan")
+            && direct2d.contains("icon_font_fallback_order")
+            && direct2d.contains("WindowsOverlayScene")
             && direct2d.contains("CreateTextFormat"),
-        "Direct2D fallback should render status icons through DirectWrite icon glyphs"
+        "Direct2D fallback should render status icons through the shared Windows overlay scene and DirectWrite icon glyphs"
     );
     for forbidden in ["Ellipse(", "Polygon(", "DrawLine("] {
         assert!(

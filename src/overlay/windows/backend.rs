@@ -1,7 +1,8 @@
 use anyhow::Result;
 use windows_sys::Win32::Foundation::HWND;
 
-use super::direct2d::{Direct2dRenderer, TextPlan};
+use super::direct2d::Direct2dRenderer;
+use super::scene::TextPlan;
 use super::{composition, WindowMetrics, DIRECT2D_SHADOW_OUTSET};
 use crate::overlay::OverlayModel;
 

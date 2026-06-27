@@ -27,7 +27,8 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 
-use super::icons::{icon_font_fallback_order, state_icon_plan};
+use super::icons::icon_font_fallback_order;
+use super::scene::{TextPlan, WindowsOverlayScene};
 use super::{to_colorref, wide_null, WindowMetrics};
 use crate::overlay::layout as L;
 use crate::overlay::{OverlayModel, OverlayState};
@@ -43,12 +44,6 @@ const KEY_SHADOW_ALPHA: f32 = 0.024;
 const KEY_SHADOW_SPREAD: f64 = 0.7;
 const KEY_SHADOW_Y: f64 = 6.0;
 const MEASURE_HEIGHT: f32 = 16_384.0;
-
-#[derive(Debug, Clone)]
-pub(super) struct TextPlan {
-    pub(super) text: String,
-    pub(super) lines: usize,
-}
 
 pub(super) struct Direct2dRenderer {
     hwnd: HWND,
@@ -84,14 +79,18 @@ impl Direct2dRenderer {
         panel_width_logical: f64,
     ) -> Result<()> {
         let text_plan = self.text_plan(model, cfg, metrics, panel_width_logical)?;
+        let scene = WindowsOverlayScene::from_model(model, cfg, text_plan);
         let panel_width = metrics.px(panel_width_logical).max(1);
         let panel_height = metrics
-            .px(L::overlay_frames(panel_width_logical, cfg.core.text_scale, text_plan.lines).height)
+            .px(
+                L::overlay_frames(panel_width_logical, cfg.core.text_scale, scene.text.lines)
+                    .height,
+            )
             .max(1);
         let outset = metrics.px(super::DIRECT2D_SHADOW_OUTSET).max(0);
         let width = panel_width + outset * 2;
         let height = panel_height + outset * 2;
-        let frames = L::overlay_frames(panel_width_logical, cfg.core.text_scale, text_plan.lines);
+        let frames = L::overlay_frames(panel_width_logical, cfg.core.text_scale, scene.text.lines);
         self.ensure_surface(width, height, metrics)?;
         let surface = self.surface.as_ref().context("Direct2D layered surface")?;
         surface.clear_pixels();
@@ -159,14 +158,14 @@ impl Direct2dRenderer {
                     metrics.rect_f_from_frame(frames.height, frames.row.icon),
                     outset,
                 ),
-                model.state,
-                model.state_color,
+                scene.state_icon,
+                scene.state_color,
             )?;
 
             self.draw_text(
                 &surface.target,
                 &state_format,
-                &model.state_label,
+                &scene.state_label,
                 text_rect(
                     inset_rect(
                         metrics.rect_f_from_frame(frames.height, frames.row.status),
@@ -175,19 +174,13 @@ impl Direct2dRenderer {
                     metrics,
                     1.5,
                 ),
-                model.state_color,
+                scene.state_color,
             )?;
 
-            let app = model.app_name.as_deref().unwrap_or_default();
-            let stats = L::stats_text(
-                &L::format_duration(model.dur_ms),
-                &crate::t!("overlay.word_count", n = model.words),
-                app,
-            );
             self.draw_text(
                 &surface.target,
                 &meta_format,
-                &stats,
+                &scene.stats,
                 text_rect(
                     inset_rect(
                         metrics.rect_f_from_frame(frames.height, frames.row.stats),
@@ -199,15 +192,10 @@ impl Direct2dRenderer {
                 cfg.core.text.secondary,
             )?;
 
-            let (meta, meta_color) = if let Some(notice) = &model.notice {
-                (notice.text.as_str(), cfg.core.text.notice)
-            } else {
-                (model.chain_summary.as_str(), cfg.core.text.tertiary)
-            };
             self.draw_text(
                 &surface.target,
                 &trailing_meta_format,
-                meta,
+                &scene.meta,
                 text_rect(
                     inset_rect(
                         metrics.rect_f_from_frame(frames.height, frames.row.meta),
@@ -216,18 +204,13 @@ impl Direct2dRenderer {
                     metrics,
                     1.5,
                 ),
-                meta_color,
+                scene.meta_color,
             )?;
 
-            let text_color = if model.error_text.is_empty() {
-                cfg.core.text.primary
-            } else {
-                cfg.core.text.error
-            };
             self.draw_text(
                 &surface.target,
                 &body_format,
-                &text_plan.text,
+                &scene.text.text,
                 text_rect(
                     inset_rect(
                         metrics.rect_f_from_frame(frames.height, frames.body),
@@ -236,7 +219,7 @@ impl Direct2dRenderer {
                     metrics,
                     2.0,
                 ),
-                text_color,
+                scene.body_color,
             )?;
 
             surface
@@ -391,10 +374,9 @@ impl Direct2dRenderer {
         target: &ID2D1DCRenderTarget,
         format: &IDWriteTextFormat,
         rect: D2D_RECT_F,
-        state: OverlayState,
+        plan: super::icons::StateIconPlan,
         rgb: u32,
     ) -> Result<()> {
-        let plan = state_icon_plan(state);
         self.draw_text(target, format, &plan.fluent_glyph.to_string(), rect, rgb)
     }
 

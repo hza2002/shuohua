@@ -40,7 +40,8 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
   的 shadow outset geometry：surface 包含 renderer-owned outset，panel/content 坐标保持 inset。但还未绘制
   最终 material/shadow/animation，也未切换默认 backend。当前 composition shadow surface 只验证独立
   `shadow` visual 分层和 tapered shadow pass plumbing，不代表最终阴影质感。Icon visual 已绑定静态 opacity
-  animation probe，只证明 composition static animation binding 可用，不代表状态 icon 动画完成。
+  animation probe，并会按状态 icon plan 切换 state-driven opacity animation profile；这只证明 animation binding
+  和状态路由可用，不代表 transform/scale/rotate 状态 icon 动画完成。
 - Cross-user 第二账号隔离验证延后；代码已有 user/session scoped pipe/mutex 方向，但不同用户实机
   smoke 未完成。
 - Windows release-grade 验收仍缺 multi-monitor、remote desktop/UAC/elevation、更多目标应用、

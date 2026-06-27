@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows::core::{Interface, PCWSTR};
@@ -31,7 +31,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
 use windows_sys::Win32::Foundation::HWND;
 
-use super::icons::{icon_font_fallback_order, state_icon_plan};
+use super::icons::{icon_font_fallback_order, state_icon_plan, IconAnimation};
 use super::scene::WindowsOverlayScene;
 use super::{wide_null, WindowMetrics};
 use crate::overlay::OverlayState;
@@ -131,6 +131,7 @@ pub(super) struct CompositionVisualTree {
     content: IDCompositionVisual,
     icon: IDCompositionVisual,
     icon3: Option<IDCompositionVisual3>,
+    icon_animation: Option<IconAnimation>,
     status: IDCompositionVisual,
     stats: IDCompositionVisual,
     meta: IDCompositionVisual,
@@ -202,6 +203,7 @@ impl CompositionVisualTree {
             content,
             icon,
             icon3,
+            icon_animation: None,
             status,
             stats,
             meta,
@@ -264,6 +266,7 @@ impl CompositionVisualTree {
         let meta = visual_offset(metrics, scene.frames.height, scene.frames.row.meta);
         let body = visual_offset(metrics, scene.frames.height, scene.frames.body);
         self.clips.apply_panel_clip(geometry)?;
+        self.bind_icon_animation_for_state(device, scene.state_icon.animation)?;
         unsafe {
             self.shadow
                 .SetOffsetX2(0.0)
@@ -318,6 +321,70 @@ impl CompositionVisualTree {
             self.body
                 .SetOffsetY2(body.1)
                 .context("IDCompositionVisual::SetOffsetY body")?;
+        }
+        Ok(())
+    }
+
+    fn bind_icon_animation_for_state(
+        &mut self,
+        device: &IDCompositionDevice,
+        animation: IconAnimation,
+    ) -> Result<()> {
+        if self.icon_animation == Some(animation) {
+            return Ok(());
+        }
+        self.icon_animation = Some(animation);
+        let Some(icon3) = &self.icon3 else {
+            return Ok(());
+        };
+        unsafe {
+            match animation {
+                IconAnimation::None => icon3
+                    .SetOpacity2(1.0)
+                    .context("IDCompositionVisual3::SetOpacity2 icon no animation")?,
+                IconAnimation::Breathe | IconAnimation::Pulse | IconAnimation::Rotate => {
+                    let opacity = opacity_keyframe_animation(
+                        device,
+                        "icon state opacity pulse",
+                        &[(0.0, 1.0), (0.42, 0.62), (0.84, 1.0)],
+                    )?;
+                    icon3
+                        .SetOpacity(&opacity)
+                        .context("IDCompositionVisual3::SetOpacity icon pulse animation")?;
+                }
+                IconAnimation::Dots => {
+                    let opacity = opacity_keyframe_animation(
+                        device,
+                        "icon thinking opacity dots",
+                        &[
+                            (0.0, 0.55),
+                            (0.22, 1.0),
+                            (0.44, 0.55),
+                            (0.66, 1.0),
+                            (0.88, 0.8),
+                        ],
+                    )?;
+                    icon3
+                        .SetOpacity(&opacity)
+                        .context("IDCompositionVisual3::SetOpacity icon dots animation")?;
+                }
+                IconAnimation::Shake => {
+                    let opacity = opacity_keyframe_animation(
+                        device,
+                        "icon error opacity alert",
+                        &[
+                            (0.0, 1.0),
+                            (0.12, 0.35),
+                            (0.24, 1.0),
+                            (0.36, 0.45),
+                            (0.54, 1.0),
+                        ],
+                    )?;
+                    icon3
+                        .SetOpacity(&opacity)
+                        .context("IDCompositionVisual3::SetOpacity icon alert animation")?;
+                }
+            }
         }
         Ok(())
     }
@@ -974,6 +1041,45 @@ fn static_animation(
     Ok(animation)
 }
 
+fn opacity_keyframe_animation(
+    device: &IDCompositionDevice,
+    name: &'static str,
+    keyframes: &[(f64, f32)],
+) -> Result<IDCompositionAnimation> {
+    let animation = unsafe {
+        device
+            .CreateAnimation()
+            .with_context(|| format!("IDCompositionDevice::CreateAnimation {name}"))?
+    };
+    let Some((first_time, first_value)) = keyframes.first().copied() else {
+        bail!("opacity animation `{name}` requires at least one keyframe");
+    };
+    let mut previous_time = first_time;
+    let mut previous_value = first_value;
+    unsafe {
+        animation
+            .AddCubic(first_time, first_value, 0.0, 0.0, 0.0)
+            .with_context(|| format!("IDCompositionAnimation::AddCubic {name} first"))?;
+        for (time, value) in keyframes.iter().copied().skip(1) {
+            let duration = (time - previous_time).max(0.0);
+            let slope = if duration > 0.0 {
+                ((value - previous_value) as f64 / duration) as f32
+            } else {
+                0.0
+            };
+            animation
+                .AddCubic(time, value, slope, 0.0, 0.0)
+                .with_context(|| format!("IDCompositionAnimation::AddCubic {name} keyframe"))?;
+            previous_time = time;
+            previous_value = value;
+        }
+        animation
+            .End(previous_time.max(1.0), previous_value)
+            .with_context(|| format!("IDCompositionAnimation::End {name}"))?;
+    }
+    Ok(animation)
+}
+
 fn visual_offset(
     metrics: WindowMetrics,
     surface_height: f64,
@@ -1084,6 +1190,8 @@ mod tests {
             "CompositionGeometry",
             "draw_shadow_probe",
             "shadow_layer_alpha",
+            "bind_icon_animation_for_state",
+            "opacity_keyframe_animation",
             "shadow",
             "panel",
             "content",

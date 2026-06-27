@@ -39,6 +39,7 @@ panel、系统 icon glyph 和文本；还验证了 compositor-owned rounded clip
 Composition probe 与 Direct2D fallback 共用 shadow outset geometry：surface 包含 renderer-owned outset，
 panel/content 坐标保持 inset。Composition shadow surface 已绑定到独立 `shadow` visual，用于验证分层 plumbing。
 Icon visual 已绑定静态 opacity animation probe，用于验证 composition static animation binding。
+Composition probe 会按状态 icon plan 切换 state-driven opacity animation；transform/scale/rotate 动画仍未实现。
 默认可见 renderer 仍是 Direct2D per-pixel fallback，最终 shadow/material/animation 和默认 backend 切换尚未完成。
 
 `renderer.rs` 也持有 renderer capability skeleton：静态描述当前 renderer 是否可用、材质降级、

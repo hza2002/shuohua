@@ -1407,6 +1407,8 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "SetOffsetX2",
         "SetOffsetY2",
         "bind_animation_probes",
+        "bind_icon_animation_for_state",
+        "opacity_keyframe_animation",
         "SetRoot",
         "Commit",
         "IDCompositionSurface",
@@ -1479,6 +1481,7 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "shadow outset geometry",
         "composition shadow surface",
         "static animation binding",
+        "state-driven opacity animation",
         "DirectWrite text",
         "Direct2D fallback now renders state icons through DirectWrite icon glyphs",
     ] {

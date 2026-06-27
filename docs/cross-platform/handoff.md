@@ -6,8 +6,7 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `fix: normalize retained audio peak` (`373ec22`)；本阶段后续 loudness fix 尚未提交，
-以 `git log -1` 为准。
+Latest phase commit: `fix: normalize retained audio loudness` (`2fd05c4`)；以 `git log -1` 为准。
 
 Previous phase commit: `test: add windows process probe smoke`.
 
@@ -19,6 +18,25 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+
+Phase 10ci audio preprocessing research / Windows closeout planning 已记录：
+
+- 新增 `docs/cross-platform/audio-processing.md`，固化 WebRTC APM、Sonora、RNNoise、SpeexDSP、
+  DeepFilterNet 的调研结论、风险、链接和后续可替换 backend 设计。
+- 决策边界：audio preprocessing 是 Windows core 对标后的新能力，不继续挤在当前 Windows runtime
+  收尾里做。现有 Windows VAD-only baseline 和 retained audio loudness normalization 保留为可用状态。
+- Windows 端除 overlay 视觉/现代化重构外，core runtime 主链路已基本对标 macOS 并完成 smoke：
+  hotkey、audio capture、Silero/VadPause、ASR、post、clipboard/paste、history、retained audio、
+  path open/reveal、active app/profile route、IPC/service/single instance/process probe。
+- 仍不能把 Windows capability 全部升级为 `available`：overlay 视觉质量、cross-user 第二账号隔离、
+  multi-monitor、remote desktop/UAC/elevation、更多目标应用、长时间录音 soak、多设备/权限矩阵仍是
+  release-grade 验收项。
+- 当前接口设计对 Linux 继续友好：IPC、lifecycle/service、path open/reveal、audio capture/convert、
+  desktop/hotkey/clipboard/text injection、active app、overlay renderer 都已在 platform/overlay facade
+  后面；Linux 后续应按 backend 补齐和 capability truthfulness 推进，不需要推翻 voice/post/history/IPC
+  共享协议。
+- 接下来用户计划专门重构 Windows overlay 到现代 Windows 视觉路线；完成后 Windows 端可进入收尾验证和
+  capability 矩阵整理。
 
 Phase 10ch retained audio loudness normalization 已完成：
 

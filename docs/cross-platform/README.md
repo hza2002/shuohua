@@ -16,6 +16,7 @@
 | CLI / daemon / GUI / packaged app 的数据归属和路径根 | [app-data.md](app-data.md) |
 | GUI App / Tauri client | [gui.md](gui.md) |
 | 三端原生 overlay renderer | [overlay.md](overlay.md) |
+| 后续音频预处理候选、WebRTC/Sonora 调研、backend 边界 | [audio-processing.md](audio-processing.md) |
 | 一份配置和 theme 如何跨端工作 | [config-theme.md](config-theme.md) |
 | 平台能力模型、降级和诊断 | [platform-capabilities.md](platform-capabilities.md) |
 | IPC transport、单实例、service manager | [ipc-service.md](ipc-service.md) |

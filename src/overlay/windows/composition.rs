@@ -142,7 +142,7 @@ impl CompositionVisualTree {
     fn new(device: &IDCompositionDevice, root: IDCompositionVisual) -> Result<Self> {
         let animations = CompositionAnimations::new(device)?;
         let clips = CompositionClips::new(device)?;
-        let surfaces = CompositionSurfaces::new(device)?;
+        let surfaces = CompositionSurfaces::new();
         let shadow = create_visual(device, "shadow")?;
         let panel = create_visual(device, "panel")?;
         let panel3 = panel.cast::<IDCompositionVisual3>().ok();
@@ -157,14 +157,6 @@ impl CompositionVisualTree {
         unsafe {
             root.SetOffsetX(&animations.root_static_offset)
                 .context("IDCompositionVisual::SetOffsetX root static animation")?;
-            shadow
-                .SetContent(&surfaces.shadow)
-                .context("IDCompositionVisual::SetContent shadow surface")?;
-            panel
-                .SetContent(&surfaces.panel)
-                .context("IDCompositionVisual::SetContent panel surface")?;
-            icon.SetContent(&surfaces.icon)
-                .context("IDCompositionVisual::SetContent icon surface")?;
             panel
                 .SetClip(&clips.panel)
                 .context("IDCompositionVisual::SetClip panel rounded clip")?;
@@ -441,24 +433,24 @@ impl CompositionClips {
 }
 
 pub(super) struct CompositionSurfaces {
-    shadow: IDCompositionSurface,
+    shadow: Option<IDCompositionSurface>,
     shadow_size: (u32, u32),
-    panel: IDCompositionSurface,
+    panel: Option<IDCompositionSurface>,
     panel_size: (u32, u32),
-    icon: IDCompositionSurface,
+    icon: Option<IDCompositionSurface>,
     icon_size: (u32, u32),
 }
 
 impl CompositionSurfaces {
-    fn new(device: &IDCompositionDevice) -> Result<Self> {
-        Ok(Self {
-            shadow: create_surface(device, 1, 1, "shadow")?,
-            shadow_size: (1, 1),
-            panel: create_surface(device, 1, 1, "panel")?,
-            panel_size: (1, 1),
-            icon: create_surface(device, 1, 1, "icon")?,
-            icon_size: (1, 1),
-        })
+    fn new() -> Self {
+        Self {
+            shadow: None,
+            shadow_size: (0, 0),
+            panel: None,
+            panel_size: (0, 0),
+            icon: None,
+            icon_size: (0, 0),
+        }
     }
 
     fn ensure_shadow_surface(
@@ -468,16 +460,17 @@ impl CompositionSurfaces {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        if self.shadow_size == (width, height) {
+        if self.shadow_size == (width, height) && self.shadow.is_some() {
             return Ok(());
         }
-        self.shadow = create_surface(device, width, height, "shadow")?;
+        let surface = create_surface(device, width, height, "shadow")?;
         self.shadow_size = (width, height);
         unsafe {
             visual
-                .SetContent(&self.shadow)
+                .SetContent(&surface)
                 .context("IDCompositionVisual::SetContent resized shadow surface")?;
         }
+        self.shadow = Some(surface);
         Ok(())
     }
 
@@ -488,16 +481,17 @@ impl CompositionSurfaces {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        if self.panel_size == (width, height) {
+        if self.panel_size == (width, height) && self.panel.is_some() {
             return Ok(());
         }
-        self.panel = create_surface(device, width, height, "panel")?;
+        let surface = create_surface(device, width, height, "panel")?;
         self.panel_size = (width, height);
         unsafe {
             visual
-                .SetContent(&self.panel)
+                .SetContent(&surface)
                 .context("IDCompositionVisual::SetContent resized panel surface")?;
         }
+        self.panel = Some(surface);
         Ok(())
     }
 
@@ -508,20 +502,24 @@ impl CompositionSurfaces {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        if self.icon_size == (width, height) {
+        if self.icon_size == (width, height) && self.icon.is_some() {
             return Ok(());
         }
-        self.icon = create_surface(device, width, height, "icon")?;
+        let surface = create_surface(device, width, height, "icon")?;
         self.icon_size = (width, height);
         unsafe {
             visual
-                .SetContent(&self.icon)
+                .SetContent(&surface)
                 .context("IDCompositionVisual::SetContent resized icon surface")?;
         }
+        self.icon = Some(surface);
         Ok(())
     }
 
     fn draw_panel_probe(&self, ctx: CompositionDrawContext<'_>) -> Result<()> {
+        let Some(panel) = &self.panel else {
+            bail!("composition panel surface is not initialized");
+        };
         let rect = RECT {
             left: 0,
             top: 0,
@@ -530,14 +528,14 @@ impl CompositionSurfaces {
         };
         let mut offset = POINT::default();
         let surface = unsafe {
-            self.panel
+            panel
                 .BeginDraw::<IDXGISurface>(Some(&rect), &mut offset)
                 .context("IDCompositionSurface::BeginDraw panel")?
         };
 
         let result = draw_dxgi_scene(&surface, ctx);
         let end = unsafe {
-            self.panel
+            panel
                 .EndDraw()
                 .context("IDCompositionSurface::EndDraw panel")
         };
@@ -545,6 +543,9 @@ impl CompositionSurfaces {
     }
 
     fn draw_icon_probe(&self, ctx: CompositionDrawContext<'_>) -> Result<()> {
+        let Some(icon) = &self.icon else {
+            bail!("composition icon surface is not initialized");
+        };
         let rect = RECT {
             left: 0,
             top: 0,
@@ -553,21 +554,19 @@ impl CompositionSurfaces {
         };
         let mut offset = POINT::default();
         let surface = unsafe {
-            self.icon
-                .BeginDraw::<IDXGISurface>(Some(&rect), &mut offset)
+            icon.BeginDraw::<IDXGISurface>(Some(&rect), &mut offset)
                 .context("IDCompositionSurface::BeginDraw icon")?
         };
 
         let result = draw_dxgi_icon(&surface, ctx, self.icon_size);
-        let end = unsafe {
-            self.icon
-                .EndDraw()
-                .context("IDCompositionSurface::EndDraw icon")
-        };
+        let end = unsafe { icon.EndDraw().context("IDCompositionSurface::EndDraw icon") };
         result.and(end)
     }
 
     fn draw_shadow_probe(&self, ctx: CompositionDrawContext<'_>) -> Result<()> {
+        let Some(shadow) = &self.shadow else {
+            bail!("composition shadow surface is not initialized");
+        };
         let rect = RECT {
             left: 0,
             top: 0,
@@ -576,14 +575,14 @@ impl CompositionSurfaces {
         };
         let mut offset = POINT::default();
         let surface = unsafe {
-            self.shadow
+            shadow
                 .BeginDraw::<IDXGISurface>(Some(&rect), &mut offset)
                 .context("IDCompositionSurface::BeginDraw shadow")?
         };
 
         let result = draw_dxgi_shadow(&surface, ctx);
         let end = unsafe {
-            self.shadow
+            shadow
                 .EndDraw()
                 .context("IDCompositionSurface::EndDraw shadow")
         };
@@ -1134,6 +1133,27 @@ fn opacity_keyframe_animation(
     name: &'static str,
     keyframes: &[(f64, f32)],
 ) -> Result<IDCompositionAnimation> {
+    build_opacity_keyframe_animation(device, name, keyframes, None)
+}
+
+fn repeating_opacity_keyframe_animation(
+    device: &IDCompositionDevice,
+    name: &'static str,
+    keyframes: &[(f64, f32)],
+    duration: f64,
+) -> Result<IDCompositionAnimation> {
+    if duration <= 0.0 {
+        bail!("repeating opacity animation `{name}` requires positive duration");
+    }
+    build_opacity_keyframe_animation(device, name, keyframes, Some(duration))
+}
+
+fn build_opacity_keyframe_animation(
+    device: &IDCompositionDevice,
+    name: &'static str,
+    keyframes: &[(f64, f32)],
+    repeat_duration: Option<f64>,
+) -> Result<IDCompositionAnimation> {
     let animation = unsafe {
         device
             .CreateAnimation()
@@ -1161,27 +1181,17 @@ fn opacity_keyframe_animation(
             previous_time = time;
             previous_value = value;
         }
+        if let Some(duration) = repeat_duration {
+            animation
+                .AddRepeat(0.0, duration)
+                .with_context(|| format!("IDCompositionAnimation::AddRepeat {name}"))?;
+        }
         animation
-            .End(previous_time.max(1.0), previous_value)
+            .End(
+                repeat_duration.unwrap_or_else(|| previous_time.max(1.0)),
+                previous_value,
+            )
             .with_context(|| format!("IDCompositionAnimation::End {name}"))?;
-    }
-    Ok(animation)
-}
-
-fn repeating_opacity_keyframe_animation(
-    device: &IDCompositionDevice,
-    name: &'static str,
-    keyframes: &[(f64, f32)],
-    duration: f64,
-) -> Result<IDCompositionAnimation> {
-    if duration <= 0.0 {
-        bail!("repeating opacity animation `{name}` requires positive duration");
-    }
-    let animation = opacity_keyframe_animation(device, name, keyframes)?;
-    unsafe {
-        animation
-            .AddRepeat(0.0, duration)
-            .with_context(|| format!("IDCompositionAnimation::AddRepeat {name}"))?;
     }
     Ok(animation)
 }

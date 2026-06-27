@@ -335,7 +335,9 @@ Phase 10bg infrastructure status:
   The same probe now also creates DirectWrite text formats and draws the system icon glyph, state label, stats,
   meta, and body text into that composition surface. The probe also binds compositor-owned rounded clipping through
   `IDCompositionRectangleClip` on the panel/content visuals and validates panel opacity binding with
-  `IDCompositionVisual3`. The probe uses the same shadow outset geometry as the Direct2D fallback: the composition
+  `IDCompositionVisual3`. This uses lazy surface creation: startup creates only the device/target/visual tree, then the
+  first scene update creates and binds panel/shadow/icon `IDCompositionSurface` objects with real pixel sizes. This
+  avoids `IDCompositionDevice::CreateSurface` being called too early during daemon startup. The probe uses the same shadow outset geometry as the Direct2D fallback: the composition
   surface includes the renderer-owned outset while panel/content coordinates stay inset. A separate composition shadow surface is
   also bound to the reserved `shadow` visual and draws tapered ambient/key shadow passes only to
   validate compositor layering. The icon visual keeps the earlier static animation binding probe and now owns an

@@ -317,6 +317,20 @@ Recommended next implementation order:
 4. Keep the current Direct2D per-pixel renderer as fallback for Windows 10, unsupported composition paths, remote
    desktop quirks, high contrast, battery saver, or policy-disabled transparency.
 
+Phase 10bg infrastructure status:
+
+- `src/overlay/windows/backend.rs` now owns the Windows renderer selection point. The Composition backend is
+  planned but disabled; the Direct2D per-pixel renderer remains the active fallback.
+- `src/overlay/windows/composition.rs` records the future composition backend contract: Win32 HWND host,
+  DirectComposition or Windows Composition visuals, DirectWrite text, Segoe Fluent Icons glyphs, and Direct2D
+  fallback.
+- `src/overlay/windows/icons.rs` records the state icon plan using Windows official icon fonts:
+  `Segoe Fluent Icons` first, `Segoe MDL2 Assets` fallback. Icon bodies should come from system glyphs; animation
+  belongs to composition opacity/scale/rotate/translate once that backend is enabled.
+- The Direct2D fallback now renders state icons through DirectWrite icon glyphs instead of hand-drawn primitive
+  bars/dots/shapes. This is not the final animation system; it is the first step toward Windows-native iconography
+  without self-drawn icon bodies.
+
 References:
 
 - [DirectComposition](https://learn.microsoft.com/en-us/windows/win32/directcomp/directcomposition-portal)

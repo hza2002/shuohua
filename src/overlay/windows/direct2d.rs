@@ -16,8 +16,8 @@ use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD,
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
-    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS,
-    DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
+    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING,
+    DWRITE_TEXT_METRICS, DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::{
@@ -27,11 +27,12 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
 
+use super::icons::{icon_font_fallback_order, state_icon_plan};
 use super::{to_colorref, wide_null, WindowMetrics};
 use crate::overlay::layout as L;
 use crate::overlay::{OverlayModel, OverlayState};
 
-const FONT_FAMILY: &str = "Microsoft YaHei UI";
+const UI_FONT_FAMILY: &str = "Segoe UI Variable";
 const LOCALE: &str = "en-us";
 const LAYERED_RENDER_TARGET_DPI: f32 = 96.0;
 const AMBIENT_SHADOW_LAYERS: usize = 22;
@@ -147,8 +148,13 @@ impl Direct2dRenderer {
                 true,
             )?;
 
+            let icon_format = self.icon_text_format(physical_font_size(
+                metrics,
+                L::scaled_font_size(18.0, cfg.core.text_scale),
+            ))?;
             self.draw_state_icon(
                 &surface.target,
+                &icon_format,
                 inset_rect(
                     metrics.rect_f_from_frame(frames.height, frames.row.icon),
                     outset,
@@ -369,86 +375,27 @@ impl Direct2dRenderer {
         Ok(())
     }
 
+    fn icon_text_format(&self, point_size: f32) -> Result<IDWriteTextFormat> {
+        self.text_format_for_family(
+            icon_font_fallback_order()[0],
+            point_size,
+            false,
+            false,
+            false,
+            true,
+        )
+    }
+
     fn draw_state_icon(
         &self,
         target: &ID2D1DCRenderTarget,
+        format: &IDWriteTextFormat,
         rect: D2D_RECT_F,
         state: OverlayState,
         rgb: u32,
     ) -> Result<()> {
-        let brush = unsafe {
-            target
-                .CreateSolidColorBrush(&color(rgb, 1.0), None)
-                .context("CreateSolidColorBrush state icon")?
-        };
-        let white = unsafe {
-            target
-                .CreateSolidColorBrush(&color(0xffffff, 1.0), None)
-                .context("CreateSolidColorBrush state icon mark")?
-        };
-        let size = (rect.right - rect.left)
-            .min(rect.bottom - rect.top)
-            .max(1.0);
-        let cx = (rect.left + rect.right) / 2.0;
-        let cy = (rect.top + rect.bottom) / 2.0;
-        let r = (size / 2.0 - 3.0).max(3.0);
-
-        unsafe {
-            match state {
-                OverlayState::Idle | OverlayState::Connecting => {
-                    fill_round_rect(target, square(cx, cy, r), r, &brush);
-                }
-                OverlayState::Recording => {
-                    let bar_w = (size / 7.0).max(2.0);
-                    let gap = (bar_w / 2.0).max(1.0);
-                    for (idx, h) in [r, r * 2.0, r * 1.5].into_iter().enumerate() {
-                        let x = cx - bar_w - gap + idx as f32 * (bar_w + gap);
-                        fill_round_rect(
-                            target,
-                            D2D_RECT_F {
-                                left: x,
-                                top: cy - h / 2.0,
-                                right: x + bar_w,
-                                bottom: cy + h / 2.0,
-                            },
-                            bar_w / 2.0,
-                            &brush,
-                        );
-                    }
-                }
-                OverlayState::Thinking => {
-                    let dot_r = (r / 3.0).max(2.0);
-                    for (x, y) in [(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)] {
-                        fill_round_rect(target, square(x, y, dot_r), dot_r, &brush);
-                    }
-                }
-                OverlayState::Stopping => {
-                    fill_round_rect(target, square(cx, cy, r), 2.0, &brush);
-                }
-                OverlayState::Error => {
-                    fill_round_rect(target, square(cx, cy, r), 3.0, &brush);
-                    target.FillRectangle(
-                        &D2D_RECT_F {
-                            left: cx - 1.0,
-                            top: cy - r / 2.0,
-                            right: cx + 1.0,
-                            bottom: cy + r / 4.0,
-                        },
-                        &white,
-                    );
-                    target.FillRectangle(
-                        &D2D_RECT_F {
-                            left: cx - 1.0,
-                            top: cy + r / 2.0,
-                            right: cx + 1.0,
-                            bottom: cy + r / 2.0 + 2.0,
-                        },
-                        &white,
-                    );
-                }
-            }
-        }
-        Ok(())
+        let plan = state_icon_plan(state);
+        self.draw_text(target, format, &plan.fluent_glyph.to_string(), rect, rgb)
     }
 
     fn ensure_surface(&mut self, width: i32, height: i32, metrics: WindowMetrics) -> Result<()> {
@@ -470,7 +417,26 @@ impl Direct2dRenderer {
         wrap: bool,
         align_trailing: bool,
     ) -> Result<IDWriteTextFormat> {
-        let family = wide_null(FONT_FAMILY);
+        self.text_format_for_family(
+            UI_FONT_FAMILY,
+            point_size,
+            bold,
+            wrap,
+            align_trailing,
+            false,
+        )
+    }
+
+    fn text_format_for_family(
+        &self,
+        family_name: &str,
+        point_size: f32,
+        bold: bool,
+        wrap: bool,
+        align_trailing: bool,
+        center: bool,
+    ) -> Result<IDWriteTextFormat> {
+        let family = wide_null(family_name);
         let locale = wide_null(LOCALE);
         let format = unsafe {
             self.dwrite
@@ -491,7 +457,9 @@ impl Direct2dRenderer {
         };
         unsafe {
             format
-                .SetTextAlignment(if align_trailing {
+                .SetTextAlignment(if center {
+                    DWRITE_TEXT_ALIGNMENT_CENTER
+                } else if align_trailing {
                     DWRITE_TEXT_ALIGNMENT_TRAILING
                 } else {
                     DWRITE_TEXT_ALIGNMENT_LEADING
@@ -589,31 +557,6 @@ fn text_rect(rect: D2D_RECT_F, metrics: WindowMetrics, vertical_pad: f64) -> D2D
         right: rect.right,
         bottom: rect.bottom + pad,
     }
-}
-
-fn square(cx: f32, cy: f32, radius: f32) -> D2D_RECT_F {
-    D2D_RECT_F {
-        left: cx - radius,
-        top: cy - radius,
-        right: cx + radius,
-        bottom: cy + radius,
-    }
-}
-
-unsafe fn fill_round_rect(
-    target: &ID2D1DCRenderTarget,
-    rect: D2D_RECT_F,
-    radius: f32,
-    brush: &windows::Win32::Graphics::Direct2D::ID2D1SolidColorBrush,
-) {
-    target.FillRoundedRectangle(
-        &D2D1_ROUNDED_RECT {
-            rect,
-            radiusX: radius,
-            radiusY: radius,
-        },
-        brush,
-    );
 }
 
 struct LayeredSurface {

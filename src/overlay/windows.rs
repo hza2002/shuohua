@@ -32,7 +32,10 @@ use crate::platform::capability::{
     CapabilityId, CapabilityStatus, CapabilityStatusKind, PlatformKind,
 };
 
+mod backend;
+mod composition;
 mod direct2d;
+mod icons;
 
 const CLASS_NAME: &str = "ShuohuaOverlayWindow";
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
@@ -121,7 +124,7 @@ struct WindowsOverlay {
     model: OverlayModel,
     visible: bool,
     quit: bool,
-    direct2d: Option<direct2d::Direct2dRenderer>,
+    renderer: backend::WindowsRendererBackend,
 }
 
 impl WindowsOverlay {
@@ -137,21 +140,12 @@ impl WindowsOverlay {
             cfg,
             visible: false,
             quit: false,
-            direct2d: None,
+            renderer: backend::WindowsRendererBackend::pending(),
         });
         let raw = overlay.as_mut() as *mut Self;
         let hwnd = create_overlay_window(&overlay.cfg, raw)?;
         overlay.hwnd = hwnd;
-        overlay.direct2d = match direct2d::Direct2dRenderer::new(hwnd) {
-            Ok(renderer) => Some(renderer),
-            Err(error) => {
-                tracing::warn!(
-                    ?error,
-                    "Direct2D overlay renderer unavailable; falling back to GDI"
-                );
-                None
-            }
-        };
+        overlay.renderer = backend::WindowsRendererBackend::new(hwnd);
         Ok(overlay)
     }
 
@@ -293,7 +287,7 @@ impl WindowsOverlay {
             metrics.px(L::overlay_frames(panel_width, self.cfg.core.text_scale, lines).height);
         let radius = metrics.px(self.cfg.core.corner_radius).max(0);
         unsafe {
-            if self.direct2d.is_none() {
+            if !self.renderer.uses_per_pixel_surface() {
                 apply_window_alpha(self.hwnd, self.cfg.core.background_alpha);
                 apply_rounded_window_region(self.hwnd, width, height, radius);
             } else {
@@ -303,16 +297,15 @@ impl WindowsOverlay {
     }
 
     fn surface_outset(&self) -> f64 {
-        if self.direct2d.is_some() {
-            DIRECT2D_SHADOW_OUTSET
-        } else {
-            0.0
-        }
+        self.renderer.surface_outset()
     }
 
     fn overlay_line_count_for_width(&self, metrics: WindowMetrics, panel_width: f64) -> usize {
-        if let Some(renderer) = &self.direct2d {
-            match renderer.text_plan(&self.model, &self.cfg, metrics, panel_width) {
+        if let Some(plan) = self
+            .renderer
+            .text_plan(&self.model, &self.cfg, metrics, panel_width)
+        {
+            match plan {
                 Ok(plan) => return plan.lines,
                 Err(error) => {
                     tracing::warn!(?error, "DirectWrite overlay text measurement failed");
@@ -324,10 +317,13 @@ impl WindowsOverlay {
 
     unsafe fn paint(&mut self, hdc: HDC) {
         let mut disable_direct2d = false;
-        if let Some(renderer) = &mut self.direct2d {
-            let metrics = WindowMetrics::for_window(self.hwnd);
-            let panel_width = resolved_overlay_width(&self.cfg, metrics);
-            match renderer.paint(&self.model, &self.cfg, metrics, panel_width) {
+        let metrics = WindowMetrics::for_window(self.hwnd);
+        let panel_width = resolved_overlay_width(&self.cfg, metrics);
+        if let Some(result) = self
+            .renderer
+            .paint(&self.model, &self.cfg, metrics, panel_width)
+        {
+            match result {
                 Ok(()) => return,
                 Err(error) => {
                     tracing::warn!(?error, "Direct2D overlay paint failed; falling back to GDI");
@@ -336,12 +332,10 @@ impl WindowsOverlay {
             }
         }
         if disable_direct2d {
-            self.direct2d = None;
+            self.renderer.disable_accelerated_backend();
             self.apply_surface_shape();
         }
 
-        let metrics = WindowMetrics::for_window(self.hwnd);
-        let panel_width = resolved_overlay_width(&self.cfg, metrics);
         let lines = overlay_line_count_for_width(&self.model, &self.cfg, panel_width);
         let frames = L::overlay_frames(panel_width, self.cfg.core.text_scale, lines);
         apply_window_alpha(self.hwnd, self.cfg.core.background_alpha);

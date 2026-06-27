@@ -1290,13 +1290,7 @@ fn windows_overlay_records_direct2d_directwrite_foundation() {
         );
     }
 
-    for token in [
-        "mod direct2d;",
-        "Direct2dRenderer",
-        "falling back to GDI",
-        "WS_EX_NOACTIVATE",
-        "HTTRANSPARENT",
-    ] {
+    for token in ["mod direct2d;", "WS_EX_NOACTIVATE", "HTTRANSPARENT"] {
         assert!(
             backend.contains(token),
             "Windows overlay shell should route Direct2D without losing Win32 shell token `{token}`"
@@ -1309,7 +1303,7 @@ fn windows_overlay_records_direct2d_directwrite_foundation() {
         "IDWriteTextFormat",
         "ID2D1RenderTarget",
         "DrawText",
-        "Microsoft YaHei UI",
+        "Segoe UI Variable",
     ] {
         assert!(
             direct2d.contains(token),
@@ -1353,6 +1347,100 @@ fn windows_overlay_records_direct2d_directwrite_foundation() {
 }
 
 #[test]
+fn windows_overlay_composition_infrastructure_is_fallback_gated() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let windows_overlay = std::fs::read_to_string(root.join("src/overlay/windows.rs")).unwrap();
+    let backend = std::fs::read_to_string(root.join("src/overlay/windows/backend.rs")).unwrap();
+    let composition =
+        std::fs::read_to_string(root.join("src/overlay/windows/composition.rs")).unwrap();
+    let icons = std::fs::read_to_string(root.join("src/overlay/windows/icons.rs")).unwrap();
+    let direct2d = std::fs::read_to_string(root.join("src/overlay/windows/direct2d.rs")).unwrap();
+    let overlay_doc = std::fs::read_to_string(root.join("docs/cross-platform/overlay.md")).unwrap();
+
+    for token in [
+        "mod backend;",
+        "mod composition;",
+        "mod direct2d;",
+        "mod icons;",
+        "WindowsRendererBackend",
+    ] {
+        assert!(
+            windows_overlay.contains(token),
+            "Windows overlay root should route through backend infrastructure token `{token}`"
+        );
+    }
+
+    for token in [
+        "RendererKind",
+        "CompositionPlanned",
+        "Direct2dPerPixel",
+        "GdiFallback",
+        "uses_per_pixel_surface",
+        "disable_accelerated_backend",
+        "composition_readiness",
+    ] {
+        assert!(
+            backend.contains(token),
+            "Windows backend selector should contain token `{token}`"
+        );
+    }
+
+    for token in [
+        "win32_composition_planned",
+        "win32_direct2d_per_pixel",
+        "CompositionReadiness",
+        "Planned",
+        "DirectComposition or Windows Composition visuals",
+        "fallback: Direct2D per-pixel layered surface",
+    ] {
+        assert!(
+            composition.contains(token),
+            "Windows composition skeleton should record token `{token}`"
+        );
+    }
+
+    for token in [
+        "Segoe Fluent Icons",
+        "Segoe MDL2 Assets",
+        "StateIconPlan",
+        "IconAnimation",
+        "state_icon_plan",
+        "Recording",
+        "Pulse",
+    ] {
+        assert!(
+            icons.contains(token),
+            "Windows icon plan should use official icon font route token `{token}`"
+        );
+    }
+
+    assert!(
+        direct2d.contains("icon_font_fallback_order")
+            && direct2d.contains("state_icon_plan")
+            && direct2d.contains("CreateTextFormat"),
+        "Direct2D fallback should render status icons through DirectWrite icon glyphs"
+    );
+    for forbidden in ["Ellipse(", "Polygon(", "DrawLine("] {
+        assert!(
+            !direct2d.contains(forbidden),
+            "Direct2D status icon path should not keep hand-drawn primitive token `{forbidden}`"
+        );
+    }
+
+    for token in [
+        "Phase 10bg infrastructure status",
+        "Segoe Fluent Icons",
+        "Composition backend",
+        "Direct2D fallback now renders state icons through DirectWrite icon glyphs",
+    ] {
+        assert!(
+            overlay_doc.contains(token),
+            "overlay docs should record composition infrastructure token `{token}`"
+        );
+    }
+}
+
+#[test]
 fn windows_overlay_records_per_pixel_layered_surface() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let backend = std::fs::read_to_string(root.join("src/overlay/windows.rs")).unwrap();
@@ -1379,7 +1467,7 @@ fn windows_overlay_records_per_pixel_layered_surface() {
     }
 
     assert!(
-        backend.contains("if self.direct2d.is_none()")
+        backend.contains("!self.renderer.uses_per_pixel_surface()")
             && backend.contains("apply_window_alpha(self.hwnd, self.cfg.core.background_alpha)"),
         "Windows Direct2D path should avoid global SetLayeredWindowAttributes alpha"
     );
@@ -1464,7 +1552,7 @@ fn windows_overlay_records_per_pixel_shadow_polish() {
         "DIRECT2D_SHADOW_OUTSET",
         "surface_outset",
         "clear_window_region",
-        "if self.direct2d.is_none()",
+        "!self.renderer.uses_per_pixel_surface()",
     ] {
         assert!(
             backend.contains(token),

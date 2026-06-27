@@ -33,6 +33,10 @@ Windows 状态图标路线已经从手绘 primitive 转向系统 icon font：`Se
 `Segoe MDL2 Assets` fallback。当前 Direct2D fallback 只渲染静态 glyph；后续 Composition backend
 负责 opacity/scale/rotate/translate 动画，不自绘 icon 本体。
 
+Windows Composition backend 目前仍是 `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE` gated probe：已能创建
+DirectComposition visual tree、绑定/resize panel surface，并用 Direct2D-on-DXGI-surface 绘制圆角半透明
+panel；默认可见 renderer 仍是 Direct2D per-pixel fallback，最终 text/icon/shadow/material/animation 尚未完成。
+
 `renderer.rs` 也持有 renderer capability skeleton：静态描述当前 renderer 是否可用、材质降级、
 置顶、输入穿透和窗口锚定状态。它复用 `platform::capability` 的 status 类型，不执行窗口创建、
 权限 probe 或业务配置读取；macOS 现有 AppKit 行为不因此改变。

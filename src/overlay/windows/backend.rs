@@ -102,7 +102,9 @@ impl WindowsRendererBackend {
         } else {
             None
         };
-        if let (Some(composition), Some(scene)) = (&self.composition, composition_scene.as_ref()) {
+        if let (Some(composition), Some(scene)) =
+            (self.composition.as_mut(), composition_scene.as_ref())
+        {
             if let Err(error) = composition.update_reserved_scene(scene, metrics) {
                 tracing::warn!(
                     ?error,

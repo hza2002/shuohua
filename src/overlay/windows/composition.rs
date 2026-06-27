@@ -1,5 +1,14 @@
 use anyhow::{Context, Result};
 use windows::Win32::Foundation::HWND as WindowsHwnd;
+use windows::Win32::Foundation::{POINT, RECT};
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
+};
+use windows::Win32::Graphics::Direct2D::{
+    D2D1CreateFactory, ID2D1Factory, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
+    D2D1_ROUNDED_RECT,
+};
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice, IDCompositionAnimation, IDCompositionDevice, IDCompositionSurface,
     IDCompositionTarget, IDCompositionVisual,
@@ -7,6 +16,7 @@ use windows::Win32::Graphics::DirectComposition::{
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM,
 };
+use windows::Win32::Graphics::Dxgi::IDXGISurface;
 use windows_sys::Win32::Foundation::HWND;
 
 use super::icons::{icon_font_fallback_order, state_icon_plan};
@@ -26,6 +36,7 @@ pub(super) enum CompositionReadiness {
 
 pub(super) struct CompositionRenderer {
     device: IDCompositionDevice,
+    d2d: ID2D1Factory,
     _target: IDCompositionTarget,
     tree: CompositionVisualTree,
 }
@@ -36,6 +47,10 @@ impl CompositionRenderer {
         let device = unsafe {
             DCompositionCreateDevice::<_, IDCompositionDevice>(None)
                 .context("DCompositionCreateDevice")?
+        };
+        let d2d = unsafe {
+            D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)
+                .context("D2D1CreateFactory composition surface")?
         };
         let target = unsafe {
             device
@@ -56,17 +71,19 @@ impl CompositionRenderer {
         }
         Ok(Self {
             device,
+            d2d,
             _target: target,
             tree,
         })
     }
 
     pub(super) fn update_reserved_scene(
-        &self,
+        &mut self,
         scene: &WindowsOverlayScene,
         metrics: WindowMetrics,
     ) -> Result<()> {
-        self.tree.apply_scene_contract(scene, metrics)?;
+        self.tree
+            .apply_scene_contract(&self.device, &self.d2d, scene, metrics)?;
         unsafe {
             self.device
                 .Commit()
@@ -147,12 +164,27 @@ impl CompositionVisualTree {
     }
 
     fn apply_scene_contract(
-        &self,
+        &mut self,
+        device: &IDCompositionDevice,
+        d2d: &ID2D1Factory,
         scene: &WindowsOverlayScene,
         metrics: WindowMetrics,
     ) -> Result<()> {
         self.animations.keep_alive();
-        self.surfaces.keep_alive();
+        self.surfaces.ensure_panel_surface(
+            device,
+            &self.panel,
+            metrics.px(scene.panel_width).max(1) as u32,
+            metrics.px(scene.frames.height).max(1) as u32,
+        )?;
+        self.surfaces.draw_panel_probe(
+            d2d,
+            metrics.px(scene.panel_width).max(1) as u32,
+            metrics.px(scene.frames.height).max(1) as u32,
+            metrics.px(scene.corner_radius).max(0) as f32,
+            scene.panel_color,
+            scene.panel_alpha,
+        )?;
         let icon = visual_offset(metrics, scene.frames.height, scene.frames.row.icon);
         let status = visual_offset(metrics, scene.frames.height, scene.frames.row.status);
         let stats = visual_offset(metrics, scene.frames.height, scene.frames.row.stats);
@@ -214,24 +246,134 @@ impl CompositionVisualTree {
 
 pub(super) struct CompositionSurfaces {
     panel: IDCompositionSurface,
+    panel_size: (u32, u32),
 }
 
 impl CompositionSurfaces {
     fn new(device: &IDCompositionDevice) -> Result<Self> {
-        let panel = unsafe {
-            device
-                .CreateSurface(
-                    1,
-                    1,
-                    DXGI_FORMAT_B8G8R8A8_UNORM,
-                    DXGI_ALPHA_MODE_PREMULTIPLIED,
-                )
-                .context("IDCompositionDevice::CreateSurface panel")?
-        };
-        Ok(Self { panel })
+        Ok(Self {
+            panel: create_panel_surface(device, 1, 1)?,
+            panel_size: (1, 1),
+        })
     }
 
-    fn keep_alive(&self) {}
+    fn ensure_panel_surface(
+        &mut self,
+        device: &IDCompositionDevice,
+        visual: &IDCompositionVisual,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        if self.panel_size == (width, height) {
+            return Ok(());
+        }
+        self.panel = create_panel_surface(device, width, height)?;
+        self.panel_size = (width, height);
+        unsafe {
+            visual
+                .SetContent(&self.panel)
+                .context("IDCompositionVisual::SetContent resized panel surface")?;
+        }
+        Ok(())
+    }
+
+    fn draw_panel_probe(
+        &self,
+        d2d: &ID2D1Factory,
+        width: u32,
+        height: u32,
+        radius: f32,
+        rgb: u32,
+        alpha: f64,
+    ) -> Result<()> {
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
+        let mut offset = POINT::default();
+        let surface = unsafe {
+            self.panel
+                .BeginDraw::<IDXGISurface>(Some(&rect), &mut offset)
+                .context("IDCompositionSurface::BeginDraw panel")?
+        };
+
+        let result = draw_dxgi_panel(d2d, &surface, width, height, radius, rgb, alpha);
+        let end = unsafe {
+            self.panel
+                .EndDraw()
+                .context("IDCompositionSurface::EndDraw panel")
+        };
+        result.and(end)
+    }
+}
+
+fn create_panel_surface(
+    device: &IDCompositionDevice,
+    width: u32,
+    height: u32,
+) -> Result<IDCompositionSurface> {
+    unsafe {
+        device
+            .CreateSurface(
+                width,
+                height,
+                DXGI_FORMAT_B8G8R8A8_UNORM,
+                DXGI_ALPHA_MODE_PREMULTIPLIED,
+            )
+            .context("IDCompositionDevice::CreateSurface panel")
+    }
+}
+
+fn draw_dxgi_panel(
+    d2d: &ID2D1Factory,
+    surface: &IDXGISurface,
+    width: u32,
+    height: u32,
+    radius: f32,
+    rgb: u32,
+    alpha: f64,
+) -> Result<()> {
+    let props = D2D1_RENDER_TARGET_PROPERTIES {
+        r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        pixelFormat: D2D1_PIXEL_FORMAT {
+            format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+        },
+        dpiX: 96.0,
+        dpiY: 96.0,
+        usage: D2D1_RENDER_TARGET_USAGE_NONE,
+        minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+    };
+    let target = unsafe {
+        d2d.CreateDxgiSurfaceRenderTarget(surface, &props)
+            .context("ID2D1Factory::CreateDxgiSurfaceRenderTarget panel")?
+    };
+    unsafe {
+        target.BeginDraw();
+        target.Clear(Some(&transparent_color()));
+        let brush = target
+            .CreateSolidColorBrush(&color(rgb, alpha.clamp(0.0, 1.0) as f32), None)
+            .context("CreateSolidColorBrush composition panel")?;
+        target.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F {
+                    left: 0.0,
+                    top: 0.0,
+                    right: width as f32,
+                    bottom: height as f32,
+                },
+                radiusX: radius,
+                radiusY: radius,
+            },
+            &brush,
+        );
+        target
+            .EndDraw(None, None)
+            .context("ID2D1RenderTarget::EndDraw panel")?;
+    }
+    Ok(())
 }
 
 pub(super) struct CompositionAnimations {
@@ -275,6 +417,24 @@ fn visual_offset(
 ) -> (f32, f32) {
     let top = surface_height - frame.y - frame.h;
     (metrics.px(frame.x) as f32, metrics.px(top) as f32)
+}
+
+fn transparent_color() -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 0.0,
+    }
+}
+
+fn color(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: ((rgb >> 16) & 0xff) as f32 / 255.0,
+        g: ((rgb >> 8) & 0xff) as f32 / 255.0,
+        b: (rgb & 0xff) as f32 / 255.0,
+        a: alpha,
+    }
 }
 
 fn create_visual(device: &IDCompositionDevice, name: &'static str) -> Result<IDCompositionVisual> {

@@ -1407,6 +1407,12 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "SetOffsetY2",
         "SetRoot",
         "Commit",
+        "IDCompositionSurface",
+        "BeginDraw::<IDXGISurface>",
+        "CreateDxgiSurfaceRenderTarget",
+        "EndDraw",
+        "draw_panel_probe",
+        "ensure_panel_surface",
         "DirectComposition or Windows Composition visuals",
         "fallback: Direct2D per-pixel layered surface",
     ] {
@@ -1450,6 +1456,7 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "Phase 10bg infrastructure status",
         "Segoe Fluent Icons",
         "Composition backend",
+        "Direct2D-on-composition-surface",
         "Direct2D fallback now renders state icons through DirectWrite icon glyphs",
     ] {
         assert!(

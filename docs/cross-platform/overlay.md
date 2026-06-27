@@ -328,8 +328,11 @@ Phase 10bg infrastructure status:
   later compositor-owned shadow, rounded clipping, material, and animation work. The reserved visual tree already
   separates `shadow`, `panel`, `content`, `icon`, `status`, `stats`, `meta`, and `body` layers. A no-op
   `IDCompositionAnimation` probe is bound to the root visual to validate animation creation/binding/commit without
-  changing the visible fallback renderer. A transparent 1x1 `IDCompositionSurface` is bound to the panel visual to
-  validate surface creation/content binding before Direct2D-on-composition-surface drawing is introduced.
+  changing the visible fallback renderer. The panel visual now owns a resizable `IDCompositionSurface`; the gated
+  probe enters `BeginDraw::<IDXGISurface>`, creates a Direct2D render target with
+  `CreateDxgiSurfaceRenderTarget`, draws the rounded translucent panel surface, then calls `EndDraw` and commits.
+  This proves Direct2D-on-composition-surface plumbing only; final material, shadow, text, icon animation, and
+  default backend switching remain separate work.
 - `src/overlay/windows/icons.rs` records the state icon plan using Windows official icon fonts:
   `Segoe Fluent Icons` first, `Segoe MDL2 Assets` fallback. Icon bodies should come from system glyphs; animation
   belongs to composition opacity/scale/rotate/translate once that backend is enabled.

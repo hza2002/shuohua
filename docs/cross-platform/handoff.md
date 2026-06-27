@@ -19,8 +19,6 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
   `src/client_api.rs`、`src/lib.rs`、`docs/cross-platform/gui.md`。
 - TUI 已重新直接使用 `ipc::client::IpcClient` 和既有 `Command::Subscribe`，不依赖
   GUI client helper。
-- `docs/cross-platform/audio-processing.md` 已记录后续 audio preprocessing 调研：
-  WebRTC APM、Sonora、RNNoise、SpeexDSP、DeepFilterNet、backend 边界和单二进制风险。
 - Windows core runtime 主链路已完成一轮 smoke/用户验证：hotkey、audio capture、Silero/VadPause、
   ASR、post、clipboard/paste、history、retained audio、path open/reveal、active app/profile route、
   IPC/service/single instance/process probe。
@@ -58,7 +56,6 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
 - Windows release-grade 验收仍缺 multi-monitor、remote desktop/UAC/elevation、更多目标应用、
   长时间录音 soak、多设备/权限矩阵。
 - Linux runtime backend 尚未接完整链路。
-- Audio preprocessing 暂作为后续独立能力，不在当前 Windows closeout 中继续扩展。
 
 ## 验证结果
 

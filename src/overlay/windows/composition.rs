@@ -1,17 +1,28 @@
 use anyhow::{Context, Result};
+use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::HWND as WindowsHwnd;
 use windows::Win32::Foundation::{POINT, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Factory, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
+    D2D1CreateFactory, ID2D1Factory, ID2D1RenderTarget, D2D1_DRAW_TEXT_OPTIONS_CLIP,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
-    D2D1_ROUNDED_RECT,
+    D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
 };
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice, IDCompositionAnimation, IDCompositionDevice, IDCompositionSurface,
     IDCompositionTarget, IDCompositionVisual,
+};
+use windows::Win32::Graphics::DirectWrite::{
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING,
+    DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -21,8 +32,11 @@ use windows_sys::Win32::Foundation::HWND;
 
 use super::icons::{icon_font_fallback_order, state_icon_plan};
 use super::scene::WindowsOverlayScene;
-use super::WindowMetrics;
+use super::{wide_null, WindowMetrics};
 use crate::overlay::OverlayState;
+
+const UI_FONT_FAMILY: &str = "Segoe UI Variable";
+const LOCALE: &str = "en-us";
 
 pub(super) const BACKEND_NAME: &str = "win32_composition_planned";
 pub(super) const FALLBACK_BACKEND_NAME: &str = "win32_direct2d_per_pixel";
@@ -37,6 +51,7 @@ pub(super) enum CompositionReadiness {
 pub(super) struct CompositionRenderer {
     device: IDCompositionDevice,
     d2d: ID2D1Factory,
+    dwrite: IDWriteFactory,
     _target: IDCompositionTarget,
     tree: CompositionVisualTree,
 }
@@ -51,6 +66,10 @@ impl CompositionRenderer {
         let d2d = unsafe {
             D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)
                 .context("D2D1CreateFactory composition surface")?
+        };
+        let dwrite = unsafe {
+            DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)
+                .context("DWriteCreateFactory composition surface")?
         };
         let target = unsafe {
             device
@@ -72,6 +91,7 @@ impl CompositionRenderer {
         Ok(Self {
             device,
             d2d,
+            dwrite,
             _target: target,
             tree,
         })
@@ -83,7 +103,7 @@ impl CompositionRenderer {
         metrics: WindowMetrics,
     ) -> Result<()> {
         self.tree
-            .apply_scene_contract(&self.device, &self.d2d, scene, metrics)?;
+            .apply_scene_contract(&self.device, &self.d2d, &self.dwrite, scene, metrics)?;
         unsafe {
             self.device
                 .Commit()
@@ -167,6 +187,7 @@ impl CompositionVisualTree {
         &mut self,
         device: &IDCompositionDevice,
         d2d: &ID2D1Factory,
+        dwrite: &IDWriteFactory,
         scene: &WindowsOverlayScene,
         metrics: WindowMetrics,
     ) -> Result<()> {
@@ -177,14 +198,15 @@ impl CompositionVisualTree {
             metrics.px(scene.panel_width).max(1) as u32,
             metrics.px(scene.frames.height).max(1) as u32,
         )?;
-        self.surfaces.draw_panel_probe(
+        self.surfaces.draw_panel_probe(CompositionDrawContext {
             d2d,
-            metrics.px(scene.panel_width).max(1) as u32,
-            metrics.px(scene.frames.height).max(1) as u32,
-            metrics.px(scene.corner_radius).max(0) as f32,
-            scene.panel_color,
-            scene.panel_alpha,
-        )?;
+            dwrite,
+            scene,
+            metrics,
+            width: metrics.px(scene.panel_width).max(1) as u32,
+            height: metrics.px(scene.frames.height).max(1) as u32,
+            radius: metrics.px(scene.corner_radius).max(0) as f32,
+        })?;
         let icon = visual_offset(metrics, scene.frames.height, scene.frames.row.icon);
         let status = visual_offset(metrics, scene.frames.height, scene.frames.row.status);
         let stats = visual_offset(metrics, scene.frames.height, scene.frames.row.stats);
@@ -277,20 +299,12 @@ impl CompositionSurfaces {
         Ok(())
     }
 
-    fn draw_panel_probe(
-        &self,
-        d2d: &ID2D1Factory,
-        width: u32,
-        height: u32,
-        radius: f32,
-        rgb: u32,
-        alpha: f64,
-    ) -> Result<()> {
+    fn draw_panel_probe(&self, ctx: CompositionDrawContext<'_>) -> Result<()> {
         let rect = RECT {
             left: 0,
             top: 0,
-            right: width as i32,
-            bottom: height as i32,
+            right: ctx.width as i32,
+            bottom: ctx.height as i32,
         };
         let mut offset = POINT::default();
         let surface = unsafe {
@@ -299,7 +313,7 @@ impl CompositionSurfaces {
                 .context("IDCompositionSurface::BeginDraw panel")?
         };
 
-        let result = draw_dxgi_panel(d2d, &surface, width, height, radius, rgb, alpha);
+        let result = draw_dxgi_scene(&surface, ctx);
         let end = unsafe {
             self.panel
                 .EndDraw()
@@ -307,6 +321,16 @@ impl CompositionSurfaces {
         };
         result.and(end)
     }
+}
+
+struct CompositionDrawContext<'a> {
+    d2d: &'a ID2D1Factory,
+    dwrite: &'a IDWriteFactory,
+    scene: &'a WindowsOverlayScene,
+    metrics: WindowMetrics,
+    width: u32,
+    height: u32,
+    radius: f32,
 }
 
 fn create_panel_surface(
@@ -326,15 +350,7 @@ fn create_panel_surface(
     }
 }
 
-fn draw_dxgi_panel(
-    d2d: &ID2D1Factory,
-    surface: &IDXGISurface,
-    width: u32,
-    height: u32,
-    radius: f32,
-    rgb: u32,
-    alpha: f64,
-) -> Result<()> {
+fn draw_dxgi_scene(surface: &IDXGISurface, ctx: CompositionDrawContext<'_>) -> Result<()> {
     let props = D2D1_RENDER_TARGET_PROPERTIES {
         r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
         pixelFormat: D2D1_PIXEL_FORMAT {
@@ -347,31 +363,243 @@ fn draw_dxgi_panel(
         minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
     };
     let target = unsafe {
-        d2d.CreateDxgiSurfaceRenderTarget(surface, &props)
+        ctx.d2d
+            .CreateDxgiSurfaceRenderTarget(surface, &props)
             .context("ID2D1Factory::CreateDxgiSurfaceRenderTarget panel")?
     };
     unsafe {
         target.BeginDraw();
+        target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
         target.Clear(Some(&transparent_color()));
         let brush = target
-            .CreateSolidColorBrush(&color(rgb, alpha.clamp(0.0, 1.0) as f32), None)
+            .CreateSolidColorBrush(
+                &color(
+                    ctx.scene.panel_color,
+                    ctx.scene.panel_alpha.clamp(0.0, 1.0) as f32,
+                ),
+                None,
+            )
             .context("CreateSolidColorBrush composition panel")?;
         target.FillRoundedRectangle(
             &D2D1_ROUNDED_RECT {
                 rect: D2D_RECT_F {
                     left: 0.0,
                     top: 0.0,
-                    right: width as f32,
-                    bottom: height as f32,
+                    right: ctx.width as f32,
+                    bottom: ctx.height as f32,
                 },
-                radiusX: radius,
-                radiusY: radius,
+                radiusX: ctx.radius,
+                radiusY: ctx.radius,
             },
             &brush,
         );
+        draw_scene_text(&target, ctx.dwrite, ctx.scene, ctx.metrics)?;
         target
             .EndDraw(None, None)
-            .context("ID2D1RenderTarget::EndDraw panel")?;
+            .context("ID2D1RenderTarget::EndDraw scene")?;
+    }
+    Ok(())
+}
+
+fn draw_scene_text(
+    target: &ID2D1RenderTarget,
+    dwrite: &IDWriteFactory,
+    scene: &WindowsOverlayScene,
+    metrics: WindowMetrics,
+) -> Result<()> {
+    let meta_format = text_format(
+        dwrite,
+        UI_FONT_FAMILY,
+        physical_font_size(
+            metrics,
+            crate::overlay::layout::scaled_font_size(12.0, scene.text_scale),
+        ),
+        false,
+        false,
+        false,
+        false,
+    )?;
+    let state_format = text_format(
+        dwrite,
+        UI_FONT_FAMILY,
+        physical_font_size(
+            metrics,
+            crate::overlay::layout::scaled_font_size(13.0, scene.text_scale),
+        ),
+        true,
+        false,
+        false,
+        false,
+    )?;
+    let body_format = text_format(
+        dwrite,
+        UI_FONT_FAMILY,
+        physical_font_size(
+            metrics,
+            crate::overlay::layout::scaled_font_size(14.0, scene.text_scale),
+        ),
+        false,
+        true,
+        false,
+        false,
+    )?;
+    let trailing_format = text_format(
+        dwrite,
+        UI_FONT_FAMILY,
+        physical_font_size(
+            metrics,
+            crate::overlay::layout::scaled_font_size(12.0, scene.text_scale),
+        ),
+        false,
+        false,
+        true,
+        false,
+    )?;
+    let icon_format = text_format(
+        dwrite,
+        icon_font_fallback_order()[0],
+        physical_font_size(
+            metrics,
+            crate::overlay::layout::scaled_font_size(18.0, scene.text_scale),
+        ),
+        false,
+        false,
+        false,
+        true,
+    )?;
+
+    draw_text(
+        target,
+        &icon_format,
+        &scene.state_icon.fluent_glyph.to_string(),
+        metrics.rect_f_from_frame(scene.frames.height, scene.frames.row.icon),
+        scene.state_color,
+    )?;
+    draw_text(
+        target,
+        &state_format,
+        &scene.state_label,
+        text_rect(
+            metrics.rect_f_from_frame(scene.frames.height, scene.frames.row.status),
+            metrics,
+            1.5,
+        ),
+        scene.state_color,
+    )?;
+    draw_text(
+        target,
+        &meta_format,
+        &scene.stats,
+        text_rect(
+            metrics.rect_f_from_frame(scene.frames.height, scene.frames.row.stats),
+            metrics,
+            1.5,
+        ),
+        scene.stats_color,
+    )?;
+    draw_text(
+        target,
+        &trailing_format,
+        &scene.meta,
+        text_rect(
+            metrics.rect_f_from_frame(scene.frames.height, scene.frames.row.meta),
+            metrics,
+            1.5,
+        ),
+        scene.meta_color,
+    )?;
+    draw_text(
+        target,
+        &body_format,
+        &scene.text.text,
+        text_rect(
+            metrics.rect_f_from_frame(scene.frames.height, scene.frames.body),
+            metrics,
+            2.0,
+        ),
+        scene.body_color,
+    )?;
+    Ok(())
+}
+
+fn text_format(
+    dwrite: &IDWriteFactory,
+    family_name: &str,
+    point_size: f32,
+    bold: bool,
+    wrap: bool,
+    align_trailing: bool,
+    center: bool,
+) -> Result<IDWriteTextFormat> {
+    let family = wide_null(family_name);
+    let locale = wide_null(LOCALE);
+    let format = unsafe {
+        dwrite
+            .CreateTextFormat(
+                PCWSTR(family.as_ptr()),
+                None,
+                if bold {
+                    DWRITE_FONT_WEIGHT_BOLD
+                } else {
+                    DWRITE_FONT_WEIGHT_NORMAL
+                },
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                point_size,
+                PCWSTR(locale.as_ptr()),
+            )
+            .context("CreateTextFormat composition")?
+    };
+    unsafe {
+        format
+            .SetTextAlignment(if center {
+                DWRITE_TEXT_ALIGNMENT_CENTER
+            } else if align_trailing {
+                DWRITE_TEXT_ALIGNMENT_TRAILING
+            } else {
+                DWRITE_TEXT_ALIGNMENT_LEADING
+            })
+            .context("SetTextAlignment composition")?;
+        format
+            .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)
+            .context("SetParagraphAlignment composition")?;
+        format
+            .SetWordWrapping(if wrap {
+                DWRITE_WORD_WRAPPING_WRAP
+            } else {
+                DWRITE_WORD_WRAPPING_NO_WRAP
+            })
+            .context("SetWordWrapping composition")?;
+    }
+    Ok(format)
+}
+
+fn draw_text(
+    target: &ID2D1RenderTarget,
+    format: &IDWriteTextFormat,
+    text: &str,
+    rect: D2D_RECT_F,
+    rgb: u32,
+) -> Result<()> {
+    let brush = unsafe {
+        target
+            .CreateSolidColorBrush(&color(rgb, 1.0), None)
+            .context("CreateSolidColorBrush composition text")?
+    };
+    let text = utf16(text);
+    unsafe {
+        target.DrawText(
+            &text,
+            format,
+            &rect,
+            &brush,
+            if text.is_empty() {
+                D2D1_DRAW_TEXT_OPTIONS_NONE
+            } else {
+                D2D1_DRAW_TEXT_OPTIONS_CLIP
+            },
+            DWRITE_MEASURING_MODE_NATURAL,
+        );
     }
     Ok(())
 }
@@ -419,6 +647,20 @@ fn visual_offset(
     (metrics.px(frame.x) as f32, metrics.px(top) as f32)
 }
 
+fn text_rect(rect: D2D_RECT_F, metrics: WindowMetrics, vertical_pad: f64) -> D2D_RECT_F {
+    let pad = metrics.px(vertical_pad) as f32;
+    D2D_RECT_F {
+        left: rect.left,
+        top: rect.top - pad,
+        right: rect.right,
+        bottom: rect.bottom + pad,
+    }
+}
+
+fn physical_font_size(metrics: WindowMetrics, logical_size: f64) -> f32 {
+    metrics.px(logical_size).max(1) as f32
+}
+
 fn transparent_color() -> D2D1_COLOR_F {
     D2D1_COLOR_F {
         r: 0.0,
@@ -435,6 +677,10 @@ fn color(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
         b: (rgb & 0xff) as f32 / 255.0,
         a: alpha,
     }
+}
+
+fn utf16(text: &str) -> Vec<u16> {
+    OsStr::new(text).encode_wide().collect()
 }
 
 fn create_visual(device: &IDCompositionDevice, name: &'static str) -> Result<IDCompositionVisual> {

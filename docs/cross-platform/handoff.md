@@ -34,8 +34,9 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
   fallback。Windows overlay scene 计划对象已抽出，Direct2D fallback 和后续 Composition renderer 应共享
   同一份状态/icon/meta/body 文本计划与 layout frames；Composition probe 已验证 root animation 创建/绑定/
   commit 路径，以及 panel `IDCompositionSurface` 创建/绑定、resize、`BeginDraw::<IDXGISurface>`、
-  Direct2D `CreateDxgiSurfaceRenderTarget` 绘制圆角半透明 panel、`EndDraw` 路径，但还未绘制最终
-  material/text/icon/shadow surface，也未切换默认 backend。
+  Direct2D `CreateDxgiSurfaceRenderTarget` 绘制圆角半透明 panel、DirectWrite 绘制系统 icon glyph 与
+  state/stats/meta/body 文本、`EndDraw` 路径，但还未绘制最终 material/shadow/animation，也未切换默认
+  backend。
 - Cross-user 第二账号隔离验证延后；代码已有 user/session scoped pipe/mutex 方向，但不同用户实机
   smoke 未完成。
 - Windows release-grade 验收仍缺 multi-monitor、remote desktop/UAC/elevation、更多目标应用、
@@ -55,7 +56,8 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
 - 必要时补 `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings`
 - `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE=1 cargo test --target x86_64-pc-windows-msvc
   overlay::windows::tests::runtime_smoke_creates_shows_hides_and_quits_window -- --ignored --nocapture`
-  已通过，可验证 DirectComposition probe 初始化和 panel surface draw 不破坏 Direct2D fallback。
+  已通过，可验证 DirectComposition probe 初始化、panel surface draw 和 DirectWrite text draw 不破坏
+  Direct2D fallback。
 
 ## 已知风险
 
@@ -71,5 +73,5 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
    DirectWrite/Direct2D 负责清晰文本。
 2. PoC 前不要继续在 GDI/DIB fallback 上堆视觉补丁，也不要直接接 Windows App SDK
    Mica/Acrylic 或 undocumented blur API。
-3. 下一步填 `composition.rs` 最小 Windows-only renderer：先补 text/icon surface 或 visual layer、
-   panel opacity/scale 动画和 compositor-owned shadow/rounded clipping，再考虑 blur/material。
+3. 下一步填 `composition.rs` 最小 Windows-only renderer：先补 panel opacity/scale 动画和
+   compositor-owned shadow/rounded clipping，再考虑 blur/material 与默认 backend 切换。

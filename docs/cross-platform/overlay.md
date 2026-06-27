@@ -331,8 +331,10 @@ Phase 10bg infrastructure status:
   changing the visible fallback renderer. The panel visual now owns a resizable `IDCompositionSurface`; the gated
   probe enters `BeginDraw::<IDXGISurface>`, creates a Direct2D render target with
   `CreateDxgiSurfaceRenderTarget`, draws the rounded translucent panel surface, then calls `EndDraw` and commits.
-  This proves Direct2D-on-composition-surface plumbing only; final material, shadow, text, icon animation, and
-  default backend switching remain separate work.
+  The same probe now also creates DirectWrite text formats and draws the system icon glyph, state label, stats,
+  meta, and body text into that composition surface. This proves Direct2D/DirectWrite-on-composition-surface
+  plumbing only; final material, shadow, icon animation, text-quality tuning, and default backend switching remain
+  separate work.
 - `src/overlay/windows/icons.rs` records the state icon plan using Windows official icon fonts:
   `Segoe Fluent Icons` first, `Segoe MDL2 Assets` fallback. Icon bodies should come from system glyphs; animation
   belongs to composition opacity/scale/rotate/translate once that backend is enabled.

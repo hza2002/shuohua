@@ -220,7 +220,7 @@ Phase 10be Windows startup registration error boundary:
 
 ## Smart Fallback
 
-CLI/TUI/GUI 连接 daemon 时：
+CLI/TUI/client 连接 daemon 时：
 
 1. probe endpoint。
 2. 如果不存在，按平台策略尝试启动用户 daemon。
@@ -230,7 +230,7 @@ CLI/TUI/GUI 连接 daemon 时：
 ## 验收
 
 - macOS 当前 JSON-line 协议不变。
-- TUI/GUI/client 不关心 transport 细节。
+- TUI/client 不关心 transport 细节。
 - Windows backend 只需替换 transport，不 fork protocol。
 - service status 输出使用相同 user-facing contract。
 - `cargo test --test platform_layout` 保护 protocol/client/server 和 transport 的 import 边界。

@@ -2,7 +2,7 @@
 
 ## Goal
 
-CLI, daemon, GUI, and packaged desktop app entries must share one product data model. Packaging may add
+CLI, daemon, TUI, and packaged desktop app entries must share one product data model. Packaging may add
 app-private storage, but it must not create a second copy of user config, history, retained audio, or logs.
 
 This document defines the long-term path ownership model for macOS, Windows, and Linux. Platform-specific
@@ -12,15 +12,15 @@ documents may refine exact APIs and validation commands, but they should not con
 
 Shuohua uses three path classes:
 
-| Class | Owner | Contents | Shared by CLI/daemon/GUI? |
+| Class | Owner | Contents | Shared by CLI/daemon/TUI? |
 |---|---|---|---|
 | Install root | installer/package | executable, app bundle, resources | No user data. |
 | Product data root | shuohua product | config, profiles, ASR/post configs, history, retained audio, logs, traces, daemon state | Yes. |
-| App-private data | packaged GUI/runtime | window state, WebView cache, onboarding state, tray UI preference, package runtime cache | No, unless explicitly exported. |
+| App-private data | packaged app runtime | window state, web runtime cache, onboarding state, tray UI preference, package runtime cache | No, unless explicitly exported. |
 
 Rules:
 
-- Product data is the durable user contract. CLI, daemon, TUI, GUI, and tray must resolve the same product data
+- Product data is the durable user contract. CLI, daemon, TUI, packaged app, and tray must resolve the same product data
   roots by default.
 - Packaged app data is not the default source of product data because CLI and daemon must keep working outside
   the package container.
@@ -35,14 +35,14 @@ Rules:
 
 Current macOS CLI behavior may continue to use terminal-friendly config paths such as `~/.config/shuohua`.
 Future `.app` packaging should share the same product data instead of starting over inside the app bundle or a
-separate GUI-only root.
+separate package-only root.
 
 Recommended long-term stance:
 
 - Config remains terminal-friendly by default. Keeping `~/.config/shuohua` is acceptable for the product
   contract because many CLI users expect it and the current macOS version already uses that style.
 - App-private cache/state may use macOS app conventions such as `~/Library/Caches/Shuohua` or an app container
-  when the data only belongs to GUI/runtime presentation.
+  when the data only belongs to packaged app/runtime presentation.
 - If a future sandboxed macOS package needs a container, treat it as a packaging mode with explicit migration or
   import/export, not as an implicit new default for product config/history.
 
@@ -57,7 +57,7 @@ Windows should follow per-user known-folder conventions for product data:
 
 Windows packaged app data remains app-private by default:
 
-- MSIX/package-local data can store GUI runtime state, WebView cache, onboarding state, and package runtime
+- MSIX/package-local data can store packaged app runtime state, web runtime cache, onboarding state, and package runtime
   cache.
 - CLI/daemon shared config and history must not move into package-private data by default.
 - If package identity or store policy later restricts direct access, add an explicit migration/import/export
@@ -89,7 +89,7 @@ AppPaths
   logs_dir
   traces_dir
   cache_dir
-  app_private_dir (optional, GUI/package only)
+  app_private_dir (optional, package only)
 ```
 
 Business modules should request paths through this facade. They should not directly read `HOME`, XDG variables,
@@ -100,6 +100,6 @@ Migration rules:
 - First prefer existing roots when they already contain user config/history and remain valid for the current
   packaging mode.
 - Never auto-copy large or sensitive data such as retained audio without an explicit migration decision.
-- Show path decisions in doctor/TUI/GUI diagnostics so users can see which roots are active.
+- Show path decisions in doctor/TUI diagnostics so users can see which roots are active.
 - Any future root migration must document source, destination, rollback, duplicate handling, and user-visible
   prompts before implementation.

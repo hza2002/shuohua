@@ -13,7 +13,6 @@
 
 mod asr;
 mod cli;
-pub mod client_api;
 mod config;
 mod daemon;
 pub mod history;

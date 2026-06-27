@@ -5,8 +5,8 @@
 用户应能同步同一套 `config.toml`、profile、ASR/post 配置和 theme 到 macOS、Windows、Linux。
 平台差异通过 capability 诊断和 theme 平台段处理，不要求用户维护三份主配置。
 
-配置和 theme 属于共享 product data。CLI、daemon、TUI、GUI 和 packaged desktop app 默认读取同一套
-product config root；package/app 私有目录只能保存 GUI/runtime 私有状态，不能保存另一份有效配置。
+配置和 theme 属于共享 product data。CLI、daemon、TUI 和 packaged desktop app 默认读取同一套
+product config root；package/app 私有目录只能保存 package/runtime 私有状态，不能保存另一份有效配置。
 路径归属规则见 [app-data.md](app-data.md)。
 
 ## 主配置
@@ -115,7 +115,7 @@ Theme 表达用户偏好，renderer 决定实际能力：
 - blur 不可用或可读性不足时降级 `translucent`。
 - 仍不可读时降级 `solid`。
 
-降级结果应进入 capability/status，供 doctor/TUI/GUI 显示。
+降级结果应进入 capability/status，供 doctor/TUI 显示。
 
 ## 字段治理
 
@@ -124,7 +124,7 @@ Theme 表达用户偏好，renderer 决定实际能力：
 - 平台私有调试字段应放在平台段，并在文档里标记为 advanced。
 - 删除无效字段时同步更新 schema、template、i18n 和用户迁移说明。
 
-`theme.name` 是 metadata，不参与渲染，但可用于内置 theme registry 和 GUI 展示。
+`theme.name` 是 metadata，不参与渲染，但可用于内置 theme registry 和后续管理界面展示。
 
 当前 advanced 字段：
 

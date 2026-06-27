@@ -31,7 +31,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
-use crate::client_api::DaemonClient;
+use crate::ipc::client::IpcClient;
 use crate::ipc::protocol::{Command, Event};
 use crate::tui::configure::ConfigurePage;
 use crate::tui::history::HistoryPage;
@@ -128,12 +128,12 @@ impl App {
 }
 
 fn startup_commands() -> Vec<Command> {
-    vec![crate::client_api::subscribe_command()]
+    vec![Command::Subscribe]
 }
 
 pub async fn run() -> Result<()> {
     init_i18n_from_config();
-    let mut client = DaemonClient::connect_default().await?;
+    let mut client = IpcClient::connect_default().await?;
     for command in startup_commands() {
         client.send(&command).await?;
     }
@@ -200,7 +200,7 @@ fn init_i18n_from_config_path(path: &std::path::Path) {
     crate::i18n::init(&language);
 }
 
-async fn handle_key(app: &mut App, client: &mut DaemonClient, key: KeyEvent) -> Result<bool> {
+async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Result<bool> {
     use keybindings::Action;
 
     if app.configure.is_wizard_active() {
@@ -279,7 +279,7 @@ async fn handle_key(app: &mut App, client: &mut DaemonClient, key: KeyEvent) -> 
     Ok(false)
 }
 
-async fn send_pending_history_refresh(app: &mut App, client: &mut DaemonClient) -> Result<()> {
+async fn send_pending_history_refresh(app: &mut App, client: &mut IpcClient) -> Result<()> {
     if app.page != Page::History {
         return Ok(());
     }
@@ -289,7 +289,7 @@ async fn send_pending_history_refresh(app: &mut App, client: &mut DaemonClient) 
     Ok(())
 }
 
-async fn send_history_enter_commands(app: &mut App, client: &mut DaemonClient) -> Result<()> {
+async fn send_history_enter_commands(app: &mut App, client: &mut IpcClient) -> Result<()> {
     for command in app.history.enter_commands() {
         client.send(&command).await?;
     }

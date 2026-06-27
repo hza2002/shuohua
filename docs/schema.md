@@ -6,7 +6,7 @@
 
 ## 1. UDS 协议
 
-`/tmp/shuohua-${UID}.sock`，line-delimited JSON，事件驱动。daemon 端是 server，TUI / 未来 GUI / 外部脚本都是 client。
+`/tmp/shuohua-${UID}.sock`，line-delimited JSON，事件驱动。daemon 端是 server，TUI / 外部脚本都是 client。
 
 ### 1.1 TUI → daemon（命令）
 
@@ -26,7 +26,7 @@
 ```
 
 当前 UDS 协议类型预留 start/stop/cancel 录音控制，但 daemon 仍返回
-`error(kind="unsupported")`。录音控制当前只走全局 hotkey；TUI/GUI 当前定位是状态、
+`error(kind="unsupported")`。录音控制当前只走全局 hotkey；TUI 当前定位是状态、
 历史、配置查看与维护工具。
 
 ### 1.2 daemon → TUI（事件）
@@ -76,13 +76,13 @@
 - 单一真相来源（history 派生统计）
 - 不浪费 SSD（无 1Hz 写）
 - daemon 无 TUI 时几乎完全空闲
-- 未来 GUI / menubar app 走同一个 UDS + history JSONL，零返工
+- 外部 client / menubar app 走同一个 UDS + history JSONL，零返工
 
 ---
 
 ## 2. History JSONL Schema（v1）
 
-history JSONL 是**唯一的持久化数据源**（统计、TUI、未来 GUI/脚本都派生自它）。文件按本地月份分片：
+history JSONL 是**唯一的持久化数据源**（统计、TUI、脚本都派生自它）。文件按本地月份分片：
 
 ```
 ${XDG_STATE_HOME:-~/.local/state}/shuohua/history/YYYY-MM.jsonl
@@ -257,4 +257,4 @@ ${XDG_STATE_HOME:-~/.local/state}/shuohua/traces/<recording_id>.jsonl
 - `asr_partial` / `asr_segment` / `asr_final` / `asr_error` / `asr_done`：ASR 事件时间；Doubao segment 使用服务端 `start_time/end_time`（缺失时回退到收到事件时间）。
 - `recording_end`：最终 status、实际喂给 ASR 的 `audio_ms`、shadow VAD 预计 `active_ms/saved_ms/sessions`。
 
-trace 文件可随时删除，不被 TUI/GUI 消费。它只用于离线评估“VAD active 区间是否覆盖 ASR utterance”和“预计省费比例”。
+trace 文件可随时删除，不被 TUI 消费。它只用于离线评估“VAD active 区间是否覆盖 ASR utterance”和“预计省费比例”。

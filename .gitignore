@@ -2,7 +2,6 @@
 /target/
 **/target/
 **/*.rs.bk
-src-tauri/gen/
 
 # Local scratch/output
 /tmp/

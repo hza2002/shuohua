@@ -4,7 +4,7 @@
 
 Windows is the next primary cross-platform target. The goal is a normal per-user desktop application that
 can record microphone audio, receive global hotkeys, show a native overlay, paste text into the foreground
-application, and expose the same CLI/TUI/GUI client contract as macOS.
+application, and expose the same CLI/TUI client contract as macOS.
 
 This document is the implementation baseline for Windows-specific development. If implementation or runtime
 testing proves a better route, update this document before changing the code.
@@ -46,7 +46,6 @@ Windows keeps the same daemon + clients model:
 ```text
 shuo daemon      user-session process: audio / hotkey / overlay / clipboard / history / IPC
 shuo CLI/TUI     on-demand client over Named Pipe
-Shuo GUI         future Tauri client, not part of daemon hot path
 ```
 
 The daemon owns desktop integration because hotkey, clipboard, text injection, overlay windows, and microphone
@@ -64,8 +63,8 @@ Startup should be user scoped:
 ## File Layout
 
 Windows file layout follows the shared product data ownership model in [app-data.md](app-data.md). The same
-product config/history/audio/log roots are shared by CLI, daemon, TUI, GUI, and tray. Package-private app data
-is reserved for GUI/runtime state and must not become a second product data truth source.
+product config/history/audio/log roots are shared by CLI, daemon, TUI, packaged app, and tray. Package-private app data
+is reserved for package/runtime state and must not become a second product data truth source.
 
 Windows must use Windows per-user app data locations, not Unix-style home dotfiles.
 
@@ -90,8 +89,8 @@ Implementation notes:
   fallback only for development/error fallback.
 - Windows unpackaged desktop builds should resolve known folders through Windows APIs when possible, with
   `%APPDATA%` / `%LOCALAPPDATA%` environment fallback only as a development fallback.
-- Packaged-app `ApplicationData` or MSIX package-local data is app-private by default. It may store GUI window
-  state, WebView cache, onboarding state, tray preference, or updater/package runtime state, but it must not
+- Packaged-app `ApplicationData` or MSIX package-local data is app-private by default. It may store window
+  state, web runtime cache, onboarding state, tray preference, or updater/package runtime state, but it must not
   silently replace the shared product data root used by CLI and daemon.
 - If a future packaged app cannot access the shared product data root because of sandbox/store constraints,
   add an explicit migration/import/export design before changing roots.
@@ -372,7 +371,7 @@ Rules:
 - Text injection must be tested across Notepad, browser text fields, Office/Teams-style apps if available, and
   terminal/editor windows.
 - Foreground restrictions and UAC/elevation boundaries must be documented from runtime tests.
-- Clipboard access is foreground-desktop state. Keep it in the daemon desktop facade; do not move it into GUI
+- Clipboard access is foreground-desktop state. Keep it in the daemon desktop facade; do not move it into a packaged app
   code or service code.
 
 Current clipboard baseline:
@@ -417,7 +416,7 @@ Current active app identity baseline:
 
 ## Overlay
 
-Windows overlay must be native Win32, not Tauri/WebView.
+Windows overlay must be native Win32, not WebView.
 
 First PoC route:
 
@@ -443,9 +442,9 @@ Stop point for user intervention:
 - After the minimal Win32 overlay can be launched manually and accepts show/hide/status commands.
 - Visual behavior, focus behavior, monitor placement, and DPI cannot be accepted from macOS cross-checks.
 
-## GUI
+## Packaged App
 
-GUI product work remains frozen. Windows work should not polish the current placeholder GUI.
+Packaged app product work is out of scope for the current Windows runtime branch.
 
 Allowed:
 
@@ -454,8 +453,8 @@ Allowed:
 
 Not allowed in the Windows core phase:
 
-- Move daemon logic into Tauri.
-- Add GUI reconnect/service management as a substitute for daemon runtime validation.
+- Move daemon logic into a packaged app runtime.
+- Add packaged-app reconnect/service management as a substitute for daemon runtime validation.
 - Add WebView to overlay or hotkey paths.
 
 ## Build And Artifact Strategy
@@ -559,7 +558,7 @@ Recommended next phases:
 
 Stop for user testing after phases 3, 4, 5, 6, and 7. Those cannot be validated on macOS.
 
-Do not start with GUI polish. The GUI remains a future client surface; the Windows-first core path is CLI/TUI,
+Do not start with packaged app polish. The Windows-first core path is CLI/TUI,
 daemon, native overlay, hotkey, audio, clipboard, and paste.
 
 ## References

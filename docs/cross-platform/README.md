@@ -13,8 +13,7 @@
 | Windows 开发规范、路径、IPC、桌面能力、验证顺序 | [windows.md](windows.md) |
 | Windows 本地开发机搭建、Git 同步、build/test 命令 | [windows-local-dev.md](windows-local-dev.md) |
 | Windows 首次实机/VM runtime smoke checklist | [windows-runtime-validation.md](windows-runtime-validation.md) |
-| CLI / daemon / GUI / packaged app 的数据归属和路径根 | [app-data.md](app-data.md) |
-| GUI App / Tauri client | [gui.md](gui.md) |
+| CLI / daemon / packaged app 的数据归属和路径根 | [app-data.md](app-data.md) |
 | 三端原生 overlay renderer | [overlay.md](overlay.md) |
 | 后续音频预处理候选、WebRTC/Sonora 调研、backend 边界 | [audio-processing.md](audio-processing.md) |
 | 一份配置和 theme 如何跨端工作 | [config-theme.md](config-theme.md) |

@@ -5,6 +5,8 @@ use super::direct2d::{Direct2dRenderer, TextPlan};
 use super::{composition, WindowMetrics, DIRECT2D_SHADOW_OUTSET};
 use crate::overlay::OverlayModel;
 
+const COMPOSITION_PROBE_ENV: &str = "SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE";
+
 pub(super) enum RendererKind {
     CompositionPlanned,
     Direct2dPerPixel,
@@ -12,6 +14,7 @@ pub(super) enum RendererKind {
 }
 
 pub(super) struct WindowsRendererBackend {
+    composition: Option<composition::CompositionRenderer>,
     direct2d: Option<Direct2dRenderer>,
     composition_ready: composition::CompositionReadiness,
 }
@@ -19,15 +22,17 @@ pub(super) struct WindowsRendererBackend {
 impl WindowsRendererBackend {
     pub(super) fn pending() -> Self {
         Self {
+            composition: None,
             direct2d: None,
             composition_ready: composition::readiness(),
         }
     }
 
     pub(super) fn new(hwnd: HWND) -> Self {
-        let composition_ready = composition::readiness();
+        let (composition, composition_ready) = probe_composition(hwnd);
         match Direct2dRenderer::new(hwnd) {
             Ok(direct2d) => Self {
+                composition,
                 direct2d: Some(direct2d),
                 composition_ready,
             },
@@ -37,6 +42,7 @@ impl WindowsRendererBackend {
                     "Direct2D overlay renderer unavailable; falling back to GDI"
                 );
                 Self {
+                    composition,
                     direct2d: None,
                     composition_ready,
                 }
@@ -87,6 +93,14 @@ impl WindowsRendererBackend {
         metrics: WindowMetrics,
         panel_width: f64,
     ) -> Option<Result<()>> {
+        if let Some(composition) = &self.composition {
+            if let Err(error) = composition.keep_reserved_root_hidden() {
+                tracing::warn!(
+                    ?error,
+                    "DirectComposition reserved root update failed; keeping fallback renderer"
+                );
+            }
+        }
         self.direct2d
             .as_mut()
             .map(|renderer| renderer.paint(model, cfg, metrics, panel_width))
@@ -94,6 +108,35 @@ impl WindowsRendererBackend {
 
     pub(super) fn disable_accelerated_backend(&mut self) {
         self.direct2d = None;
+    }
+}
+
+fn probe_composition(
+    hwnd: HWND,
+) -> (
+    Option<composition::CompositionRenderer>,
+    composition::CompositionReadiness,
+) {
+    if std::env::var_os(COMPOSITION_PROBE_ENV).is_none() {
+        return (None, composition::CompositionReadiness::Planned);
+    }
+    match composition::CompositionRenderer::new(hwnd) {
+        Ok(renderer) => {
+            tracing::info!(
+                "DirectComposition overlay probe initialized; renderer remains fallback"
+            );
+            (
+                Some(renderer),
+                composition::CompositionReadiness::ProbeReady,
+            )
+        }
+        Err(error) => {
+            tracing::warn!(
+                ?error,
+                "DirectComposition overlay probe unavailable; using fallback renderer"
+            );
+            (None, composition::CompositionReadiness::Disabled)
+        }
     }
 }
 

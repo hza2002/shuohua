@@ -319,11 +319,13 @@ Recommended next implementation order:
 
 Phase 10bg infrastructure status:
 
-- `src/overlay/windows/backend.rs` now owns the Windows renderer selection point. The Composition backend is
-  planned but disabled; the Direct2D per-pixel renderer remains the active fallback.
+- `src/overlay/windows/backend.rs` now owns the Windows renderer selection point. The Composition backend can be
+  explicitly probed with `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE`, but the Direct2D per-pixel renderer remains
+  the active fallback.
 - `src/overlay/windows/composition.rs` records the future composition backend contract: Win32 HWND host,
   DirectComposition or Windows Composition visuals, DirectWrite text, Segoe Fluent Icons glyphs, and Direct2D
-  fallback.
+  fallback. It currently initializes a hidden DirectComposition root visual only as a reserved handoff point for
+  later compositor-owned shadow, rounded clipping, material, and animation work.
 - `src/overlay/windows/icons.rs` records the state icon plan using Windows official icon fonts:
   `Segoe Fluent Icons` first, `Segoe MDL2 Assets` fallback. Icon bodies should come from system glyphs; animation
   belongs to composition opacity/scale/rotate/translate once that backend is enabled.

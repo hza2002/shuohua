@@ -102,9 +102,11 @@ ort = { version = "=2.0.0-rc.10", default-features = false, features = ["load-dy
 voice_activity_detector_windows = { package = "voice_activity_detector", path = "vendor/voice_activity_detector", features = ["load-dynamic"] }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Graphics_DirectComposition",
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",
     "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_Media_MediaFoundation",

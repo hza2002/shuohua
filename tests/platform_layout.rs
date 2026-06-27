@@ -1280,8 +1280,10 @@ fn windows_overlay_records_direct2d_directwrite_foundation() {
         std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
 
     for token in [
+        "Win32_Graphics_DirectComposition",
         "Win32_Graphics_Direct2D",
         "Win32_Graphics_DirectWrite",
+        "Win32_Graphics_Dxgi",
         "Win32_Graphics_Dxgi_Common",
     ] {
         assert!(
@@ -1375,9 +1377,12 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "CompositionPlanned",
         "Direct2dPerPixel",
         "GdiFallback",
+        "SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE",
+        "probe_composition",
         "uses_per_pixel_surface",
         "disable_accelerated_backend",
         "composition_readiness",
+        "keep_reserved_root_hidden",
     ] {
         assert!(
             backend.contains(token),
@@ -1390,6 +1395,12 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "win32_direct2d_per_pixel",
         "CompositionReadiness",
         "Planned",
+        "ProbeReady",
+        "DCompositionCreateDevice",
+        "CreateTargetForHwnd",
+        "CreateVisual",
+        "SetRoot",
+        "Commit",
         "DirectComposition or Windows Composition visuals",
         "fallback: Direct2D per-pixel layered surface",
     ] {

@@ -1,4 +1,8 @@
-use anyhow::{bail, Result};
+use anyhow::{Context, Result};
+use windows::Win32::Foundation::HWND as WindowsHwnd;
+use windows::Win32::Graphics::DirectComposition::{
+    DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
+};
 use windows_sys::Win32::Foundation::HWND;
 
 use super::icons::{icon_font_fallback_order, state_icon_plan};
@@ -10,17 +14,52 @@ pub(super) const FALLBACK_BACKEND_NAME: &str = "win32_direct2d_per_pixel";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompositionReadiness {
     Planned,
+    ProbeReady,
     Disabled,
 }
 
 pub(super) struct CompositionRenderer {
-    _hwnd: HWND,
+    device: IDCompositionDevice,
+    _target: IDCompositionTarget,
+    _root: IDCompositionVisual,
 }
 
 impl CompositionRenderer {
     pub(super) fn new(hwnd: HWND) -> Result<Self> {
-        let _ = hwnd;
-        bail!("Windows composition renderer is planned but not enabled")
+        let hwnd = WindowsHwnd(hwnd.cast());
+        let device = unsafe {
+            DCompositionCreateDevice::<_, IDCompositionDevice>(None)
+                .context("DCompositionCreateDevice")?
+        };
+        let target = unsafe {
+            device
+                .CreateTargetForHwnd(hwnd, true)
+                .context("IDCompositionDevice::CreateTargetForHwnd")?
+        };
+        let root = unsafe {
+            device
+                .CreateVisual()
+                .context("IDCompositionDevice::CreateVisual")?
+        };
+        unsafe {
+            target
+                .SetRoot(&root)
+                .context("IDCompositionTarget::SetRoot")?;
+            device.Commit().context("IDCompositionDevice::Commit")?;
+        }
+        Ok(Self {
+            device,
+            _target: target,
+            _root: root,
+        })
+    }
+
+    pub(super) fn keep_reserved_root_hidden(&self) -> Result<()> {
+        unsafe {
+            self.device
+                .Commit()
+                .context("IDCompositionDevice::Commit hidden root")
+        }
     }
 }
 

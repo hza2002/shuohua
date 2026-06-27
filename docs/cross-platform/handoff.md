@@ -29,8 +29,9 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
 ## 未完成事项
 
 - Windows overlay 视觉与实现路线仍需重构；当前 Win32 + Direct2D/DirectWrite +
-  `UpdateLayeredWindow` baseline 可用但不是最终质量。Composition backend infrastructure 已建立但
-  默认仍走 Direct2D fallback。
+  `UpdateLayeredWindow` baseline 可用但不是最终质量。Composition backend infrastructure 已建立，可用
+  `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE` 探测 DirectComposition 初始化，但默认仍走 Direct2D
+  fallback。
 - Cross-user 第二账号隔离验证延后；代码已有 user/session scoped pipe/mutex 方向，但不同用户实机
   smoke 未完成。
 - Windows release-grade 验收仍缺 multi-monitor、remote desktop/UAC/elevation、更多目标应用、
@@ -48,6 +49,9 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
 - `cargo test --target x86_64-pc-windows-msvc`
 - `cargo build --target x86_64-pc-windows-msvc`
 - 必要时补 `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings`
+- `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE=1 cargo test --target x86_64-pc-windows-msvc
+  overlay::windows::tests::runtime_smoke_creates_shows_hides_and_quits_window -- --ignored --nocapture`
+  已通过，可验证 DirectComposition probe 初始化不破坏 Direct2D fallback。
 
 ## 已知风险
 

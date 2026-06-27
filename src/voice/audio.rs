@@ -4,6 +4,10 @@ use anyhow::{Context, Result};
 
 use crate::config::RecordAudioMode;
 
+const RETAINED_AUDIO_TARGET_PEAK: i16 = (i16::MAX as f32 * 0.89) as i16;
+const RETAINED_AUDIO_MIN_PEAK_TO_NORMALIZE: i16 = 512;
+const RETAINED_AUDIO_MAX_GAIN: f32 = 8.0;
+
 #[derive(Debug)]
 pub(crate) struct AudioOutput {
     pub(crate) wav_path: PathBuf,
@@ -54,6 +58,7 @@ impl AudioOutput {
     ) -> Result<PathBuf> {
         let mut published = false;
         let result = (|| -> Result<PathBuf> {
+            normalize_retained_wav_peak(&self.wav_path)?;
             convert(self.mode, &self.wav_path, &self.temp_path)?;
             std::fs::rename(&self.temp_path, &self.final_path).with_context(|| {
                 format!(
@@ -85,6 +90,73 @@ impl AudioOutput {
     }
 }
 
+fn normalize_retained_wav_peak(path: &Path) -> Result<()> {
+    let (spec, samples) = read_pcm_i16_wav(path)?;
+    let peak = samples
+        .iter()
+        .map(|sample| sample.unsigned_abs())
+        .max()
+        .unwrap_or(0);
+    if peak < RETAINED_AUDIO_MIN_PEAK_TO_NORMALIZE as u16
+        || peak >= RETAINED_AUDIO_TARGET_PEAK as u16
+    {
+        return Ok(());
+    }
+
+    let gain = (RETAINED_AUDIO_TARGET_PEAK as f32 / peak as f32).min(RETAINED_AUDIO_MAX_GAIN);
+    let normalized = samples
+        .into_iter()
+        .map(|sample| apply_gain(sample, gain))
+        .collect::<Vec<_>>();
+    write_pcm_i16_wav(path, spec, &normalized)
+}
+
+fn read_pcm_i16_wav(path: &Path) -> Result<(hound::WavSpec, Vec<i16>)> {
+    let mut reader =
+        hound::WavReader::open(path).with_context(|| format!("open WAV {}", path.display()))?;
+    let spec = reader.spec();
+    if spec.sample_format != hound::SampleFormat::Int || spec.bits_per_sample != 16 {
+        anyhow::bail!(
+            "retained audio normalization only supports 16-bit PCM WAV input, got {:?}/{}bit",
+            spec.sample_format,
+            spec.bits_per_sample
+        );
+    }
+    let samples = reader
+        .samples::<i16>()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("read retained WAV PCM samples")?;
+    Ok((spec, samples))
+}
+
+fn write_pcm_i16_wav(path: &Path, spec: hound::WavSpec, samples: &[i16]) -> Result<()> {
+    let temp_path = path.with_extension("normalized.tmp.wav");
+    let mut writer = hound::WavWriter::create(&temp_path, spec)
+        .with_context(|| format!("create normalized WAV {}", temp_path.display()))?;
+    for &sample in samples {
+        writer
+            .write_sample(sample)
+            .with_context(|| format!("write normalized WAV {}", temp_path.display()))?;
+    }
+    writer
+        .finalize()
+        .with_context(|| format!("finalize normalized WAV {}", temp_path.display()))?;
+    std::fs::rename(&temp_path, path).with_context(|| {
+        format!(
+            "replace retained WAV {} -> {}",
+            temp_path.display(),
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn apply_gain(sample: i16, gain: f32) -> i16 {
+    (sample as f32 * gain)
+        .round()
+        .clamp(i16::MIN as f32, i16::MAX as f32) as i16
+}
+
 fn remove_if_exists(path: &Path) {
     if let Err(error) = std::fs::remove_file(path) {
         if error.kind() != std::io::ErrorKind::NotFound {
@@ -98,6 +170,10 @@ mod tests {
     use super::*;
 
     fn write_test_wav(path: &Path) {
+        write_test_wav_with_samples(path, &[0i16; 1_600]);
+    }
+
+    fn write_test_wav_with_samples(path: &Path, samples: &[i16]) {
         let spec = hound::WavSpec {
             channels: 1,
             sample_rate: 16_000,
@@ -105,10 +181,75 @@ mod tests {
             sample_format: hound::SampleFormat::Int,
         };
         let mut writer = hound::WavWriter::create(path, spec).unwrap();
-        for sample in [0i16; 1_600] {
+        for &sample in samples {
             writer.write_sample(sample).unwrap();
         }
         writer.finalize().unwrap();
+    }
+
+    fn read_test_wav_samples(path: &Path) -> Vec<i16> {
+        hound::WavReader::open(path)
+            .unwrap()
+            .samples::<i16>()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn retained_wav_normalization_amplifies_quiet_recordings_before_conversion() {
+        let dir = std::env::temp_dir().join(format!("shuohua-audio-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("quiet.wav");
+        write_test_wav_with_samples(&wav, &[1000, -1000, 500, -500]);
+
+        normalize_retained_wav_peak(&wav).unwrap();
+
+        let samples = read_test_wav_samples(&wav);
+        assert_eq!(
+            samples.iter().map(|sample| sample.unsigned_abs()).max(),
+            Some((1000.0 * RETAINED_AUDIO_MAX_GAIN).round() as u16)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn retained_wav_normalization_leaves_tiny_noise_unchanged() {
+        let dir = std::env::temp_dir().join(format!("shuohua-audio-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("noise.wav");
+        write_test_wav_with_samples(&wav, &[12, -12, 8, -8]);
+
+        normalize_retained_wav_peak(&wav).unwrap();
+
+        assert_eq!(read_test_wav_samples(&wav), vec![12, -12, 8, -8]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn finish_normalizes_retained_wav_before_conversion() {
+        let dir = std::env::temp_dir().join(format!("shuohua-audio-{}", ulid::Ulid::new()));
+        let output = prepare_in_dir(&dir, "01HXYZ", RecordAudioMode::Lossless)
+            .unwrap()
+            .unwrap();
+        write_test_wav_with_samples(&output.wav_path, &[1000, -1000, 500, -500]);
+        let final_path = output.final_path.clone();
+
+        let finished = output
+            .finish_with(|_, input, output| {
+                let samples = read_test_wav_samples(input);
+                assert_eq!(
+                    samples.iter().map(|sample| sample.unsigned_abs()).max(),
+                    Some((1000.0 * RETAINED_AUDIO_MAX_GAIN).round() as u16)
+                );
+                std::fs::write(output, b"converted").unwrap();
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(finished, final_path);
+        assert_eq!(std::fs::read(&finished).unwrap(), b"converted");
+        assert!(!dir.join("01HXYZ.tmp.wav").exists());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

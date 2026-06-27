@@ -47,10 +47,13 @@ voice 只负责把一次 recording 的 capture/ASR/post 结果翻译成 `History
 
 - recorder 原始 PCM；
 - 发给 ASR provider 的 PCM；
-- retained audio 的 WAV/FLAC/M4A；
 - history/audio 关联语义。
 
 当前 Windows backend 在 VAD 副本上启用自适应增益：按 Silero 512-sample frame 估算 RMS/peak，低于噪声门限时让 gain 回落到 1x；有效语音帧按目标 RMS 计算 gain，并用 attack/release 平滑跨帧变化。这个处理是 Windows microphone-level calibration baseline，不是最终跨平台 audio-processing 结论。macOS 当前保持 passthrough，未来只有在 macOS A/B runtime 验证不退化后才考虑共用。
+
+retained audio 是单独的发布路径：recorder 仍先写 16 kHz mono 原始临时 WAV；`voice::audio::finish` 在转成
+FLAC/M4A 前会对临时 WAV 做一次保守 peak normalization。该处理只改善保存文件的回放电平，不回流到 VAD、
+ASR provider、状态机或上屏文本。
 
 Silero 概率由 `VadController` 做统一端点判定：从 Silence 进入 Speech 使用配置中的 `threshold`，已经处于 Speech 后使用派生的较低 exit threshold 累计静音，避免概率在阈值附近抖动导致过早 pause。`pause_silence_ms` 仍按显式配置解释，不做 Windows 隐式覆盖；诊断命令和 runtime 必须走同一套 controller。
 

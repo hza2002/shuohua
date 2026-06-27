@@ -19,6 +19,15 @@ current HEAD.
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
 
+Phase 10cg retained audio peak normalization 已完成：
+
+- 用户验证 retained audio 能录制/播放，但整体声音特别小。
+- 修复：`voice::audio::finish` 在 retained-audio 转码前，对临时 WAV 做保守 peak normalization；低于噪声门限的
+  tiny noise 不放大，最大增益有上限。
+- 该归一化只影响保存下来的 `.flac` / `.m4a`，不改变 recorder 发给 ASR provider 的 PCM、不改变 VAD
+  preprocessor/状态机、不改变 clipboard/paste。
+- 下一步需要用户重新录制 compact/lossless 各一段，确认播放音量明显改善且没有削波/噪声被异常放大。
+
 Phase 10cf Windows process probe child-exit smoke 已完成：
 
 - 新增 Windows ignored runtime smoke

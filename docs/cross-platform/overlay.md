@@ -320,9 +320,11 @@ Recommended next implementation order:
 Phase 10bg infrastructure status:
 
 - `src/overlay/windows/backend.rs` now owns the Windows renderer selection point. The Composition backend can be
-  explicitly probed with `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE`; `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_VISIBLE`
-  is a manual visible backend gate for local QA. Without the visible gate, the Direct2D per-pixel renderer remains
-  the active fallback.
+  explicitly probed with `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE`, but
+  `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_VISIBLE` is disabled on the current `WS_EX_LAYERED` host. Manual QA showed
+  that letting the same HWND act as both an `UpdateLayeredWindow` layered window and a DirectComposition target can
+  produce startup edge ghosts and continuous refresh artifacts. The visible output therefore stays on the Direct2D
+  per-pixel fallback until a dedicated composition-backed host/window is designed.
 - `src/overlay/windows/composition.rs` records the future composition backend contract: Win32 HWND host,
   DirectComposition or Windows Composition visuals, DirectWrite text, Segoe Fluent Icons glyphs, and Direct2D
   fallback. It currently initializes a hidden DirectComposition root visual only as a reserved handoff point for
@@ -350,8 +352,7 @@ Phase 10bg infrastructure status:
   mode for the target surface. This proves
   Direct2D/DirectWrite-on-composition-surface plus geometry/clip/opacity/shadow-surface/animation binding plumbing
   only; final material, final shadow tuning, full dynamic icon animation, text-quality tuning, and default backend
-  switching remain separate work. The manual visible backend gate is for local visual QA only and must not be treated
-  as a capability upgrade.
+  switching remain separate work. The disabled visible gate must not be treated as a capability upgrade.
 - `src/overlay/windows/icons.rs` records the state icon plan using Windows official icon fonts:
   `Segoe Fluent Icons` first, `Segoe MDL2 Assets` fallback. Icon bodies should come from system glyphs; animation
   belongs to composition opacity/scale/rotate/translate once that backend is enabled.

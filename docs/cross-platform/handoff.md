@@ -47,8 +47,12 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
   拆到独立 icon surface，`icon` visual 会按状态 icon plan 切换 looping state-driven opacity animation profile；
   这只证明独立 icon surface、animation binding 和状态路由可用，不代表 transform/scale/rotate 状态 icon 动画完成。
   Composition text/icon surface 使用 Direct2D 默认 text antialiasing，不再强制 grayscale。
-  `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_VISIBLE` 是本地 QA 用 manual visible backend gate；默认仍走 Direct2D
-  per-pixel fallback，不能据此升级 capability。
+  `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_VISIBLE` 不能再让当前 `WS_EX_LAYERED` host 接管可见输出：
+  手动 QA 发现同一个 HWND 同时作为 `UpdateLayeredWindow` layered window 和 DirectComposition target
+  会出现启动后只剩边缘残影/持续刷新感。当前代码保留 `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE`
+  作为旁路初始化和 surface draw 探针，但可见输出强制回到 Direct2D per-pixel fallback；如果 probe
+  scene update 失败，会禁用 probe，避免每帧重复 warning。下一步需要单独设计真正的
+  composition-backed host/window，而不是在现有 layered-window host 上继续打开 visible gate。
 - Cross-user 第二账号隔离验证延后；代码已有 user/session scoped pipe/mutex 方向，但不同用户实机
   smoke 未完成。
 - Windows release-grade 验收仍缺 multi-monitor、remote desktop/UAC/elevation、更多目标应用、

@@ -21,6 +21,7 @@ pub(super) struct WindowsRendererBackend {
     direct2d: Option<Direct2dRenderer>,
     composition_ready: composition::CompositionReadiness,
     composition_visible: bool,
+    composition_visible_requested: bool,
 }
 
 impl WindowsRendererBackend {
@@ -30,19 +31,26 @@ impl WindowsRendererBackend {
             direct2d: None,
             composition_ready: composition::readiness(),
             composition_visible: false,
+            composition_visible_requested: false,
         }
     }
 
     pub(super) fn new(hwnd: HWND) -> Self {
         let (composition, composition_ready) = probe_composition(hwnd);
-        let composition_visible =
-            composition.is_some() && std::env::var_os(COMPOSITION_VISIBLE_ENV).is_some();
+        let composition_visible_requested = std::env::var_os(COMPOSITION_VISIBLE_ENV).is_some();
+        if composition_visible_requested && composition.is_some() {
+            tracing::warn!(
+                "DirectComposition visible overlay is disabled on the current layered-window host; using Direct2D fallback"
+            );
+        }
+        let composition_visible = false;
         match Direct2dRenderer::new(hwnd) {
             Ok(direct2d) => Self {
                 composition,
                 direct2d: Some(direct2d),
                 composition_ready,
                 composition_visible,
+                composition_visible_requested,
             },
             Err(error) => {
                 tracing::warn!(
@@ -54,6 +62,7 @@ impl WindowsRendererBackend {
                     direct2d: None,
                     composition_ready,
                     composition_visible,
+                    composition_visible_requested,
                 }
             }
         }
@@ -74,10 +83,7 @@ impl WindowsRendererBackend {
     }
 
     pub(super) fn uses_per_pixel_surface(&self) -> bool {
-        matches!(
-            self.kind(),
-            RendererKind::CompositionVisible | RendererKind::Direct2dPerPixel
-        )
+        matches!(self.kind(), RendererKind::Direct2dPerPixel)
     }
 
     pub(super) fn surface_outset(&self) -> f64 {
@@ -122,8 +128,11 @@ impl WindowsRendererBackend {
             if let Err(error) = composition.update_reserved_scene(scene, metrics) {
                 tracing::warn!(
                     ?error,
-                    "DirectComposition reserved scene update failed; keeping fallback renderer"
+                    visible_requested = self.composition_visible_requested,
+                    "DirectComposition reserved scene update failed; disabling probe and keeping fallback renderer"
                 );
+                self.composition = None;
+                self.composition_ready = composition::CompositionReadiness::Disabled;
             } else {
                 composition_painted = true;
             }

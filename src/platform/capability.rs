@@ -332,9 +332,9 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 platform: PlatformKind::Windows,
                 backend: "open_process_probe",
                 status: CapabilityStatusKind::Partial,
-                summary: "OpenProcess process probe is used by same-user service lifecycle smoke but still needs crash and PID-reuse validation",
-                reason: "service_lifecycle_smoke_only",
-                next_step: Some("Validate Windows process probing after daemon crash, abandoned mutex, and PID reuse"),
+                summary: "OpenProcess process probe has tracked a same-user child process from running to exited",
+                reason: "child_process_exit_runtime_smoke",
+                next_step: Some("Validate Windows process probing after daemon crash, abandoned mutex, PID reuse, and permission boundaries"),
             },
             CapabilityStatus {
                 id: CapabilityId::ServiceManager,

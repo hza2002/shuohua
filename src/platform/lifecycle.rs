@@ -294,6 +294,24 @@ mod imp {
         }
 
         #[test]
+        #[ignore = "spawns a short-lived child process; run only during Windows process-probe runtime smoke"]
+        fn process_probe_runtime_smoke_tracks_child_exit() {
+            let mut child = std::process::Command::new("cmd.exe")
+                .args(["/C", "timeout", "/T", "30", "/NOBREAK"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("spawn child process for process probe smoke");
+            let pid = child.id();
+            assert!(process_exists(pid).expect("probe running child"));
+
+            child.kill().expect("kill child process");
+            child.wait().expect("wait child process");
+            assert!(!process_exists(pid).expect("probe exited child"));
+        }
+
+        #[test]
         fn mutex_wait_result_recovers_abandoned_mutex_explicitly() {
             assert!(matches!(
                 wait_for_mutex_result(WAIT_OBJECT_0).unwrap(),

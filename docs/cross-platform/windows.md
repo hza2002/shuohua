@@ -180,8 +180,8 @@ Rules:
 - A second daemon should fail before opening a second runtime endpoint. The final guard is named mutex plus pipe
   first-instance behavior, not one primitive alone.
 - Current capability reason is `same_user_elevation_smoke_only` for the mutex guard and
-  `service_lifecycle_smoke_only` for process probe; these are still partial until cross-user, crash/abandon,
-  PID reuse, and longer soak are validated.
+  `child_process_exit_runtime_smoke` for process probe; these are still partial until cross-user,
+  crash/abandon, PID reuse, permission boundaries, and longer soak are validated.
 
 ## Service And Startup
 

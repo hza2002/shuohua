@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: pending Phase 10ce retained audio TUI action path smoke.
+Latest phase commit: `test: add windows process probe smoke`（以 `git log -1` 为准）。
 
-Previous phase commit: `test: add windows profile route smoke` (`9e08acf`).
+Previous phase commit: `test: add retained audio action smoke` (`7fcf71f`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,15 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+
+Phase 10cf Windows process probe child-exit smoke 已完成：
+
+- 新增 Windows ignored runtime smoke
+  `platform::lifecycle::imp::tests::process_probe_runtime_smoke_tracks_child_exit`：启动同用户短命 child
+  process，验证 `process_exists(pid)` 在运行时为 true，kill/wait 后为 false。
+- Windows `process.probe` capability 仍保持 `partial/open_process_probe`，reason 从
+  `service_lifecycle_smoke_only` 收窄为 `child_process_exit_runtime_smoke`。
+- 仍不能升级为 `available`：daemon crash/abandon、PID reuse、permission boundary 和长时间 soak 尚未覆盖。
 
 Phase 10ce retained audio TUI action path smoke 已完成：
 

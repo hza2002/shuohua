@@ -766,6 +766,7 @@ fn windows_lifecycle_primitives_have_compile_backend() {
         "OpenProcess",
         "CloseHandle",
         "PROCESS_QUERY_LIMITED_INFORMATION",
+        "process_probe_runtime_smoke_tracks_child_exit",
     ] {
         assert!(
             windows_section.contains(token),
@@ -787,8 +788,8 @@ fn windows_lifecycle_primitives_have_compile_backend() {
         "named_mutex",
         "CapabilityId::ProcessProbe",
         "open_process_probe",
-        "service_lifecycle_smoke_only",
-        "Validate Windows process probing after daemon crash, abandoned mutex, and PID reuse",
+        "child_process_exit_runtime_smoke",
+        "Validate Windows process probing after daemon crash, abandoned mutex, PID reuse, and permission boundaries",
     ] {
         assert!(
             capability.contains(token),

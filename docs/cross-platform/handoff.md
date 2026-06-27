@@ -38,7 +38,8 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
   state/stats/meta/body 文本、`EndDraw` 路径，并验证 `IDCompositionRectangleClip` rounded clip 与
   `IDCompositionVisual3::SetOpacity2` panel opacity binding。Composition probe 现在也对齐 Direct2D fallback
   的 shadow outset geometry：surface 包含 renderer-owned outset，panel/content 坐标保持 inset。但还未绘制
-  最终 material/shadow/animation，也未切换默认 backend。
+  最终 material/shadow/animation，也未切换默认 backend。当前 composition shadow surface 只验证独立
+  `shadow` visual 分层和 tapered shadow pass plumbing，不代表最终阴影质感。
 - Cross-user 第二账号隔离验证延后；代码已有 user/session scoped pipe/mutex 方向，但不同用户实机
   smoke 未完成。
 - Windows release-grade 验收仍缺 multi-monitor、remote desktop/UAC/elevation、更多目标应用、

@@ -1413,6 +1413,8 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "CreateDxgiSurfaceRenderTarget",
         "EndDraw",
         "draw_panel_probe",
+        "draw_shadow_probe",
+        "shadow_layer_alpha",
         "draw_scene_text",
         "DWriteCreateFactory",
         "CreateTextFormat",
@@ -1473,6 +1475,7 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "compositor-owned rounded clipping",
         "panel opacity binding",
         "shadow outset geometry",
+        "composition shadow surface",
         "DirectWrite text",
         "Direct2D fallback now renders state icons through DirectWrite icon glyphs",
     ] {

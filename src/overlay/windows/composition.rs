@@ -38,6 +38,13 @@ use crate::overlay::OverlayState;
 
 const UI_FONT_FAMILY: &str = "Segoe UI Variable";
 const LOCALE: &str = "en-us";
+const COMPOSITION_AMBIENT_SHADOW_LAYERS: usize = 18;
+const COMPOSITION_AMBIENT_SHADOW_ALPHA: f32 = 0.010;
+const COMPOSITION_AMBIENT_SHADOW_SPREAD: f64 = 0.9;
+const COMPOSITION_KEY_SHADOW_LAYERS: usize = 10;
+const COMPOSITION_KEY_SHADOW_ALPHA: f32 = 0.020;
+const COMPOSITION_KEY_SHADOW_SPREAD: f64 = 0.72;
+const COMPOSITION_KEY_SHADOW_Y: f64 = 6.0;
 
 pub(super) const BACKEND_NAME: &str = "win32_composition_planned";
 pub(super) const FALLBACK_BACKEND_NAME: &str = "win32_direct2d_per_pixel";
@@ -147,6 +154,9 @@ impl CompositionVisualTree {
         unsafe {
             root.SetOffsetX(&animations.root_static_offset)
                 .context("IDCompositionVisual::SetOffsetX root static animation")?;
+            shadow
+                .SetContent(&surfaces.shadow)
+                .context("IDCompositionVisual::SetContent shadow surface")?;
             panel
                 .SetContent(&surfaces.panel)
                 .context("IDCompositionVisual::SetContent panel surface")?;
@@ -206,6 +216,12 @@ impl CompositionVisualTree {
     ) -> Result<()> {
         self.animations.keep_alive();
         let geometry = CompositionGeometry::from_scene(scene, metrics);
+        self.surfaces.ensure_shadow_surface(
+            device,
+            &self.shadow,
+            geometry.surface_width as u32,
+            geometry.surface_height as u32,
+        )?;
         self.surfaces.ensure_panel_surface(
             device,
             &self.panel,
@@ -213,6 +229,13 @@ impl CompositionVisualTree {
             geometry.surface_height as u32,
         )?;
         self.surfaces.draw_panel_probe(CompositionDrawContext {
+            d2d,
+            dwrite,
+            scene,
+            metrics,
+            geometry,
+        })?;
+        self.surfaces.draw_shadow_probe(CompositionDrawContext {
             d2d,
             dwrite,
             scene,
@@ -319,6 +342,8 @@ impl CompositionClips {
 }
 
 pub(super) struct CompositionSurfaces {
+    shadow: IDCompositionSurface,
+    shadow_size: (u32, u32),
     panel: IDCompositionSurface,
     panel_size: (u32, u32),
 }
@@ -326,9 +351,31 @@ pub(super) struct CompositionSurfaces {
 impl CompositionSurfaces {
     fn new(device: &IDCompositionDevice) -> Result<Self> {
         Ok(Self {
-            panel: create_panel_surface(device, 1, 1)?,
+            shadow: create_surface(device, 1, 1, "shadow")?,
+            shadow_size: (1, 1),
+            panel: create_surface(device, 1, 1, "panel")?,
             panel_size: (1, 1),
         })
+    }
+
+    fn ensure_shadow_surface(
+        &mut self,
+        device: &IDCompositionDevice,
+        visual: &IDCompositionVisual,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        if self.shadow_size == (width, height) {
+            return Ok(());
+        }
+        self.shadow = create_surface(device, width, height, "shadow")?;
+        self.shadow_size = (width, height);
+        unsafe {
+            visual
+                .SetContent(&self.shadow)
+                .context("IDCompositionVisual::SetContent resized shadow surface")?;
+        }
+        Ok(())
     }
 
     fn ensure_panel_surface(
@@ -341,7 +388,7 @@ impl CompositionSurfaces {
         if self.panel_size == (width, height) {
             return Ok(());
         }
-        self.panel = create_panel_surface(device, width, height)?;
+        self.panel = create_surface(device, width, height, "panel")?;
         self.panel_size = (width, height);
         unsafe {
             visual
@@ -370,6 +417,29 @@ impl CompositionSurfaces {
             self.panel
                 .EndDraw()
                 .context("IDCompositionSurface::EndDraw panel")
+        };
+        result.and(end)
+    }
+
+    fn draw_shadow_probe(&self, ctx: CompositionDrawContext<'_>) -> Result<()> {
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: ctx.geometry.surface_width,
+            bottom: ctx.geometry.surface_height,
+        };
+        let mut offset = POINT::default();
+        let surface = unsafe {
+            self.shadow
+                .BeginDraw::<IDXGISurface>(Some(&rect), &mut offset)
+                .context("IDCompositionSurface::BeginDraw shadow")?
+        };
+
+        let result = draw_dxgi_shadow(&surface, ctx);
+        let end = unsafe {
+            self.shadow
+                .EndDraw()
+                .context("IDCompositionSurface::EndDraw shadow")
         };
         result.and(end)
     }
@@ -421,10 +491,11 @@ impl CompositionGeometry {
     }
 }
 
-fn create_panel_surface(
+fn create_surface(
     device: &IDCompositionDevice,
     width: u32,
     height: u32,
+    name: &'static str,
 ) -> Result<IDCompositionSurface> {
     unsafe {
         device
@@ -434,7 +505,7 @@ fn create_panel_surface(
                 DXGI_FORMAT_B8G8R8A8_UNORM,
                 DXGI_ALPHA_MODE_PREMULTIPLIED,
             )
-            .context("IDCompositionDevice::CreateSurface panel")
+            .with_context(|| format!("IDCompositionDevice::CreateSurface {name}"))
     }
 }
 
@@ -538,6 +609,114 @@ fn draw_dxgi_scene(surface: &IDXGISurface, ctx: CompositionDrawContext<'_>) -> R
             .context("ID2D1RenderTarget::EndDraw scene")?;
     }
     Ok(())
+}
+
+fn draw_dxgi_shadow(surface: &IDXGISurface, ctx: CompositionDrawContext<'_>) -> Result<()> {
+    let target = create_dxgi_render_target(ctx.d2d, surface, "shadow")?;
+    unsafe {
+        target.BeginDraw();
+        target.Clear(Some(&transparent_color()));
+        draw_shadow_pass(
+            &target,
+            ctx.geometry,
+            ShadowPass {
+                layers: COMPOSITION_AMBIENT_SHADOW_LAYERS,
+                alpha: COMPOSITION_AMBIENT_SHADOW_ALPHA,
+                spread_step: COMPOSITION_AMBIENT_SHADOW_SPREAD,
+                y_offset: 0.0,
+                falloff: 2.2,
+            },
+            ctx.metrics,
+        )?;
+        draw_shadow_pass(
+            &target,
+            ctx.geometry,
+            ShadowPass {
+                layers: COMPOSITION_KEY_SHADOW_LAYERS,
+                alpha: COMPOSITION_KEY_SHADOW_ALPHA,
+                spread_step: COMPOSITION_KEY_SHADOW_SPREAD,
+                y_offset: COMPOSITION_KEY_SHADOW_Y,
+                falloff: 1.8,
+            },
+            ctx.metrics,
+        )?;
+        target
+            .EndDraw(None, None)
+            .context("ID2D1RenderTarget::EndDraw shadow")?;
+    }
+    Ok(())
+}
+
+fn create_dxgi_render_target(
+    d2d: &ID2D1Factory,
+    surface: &IDXGISurface,
+    name: &'static str,
+) -> Result<ID2D1RenderTarget> {
+    let props = D2D1_RENDER_TARGET_PROPERTIES {
+        r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        pixelFormat: D2D1_PIXEL_FORMAT {
+            format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+        },
+        dpiX: 96.0,
+        dpiY: 96.0,
+        usage: D2D1_RENDER_TARGET_USAGE_NONE,
+        minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+    };
+    unsafe {
+        d2d.CreateDxgiSurfaceRenderTarget(surface, &props)
+            .with_context(|| format!("ID2D1Factory::CreateDxgiSurfaceRenderTarget {name}"))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ShadowPass {
+    layers: usize,
+    alpha: f32,
+    spread_step: f64,
+    y_offset: f64,
+    falloff: f32,
+}
+
+fn draw_shadow_pass(
+    target: &ID2D1RenderTarget,
+    geometry: CompositionGeometry,
+    pass: ShadowPass,
+    metrics: WindowMetrics,
+) -> Result<()> {
+    let y_offset = metrics.px(pass.y_offset) as f32;
+    for layer in (1..=pass.layers).rev() {
+        let spread = metrics.px(layer as f64 * pass.spread_step).max(1) as f32;
+        let alpha = shadow_layer_alpha(pass.alpha, layer, pass.layers, pass.falloff);
+        let brush = unsafe {
+            target
+                .CreateSolidColorBrush(&color(0x000000, alpha), None)
+                .context("CreateSolidColorBrush composition shadow")?
+        };
+        unsafe {
+            target.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect: D2D_RECT_F {
+                        left: geometry.panel_left - spread,
+                        top: geometry.panel_top - spread + y_offset,
+                        right: geometry.panel_right + spread,
+                        bottom: geometry.panel_bottom + spread + y_offset,
+                    },
+                    radiusX: geometry.radius + spread,
+                    radiusY: geometry.radius + spread,
+                },
+                &brush,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn shadow_layer_alpha(alpha: f32, layer: usize, layers: usize, falloff: f32) -> f32 {
+    if layers == 0 {
+        return 0.0;
+    }
+    alpha * (layer as f32 / layers as f32).powf(falloff)
 }
 
 fn draw_scene_text(
@@ -885,6 +1064,8 @@ mod tests {
             "CompositionVisualTree",
             "CompositionSurfaces",
             "CompositionGeometry",
+            "draw_shadow_probe",
+            "shadow_layer_alpha",
             "shadow",
             "panel",
             "content",
@@ -925,5 +1106,14 @@ mod tests {
         assert_eq!(geometry.surface_height, geometry.panel_height + outset * 2);
         assert_eq!(geometry.panel_left, outset as f32);
         assert_eq!(geometry.panel_top, outset as f32);
+    }
+
+    #[test]
+    fn composition_shadow_alpha_tapers_outer_layers() {
+        let inner = shadow_layer_alpha(0.1, 5, 5, 2.0);
+        let outer = shadow_layer_alpha(0.1, 1, 5, 2.0);
+
+        assert!((inner - 0.1).abs() < 0.001);
+        assert!(outer < 0.01);
     }
 }

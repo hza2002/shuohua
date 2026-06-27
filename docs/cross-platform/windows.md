@@ -428,6 +428,20 @@ First PoC route:
 - Text rendering route may be Direct2D, softbuffer, Skia, or another small native renderer after PoC. Do not
   pick a large rendering stack until a minimal visible overlay works.
 
+Current decision after Windows runtime QA:
+
+- The existing Win32 + Direct2D/DirectWrite + `UpdateLayeredWindow` path is the supported fallback, not the final
+  visual target. It keeps text solid and clear enough, but DIB/layered-window composition and hand-drawn shadows are
+  below the macOS visual ceiling.
+- The next overlay architecture should keep the Win32 no-activate/topmost shell and evaluate a compositor-backed
+  renderer: DirectComposition or Windows Composition for material, rounded clipping, shadow, opacity, and animation;
+  DirectWrite/Direct2D for text and vector content.
+- Windows App SDK Mica/Acrylic should not be wired directly into the daemon overlay before a PoC proves clipping and
+  layering. Microsoft documents Mica as an opaque app-window foundation and Acrylic as transient frosted-glass UI;
+  our overlay needs a compact, rounded, click-through, always-on-top surface rather than a normal app backdrop.
+- Do not use undocumented blur APIs as the product route. A documented composition route plus fallback is preferred,
+  even if it takes more work.
+
 Validation gates:
 
 - Shows/hides without stealing focus.

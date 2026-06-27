@@ -28,7 +28,8 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
 
 ## 未完成事项
 
-- Windows overlay 视觉与实现路线仍需重构；当前 Win32/GDI baseline 可用但不是最终质量。
+- Windows overlay 视觉与实现路线仍需重构；当前 Win32 + Direct2D/DirectWrite +
+  `UpdateLayeredWindow` baseline 可用但不是最终质量。
 - Cross-user 第二账号隔离验证延后；代码已有 user/session scoped pipe/mutex 方向，但不同用户实机
   smoke 未完成。
 - Windows release-grade 验收仍缺 multi-monitor、remote desktop/UAC/elevation、更多目标应用、
@@ -56,8 +57,9 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
 
 ## 下一步建议
 
-1. 完成 GUI PoC 清理验证并提交 `chore: archive gui poc off runtime branch`。
-2. 调研现代 Windows overlay/window 技术路线，优先评估 DirectComposition/Direct2D/DirectWrite、
-   Windows Composition、DWM backdrop 和 Windows App SDK 相关限制。
-3. 选定 overlay 路线后先更新 `docs/cross-platform/overlay.md` 和 `docs/cross-platform/windows.md`，
-   再小步实现。
+1. Windows overlay 下一步先做 composition-backed renderer PoC 设计：保留 Win32 no-activate/topmost
+   shell，评估 DirectComposition 或 Windows Composition 负责材质、圆角裁剪、阴影、opacity 动画；
+   DirectWrite/Direct2D 负责清晰文本。
+2. PoC 前不要继续在 GDI/DIB fallback 上堆视觉补丁，也不要直接接 Windows App SDK
+   Mica/Acrylic 或 undocumented blur API。
+3. 选定 PoC 边界后先补 `tests/platform_layout.rs` 架构守卫，再实现最小 Windows-only renderer。

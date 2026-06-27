@@ -282,6 +282,51 @@ That could make the right side of the overlay extend past the monitor edge.
 - This does not add a new config field and does not change theme semantics.
 - Capability does not change: this is layout correctness, not final multi-monitor/fullscreen/UAC visual QA.
 
+### Windows Modern Overlay Direction
+
+Phase 10bg+ should treat the current `UpdateLayeredWindow` + Direct2D DIB renderer as a stable fallback, not the
+final visual architecture. Based on current Microsoft documentation, the preferred Windows overlay direction is:
+
+- Keep the Win32 shell: a borderless `WS_POPUP` window with topmost, no-activate, tool-window, hit-test
+  passthrough, foreground-monitor placement, and daemon-owned message loop. This preserves the runtime boundary
+  and avoids putting WebView or packaged-app UI runtime in the daemon hot path.
+- Keep DirectWrite for text. Microsoft documents DirectWrite as the Windows API for high-quality, Unicode,
+  sub-pixel text rendering and notes hardware acceleration when paired with Direct2D. Composition/Visual layer
+  APIs do not provide a text primitive, so a future renderer still needs DirectWrite or another text renderer.
+- Move material, shadow, clipping, opacity, and animation toward a compositor-owned pipeline. Microsoft positions
+  DirectComposition as high-performance bitmap composition with transforms, effects, and animations independent of
+  the UI thread; Microsoft also recommends Windows.UI.Composition / Microsoft.UI.Composition for Windows 10+
+  desktop app modernization. For our overlay, this means a later PoC should evaluate a Win32 host plus
+  DirectComposition or Windows Composition visuals, not more GDI or DIB shadow tuning.
+- Treat Windows App SDK Mica/Acrylic as design inputs, not a direct first implementation. Microsoft documents Mica
+  as an opaque long-lived app-window foundation and Acrylic as a transient frosted-glass material; the Windows App
+  SDK `SystemBackdrop` path is primarily WinUI/XAML-oriented and needs runtime support checks. The earlier DWM
+  backdrop probe already showed rectangular backdrop artifacts with the layered rounded overlay. A future material
+  PoC must own rounded clipping, text, shadow, and backdrop composition together before enabling blur.
+- Avoid undocumented blur APIs and one-off config toggles. `SetWindowCompositionAttribute`/AccentPolicy-style blur
+  is not a documented Microsoft Learn production route; do not build the final renderer around it.
+
+Recommended next implementation order:
+
+1. Document and test a renderer boundary that can swap the current Direct2D DIB fallback for a composition-backed
+   renderer without touching shared overlay model/layout or daemon IPC.
+2. Build a narrow Windows-only PoC window that proves compositor-owned rounded clipping, shadow, opacity animation,
+   and DirectWrite text can render together without the unknown rectangular backdrop artifacts.
+3. Only after that, evaluate blur/material choices: Desktop Acrylic/system backdrop where support and clipping are
+   correct, otherwise a composition-controlled translucent material.
+4. Keep the current Direct2D per-pixel renderer as fallback for Windows 10, unsupported composition paths, remote
+   desktop quirks, high contrast, battery saver, or policy-disabled transparency.
+
+References:
+
+- [DirectComposition](https://learn.microsoft.com/en-us/windows/win32/directcomp/directcomposition-portal)
+- [Direct2D](https://learn.microsoft.com/en-us/windows/win32/direct2d/direct2d-portal)
+- [DirectWrite](https://learn.microsoft.com/en-us/windows/win32/directwrite/direct-write-portal)
+- [Visual layer overview](https://learn.microsoft.com/en-us/windows/apps/develop/composition/visual-layer)
+- [Using the Visual layer in desktop apps](https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/ui/visual-layer-in-desktop-apps)
+- [Apply Mica or Acrylic materials in desktop apps for Windows 11](https://learn.microsoft.com/en-us/windows/apps/develop/ui/system-backdrops)
+- [Mica material](https://learn.microsoft.com/en-us/windows/apps/design/style/mica)
+
 ### Linux
 
 Wayland-first。X11 只保留 backend 接口位置，成本过高时允许 unsupported。

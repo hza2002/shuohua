@@ -27,7 +27,7 @@
 
 command/model/layout 平台无关；`renderer.rs` 拥有平台 renderer 选择，`mod.rs` 的 `run()` 只转发到 renderer。macOS renderer 使用 NSPanel/AppKit glass；Windows 当前 renderer 是 Win32 no-activate layered window + Direct2D/DirectWrite per-pixel baseline，GDI 保留为 fallback。**加新平台 = 加 `overlay/<platform>/` 兄弟目录写自己的 view/chrome + 平台配置 struct，不动 command/model/layout/上层。**
 
-Windows baseline renderer 是当前可用 fallback，不是最终视觉路线。它避免 Tauri/WebView 进入 daemon 热路径，但 `UpdateLayeredWindow` + DIB + 手绘 shadow 的质感上限低于 macOS Liquid Glass；最终 Windows renderer 应在 core runtime 对齐后单独评估 DirectComposition / Windows Composition / Windows App SDK 等现代路线。
+Windows baseline renderer 是当前可用 fallback，不是最终视觉路线。它避免 Tauri/WebView 进入 daemon 热路径，但 `UpdateLayeredWindow` + DIB + 手绘 shadow 的质感上限低于 macOS Liquid Glass；最终 Windows renderer 应保留 Win32 no-activate/topmost shell，单独评估 DirectComposition / Windows Composition + DirectWrite/Direct2D 的现代路线。Windows App SDK Mica/Acrylic 只能作为材质候选，不应在没有 rounded clipping、shadow、solid text 和 animation PoC 前直接接入 daemon overlay。
 
 `renderer.rs` 也持有 renderer capability skeleton：静态描述当前 renderer 是否可用、材质降级、
 置顶、输入穿透和窗口锚定状态。它复用 `platform::capability` 的 status 类型，不执行窗口创建、

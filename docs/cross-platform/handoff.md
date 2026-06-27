@@ -18,6 +18,21 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+
+Phase 10bq Windows VAD preprocessing baseline 正在收尾：
+
+- Windows Silero VAD 现在通过 `voice::preprocess::VadPreprocessor` 处理 VAD-only PCM 副本；ASR PCM、
+  retained audio、history 均不受影响。
+- 当前 preprocessor 在 Windows 上做 RMS/peak gated adaptive gain，并平滑跨 frame 的 gain 变化；macOS
+  当前仍 passthrough，避免破坏已可用行为。
+- 曾尝试 Windows 隐式覆盖 `pause_silence_ms/min_start_voiced_frames`，已撤回；runtime 重新尊重
+  config 中的 VAD 策略字段。`policy_from_config` 只是让 engine/diagnostics 共享同一条显式配置路径。
+- 新增隐藏诊断命令 `shuo diagnostics silero-vad-file <path>`，用 ffmpeg 解码音频后输出 Silero 概率、
+  effective policy 和 transition 时间点，方便不同设备/录音离线分析。
+- 用户手动 smoke 反馈当前 Windows VAD 效果“还不错”。下一阶段建议做 WebRTC Audio Processing Module
+  feasibility spike：优先验证单二进制分发形态（静态链接或像 ORT 一样内嵌/释放），再决定是否替换当前
+  simple preprocessor。
+
 Phase 10bp Windows Silero VAD parity 已完成 build/test 与单 exe init smoke：
 
 - 用户明确产品目标：最终安装/分发体验应是用户拿到一个单 binary 即可运行，不需要手动安装 ORT/DLL/

@@ -56,6 +56,14 @@ impl VadPolicy {
     }
 }
 
+pub fn policy_from_config(config: &crate::config::VoiceVadCfg, frame_ms: u32) -> VadPolicy {
+    VadPolicy {
+        min_start_voiced_frames: config.min_start_voiced_frames,
+        pause_silence_ms: config.pause_silence_ms,
+        frame_ms,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VadController {
     policy: VadPolicy,
@@ -220,5 +228,21 @@ mod tests {
             controller.accept(VadFrame::Speech),
             VadTransition::SpeechStarted
         );
+    }
+
+    #[test]
+    fn policy_from_config_uses_explicit_config_values() {
+        let policy = policy_from_config(
+            &crate::config::VoiceVadCfg {
+                min_start_voiced_frames: 2,
+                pause_silence_ms: 1_500,
+                ..crate::config::VoiceVadCfg::default()
+            },
+            32,
+        );
+
+        assert_eq!(policy.min_start_voiced_frames, 2);
+        assert_eq!(policy.pause_silence_ms, 1_500);
+        assert_eq!(policy.frame_ms, 32);
     }
 }

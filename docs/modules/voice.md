@@ -41,6 +41,19 @@ voice 只负责把一次 recording 的 capture/ASR/post 结果翻译成 `History
 
 **provider 主动 Done**：任一模式下 provider 自发 `AsrEvent::Done` 都视为该 session 已结束；engine 不再发 `is_last`、不再等第二个 Done。VadPause 在此基础上转 Idle 等下一段，避免被当成 `asr_timeout`。
 
+## VAD-only preprocessing
+
+`voice::preprocess::VadPreprocessor` 只处理送给本地 VAD backend 的 PCM 副本。它不得改变：
+
+- recorder 原始 PCM；
+- 发给 ASR provider 的 PCM；
+- retained audio 的 WAV/FLAC/M4A；
+- history/audio 关联语义。
+
+当前 Windows backend 在 VAD 副本上启用自适应增益：按 Silero 512-sample frame 估算 RMS/peak，低于噪声门限时让 gain 回落到 1x；有效语音帧按目标 RMS 计算 gain，并用 attack/release 平滑跨帧变化。这个处理是 Windows microphone-level calibration baseline，不是最终跨平台 audio-processing 结论。macOS 当前保持 passthrough，未来只有在 macOS A/B runtime 验证不退化后才考虑共用。
+
+不要在 `silero.rs` 里直接堆平台增益逻辑；替换 WebRTC APM、纯 Rust AGC/NS 或其他成熟 pipeline 时，应优先作为 `VadPreprocessor` backend 接入。
+
 ## 本模块持有的不变量
 
 - **停止必 drain residual + `stop_delay_ms`**（默认值见 `src/config/main.rs`），否则尾字被切。

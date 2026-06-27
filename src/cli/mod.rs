@@ -6,6 +6,7 @@ pub mod service;
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Parser)]
 #[command(name = "shuo", version, about = "macOS voice input assistant")]
@@ -33,10 +34,12 @@ pub enum Command {
     Version,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum DiagnosticsCommand {
     /// Initialize Silero VAD and run a one-frame silence smoke.
     SileroVad,
+    /// Decode an audio file and summarize Silero VAD probabilities.
+    SileroVadFile { path: PathBuf },
 }
 
 pub fn parse() -> Cli {
@@ -86,7 +89,122 @@ fn run_diagnostics(command: DiagnosticsCommand) -> Result<()> {
             );
             Ok(())
         }
+        DiagnosticsCommand::SileroVadFile { path } => run_silero_vad_file(&path),
     }
+}
+
+fn run_silero_vad_file(path: &Path) -> Result<()> {
+    let vad_cfg = crate::config::load_from(&crate::config::default_path())
+        .map(|cfg| cfg.voice.vad)
+        .unwrap_or_else(|_| crate::config::VoiceVadCfg::default());
+    let samples = decode_audio_file_to_16k_mono(path)?;
+    let mut vad = crate::voice::silero::SileroVad::new(crate::voice::silero::SileroConfig {
+        threshold: vad_cfg.threshold,
+    })?;
+    let frames = vad.accept(&samples);
+    let speech = frames
+        .iter()
+        .filter(|frame| matches!(frame.frame, crate::voice::vad::VadFrame::Speech))
+        .count();
+    let max = frames
+        .iter()
+        .map(|frame| frame.probability)
+        .fold(0.0f32, f32::max);
+    let avg = if frames.is_empty() {
+        0.0
+    } else {
+        frames.iter().map(|frame| frame.probability).sum::<f32>() / frames.len() as f32
+    };
+
+    let effective_policy = crate::voice::vad::policy_from_config(
+        &vad_cfg,
+        crate::voice::silero::SileroConfig::frame_ms(),
+    );
+    let mut controller = crate::voice::vad::VadController::new(effective_policy);
+    let mut resumes = 0;
+    let mut pauses = 0;
+    let mut transitions = Vec::new();
+    for frame in &frames {
+        match controller.accept(frame.frame) {
+            crate::voice::vad::VadTransition::SpeechStarted => {
+                resumes += 1;
+                transitions.push(("resume", frame.start_sample, frame.probability));
+            }
+            crate::voice::vad::VadTransition::SilenceStarted => {
+                pauses += 1;
+                transitions.push(("pause", frame.start_sample, frame.probability));
+            }
+            crate::voice::vad::VadTransition::None => {}
+        }
+    }
+
+    println!(
+        "silero-vad-file: OK samples={} frames={} speech={} threshold={:.3} effective_min_start={} effective_pause_ms={} max={:.6} avg={:.6} resumes={} pauses={}",
+        samples.len(),
+        frames.len(),
+        speech,
+        vad_cfg.threshold,
+        effective_policy.min_start_voiced_frames,
+        effective_policy.pause_silence_ms,
+        max,
+        avg,
+        resumes,
+        pauses
+    );
+    for frame in frames.iter().take(20) {
+        println!(
+            "frame start_ms={} probability={:.6} speech={}",
+            frame.start_sample * 1000 / 16_000,
+            frame.probability,
+            matches!(frame.frame, crate::voice::vad::VadFrame::Speech)
+        );
+    }
+    for (kind, start_sample, probability) in transitions.iter().take(20) {
+        println!(
+            "transition kind={} start_ms={} probability={:.6}",
+            kind,
+            start_sample * 1000 / 16_000,
+            probability
+        );
+    }
+    Ok(())
+}
+
+fn decode_audio_file_to_16k_mono(path: &Path) -> Result<Vec<i16>> {
+    let wav = std::env::temp_dir().join(format!("shuohua-vad-{}.wav", ulid::Ulid::new()));
+    let output = std::process::Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            &path.to_string_lossy(),
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-f",
+            "wav",
+            &wav.to_string_lossy(),
+        ])
+        .output()
+        .with_context(|| "run ffmpeg for Silero VAD file diagnostic")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "ffmpeg failed with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let mut reader =
+        hound::WavReader::open(&wav).with_context(|| format!("read {}", wav.display()))?;
+    let samples = reader
+        .samples::<i16>()
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| format!("decode {}", wav.display()))?;
+    let _ = std::fs::remove_file(wav);
+    Ok(samples)
 }
 
 fn init_i18n_for_cli() {
@@ -227,6 +345,19 @@ mod tests {
         match cli.command {
             Some(Command::Diagnostics(DiagnosticsCommand::SileroVad)) => {}
             other => panic!("expected diagnostics silero-vad, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hidden_diagnostics_parse_silero_vad_file_smoke() {
+        let cli =
+            Cli::try_parse_from(["shuo", "diagnostics", "silero-vad-file", "sample.m4a"]).unwrap();
+
+        match cli.command {
+            Some(Command::Diagnostics(DiagnosticsCommand::SileroVadFile { path })) => {
+                assert_eq!(path, PathBuf::from("sample.m4a"));
+            }
+            other => panic!("expected diagnostics silero-vad-file, got {other:?}"),
         }
     }
 

@@ -48,6 +48,7 @@ pub struct SileroVad {
     threshold: f32,
     buffer: Vec<i16>,
     sample_offset: u64,
+    preprocessor: crate::voice::preprocess::VadPreprocessor,
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -75,6 +76,7 @@ impl SileroVad {
             threshold: config.threshold,
             buffer: Vec::with_capacity(SILERO_CHUNK_SAMPLES),
             sample_offset: 0,
+            preprocessor: crate::voice::preprocess::VadPreprocessor::new(),
         })
     }
 
@@ -87,6 +89,7 @@ impl SileroVad {
             let chunk: Vec<i16> = self.buffer.drain(..SILERO_CHUNK_SAMPLES).collect();
             let start_sample = self.sample_offset;
             self.sample_offset += SILERO_CHUNK_SAMPLES as u64;
+            let chunk = self.preprocessor.process(&chunk);
             let probability = self.detector.predict(chunk.iter().copied());
             let frame = if probability >= self.threshold {
                 VadFrame::Speech

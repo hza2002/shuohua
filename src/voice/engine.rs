@@ -89,16 +89,12 @@ impl VadPauseState {
     fn new(config: &crate::config::VoiceVadCfg) -> anyhow::Result<Self> {
         use crate::voice::silero::{SileroConfig, SileroVad};
         use crate::voice::timeline::{ms_to_samples, PcmTimeline};
-        use crate::voice::vad::{VadController, VadPolicy};
+        use crate::voice::vad::{policy_from_config, VadController};
 
         let silero = SileroVad::new(SileroConfig {
             threshold: config.threshold,
         })?;
-        let controller = VadController::new(VadPolicy {
-            min_start_voiced_frames: config.min_start_voiced_frames,
-            pause_silence_ms: config.pause_silence_ms,
-            frame_ms: SileroConfig::frame_ms(),
-        });
+        let controller = VadController::new(policy_from_config(config, SileroConfig::frame_ms()));
         let retention_ms = config.pre_roll_ms + config.max_overlap_ms + 100;
         Ok(Self {
             silero,
@@ -401,6 +397,12 @@ pub(crate) async fn run_with_recorder(
                                         if vad.controller.accept(frame.frame)
                                             == VadTransition::SilenceStarted
                                         {
+                                            tracing::info!(
+                                                recording_id = %recording_id,
+                                                probability = frame.probability,
+                                                start_sample = frame.start_sample,
+                                                "vad pause requested"
+                                            );
                                             pause_requested = true;
                                             break;
                                         }
@@ -624,6 +626,12 @@ pub(crate) async fn run_with_recorder(
                                     if vad.controller.accept(frame.frame)
                                         == VadTransition::SpeechStarted
                                     {
+                                        tracing::info!(
+                                            recording_id = %recording_id,
+                                            probability = frame.probability,
+                                            start_sample = frame.start_sample,
+                                            "vad resume requested"
+                                        );
                                         speech_start = Some(frame.start_sample);
                                         break;
                                     }

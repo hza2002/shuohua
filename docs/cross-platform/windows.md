@@ -283,6 +283,12 @@ install extra runtime components.
 Passing build/tests alone does not promote Windows VAD capability to available; real microphone VadPause smoke is
 still required.
 
+Windows VAD input levels can be much lower than macOS or vary across microphones. The current Windows baseline adds
+VAD-only adaptive preprocessing before Silero: a copy of the 16 kHz mono PCM is gain-normalized with RMS/peak noise
+gating and smoothed gain, then passed to Silero. This does not change ASR input, retained audio, or history. The
+preprocessor is isolated in `voice::preprocess` so a future WebRTC Audio Processing Module spike can replace the
+current baseline without touching Silero/session orchestration.
+
 Stop point for user intervention:
 
 - After `shuo.exe doctor` can show a Windows audio backend and device summary.

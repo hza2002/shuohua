@@ -19,6 +19,18 @@ current HEAD.
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
 
+Phase 10by Windows active-app self foreground smoke 已完成：
+
+- 新增 ignored runtime smoke，创建 foreground Win32 window，并确认 Windows
+  `platform::windows::app_context::frontmost_app()` 能解析到当前测试进程的 `windows_exe_name` 和 display
+  `app_name`。
+- 本机已通过：
+  `cargo test --target x86_64-pc-windows-msvc platform::windows::app_context::tests::foreground_self_window_runtime_smoke -- --ignored --exact`。
+- capability 保持 `desktop.active_app=partial backend=foreground_window_process_identity`，reason 从
+  `exe_name_and_optional_aumid` 收窄为 `foreground_self_window_runtime_smoke`。
+- 本阶段仍不覆盖 packaged app / Store app / terminal/editor/browser 矩阵、profile route 命中或 full
+  record -> paste。
+
 Phase 10bx Windows paste target smoke 已完成：
 
 - 新增 Windows ignored runtime smoke

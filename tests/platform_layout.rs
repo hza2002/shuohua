@@ -1623,6 +1623,9 @@ fn windows_active_app_identity_backend_lives_behind_desktop_facade() {
         "windows_app_user_model_id",
         "windows_exe_name",
         "app_name_from_exe_name",
+        "foreground_self_window_runtime_smoke",
+        "CreateWindowExW",
+        "SetForegroundWindow",
     ] {
         assert!(
             backend.contains(token),
@@ -1653,7 +1656,7 @@ fn windows_active_app_capability_reports_process_identity_partial() {
     for token in [
         "CapabilityId::DesktopActiveApp",
         "foreground_window_process_identity",
-        "exe_name_and_optional_aumid",
+        "foreground_self_window_runtime_smoke",
         "Validate foreground app route matching across packaged and unpackaged Windows apps",
     ] {
         assert!(

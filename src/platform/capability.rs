@@ -397,8 +397,8 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 platform: PlatformKind::Windows,
                 backend: "foreground_window_process_identity",
                 status: CapabilityStatusKind::Partial,
-                summary: "Foreground window lookup can resolve process executable name and best-effort AppUserModelID",
-                reason: "exe_name_and_optional_aumid",
+                summary: "Foreground window lookup can resolve a self-owned Win32 window to process executable identity",
+                reason: "foreground_self_window_runtime_smoke",
                 next_step: Some("Validate foreground app route matching across packaged and unpackaged Windows apps"),
             },
         ])

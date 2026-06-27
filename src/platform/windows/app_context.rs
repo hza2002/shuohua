@@ -130,6 +130,14 @@ impl Drop for ProcessHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::{anyhow, Result};
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, DispatchMessageW, PeekMessageW, SetForegroundWindow,
+        ShowWindow, TranslateMessage, CW_USEDEFAULT, MSG, PM_REMOVE, SW_SHOW, WS_OVERLAPPEDWINDOW,
+        WS_VISIBLE,
+    };
 
     #[test]
     fn extracts_exe_name_from_windows_path() {
@@ -158,5 +166,105 @@ mod tests {
             utf16_nul_terminated_to_string(&encoded).as_deref(),
             Some("Microsoft.App")
         );
+    }
+
+    #[test]
+    #[ignore = "creates a foreground Win32 window; run only during Windows active-app runtime smoke"]
+    fn foreground_self_window_runtime_smoke() -> Result<()> {
+        let expected_exe = std::env::current_exe()?
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| anyhow!("current test executable has no UTF-8 file name"))?;
+
+        let window = TestWindow::create()?;
+        window.focus()?;
+        pump_messages(Duration::from_millis(150));
+
+        let app = super::frontmost_app();
+        assert_eq!(app.windows_exe_name.as_deref(), Some(expected_exe.as_str()));
+        assert_eq!(
+            app.app_name.as_deref(),
+            Some(app_name_from_exe_name(&expected_exe).as_str())
+        );
+        Ok(())
+    }
+
+    struct TestWindow {
+        hwnd: HWND,
+    }
+
+    impl TestWindow {
+        fn create() -> Result<Self> {
+            let class = wide_null("STATIC");
+            let title = wide_null("shuohua active app smoke");
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    title.as_ptr(),
+                    WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    480,
+                    180,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if hwnd.is_null() {
+                return Err(last_error("CreateWindowExW"));
+            }
+            unsafe {
+                ShowWindow(hwnd, SW_SHOW);
+            }
+            Ok(Self { hwnd })
+        }
+
+        fn focus(&self) -> Result<()> {
+            unsafe {
+                if SetForegroundWindow(self.hwnd) == 0 {
+                    return Err(last_error("SetForegroundWindow"));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for TestWindow {
+        fn drop(&mut self) {
+            unsafe {
+                DestroyWindow(self.hwnd);
+            }
+        }
+    }
+
+    fn pump_messages(duration: Duration) {
+        let until = Instant::now() + duration;
+        while Instant::now() < until {
+            unsafe {
+                let mut msg = std::mem::zeroed::<MSG>();
+                while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn wide_null(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn last_error(operation: &'static str) -> anyhow::Error {
+        unsafe {
+            anyhow!(
+                "{operation}: {}",
+                std::io::Error::from_raw_os_error(GetLastError() as i32)
+            )
+        }
     }
 }

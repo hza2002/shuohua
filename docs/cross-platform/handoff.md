@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `test: add windows profile route smoke` (`e1df866`).
+Latest phase commit: pending Phase 10ce retained audio TUI action path smoke.
 
-Previous phase commit: `docs: record windows common target smoke` (`c59fbd7`).
+Previous phase commit: `test: add windows profile route smoke` (`9e08acf`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,15 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+
+Phase 10ce retained audio TUI action path smoke 已完成：
+
+- TUI History open/reveal action 增加自动化测试：当 audio cache 已解析出 `.m4a` 或 `.flac` retained-audio
+  实际路径时，action 使用该路径，而不是默认假设 `.flac`。
+- missing retained audio 时，TUI 不调用 platform path action，只返回 missing status。
+- 本阶段不启动 Explorer、不打开系统播放器、不验证 codec playback；Windows `audio.convert` 仍保持
+  `partial/media_foundation_aac_flacenc/full_recording_history_smoke`，下一步仍需人工验证 retained FLAC/M4A
+  Explorer open/reveal 和 playback workflow。
 
 Phase 10cd Windows active app profile route smoke 已完成：
 

@@ -463,7 +463,10 @@ impl HistoryPage {
         }
     }
 
-    fn run_audio_action(&self, action: fn(&Path) -> Result<()>, status_key: &str) -> String {
+    fn run_audio_action<F>(&self, action: F, status_key: &str) -> String
+    where
+        F: FnOnce(&Path) -> Result<()>,
+    {
         let Some(record) = self.selected_record() else {
             return crate::t!("tui.no_history_selected");
         };

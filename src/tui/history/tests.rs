@@ -627,6 +627,57 @@ fn delete_response_and_history_changed_are_order_independent() {
 }
 
 #[test]
+fn audio_action_uses_resolved_retained_audio_path() {
+    let id = ulid::Ulid::new().to_string();
+    let m4a_path = std::env::temp_dir()
+        .join(format!("shuohua-history-audio-action-{id}"))
+        .join("audio")
+        .join(format!("{id}.m4a"));
+    let mut page = HistoryPage::new();
+    page.records = vec![sample_record(&id, 3)];
+    page.audio_cache.insert(
+        id.clone(),
+        crate::tui::audio::AudioInfo {
+            path: m4a_path.clone(),
+            size_bytes: Some(12),
+            modified: None,
+        },
+    );
+
+    let status = page.run_audio_action(
+        |path| {
+            assert_eq!(path, m4a_path.as_path());
+            Ok(())
+        },
+        "tui.history.audio.opening",
+    );
+
+    assert!(status.contains(&m4a_path.display().to_string()));
+}
+
+#[test]
+fn audio_action_does_not_call_platform_action_for_missing_audio() {
+    let id = ulid::Ulid::new().to_string();
+    let mut page = HistoryPage::new();
+    page.records = vec![sample_record(&id, 3)];
+    page.audio_cache.insert(
+        id,
+        crate::tui::audio::AudioInfo {
+            path: std::env::temp_dir().join("missing.flac"),
+            size_bytes: None,
+            modified: None,
+        },
+    );
+
+    let status = page.run_audio_action(
+        |_| panic!("missing audio must not call platform path action"),
+        "tui.history.audio.opening",
+    );
+
+    assert_eq!(status, crate::t!("tui.history.audio.missing_status"));
+}
+
+#[test]
 fn stale_snapshot_keeps_last_valid_chart_and_shows_warning() {
     let mut page = HistoryPage::new();
     page.analytics.selection.period = AnalyticsPeriod::Month;

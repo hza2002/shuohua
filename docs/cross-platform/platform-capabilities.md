@@ -218,6 +218,17 @@ reason 从底层 runtime smoke 收窄，但仍保持 `partial`：
   Windows privacy 状态变化、长时间录音稳定性、remote desktop 边界、Explorer open/reveal 和音频播放。
 - 因此不能升级到 `available`；后续若要继续收窄，应优先做 open/reveal/playback smoke 和更长录音 soak。
 
+## Phase 10ce Retained Audio TUI Action Path Smoke
+
+Phase 10ce 补充 retained-audio UI action 的自动化路径 smoke：
+
+- TUI History 的 open/reveal action 增加单元测试：当 audio cache 解析出 `.m4a` 或 `.flac` 实际文件时，
+  action 使用解析后的 retained-audio path，而不是默认假设 `.flac`。
+- missing retained audio 时，TUI 不会调用 platform path action，只返回 missing status。
+- 该 smoke 不启动 Explorer、不打开系统播放器、不验证 codec playback；Windows `audio.convert` 仍保持
+  `partial/media_foundation_aac_flacenc/full_recording_history_smoke`，直到 retained FLAC/M4A Explorer
+  open/reveal 和 playback workflow 由人工 runtime 验证覆盖。
+
 ## Phase 10j Windows Lifecycle Primitive Compile Backend
 
 Windows lifecycle no longer needs to be a pure unsupported placeholder for compile checks:

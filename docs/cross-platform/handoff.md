@@ -36,7 +36,9 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
   commit 路径，以及 panel `IDCompositionSurface` 创建/绑定、resize、`BeginDraw::<IDXGISurface>`、
   Direct2D `CreateDxgiSurfaceRenderTarget` 绘制圆角半透明 panel、DirectWrite 绘制系统 icon glyph 与
   state/stats/meta/body 文本、`EndDraw` 路径，并验证 `IDCompositionRectangleClip` rounded clip 与
-  `IDCompositionVisual3::SetOpacity2` panel opacity binding。Surface 创建已延后到第一次 scene update：
+  `IDCompositionVisual3::SetOpacity2` panel opacity binding。DirectComposition device 现在来自 D3D11 BGRA
+  `IDXGIDevice`，hardware D3D11 不可用时 fallback 到 WARP，避免 NULL-device `CreateSurface` 路线触发
+  `0x8000000E`。Surface 创建已延后到第一次 scene update：
   startup 只创建 device/target/visual tree，避免 daemon 初始化时过早调用 `IDCompositionDevice::CreateSurface`
   触发 `0x8000000E`。Composition probe 现在也对齐 Direct2D fallback
   的 shadow outset geometry：surface 包含 renderer-owned outset，panel/content 坐标保持 inset。但还未绘制

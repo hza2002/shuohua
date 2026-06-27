@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows::core::{Interface, PCWSTR};
-use windows::Win32::Foundation::HWND as WindowsHwnd;
+use windows::Win32::Foundation::{HMODULE, HWND as WindowsHwnd};
 use windows::Win32::Foundation::{POINT, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
@@ -12,6 +12,12 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
     D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_DEFAULT,
+};
+use windows::Win32::Graphics::Direct3D::{
+    D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0,
+};
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11CreateDevice, ID3D11Device, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
 };
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice, IDCompositionAnimation, IDCompositionDevice,
@@ -28,7 +34,7 @@ use windows::Win32::Graphics::DirectWrite::{
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM,
 };
-use windows::Win32::Graphics::Dxgi::IDXGISurface;
+use windows::Win32::Graphics::Dxgi::{IDXGIDevice, IDXGISurface};
 use windows_sys::Win32::Foundation::HWND;
 
 use super::icons::{icon_font_fallback_order, state_icon_plan, IconAnimation};
@@ -57,6 +63,8 @@ pub(super) enum CompositionReadiness {
 }
 
 pub(super) struct CompositionRenderer {
+    _d3d: ID3D11Device,
+    _dxgi: IDXGIDevice,
     device: IDCompositionDevice,
     d2d: ID2D1Factory,
     dwrite: IDWriteFactory,
@@ -67,8 +75,9 @@ pub(super) struct CompositionRenderer {
 impl CompositionRenderer {
     pub(super) fn new(hwnd: HWND) -> Result<Self> {
         let hwnd = WindowsHwnd(hwnd.cast());
+        let (d3d, dxgi) = create_d3d_dxgi_device()?;
         let device = unsafe {
-            DCompositionCreateDevice::<_, IDCompositionDevice>(None)
+            DCompositionCreateDevice::<_, IDCompositionDevice>(&dxgi)
                 .context("DCompositionCreateDevice")?
         };
         let d2d = unsafe {
@@ -97,6 +106,8 @@ impl CompositionRenderer {
             device.Commit().context("IDCompositionDevice::Commit")?;
         }
         Ok(Self {
+            _d3d: d3d,
+            _dxgi: dxgi,
             device,
             d2d,
             dwrite,
@@ -118,6 +129,37 @@ impl CompositionRenderer {
                 .context("IDCompositionDevice::Commit reserved scene")
         }
     }
+}
+
+fn create_d3d_dxgi_device() -> Result<(ID3D11Device, IDXGIDevice)> {
+    create_d3d_dxgi_device_with_driver(D3D_DRIVER_TYPE_HARDWARE)
+        .or_else(|_| create_d3d_dxgi_device_with_driver(D3D_DRIVER_TYPE_WARP))
+}
+
+fn create_d3d_dxgi_device_with_driver(
+    driver_type: D3D_DRIVER_TYPE,
+) -> Result<(ID3D11Device, IDXGIDevice)> {
+    let mut d3d = None;
+    let mut selected_level = D3D_FEATURE_LEVEL_11_0;
+    unsafe {
+        D3D11CreateDevice(
+            None,
+            driver_type,
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            Some(&[D3D_FEATURE_LEVEL_11_0]),
+            D3D11_SDK_VERSION,
+            Some(&mut d3d),
+            Some(&mut selected_level),
+            None,
+        )
+        .with_context(|| format!("D3D11CreateDevice composition BGRA device {driver_type:?}"))?;
+    }
+    let d3d = d3d.context("D3D11CreateDevice returned no ID3D11Device")?;
+    let dxgi = d3d
+        .cast::<IDXGIDevice>()
+        .context("ID3D11Device -> IDXGIDevice")?;
+    Ok((d3d, dxgi))
 }
 
 pub(super) struct CompositionVisualTree {

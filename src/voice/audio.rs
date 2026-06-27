@@ -258,9 +258,9 @@ mod tests {
     }
 
     #[cfg(target_os = "windows")]
-    #[ignore = "requires ffmpeg on PATH; run only during Windows retained-audio runtime smoke"]
+    #[ignore = "uses pure Rust FLAC; run only during Windows retained-audio runtime smoke"]
     #[test]
-    fn external_lossless_finish_creates_retained_audio_and_removes_temporary_wav() {
+    fn native_lossless_finish_creates_retained_audio_and_removes_temporary_wav() {
         let dir = std::env::temp_dir().join(format!("shuohua-audio-finish-{}", ulid::Ulid::new()));
         let output = prepare_in_dir(&dir, "01HXYZ", RecordAudioMode::Lossless)
             .unwrap()

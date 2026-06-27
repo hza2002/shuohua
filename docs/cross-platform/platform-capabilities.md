@@ -185,24 +185,24 @@ command behind `platform::audio_convert`:
 该阶段不改变 retained audio 文件命名、history schema、recorder WAV 写入、`record_audio = "off"`，
 也不让 daemon 热路径引入外部转码依赖。
 
-## Phase 10bj Windows Optional FFmpeg Retained Audio Backend
+## Phase 10bj/10bt Windows Native Retained Audio Backend
 
-Windows retained audio conversion now has a pragmatic split backend:
+Windows retained audio conversion now has native/single-binary conversion paths:
 
-- `audio.convert`：`partial`，backend `media_foundation_aac_ffmpeg_flac`，reason
-  `compact_native_lossless_external`。
+- `audio.convert`：`partial`，backend `media_foundation_aac_flacenc`，reason
+  `native_conversion_runtime_smoke`。
 - `compact` 使用 Windows Media Foundation Sink Writer 把 recorder WAV 转为 AAC/M4A，码率仍为 32 kbps；
   该路径不要求用户安装外部依赖。
-- `lossless` 仍使用 PATH 中的 `ffmpeg.exe` 把 recorder WAV 转为 FLAC。
-- 本阶段不新增配置项，不打包 ffmpeg；缺少 ffmpeg 时 lossless retained audio 保存失败并清理临时
-  WAV/目标文件，compact 不受影响。
+- `lossless` 使用 pure Rust `flacenc` 把 recorder WAV 转为 FLAC；该路径同样不要求用户安装外部依赖。
+- 本阶段不新增配置项，不打包 ffmpeg。`convert_retained_audio_with_program` 只保留为 Windows ffmpeg
+  helper/test seam，不是默认 runtime path。
 - 文本 dispatch、clipboard/paste 和 history append 不能依赖 retained audio conversion 成功。
 - Windows ignored runtime smoke
   `platform::audio_convert::imp::tests::media_foundation_runtime_smoke_creates_m4a_without_ffmpeg` 已验证 native
-  compact M4A 生成；`voice::audio::tests::ffmpeg_finish_creates_retained_audio_and_removes_temporary_wav` 仍覆盖
-  retained-audio finish cleanup 语义。
-- 在 full Windows recording session 验证 `.flac` / `.m4a` 生成和回放、且 lossless 路径满足最终 packaging
-  policy 之前，不能把 capability 升级为 `available`。
+  compact M4A 生成；`platform::audio_convert::imp::tests::pure_rust_flac_runtime_smoke_creates_flac_without_ffmpeg`
+  已验证 native FLAC 生成；voice finish ignored smoke 覆盖 retained-audio finish cleanup 语义。
+- 在 full Windows recording session 验证 `.flac` / `.m4a` 生成、history 关联、Explorer open/reveal 和回放之前，
+  不能把 capability 升级为 `available`。
 
 ## Phase 10j Windows Lifecycle Primitive Compile Backend
 

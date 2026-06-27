@@ -344,9 +344,9 @@ fn windows_audio_convert_capability_reports_native_compact_backend() {
 
     for token in [
         "CapabilityId::AudioConvert",
-        "media_foundation_aac_ffmpeg_flac",
-        "compact_native_lossless_external",
-        "Replace or package the lossless FLAC backend before declaring single-binary retained audio complete",
+        "media_foundation_aac_flacenc",
+        "native_conversion_runtime_smoke",
+        "Validate retained FLAC/M4A files from full Windows recording sessions and playback/open workflows",
     ] {
         assert!(
             capability.contains(token),
@@ -358,12 +358,15 @@ fn windows_audio_convert_capability_reports_native_compact_backend() {
         "#[cfg(target_os = \"windows\")]",
         "MFCreateSinkWriterFromURL",
         "convert_wav_to_m4a_media_foundation",
+        "convert_wav_to_flac_pure_rust",
+        "flacenc::source::MemSource",
         "const FFMPEG: &str = \"ffmpeg\"",
         "ffmpeg_args",
         "retain audio on Windows",
         "media_foundation_runtime_smoke_creates_m4a_without_ffmpeg",
+        "pure_rust_flac_runtime_smoke_creates_flac_without_ffmpeg",
         "native_compact_finish_creates_retained_audio_and_removes_temporary_wav",
-        "external_lossless_finish_creates_retained_audio_and_removes_temporary_wav",
+        "native_lossless_finish_creates_retained_audio_and_removes_temporary_wav",
     ] {
         assert!(
             facade.contains(token) || voice_audio.contains(token),
@@ -372,11 +375,13 @@ fn windows_audio_convert_capability_reports_native_compact_backend() {
     }
 
     for token in [
-        "Phase 10bj Windows Optional FFmpeg Retained Audio Backend",
-        "`audio.convert`：`partial`，backend `media_foundation_aac_ffmpeg_flac`，reason",
+        "Phase 10bj/10bt Windows Native Retained Audio Backend",
+        "`audio.convert`：`partial`，backend `media_foundation_aac_flacenc`，reason",
         "`compact` 使用 Windows Media Foundation Sink Writer",
+        "`lossless` 使用 pure Rust `flacenc`",
         "不打包 ffmpeg",
         "media_foundation_runtime_smoke_creates_m4a_without_ffmpeg",
+        "pure_rust_flac_runtime_smoke_creates_flac_without_ffmpeg",
     ] {
         assert!(
             platform_doc.contains(token),
@@ -387,8 +392,9 @@ fn windows_audio_convert_capability_reports_native_compact_backend() {
     for token in [
         "Retained audio conversion on Windows is split by retention mode",
         "Windows Media Foundation Sink Writer",
-        "`ffmpeg.exe` must be discoverable on",
-        "not the final lossless packaging policy",
+        "pure Rust `flacenc` encoder",
+        "does not require `ffmpeg.exe`",
+        "single-binary dependency policy",
     ] {
         assert!(
             windows_doc.contains(token),

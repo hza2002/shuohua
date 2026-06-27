@@ -19,21 +19,28 @@ current HEAD.
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
 
-Phase 10bs Windows native compact retained-audio conversion 正在收尾：
+Phase 10bt Windows native retained-audio conversion 正在收尾：
+
+- Windows `record_audio = "lossless"` 不再依赖 PATH 中的 `ffmpeg.exe`，改用 pure Rust `flacenc` 将
+  recorder WAV 转成 FLAC。`flacenc` 已用 `--no-default-features` 接入，scratch Windows/MSVC 构建和本机
+  ignored runtime smoke 都能生成 FLAC。
+- Windows `record_audio = "compact"` 继续使用上一阶段 Windows Media Foundation Sink Writer 转 AAC/M4A
+  32 kbps。
+- `audio.convert` capability 仍保持 `partial`，但 backend/reason 更新为
+  `media_foundation_aac_flacenc` / `native_conversion_runtime_smoke`。这表示 conversion dependency 已满足
+  当前单二进制策略，但 full recording -> history/open/playback 仍待验证。
+- 未完成：真实 hotkey-triggered Windows recording 下分别验证 compact `.m4a` 和 lossless `.flac` 生成、
+  history 关联、Explorer open/reveal 和播放；通过前不能把 `audio.convert` 升级为 available。
+
+Phase 10bs Windows native compact retained-audio conversion 已完成：
 
 - Windows `record_audio = "compact"` 不再依赖 PATH 中的 `ffmpeg.exe`，改用 Windows Media Foundation
   Sink Writer 将 recorder WAV 转成 AAC/M4A 32 kbps。该路径不新增第三方依赖，符合单 exe 用户体验方向。
-- Windows `record_audio = "lossless"` 仍暂时依赖 `ffmpeg.exe` 转 FLAC，因此 `audio.convert` capability
-  仍保持 `partial`，backend/reason 更新为
-  `media_foundation_aac_ffmpeg_flac` / `compact_native_lossless_external`。
 - 新增 ignored runtime smoke
   `platform::audio_convert::imp::tests::media_foundation_runtime_smoke_creates_m4a_without_ffmpeg`，已在本机
   Windows 通过，证明 native compact `.m4a` 可生成且无需 ffmpeg。
 - voice retained-audio finish smoke 拆成 native compact 与 external lossless 两条，避免把 compact 误写成
   ffmpeg 依赖。
-- 未完成：Windows lossless/FLAC 的最终单二进制策略。后续可评估 Media Foundation FLAC encoder 可用性、
-  纯 Rust FLAC encoder、或把 lossless 设为 Windows developer-only；完成前不能把 `audio.convert`
-  升级为 available。
 
 Phase 10br Windows audio-processing dependency spike 已完成：
 

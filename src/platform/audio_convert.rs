@@ -116,6 +116,7 @@ mod imp {
     use std::process::Command;
 
     use anyhow::{bail, Context, Result};
+    use flacenc::error::Verify;
     use windows::core::PCWSTR;
     use windows::Win32::Media::MediaFoundation::{
         MFAudioFormat_AAC, MFAudioFormat_PCM, MFCreateMediaType, MFCreateMemoryBuffer,
@@ -140,9 +141,8 @@ mod imp {
             RecordAudioMode::Off => unreachable!(),
             RecordAudioMode::Compact => convert_wav_to_m4a_media_foundation(input, output)
                 .with_context(|| "convert compact retained audio with Windows Media Foundation"),
-            RecordAudioMode::Lossless => {
-                convert_retained_audio_with_program(FFMPEG, mode, input, output)
-            }
+            RecordAudioMode::Lossless => convert_wav_to_flac_pure_rust(input, output)
+                .with_context(|| "convert lossless retained audio with pure Rust FLAC encoder"),
         }
     }
 
@@ -195,12 +195,39 @@ mod imp {
     }
 
     fn convert_wav_to_m4a_media_foundation(input: &Path, output: &Path) -> Result<()> {
+        let (spec, samples) = read_pcm_i16_wav(input)?;
+        encode_pcm_i16_to_m4a_media_foundation(&samples, spec.channels, spec.sample_rate, output)
+    }
+
+    fn convert_wav_to_flac_pure_rust(input: &Path, output: &Path) -> Result<()> {
+        let (spec, samples) = read_pcm_i16_wav(input)?;
+        let samples = samples.into_iter().map(i32::from).collect::<Vec<_>>();
+        let config = flacenc::config::Encoder::default()
+            .into_verified()
+            .map_err(|(_, error)| anyhow::anyhow!("verify FLAC encoder config: {error}"))?;
+        let source = flacenc::source::MemSource::from_samples(
+            &samples,
+            spec.channels as usize,
+            spec.bits_per_sample as usize,
+            spec.sample_rate as usize,
+        );
+        let stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
+            .map_err(|error| anyhow::anyhow!("encode FLAC: {error}"))?;
+        let mut sink = flacenc::bitsink::ByteSink::new();
+        flacenc::component::BitRepr::write(&stream, &mut sink)
+            .map_err(|error| anyhow::anyhow!("write FLAC bitstream: {error}"))?;
+        std::fs::write(output, sink.as_slice())
+            .with_context(|| format!("write FLAC {}", output.display()))?;
+        Ok(())
+    }
+
+    fn read_pcm_i16_wav(input: &Path) -> Result<(hound::WavSpec, Vec<i16>)> {
         let mut reader = hound::WavReader::open(input)
             .with_context(|| format!("open WAV {}", input.display()))?;
         let spec = reader.spec();
         if spec.sample_format != hound::SampleFormat::Int || spec.bits_per_sample != 16 {
             bail!(
-                "Windows Media Foundation compact conversion only supports 16-bit PCM WAV input, got {:?}/{}bit",
+                "Windows retained audio conversion only supports 16-bit PCM WAV input, got {:?}/{}bit",
                 spec.sample_format,
                 spec.bits_per_sample
             );
@@ -217,7 +244,7 @@ mod imp {
             .samples::<i16>()
             .collect::<std::result::Result<Vec<_>, _>>()
             .context("read WAV PCM samples")?;
-        encode_pcm_i16_to_m4a_media_foundation(&samples, spec.channels, spec.sample_rate, output)
+        Ok((spec, samples))
     }
 
     fn encode_pcm_i16_to_m4a_media_foundation(
@@ -386,9 +413,9 @@ mod imp {
             assert!(format!("{err:#}").contains("retain audio on Windows"));
         }
 
-        #[ignore = "uses Windows Media Foundation and ffmpeg; run only during Windows retained-audio runtime smoke"]
+        #[ignore = "uses Windows Media Foundation and pure Rust FLAC; run only during Windows retained-audio runtime smoke"]
         #[test]
-        fn runtime_smoke_creates_native_m4a_and_ffmpeg_flac() {
+        fn runtime_smoke_creates_native_m4a_and_flac() {
             let dir =
                 std::env::temp_dir().join(format!("shuohua-audio-convert-{}", ulid::Ulid::new()));
             std::fs::create_dir_all(&dir).unwrap();
@@ -405,6 +432,23 @@ mod imp {
             assert!(flac.is_file(), "missing {}", flac.display());
             assert!(std::fs::metadata(&flac).unwrap().len() > 0);
 
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[ignore = "uses pure Rust FLAC encoder; run only during Windows retained-audio runtime smoke"]
+        #[test]
+        fn pure_rust_flac_runtime_smoke_creates_flac_without_ffmpeg() {
+            let dir = std::env::temp_dir()
+                .join(format!("shuohua-audio-convert-flac-{}", ulid::Ulid::new()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let input = dir.join("input.wav");
+            let output = dir.join("output.flac");
+            write_test_wav(&input);
+
+            convert_wav_to_flac_pure_rust(&input, &output).unwrap();
+
+            assert!(output.is_file(), "missing {}", output.display());
+            assert!(std::fs::metadata(&output).unwrap().len() > 0);
             let _ = std::fs::remove_dir_all(dir);
         }
 

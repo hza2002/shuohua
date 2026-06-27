@@ -19,6 +19,16 @@ current HEAD.
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
 
+Phase 10cb Windows real app record-to-paste smoke 已完成：
+
+- 用户在普通 Windows session 中完成 Notepad 和 VS Code 的真实 full record -> paste smoke，并反馈“都成功”。
+- 覆盖路径：`F16` hotkey -> Windows `WH_KEYBOARD_LL` -> microphone/cpal/WASAPI -> VAD/ASR -> Win32 clipboard ->
+  `SendInput` Ctrl+V -> foreground target app。
+- Windows `desktop.hotkey`、`desktop.hotkey_suppression`、`desktop.clipboard`、`desktop.text_injection` 和
+  `audio.capture` capability 仍保持 `partial`，reason 收窄为 `notepad_vscode_record_paste_smoke`。
+- 仍不能升级为 `available`：browser text fields、terminal、IME/composition、remote desktop、UAC/elevation、
+  长时间录音稳定性和更多设备/权限状态尚未覆盖。
+
 Phase 10ca Windows single-executable release smoke 已完成：
 
 - 本机执行 `cargo build --release --target x86_64-pc-windows-msvc`，生成

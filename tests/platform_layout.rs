@@ -304,7 +304,7 @@ fn windows_audio_capture_capability_reports_input_stream_smoke() {
     for token in [
         "CapabilityId::AudioCapture",
         "cpal_wasapi",
-        "full_recording_history_smoke",
+        "notepad_vscode_record_paste_smoke",
         "Validate sustained recording stability across Windows devices, privacy states, and remote desktop sessions",
     ] {
         assert!(
@@ -322,7 +322,8 @@ fn windows_audio_capture_capability_reports_input_stream_smoke() {
     for token in [
         "Phase 10bg Windows Audio Input Stream Runtime Smoke",
         "Phase 10bv Windows Full Recording Audio Smoke",
-        "`audio.capture`：`partial`，backend `cpal_wasapi`，reason `full_recording_history_smoke`",
+        "notepad_vscode_record_paste_smoke",
+        "`audio.capture`：`partial`，backend `cpal_wasapi`，reason `notepad_vscode_record_paste_smoke`",
         "SHUOHUA_WINDOWS_AUDIO_REQUIRE_SIGNAL",
         "Phase 10ah Windows Audio Capture Diagnostics",
     ] {
@@ -1078,9 +1079,9 @@ fn windows_hotkey_capability_reports_hook_partial() {
         "CapabilityId::DesktopHotkey",
         "CapabilityId::DesktopHotkeySuppression",
         "wh_keyboard_ll",
-        "win32_edit_suppression_runtime_smoke",
-        "Validate hotkey press/release tracking across real Windows foreground apps",
-        "Validate suppressed down/up pairing, stuck modifier prevention, IME, and UAC boundaries",
+        "notepad_vscode_record_paste_smoke",
+        "Validate hotkey press/release tracking across browser, terminal, IME, remote desktop, and UAC boundaries",
+        "Validate suppressed down/up pairing, stuck modifier prevention, browser, terminal, IME, and UAC boundaries",
     ] {
         assert!(
             capability.contains(token),
@@ -1737,8 +1738,8 @@ fn windows_clipboard_capability_reports_write_only_partial() {
     for token in [
         "CapabilityId::DesktopClipboard",
         "win32_clipboard_unicode",
-        "dispatch_clipboard_runtime_smoke",
-        "Validate full record-to-clipboard behavior across target Windows apps and elevation boundaries",
+        "notepad_vscode_record_paste_smoke",
+        "Validate full record-to-clipboard behavior across browser, terminal, IME, and elevation boundaries",
     ] {
         assert!(
             capability.contains(token),
@@ -1805,8 +1806,8 @@ fn windows_text_injection_capability_reports_sendinput_partial() {
     for token in [
         "CapabilityId::DesktopTextInjection",
         "sendinput_ctrl_v",
-        "win32_edit_target_runtime_smoke",
-        "Validate Ctrl+V injection across real target Windows apps and UAC/elevation boundaries",
+        "notepad_vscode_record_paste_smoke",
+        "Validate Ctrl+V injection across browser, terminal, IME, remote desktop, and UAC/elevation boundaries",
     ] {
         assert!(
             capability.contains(token),

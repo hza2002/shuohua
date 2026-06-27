@@ -209,7 +209,7 @@ Windows retained audio conversion now has native/single-binary conversion paths:
 Windows 已完成真实麦克风 recording -> ASR -> history -> retained audio smoke，因此 audio 相关 capability
 reason 从底层 runtime smoke 收窄，但仍保持 `partial`：
 
-- `audio.capture`：`partial`，backend `cpal_wasapi`，reason `full_recording_history_smoke`。
+- `audio.capture`：`partial`，backend `cpal_wasapi`，reason `notepad_vscode_record_paste_smoke`。
 - `audio.convert`：`partial`，backend `media_foundation_aac_flacenc`，reason
   `full_recording_history_smoke`。
 - 用户在 Windows 本机分别验证 compact `.m4a` 和 lossless `.flac` 录音可生成；本 session 复核对应
@@ -345,12 +345,21 @@ Phase 10bw 后，Windows `desktop.clipboard` reason 收窄为 `dispatch_clipboar
 - 该 smoke 不触发 `SendInput`，不验证目标 App 是否接收 paste，不覆盖 elevation/UAC 和更多 App 矩阵；
   `desktop.clipboard` 仍保持 `partial`。
 
+Phase 10cb 后，用户完成 Notepad 和 VS Code 的真实 full record -> paste smoke：
+
+- `desktop.hotkey`、`desktop.hotkey_suppression`、`desktop.clipboard`、`desktop.text_injection` 和
+  `audio.capture` reason 收窄为 `notepad_vscode_record_paste_smoke`。
+- 该 smoke 覆盖真实触发键、麦克风录音、VAD/ASR、Win32 clipboard、`SendInput` Ctrl+V，以及两个常见
+  foreground targets：Notepad 和 VS Code text editor。
+- 仍不能升级为 `available`：browser text fields、terminal、IME/composition、remote desktop、UAC/elevation、
+  长时间录音稳定性和更多设备/权限状态尚未覆盖。
+
 ## Phase 10bx Windows Paste Target Smoke
 
 Phase 10bx 后，Windows `desktop.text_injection` reason 收窄为 `win32_edit_target_runtime_smoke`：
 
 - `desktop.text_injection`：`partial`，backend `sendinput_ctrl_v`，reason
-  `win32_edit_target_runtime_smoke`。
+  `notepad_vscode_record_paste_smoke`。
 - ignored runtime smoke 会创建一个临时 foreground Win32 `EDIT` control，把 Unicode 文本写入 clipboard，
   调用真实 `platform::autotype::paste()`，再用 `GetWindowTextW` 读回目标控件文本。
 - 这比只验证 `SendInput` 返回成功更接近真实 paste，但目标仍是测试进程自己创建的基础 Win32 edit
@@ -375,9 +384,9 @@ Windows `desktop.hotkey` / `desktop.hotkey_suppression` 在 Phase 10an 只表达
 backend 存在并做过同会话 smoke：
 
 - `desktop.hotkey`：`partial`，backend `wh_keyboard_ll`，reason
-  `win32_edit_suppression_runtime_smoke`。
+  `notepad_vscode_record_paste_smoke`。
 - `desktop.hotkey_suppression`：`partial`，backend `wh_keyboard_ll`，reason
-  `win32_edit_suppression_runtime_smoke`。
+  `notepad_vscode_record_paste_smoke`。
 - backend 运行在专用 OS 线程，callback 只写现有 `RawEvent` pipe wire format 并复用共享
   `Suppressor` 判断是否 drop foreground event。
 - ignored runtime smoke 已验证 hook 可收到合成 key down/up，并且能阻止合成 `A` 输入进入测试进程创建的

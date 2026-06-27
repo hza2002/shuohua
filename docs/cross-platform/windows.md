@@ -309,8 +309,8 @@ an isolated baseline rather than a declared final cross-platform audio-processin
 
 Current audio capability boundary:
 
-- `audio.capture` remains `partial/cpal_wasapi`, but its reason is now `full_recording_history_smoke` after
-  Windows real microphone recording produced submitted history records and retained audio.
+- `audio.capture` remains `partial/cpal_wasapi`, but its reason is now `notepad_vscode_record_paste_smoke` after
+  Windows real microphone recording completed full record -> paste in Notepad and VS Code.
 - `audio.convert` remains `partial/media_foundation_aac_flacenc`, reason `full_recording_history_smoke`; compact
   M4A and lossless FLAC no longer require user-installed `ffmpeg`.
 - Do not promote either capability to `available` until Explorer open/reveal, playback, longer recording soak,
@@ -349,10 +349,9 @@ Current hotkey baseline:
   wire format to the daemon pipe, and then asks the shared `Suppressor` whether to drop the foreground event.
 - Modifier transitions are forwarded as `FlagsChanged` with a post-transition modifier snapshot, matching the
   tracker contract used by macOS.
-- Capability is `partial/wh_keyboard_ll/win32_edit_suppression_runtime_smoke` for both `desktop.hotkey` and
-  `desktop.hotkey_suppression` after an ignored runtime smoke verifies synthetic key down/up delivery and
-  suppression against a foreground Win32 `EDIT` control. Real foreground App, IME, remote desktop, and
-  UAC/elevation boundaries are still unvalidated.
+- Capability is `partial/wh_keyboard_ll/notepad_vscode_record_paste_smoke` for both `desktop.hotkey` and
+  `desktop.hotkey_suppression` after the user verified full record -> paste in Notepad and VS Code. Browser,
+  terminal, IME, remote desktop, and UAC/elevation boundaries are still unvalidated.
 - This phase does not validate audio, overlay, clipboard/paste, or full record -> paste behavior.
 
 ## Clipboard And Text Injection
@@ -380,9 +379,9 @@ Current clipboard baseline:
   `OpenClipboard` / `EmptyClipboard` / `SetClipboardData(CF_UNICODETEXT)`.
 - The backend writes `CF_UNICODETEXT` using movable global memory and transfers ownership to the system only after
   `SetClipboardData` succeeds.
-- Capability is `partial/win32_clipboard_unicode/dispatch_clipboard_runtime_smoke` after `voice::dispatch`
-  writes Unicode text through the real Win32 clipboard path and reads it back. It remains partial until broader
-  target-app and elevation boundary validation is complete.
+- Capability is `partial/win32_clipboard_unicode/notepad_vscode_record_paste_smoke` after `voice::dispatch`
+  writes Unicode text through the real Win32 clipboard path and the user verified full record -> paste in Notepad
+  and VS Code. It remains partial until broader target-app and elevation boundary validation is complete.
 
 Current paste injection baseline:
 
@@ -390,9 +389,9 @@ Current paste injection baseline:
   Control down, V down, V up, Control up.
 - This is only a backend primitive. It does not implement hotkey triggering, foreground target selection, overlay,
   audio, or full record -> paste validation.
-- Capability is `partial/sendinput_ctrl_v/win32_edit_target_runtime_smoke` after an ignored Windows runtime smoke
-  pastes Unicode text into a foreground Win32 `EDIT` control created by the test process. Notepad/browser/editor/
-  terminal, IME, remote desktop, and UAC/elevation boundaries are still unvalidated.
+- Capability is `partial/sendinput_ctrl_v/notepad_vscode_record_paste_smoke` after the user verified full record ->
+  paste in Notepad and VS Code. Browser, terminal, IME, remote desktop, and UAC/elevation boundaries are still
+  unvalidated.
 - If paste injection fails in a future full session, the clipboard write should still remain the durable fallback.
 
 Current active app identity baseline:

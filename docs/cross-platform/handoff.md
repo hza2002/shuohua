@@ -19,6 +19,23 @@ current HEAD.
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
 
+Phase 10bv Windows full recording audio capability sync 已完成：
+
+- 用户手动验证 Phase 10bu 后反馈 VAD 体感“没有什么问题”，因此当前 Windows Silero/VadPause 可继续作为
+  非 overlay 能力闭环的可用 baseline；后续若要改变“思考多久进入 Idle”，应进入 endpoint policy /
+  sensitivity 设计，而不是继续堆隐藏 Windows 参数。
+- Windows `audio.capture` capability 仍为 `partial/cpal_wasapi`，reason 从 `input_stream_runtime_smoke`
+  收窄为 `full_recording_history_smoke`，因为真实麦克风 recording 已产生 `submitted` history 和 retained
+  audio。
+- Windows `audio.convert` capability 仍为 `partial/media_foundation_aac_flacenc`，reason 从
+  `native_conversion_runtime_smoke` 收窄为 `full_recording_history_smoke`，因为 compact `.m4a` 和 lossless
+  `.flac` 都已在 full recording 下生成并关联 history。
+- 仍不能升级到 `available`：Explorer open/reveal、音频播放、长时间 recording soak、多设备/权限矩阵和
+  remote desktop 边界尚未覆盖。
+- 验证：本阶段属于 capability/docs sync，需跑 `cargo fmt --check` 和
+  `cargo test --target x86_64-pc-windows-msvc platform_layout::windows_audio_capture_capability_reports_input_stream_smoke
+  platform_layout::windows_audio_convert_capability_reports_native_compact_backend` 或完整 Windows target tests。
+
 Phase 10bu VAD probability hysteresis 已完成：
 
 - 用户完成 Windows native retained-audio 手动 smoke；本 session 复核

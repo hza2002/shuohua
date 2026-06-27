@@ -350,10 +350,10 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 platform: PlatformKind::Windows,
                 backend: "cpal_wasapi",
                 status: CapabilityStatusKind::Partial,
-                summary: "cpal/WASAPI input can enumerate the default device and a runtime smoke received PCM chunks",
-                reason: "input_stream_runtime_smoke",
+                summary: "cpal/WASAPI input has passed real microphone recording and history smoke",
+                reason: "full_recording_history_smoke",
                 next_step: Some(
-                    "Validate non-silent microphone input, sustained recording, ASR, and retained audio behavior on Windows",
+                    "Validate sustained recording stability across Windows devices, privacy states, and remote desktop sessions",
                 ),
             },
             CapabilityStatus {
@@ -361,9 +361,9 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 platform: PlatformKind::Windows,
                 backend: "media_foundation_aac_flacenc",
                 status: CapabilityStatusKind::Partial,
-                summary: "Compact retained audio uses native Media Foundation AAC and lossless retained audio uses a pure Rust FLAC encoder",
-                reason: "native_conversion_runtime_smoke",
-                next_step: Some("Validate retained FLAC/M4A files from full Windows recording sessions and playback/open workflows"),
+                summary: "Native compact M4A and lossless FLAC retained audio passed full recording and history smoke",
+                reason: "full_recording_history_smoke",
+                next_step: Some("Validate retained FLAC/M4A Explorer open/reveal and playback workflows"),
             },
             CapabilityStatus {
                 id: CapabilityId::PathOpenReveal,

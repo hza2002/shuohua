@@ -304,11 +304,14 @@ Audio-processing dependency decision:
 Until a candidate passes license, packaging, build, and real microphone VAD smoke, the Windows preprocessor remains
 an isolated baseline rather than a declared final cross-platform audio-processing stack.
 
-Stop point for user intervention:
+Current audio capability boundary:
 
-- After `shuo.exe doctor` can show a Windows audio backend and device summary.
-- Before promoting `audio.capture` beyond `partial`, the user must run a real microphone recording test on
-  Windows because macOS cannot validate WASAPI device selection, privacy prompts, or capture stability.
+- `audio.capture` remains `partial/cpal_wasapi`, but its reason is now `full_recording_history_smoke` after
+  Windows real microphone recording produced submitted history records and retained audio.
+- `audio.convert` remains `partial/media_foundation_aac_flacenc`, reason `full_recording_history_smoke`; compact
+  M4A and lossless FLAC no longer require user-installed `ffmpeg`.
+- Do not promote either capability to `available` until Explorer open/reveal, playback, longer recording soak,
+  device/permission variation, and remote desktop behavior are validated on Windows.
 
 ## Hotkey
 

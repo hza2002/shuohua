@@ -304,8 +304,8 @@ fn windows_audio_capture_capability_reports_input_stream_smoke() {
     for token in [
         "CapabilityId::AudioCapture",
         "cpal_wasapi",
-        "input_stream_runtime_smoke",
-        "Validate non-silent microphone input, sustained recording, ASR, and retained audio behavior on Windows",
+        "full_recording_history_smoke",
+        "Validate sustained recording stability across Windows devices, privacy states, and remote desktop sessions",
     ] {
         assert!(
             capability.contains(token),
@@ -321,7 +321,8 @@ fn windows_audio_capture_capability_reports_input_stream_smoke() {
         std::fs::read_to_string(root.join("docs/cross-platform/platform-capabilities.md")).unwrap();
     for token in [
         "Phase 10bg Windows Audio Input Stream Runtime Smoke",
-        "`partial`，backend `cpal_wasapi`，reason `input_stream_runtime_smoke`",
+        "Phase 10bv Windows Full Recording Audio Smoke",
+        "`audio.capture`：`partial`，backend `cpal_wasapi`，reason `full_recording_history_smoke`",
         "SHUOHUA_WINDOWS_AUDIO_REQUIRE_SIGNAL",
         "Phase 10ah Windows Audio Capture Diagnostics",
     ] {
@@ -345,8 +346,8 @@ fn windows_audio_convert_capability_reports_native_compact_backend() {
     for token in [
         "CapabilityId::AudioConvert",
         "media_foundation_aac_flacenc",
-        "native_conversion_runtime_smoke",
-        "Validate retained FLAC/M4A files from full Windows recording sessions and playback/open workflows",
+        "full_recording_history_smoke",
+        "Validate retained FLAC/M4A Explorer open/reveal and playback workflows",
     ] {
         assert!(
             capability.contains(token),
@@ -376,7 +377,9 @@ fn windows_audio_convert_capability_reports_native_compact_backend() {
 
     for token in [
         "Phase 10bj/10bt Windows Native Retained Audio Backend",
+        "Phase 10bv Windows Full Recording Audio Smoke",
         "`audio.convert`：`partial`，backend `media_foundation_aac_flacenc`，reason",
+        "`full_recording_history_smoke`",
         "`compact` 使用 Windows Media Foundation Sink Writer",
         "`lossless` 使用 pure Rust `flacenc`",
         "不打包 ffmpeg",

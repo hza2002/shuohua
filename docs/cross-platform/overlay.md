@@ -325,7 +325,8 @@ Phase 10bg infrastructure status:
 - `src/overlay/windows/composition.rs` records the future composition backend contract: Win32 HWND host,
   DirectComposition or Windows Composition visuals, DirectWrite text, Segoe Fluent Icons glyphs, and Direct2D
   fallback. It currently initializes a hidden DirectComposition root visual only as a reserved handoff point for
-  later compositor-owned shadow, rounded clipping, material, and animation work.
+  later compositor-owned shadow, rounded clipping, material, and animation work. The reserved visual tree already
+  separates `shadow`, `panel`, `content`, `icon`, `status`, `stats`, `meta`, and `body` layers.
 - `src/overlay/windows/icons.rs` records the state icon plan using Windows official icon fonts:
   `Segoe Fluent Icons` first, `Segoe MDL2 Assets` fallback. Icon bodies should come from system glyphs; animation
   belongs to composition opacity/scale/rotate/translate once that backend is enabled.

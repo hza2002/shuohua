@@ -2,7 +2,7 @@ use anyhow::Result;
 use windows_sys::Win32::Foundation::HWND;
 
 use super::direct2d::Direct2dRenderer;
-use super::scene::TextPlan;
+use super::scene::{TextPlan, WindowsOverlayScene};
 use super::{composition, WindowMetrics, DIRECT2D_SHADOW_OUTSET};
 use crate::overlay::OverlayModel;
 
@@ -94,11 +94,19 @@ impl WindowsRendererBackend {
         metrics: WindowMetrics,
         panel_width: f64,
     ) -> Option<Result<()>> {
-        if let Some(composition) = &self.composition {
-            if let Err(error) = composition.keep_reserved_root_hidden() {
+        let composition_scene = if self.composition.is_some() {
+            self.direct2d
+                .as_ref()
+                .and_then(|renderer| renderer.text_plan(model, cfg, metrics, panel_width).ok())
+                .map(|text| WindowsOverlayScene::from_model(model, cfg, text))
+        } else {
+            None
+        };
+        if let (Some(composition), Some(scene)) = (&self.composition, composition_scene.as_ref()) {
+            if let Err(error) = composition.update_reserved_scene(scene, metrics, panel_width) {
                 tracing::warn!(
                     ?error,
-                    "DirectComposition reserved root update failed; keeping fallback renderer"
+                    "DirectComposition reserved scene update failed; keeping fallback renderer"
                 );
             }
         }

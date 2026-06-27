@@ -6,6 +6,8 @@ use windows::Win32::Graphics::DirectComposition::{
 use windows_sys::Win32::Foundation::HWND;
 
 use super::icons::{icon_font_fallback_order, state_icon_plan};
+use super::scene::WindowsOverlayScene;
+use super::WindowMetrics;
 use crate::overlay::OverlayState;
 
 pub(super) const BACKEND_NAME: &str = "win32_composition_planned";
@@ -21,7 +23,7 @@ pub(super) enum CompositionReadiness {
 pub(super) struct CompositionRenderer {
     device: IDCompositionDevice,
     _target: IDCompositionTarget,
-    _root: IDCompositionVisual,
+    tree: CompositionVisualTree,
 }
 
 impl CompositionRenderer {
@@ -41,25 +43,140 @@ impl CompositionRenderer {
                 .CreateVisual()
                 .context("IDCompositionDevice::CreateVisual")?
         };
+        let tree = CompositionVisualTree::new(&device, root)?;
         unsafe {
             target
-                .SetRoot(&root)
+                .SetRoot(&tree.root)
                 .context("IDCompositionTarget::SetRoot")?;
             device.Commit().context("IDCompositionDevice::Commit")?;
         }
         Ok(Self {
             device,
             _target: target,
-            _root: root,
+            tree,
         })
     }
 
-    pub(super) fn keep_reserved_root_hidden(&self) -> Result<()> {
+    pub(super) fn update_reserved_scene(
+        &self,
+        scene: &WindowsOverlayScene,
+        metrics: WindowMetrics,
+        panel_width: f64,
+    ) -> Result<()> {
+        self.tree
+            .apply_scene_contract(scene, metrics, panel_width)?;
         unsafe {
             self.device
                 .Commit()
-                .context("IDCompositionDevice::Commit hidden root")
+                .context("IDCompositionDevice::Commit reserved scene")
         }
+    }
+}
+
+pub(super) struct CompositionVisualTree {
+    root: IDCompositionVisual,
+    shadow: IDCompositionVisual,
+    panel: IDCompositionVisual,
+    content: IDCompositionVisual,
+    icon: IDCompositionVisual,
+    status: IDCompositionVisual,
+    stats: IDCompositionVisual,
+    meta: IDCompositionVisual,
+    body: IDCompositionVisual,
+}
+
+impl CompositionVisualTree {
+    fn new(device: &IDCompositionDevice, root: IDCompositionVisual) -> Result<Self> {
+        let shadow = create_visual(device, "shadow")?;
+        let panel = create_visual(device, "panel")?;
+        let content = create_visual(device, "content")?;
+        let icon = create_visual(device, "icon")?;
+        let status = create_visual(device, "status")?;
+        let stats = create_visual(device, "stats")?;
+        let meta = create_visual(device, "meta")?;
+        let body = create_visual(device, "body")?;
+
+        unsafe {
+            root.AddVisual(&shadow, false, None)
+                .context("IDCompositionVisual::AddVisual shadow")?;
+            root.AddVisual(&panel, false, None)
+                .context("IDCompositionVisual::AddVisual panel")?;
+            root.AddVisual(&content, false, None)
+                .context("IDCompositionVisual::AddVisual content")?;
+            content
+                .AddVisual(&icon, false, None)
+                .context("IDCompositionVisual::AddVisual icon")?;
+            content
+                .AddVisual(&status, false, None)
+                .context("IDCompositionVisual::AddVisual status")?;
+            content
+                .AddVisual(&stats, false, None)
+                .context("IDCompositionVisual::AddVisual stats")?;
+            content
+                .AddVisual(&meta, false, None)
+                .context("IDCompositionVisual::AddVisual meta")?;
+            content
+                .AddVisual(&body, false, None)
+                .context("IDCompositionVisual::AddVisual body")?;
+        }
+
+        Ok(Self {
+            root,
+            shadow,
+            panel,
+            content,
+            icon,
+            status,
+            stats,
+            meta,
+            body,
+        })
+    }
+
+    fn apply_scene_contract(
+        &self,
+        scene: &WindowsOverlayScene,
+        metrics: WindowMetrics,
+        panel_width: f64,
+    ) -> Result<()> {
+        let _ = scene;
+        let panel_offset = metrics.px(0.0) as f32;
+        let body_width = metrics.px(crate::overlay::layout::body_width(panel_width)) as f32;
+        unsafe {
+            self.shadow
+                .SetOffsetX2(panel_offset)
+                .context("IDCompositionVisual::SetOffsetX shadow")?;
+            self.shadow
+                .SetOffsetY2(panel_offset)
+                .context("IDCompositionVisual::SetOffsetY shadow")?;
+            self.panel
+                .SetOffsetX2(panel_offset)
+                .context("IDCompositionVisual::SetOffsetX panel")?;
+            self.panel
+                .SetOffsetY2(panel_offset)
+                .context("IDCompositionVisual::SetOffsetY panel")?;
+            self.content
+                .SetOffsetX2(0.0)
+                .context("IDCompositionVisual::SetOffsetX content")?;
+            self.content
+                .SetOffsetY2(0.0)
+                .context("IDCompositionVisual::SetOffsetY content")?;
+            self.body
+                .SetOffsetX2(body_width.max(0.0) * 0.0)
+                .context("IDCompositionVisual::SetOffsetX body")?;
+            self.body
+                .SetOffsetY2(0.0)
+                .context("IDCompositionVisual::SetOffsetY body")?;
+        }
+        Ok(())
+    }
+}
+
+fn create_visual(device: &IDCompositionDevice, name: &'static str) -> Result<IDCompositionVisual> {
+    unsafe {
+        device
+            .CreateVisual()
+            .with_context(|| format!("IDCompositionDevice::CreateVisual {name}"))
     }
 }
 
@@ -71,6 +188,7 @@ pub(super) fn design_tokens() -> &'static [&'static str] {
     &[
         "Win32 HWND host",
         "DirectComposition or Windows Composition visuals",
+        "composition visual tree: shadow panel content icon status stats meta body",
         "DirectWrite text",
         "Segoe Fluent Icons glyphs",
         "fallback: Direct2D per-pixel layered surface",
@@ -101,8 +219,33 @@ mod tests {
         let tokens = design_tokens();
         assert!(tokens.contains(&"Win32 HWND host"));
         assert!(tokens.contains(&"DirectComposition or Windows Composition visuals"));
+        assert!(tokens.contains(
+            &"composition visual tree: shadow panel content icon status stats meta body"
+        ));
         assert!(tokens.contains(&"DirectWrite text"));
         assert!(tokens.contains(&"Segoe Fluent Icons glyphs"));
         assert!(tokens.contains(&"fallback: Direct2D per-pixel layered surface"));
+    }
+
+    #[test]
+    fn composition_source_names_reserved_visual_layers() {
+        let source = include_str!("composition.rs");
+        for token in [
+            "CompositionVisualTree",
+            "shadow",
+            "panel",
+            "content",
+            "icon",
+            "status",
+            "stats",
+            "meta",
+            "body",
+            "update_reserved_scene",
+        ] {
+            assert!(
+                source.contains(token),
+                "composition source should reserve visual layer token `{token}`"
+            );
+        }
     }
 }

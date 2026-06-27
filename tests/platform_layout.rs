@@ -1384,7 +1384,7 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "uses_per_pixel_surface",
         "disable_accelerated_backend",
         "composition_readiness",
-        "keep_reserved_root_hidden",
+        "update_reserved_scene",
     ] {
         assert!(
             backend.contains(token),
@@ -1401,6 +1401,10 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "DCompositionCreateDevice",
         "CreateTargetForHwnd",
         "CreateVisual",
+        "CompositionVisualTree",
+        "AddVisual",
+        "SetOffsetX2",
+        "SetOffsetY2",
         "SetRoot",
         "Commit",
         "DirectComposition or Windows Composition visuals",

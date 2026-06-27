@@ -19,7 +19,21 @@ current HEAD.
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
 
-Phase 10bq Windows VAD preprocessing baseline 正在收尾：
+Phase 10br Windows audio-processing dependency spike 正在收尾：
+
+- 目标是评估是否应直接接入成熟 WebRTC Audio Processing Module，而不是继续手写 VAD gain 逻辑。
+- 结论：WebRTC APM 仍是算法成熟度最高的长期方向，但当前 `webrtc-audio-processing 2.1.0` wrapper
+  不能直接进入主线。默认构建依赖系统 `webrtc-audio-processing-2` 动态库，不满足三端单二进制分发；
+  `bundled` 静态路径在 Windows/MSVC scratch build 中卡在 Unix 风格 build script/tooling。
+- `sonora-agc2 0.1.0` 是 BSD-3-Clause、纯 Rust、Windows/MSVC scratch build 可过，但它只是 AGC2/RNN
+  VAD 组件，不是完整 APM。若后续接入，应作为 `voice::preprocess` 的实验 backend，而不是改
+  Silero/session orchestration。
+- 本阶段不改变 runtime 行为、不新增依赖、不升级 capability。当前 Windows VAD 仍使用上一阶段
+  `VadPreprocessor` baseline；用户手动 smoke 反馈当前效果“还不错”。
+- 下一步建议：继续 Windows 非 overlay 能力闭环；若继续做音频处理，先做 packaging/license/build
+  spike，不要直接把 APM dependency 放入主线。
+
+Phase 10bq Windows VAD preprocessing baseline 已完成：
 
 - Windows Silero VAD 现在通过 `voice::preprocess::VadPreprocessor` 处理 VAD-only PCM 副本；ASR PCM、
   retained audio、history 均不受影响。
@@ -29,9 +43,7 @@ Phase 10bq Windows VAD preprocessing baseline 正在收尾：
   config 中的 VAD 策略字段。`policy_from_config` 只是让 engine/diagnostics 共享同一条显式配置路径。
 - 新增隐藏诊断命令 `shuo diagnostics silero-vad-file <path>`，用 ffmpeg 解码音频后输出 Silero 概率、
   effective policy 和 transition 时间点，方便不同设备/录音离线分析。
-- 用户手动 smoke 反馈当前 Windows VAD 效果“还不错”。下一阶段建议做 WebRTC Audio Processing Module
-  feasibility spike：优先验证单二进制分发形态（静态链接或像 ORT 一样内嵌/释放），再决定是否替换当前
-  simple preprocessor。
+- 用户手动 smoke 反馈当前 Windows VAD 效果“还不错”。
 
 Phase 10bp Windows Silero VAD parity 已完成 build/test 与单 exe init smoke：
 

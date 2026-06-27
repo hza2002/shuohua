@@ -289,6 +289,21 @@ gating and smoothed gain, then passed to Silero. This does not change ASR input,
 preprocessor is isolated in `voice::preprocess` so a future WebRTC Audio Processing Module spike can replace the
 current baseline without touching Silero/session orchestration.
 
+Audio-processing dependency decision:
+
+- WebRTC Audio Processing Module is the mature product-grade direction for AGC/noise processing, but the current
+  Rust `webrtc-audio-processing` wrapper is not a direct Windows/MSVC fit for shuohua's distribution model. Its
+  default mode dynamically links a system `webrtc-audio-processing-2` library, while its `bundled` static mode
+  currently assumes Unix-style build tooling in the native build script.
+- Windows system audio signal-processing modes can help when the driver and endpoint expose them, but that chain is
+  device/driver controlled and cannot be treated as the product's only VAD calibration layer.
+- Pure Rust AGC candidates such as `sonora-agc2` are easier to package as a single exe, but are component-level
+  building blocks rather than a complete APM replacement. They need a separate integration spike before becoming
+  runtime behavior.
+
+Until a candidate passes license, packaging, build, and real microphone VAD smoke, the Windows preprocessor remains
+an isolated baseline rather than a declared final cross-platform audio-processing stack.
+
 Stop point for user intervention:
 
 - After `shuo.exe doctor` can show a Windows audio backend and device summary.

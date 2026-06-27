@@ -54,6 +54,15 @@ voice 只负责把一次 recording 的 capture/ASR/post 结果翻译成 `History
 
 不要在 `silero.rs` 里直接堆平台增益逻辑；替换 WebRTC APM、纯 Rust AGC/NS 或其他成熟 pipeline 时，应优先作为 `VadPreprocessor` backend 接入。
 
+成熟语音输入产品通常不会把 frame threshold、pause window、gain 参数完整暴露给用户；产品配置最终应收敛到少量 sensitivity/mode 档位，底层 pipeline 自己处理设备电平差异。当前详细 `[voice.vad]` 字段仍是开发期可观测/可调试边界，不是最终 UX 形态。
+
+已调研的替换方向：
+
+- WebRTC Audio Processing Module 是算法成熟度最高的方向，覆盖 AGC、noise suppression、high-pass、AEC 等实时语音处理组件；但当前 Rust `webrtc-audio-processing` wrapper 默认动态链接系统库，`bundled` 静态路径在 Windows/MSVC 下依赖 Unix 风格 build tools，不能直接满足 shuohua 的三端单二进制分发约束。
+- `sonora-agc2` 是纯 Rust WebRTC AGC2/RNN VAD 组件，Windows/MSVC 构建风险低，但它不是完整 APM，接入前需要重新设计 frame metadata、speech probability、noise/speech level 估计和 Silero 前处理关系。
+
+因此主线暂时保留简单 `VadPreprocessor` baseline，直到某个候选方案同时通过 packaging、license、Windows/macOS/Linux build 和真实 VAD smoke。
+
 ## 本模块持有的不变量
 
 - **停止必 drain residual + `stop_delay_ms`**（默认值见 `src/config/main.rs`），否则尾字被切。

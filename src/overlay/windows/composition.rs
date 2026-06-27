@@ -205,31 +205,26 @@ impl CompositionVisualTree {
         metrics: WindowMetrics,
     ) -> Result<()> {
         self.animations.keep_alive();
+        let geometry = CompositionGeometry::from_scene(scene, metrics);
         self.surfaces.ensure_panel_surface(
             device,
             &self.panel,
-            metrics.px(scene.panel_width).max(1) as u32,
-            metrics.px(scene.frames.height).max(1) as u32,
+            geometry.surface_width as u32,
+            geometry.surface_height as u32,
         )?;
         self.surfaces.draw_panel_probe(CompositionDrawContext {
             d2d,
             dwrite,
             scene,
             metrics,
-            width: metrics.px(scene.panel_width).max(1) as u32,
-            height: metrics.px(scene.frames.height).max(1) as u32,
-            radius: metrics.px(scene.corner_radius).max(0) as f32,
+            geometry,
         })?;
         let icon = visual_offset(metrics, scene.frames.height, scene.frames.row.icon);
         let status = visual_offset(metrics, scene.frames.height, scene.frames.row.status);
         let stats = visual_offset(metrics, scene.frames.height, scene.frames.row.stats);
         let meta = visual_offset(metrics, scene.frames.height, scene.frames.row.meta);
         let body = visual_offset(metrics, scene.frames.height, scene.frames.body);
-        self.clips.apply_panel_clip(
-            metrics.px(scene.panel_width).max(1) as f32,
-            metrics.px(scene.frames.height).max(1) as f32,
-            metrics.px(scene.corner_radius).max(0) as f32,
-        )?;
+        self.clips.apply_panel_clip(geometry)?;
         unsafe {
             self.shadow
                 .SetOffsetX2(0.0)
@@ -249,10 +244,10 @@ impl CompositionVisualTree {
                     .context("IDCompositionVisual3::SetOpacity2 panel")?;
             }
             self.content
-                .SetOffsetX2(0.0)
+                .SetOffsetX2(geometry.outset as f32)
                 .context("IDCompositionVisual::SetOffsetX content")?;
             self.content
-                .SetOffsetY2(0.0)
+                .SetOffsetY2(geometry.outset as f32)
                 .context("IDCompositionVisual::SetOffsetY content")?;
             self.icon
                 .SetOffsetX2(icon.0)
@@ -301,9 +296,25 @@ impl CompositionClips {
         Ok(Self { panel, content })
     }
 
-    fn apply_panel_clip(&self, width: f32, height: f32, radius: f32) -> Result<()> {
-        apply_rounded_clip(&self.panel, width, height, radius, "panel")?;
-        apply_rounded_clip(&self.content, width, height, radius, "content")
+    fn apply_panel_clip(&self, geometry: CompositionGeometry) -> Result<()> {
+        apply_rounded_clip(
+            &self.panel,
+            geometry.panel_left,
+            geometry.panel_top,
+            geometry.panel_right,
+            geometry.panel_bottom,
+            geometry.radius,
+            "panel",
+        )?;
+        apply_rounded_clip(
+            &self.content,
+            0.0,
+            0.0,
+            geometry.panel_width as f32,
+            geometry.panel_height as f32,
+            geometry.radius,
+            "content",
+        )
     }
 }
 
@@ -344,8 +355,8 @@ impl CompositionSurfaces {
         let rect = RECT {
             left: 0,
             top: 0,
-            right: ctx.width as i32,
-            bottom: ctx.height as i32,
+            right: ctx.geometry.surface_width,
+            bottom: ctx.geometry.surface_height,
         };
         let mut offset = POINT::default();
         let surface = unsafe {
@@ -369,9 +380,45 @@ struct CompositionDrawContext<'a> {
     dwrite: &'a IDWriteFactory,
     scene: &'a WindowsOverlayScene,
     metrics: WindowMetrics,
-    width: u32,
-    height: u32,
+    geometry: CompositionGeometry,
+}
+
+#[derive(Clone, Copy)]
+struct CompositionGeometry {
+    surface_width: i32,
+    surface_height: i32,
+    panel_width: i32,
+    panel_height: i32,
+    panel_left: f32,
+    panel_top: f32,
+    panel_right: f32,
+    panel_bottom: f32,
     radius: f32,
+    outset: i32,
+}
+
+impl CompositionGeometry {
+    fn from_scene(scene: &WindowsOverlayScene, metrics: WindowMetrics) -> Self {
+        let panel_width = metrics.px(scene.panel_width).max(1);
+        let panel_height = metrics.px(scene.frames.height).max(1);
+        let outset = metrics.px(super::DIRECT2D_SHADOW_OUTSET).max(0);
+        let surface_width = panel_width + outset * 2;
+        let surface_height = panel_height + outset * 2;
+        let panel_left = outset as f32;
+        let panel_top = outset as f32;
+        Self {
+            surface_width,
+            surface_height,
+            panel_width,
+            panel_height,
+            panel_left,
+            panel_top,
+            panel_right: (outset + panel_width) as f32,
+            panel_bottom: (outset + panel_height) as f32,
+            radius: metrics.px(scene.corner_radius).max(0) as f32,
+            outset,
+        }
+    }
 }
 
 fn create_panel_surface(
@@ -404,19 +451,21 @@ fn create_rectangle_clip(
 
 fn apply_rounded_clip(
     clip: &IDCompositionRectangleClip,
-    width: f32,
-    height: f32,
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
     radius: f32,
     name: &'static str,
 ) -> Result<()> {
     unsafe {
-        clip.SetLeft2(0.0)
+        clip.SetLeft2(left)
             .with_context(|| format!("IDCompositionRectangleClip::SetLeft2 {name}"))?;
-        clip.SetTop2(0.0)
+        clip.SetTop2(top)
             .with_context(|| format!("IDCompositionRectangleClip::SetTop2 {name}"))?;
-        clip.SetRight2(width)
+        clip.SetRight2(right)
             .with_context(|| format!("IDCompositionRectangleClip::SetRight2 {name}"))?;
-        clip.SetBottom2(height)
+        clip.SetBottom2(bottom)
             .with_context(|| format!("IDCompositionRectangleClip::SetBottom2 {name}"))?;
         clip.SetTopLeftRadiusX2(radius)
             .with_context(|| format!("IDCompositionRectangleClip::SetTopLeftRadiusX2 {name}"))?;
@@ -473,13 +522,13 @@ fn draw_dxgi_scene(surface: &IDXGISurface, ctx: CompositionDrawContext<'_>) -> R
         target.FillRoundedRectangle(
             &D2D1_ROUNDED_RECT {
                 rect: D2D_RECT_F {
-                    left: 0.0,
-                    top: 0.0,
-                    right: ctx.width as f32,
-                    bottom: ctx.height as f32,
+                    left: ctx.geometry.panel_left,
+                    top: ctx.geometry.panel_top,
+                    right: ctx.geometry.panel_right,
+                    bottom: ctx.geometry.panel_bottom,
                 },
-                radiusX: ctx.radius,
-                radiusY: ctx.radius,
+                radiusX: ctx.geometry.radius,
+                radiusY: ctx.geometry.radius,
             },
             &brush,
         );
@@ -806,6 +855,7 @@ pub(super) fn icon_animation_contract(state: OverlayState) -> ([&'static str; 2]
 
 #[cfg(test)]
 mod tests {
+    use super::super::scene::TextPlan;
     use super::*;
 
     #[test]
@@ -834,6 +884,7 @@ mod tests {
         for token in [
             "CompositionVisualTree",
             "CompositionSurfaces",
+            "CompositionGeometry",
             "shadow",
             "panel",
             "content",
@@ -849,5 +900,30 @@ mod tests {
                 "composition source should reserve visual layer token `{token}`"
             );
         }
+    }
+
+    #[test]
+    fn composition_geometry_keeps_panel_inside_shadow_outset_surface() {
+        let cfg = crate::config::theme::EffectiveOverlayCfg::default();
+        let model = crate::overlay::OverlayModel::new(&cfg.core.state);
+        let metrics = WindowMetrics {
+            dpi: 144,
+            scale: 1.5,
+            work_area: windows_sys::Win32::Foundation::RECT::default(),
+        };
+        let text = TextPlan {
+            text: String::new(),
+            lines: 1,
+        };
+        let scene = WindowsOverlayScene::from_model(&model, &cfg, cfg.core.width, text);
+
+        let geometry = CompositionGeometry::from_scene(&scene, metrics);
+        let outset = metrics.px(super::super::DIRECT2D_SHADOW_OUTSET);
+
+        assert_eq!(geometry.outset, outset);
+        assert_eq!(geometry.surface_width, geometry.panel_width + outset * 2);
+        assert_eq!(geometry.surface_height, geometry.panel_height + outset * 2);
+        assert_eq!(geometry.panel_left, outset as f32);
+        assert_eq!(geometry.panel_top, outset as f32);
     }
 }

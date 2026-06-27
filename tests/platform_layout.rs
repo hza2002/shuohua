@@ -1732,12 +1732,24 @@ fn windows_clipboard_capability_reports_write_only_partial() {
     for token in [
         "CapabilityId::DesktopClipboard",
         "win32_clipboard_unicode",
-        "write_only_runtime_smoke",
-        "Validate Unicode clipboard writes across target Windows apps and elevation boundaries",
+        "dispatch_clipboard_runtime_smoke",
+        "Validate full record-to-clipboard behavior across target Windows apps and elevation boundaries",
     ] {
         assert!(
             capability.contains(token),
             "Windows desktop.clipboard capability should report write-only partial token `{token}`"
+        );
+    }
+
+    let dispatch = std::fs::read_to_string(root.join("src/voice/dispatch.rs")).unwrap();
+    for token in [
+        "windows_dispatch_clipboard_runtime_smoke",
+        "SHUOHUA_WINDOWS_DISPATCH_SMOKE_TEXT",
+        "GetClipboardData",
+    ] {
+        assert!(
+            dispatch.contains(token),
+            "voice dispatch should keep Windows clipboard runtime smoke token `{token}`"
         );
     }
 }

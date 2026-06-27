@@ -379,9 +379,9 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 platform: PlatformKind::Windows,
                 backend: "win32_clipboard_unicode",
                 status: CapabilityStatusKind::Partial,
-                summary: "Win32 CF_UNICODETEXT clipboard writes are implemented but need broader desktop-app runtime validation",
-                reason: "write_only_runtime_smoke",
-                next_step: Some("Validate Unicode clipboard writes across target Windows apps and elevation boundaries"),
+                summary: "Voice dispatch can write Unicode text through the Win32 clipboard backend",
+                reason: "dispatch_clipboard_runtime_smoke",
+                next_step: Some("Validate full record-to-clipboard behavior across target Windows apps and elevation boundaries"),
             },
             CapabilityStatus {
                 id: CapabilityId::DesktopTextInjection,

@@ -376,8 +376,9 @@ Current clipboard baseline:
   `OpenClipboard` / `EmptyClipboard` / `SetClipboardData(CF_UNICODETEXT)`.
 - The backend writes `CF_UNICODETEXT` using movable global memory and transfers ownership to the system only after
   `SetClipboardData` succeeds.
-- Capability is `partial/win32_clipboard_unicode/write_only_runtime_smoke` until broader target-app and elevation
-  boundary validation is complete.
+- Capability is `partial/win32_clipboard_unicode/dispatch_clipboard_runtime_smoke` after `voice::dispatch`
+  writes Unicode text through the real Win32 clipboard path and reads it back. It remains partial until broader
+  target-app and elevation boundary validation is complete.
 
 Current paste injection baseline:
 

@@ -19,6 +19,21 @@ current HEAD.
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
 
+Phase 10bw Windows dispatch clipboard smoke 已完成：
+
+- 新增 Windows ignored runtime smoke
+  `voice::dispatch::tests::windows_dispatch_clipboard_runtime_smoke`，直接调用
+  `voice::dispatch::dispatch(text, false)`，再用 Win32 `GetClipboardData(CF_UNICODETEXT)` 读回同一 Unicode
+  文本。
+- 本机已通过：
+  `SHUOHUA_WINDOWS_DISPATCH_SMOKE_TEXT='shuohua dispatch smoke 20260627 字🙂' cargo test --target
+  x86_64-pc-windows-msvc voice::dispatch::tests::windows_dispatch_clipboard_runtime_smoke -- --ignored --exact`。
+- Windows `desktop.clipboard` capability 仍为 `partial/win32_clipboard_unicode`，reason 从
+  `write_only_runtime_smoke` 收窄为 `dispatch_clipboard_runtime_smoke`。这覆盖 voice dispatch -> platform
+  desktop facade -> Win32 clipboard backend 的真实路径，但不触发 `SendInput`、不验证目标 App paste、
+  elevation/UAC 或 full record -> paste。
+- 验证还需跑 Windows target fmt/test/build/clippy；本阶段不涉及 overlay、hotkey 或 audio 行为。
+
 Phase 10bv Windows full recording audio capability sync 已完成：
 
 - 用户手动验证 Phase 10bu 后反馈 VAD 体感“没有什么问题”，因此当前 Windows Silero/VadPause 可继续作为

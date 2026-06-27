@@ -333,7 +333,7 @@ fn windows_audio_capture_capability_reports_input_stream_smoke() {
 }
 
 #[test]
-fn windows_audio_convert_capability_reports_optional_ffmpeg_backend() {
+fn windows_audio_convert_capability_reports_native_compact_backend() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let capability = std::fs::read_to_string(root.join("src/platform/capability.rs")).unwrap();
     let facade = std::fs::read_to_string(root.join("src/platform/audio_convert.rs")).unwrap();
@@ -344,23 +344,26 @@ fn windows_audio_convert_capability_reports_optional_ffmpeg_backend() {
 
     for token in [
         "CapabilityId::AudioConvert",
-        "ffmpeg_external",
-        "external_ffmpeg_optional",
-        "Validate retained FLAC/M4A files from a full Windows recording session",
+        "media_foundation_aac_ffmpeg_flac",
+        "compact_native_lossless_external",
+        "Replace or package the lossless FLAC backend before declaring single-binary retained audio complete",
     ] {
         assert!(
             capability.contains(token),
-            "Windows audio.convert capability should report optional ffmpeg token `{token}`"
+            "Windows audio.convert capability should report split retained-audio token `{token}`"
         );
     }
 
     for token in [
         "#[cfg(target_os = \"windows\")]",
+        "MFCreateSinkWriterFromURL",
+        "convert_wav_to_m4a_media_foundation",
         "const FFMPEG: &str = \"ffmpeg\"",
         "ffmpeg_args",
         "retain audio on Windows",
-        "ffmpeg_runtime_smoke_creates_flac_and_m4a",
-        "ffmpeg_finish_creates_retained_audio_and_removes_temporary_wav",
+        "media_foundation_runtime_smoke_creates_m4a_without_ffmpeg",
+        "native_compact_finish_creates_retained_audio_and_removes_temporary_wav",
+        "external_lossless_finish_creates_retained_audio_and_removes_temporary_wav",
     ] {
         assert!(
             facade.contains(token) || voice_audio.contains(token),
@@ -370,24 +373,26 @@ fn windows_audio_convert_capability_reports_optional_ffmpeg_backend() {
 
     for token in [
         "Phase 10bj Windows Optional FFmpeg Retained Audio Backend",
-        "`partial`，backend `ffmpeg_external`，reason `external_ffmpeg_optional`",
+        "`audio.convert`：`partial`，backend `media_foundation_aac_ffmpeg_flac`，reason",
+        "`compact` 使用 Windows Media Foundation Sink Writer",
         "不打包 ffmpeg",
-        "ffmpeg_finish_creates_retained_audio_and_removes_temporary_wav",
+        "media_foundation_runtime_smoke_creates_m4a_without_ffmpeg",
     ] {
         assert!(
             platform_doc.contains(token),
-            "platform capability docs should record Windows ffmpeg conversion token `{token}`"
+            "platform capability docs should record Windows retained-audio conversion token `{token}`"
         );
     }
 
     for token in [
-        "optional external `ffmpeg` backend",
-        "`ffmpeg.exe` must be discoverable on `PATH`",
-        "not the final packaging policy",
+        "Retained audio conversion on Windows is split by retention mode",
+        "Windows Media Foundation Sink Writer",
+        "`ffmpeg.exe` must be discoverable on",
+        "not the final lossless packaging policy",
     ] {
         assert!(
             windows_doc.contains(token),
-            "Windows design doc should record retained audio ffmpeg token `{token}`"
+            "Windows design doc should record retained audio conversion token `{token}`"
         );
     }
 }

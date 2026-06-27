@@ -187,19 +187,22 @@ command behind `platform::audio_convert`:
 
 ## Phase 10bj Windows Optional FFmpeg Retained Audio Backend
 
-Windows retained audio conversion now has a pragmatic optional backend:
+Windows retained audio conversion now has a pragmatic split backend:
 
-- `audio.convert`：`partial`，backend `ffmpeg_external`，reason `external_ffmpeg_optional`。
-- `lossless` 使用 PATH 中的 `ffmpeg.exe` 把 recorder WAV 转为 FLAC。
-- `compact` 使用 PATH 中的 `ffmpeg.exe` 把 recorder WAV 转为 AAC/M4A，码率仍为 32 kbps。
-- 本阶段不新增配置项，不打包 ffmpeg，不安装外部依赖；缺少 ffmpeg 时 retained audio 保存失败并清理临时
-  WAV/目标文件。
+- `audio.convert`：`partial`，backend `media_foundation_aac_ffmpeg_flac`，reason
+  `compact_native_lossless_external`。
+- `compact` 使用 Windows Media Foundation Sink Writer 把 recorder WAV 转为 AAC/M4A，码率仍为 32 kbps；
+  该路径不要求用户安装外部依赖。
+- `lossless` 仍使用 PATH 中的 `ffmpeg.exe` 把 recorder WAV 转为 FLAC。
+- 本阶段不新增配置项，不打包 ffmpeg；缺少 ffmpeg 时 lossless retained audio 保存失败并清理临时
+  WAV/目标文件，compact 不受影响。
 - 文本 dispatch、clipboard/paste 和 history append 不能依赖 retained audio conversion 成功。
 - Windows ignored runtime smoke
-  `voice::audio::tests::ffmpeg_finish_creates_retained_audio_and_removes_temporary_wav` 已验证
-  `prepare -> tmp.wav -> finish -> final .flac/.m4a -> temp cleanup` 路径能通过 ffmpeg 完成。
-- 在 full Windows recording session 验证 `.flac` / `.m4a` 生成和回放之前，不能把 capability 升级为
-  `available`。
+  `platform::audio_convert::imp::tests::media_foundation_runtime_smoke_creates_m4a_without_ffmpeg` 已验证 native
+  compact M4A 生成；`voice::audio::tests::ffmpeg_finish_creates_retained_audio_and_removes_temporary_wav` 仍覆盖
+  retained-audio finish cleanup 语义。
+- 在 full Windows recording session 验证 `.flac` / `.m4a` 生成和回放、且 lossless 路径满足最终 packaging
+  policy 之前，不能把 capability 升级为 `available`。
 
 ## Phase 10j Windows Lifecycle Primitive Compile Backend
 

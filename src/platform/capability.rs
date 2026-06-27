@@ -359,11 +359,11 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
             CapabilityStatus {
                 id: CapabilityId::AudioConvert,
                 platform: PlatformKind::Windows,
-                backend: "ffmpeg_external",
+                backend: "media_foundation_aac_ffmpeg_flac",
                 status: CapabilityStatusKind::Partial,
-                summary: "Retained audio conversion can use ffmpeg from PATH but the external dependency is not bundled",
-                reason: "external_ffmpeg_optional",
-                next_step: Some("Validate retained FLAC/M4A files from a full Windows recording session"),
+                summary: "Compact retained audio uses native Media Foundation AAC; lossless FLAC still falls back to ffmpeg from PATH",
+                reason: "compact_native_lossless_external",
+                next_step: Some("Replace or package the lossless FLAC backend before declaring single-binary retained audio complete"),
             },
             CapabilityStatus {
                 id: CapabilityId::PathOpenReveal,

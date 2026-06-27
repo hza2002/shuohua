@@ -253,19 +253,20 @@ Runtime validation must cover:
 - 16 kHz mono pipeline invariants after resampling.
 - Retained audio behavior when `record_audio` is compact/lossless/off.
 
-Retained audio conversion on Windows currently uses an optional external `ffmpeg` backend:
+Retained audio conversion on Windows is split by retention mode:
 
-- `lossless` converts the recorder WAV to FLAC with `ffmpeg -c:a flac`.
-- `compact` converts the recorder WAV to AAC/M4A with `ffmpeg -c:a aac -b:a 32k`.
-- `ffmpeg.exe` must be discoverable on `PATH`; the daemon does not bundle or install it in this phase.
-- Missing `ffmpeg` is reported as an audio-save error and temporary audio files are cleaned up; text dispatch and
-  history behavior must not depend on retained audio succeeding.
-- Capability remains `partial` until a full hotkey-triggered Windows recording produces retained FLAC/M4A files
-  and those files are opened/played back on the target machine.
+- `compact` uses native Windows Media Foundation Sink Writer to convert the recorder WAV to AAC/M4A at 32 kbps.
+  This path does not require `ffmpeg.exe` or any user-installed runtime.
+- `lossless` still converts the recorder WAV to FLAC with `ffmpeg -c:a flac`; `ffmpeg.exe` must be discoverable on
+  `PATH` for lossless retention in this phase.
+- Missing or failing conversion is reported as an audio-save error and temporary audio files are cleaned up; text
+  dispatch and history behavior must not depend on retained audio succeeding.
+- Capability remains `partial` until both compact and lossless retention satisfy the final single-binary packaging
+  policy and full hotkey-triggered Windows recordings are opened/played back on the target machine.
 
-This is a pragmatic Windows runtime backend, not the final packaging policy. A future installer may either bundle
-a redistributable converter, switch to Media Foundation, or keep `ffmpeg` as an explicitly documented optional
-dependency.
+This is a pragmatic Windows runtime backend, not the final lossless packaging policy. Compact retention is now native;
+lossless retention still needs either a native/system FLAC encoder route, a bundled converter, or a product decision
+that `lossless` is developer-only on Windows.
 
 Silero VAD / ONNX Runtime on Windows follows the same Silero VAD model/API route as macOS during the Windows-first
 runtime phase. This intentionally prioritizes matching macOS behavior over a temporary RMS/energy fallback.

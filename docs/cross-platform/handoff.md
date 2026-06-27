@@ -19,7 +19,23 @@ current HEAD.
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
 
-Phase 10br Windows audio-processing dependency spike 正在收尾：
+Phase 10bs Windows native compact retained-audio conversion 正在收尾：
+
+- Windows `record_audio = "compact"` 不再依赖 PATH 中的 `ffmpeg.exe`，改用 Windows Media Foundation
+  Sink Writer 将 recorder WAV 转成 AAC/M4A 32 kbps。该路径不新增第三方依赖，符合单 exe 用户体验方向。
+- Windows `record_audio = "lossless"` 仍暂时依赖 `ffmpeg.exe` 转 FLAC，因此 `audio.convert` capability
+  仍保持 `partial`，backend/reason 更新为
+  `media_foundation_aac_ffmpeg_flac` / `compact_native_lossless_external`。
+- 新增 ignored runtime smoke
+  `platform::audio_convert::imp::tests::media_foundation_runtime_smoke_creates_m4a_without_ffmpeg`，已在本机
+  Windows 通过，证明 native compact `.m4a` 可生成且无需 ffmpeg。
+- voice retained-audio finish smoke 拆成 native compact 与 external lossless 两条，避免把 compact 误写成
+  ffmpeg 依赖。
+- 未完成：Windows lossless/FLAC 的最终单二进制策略。后续可评估 Media Foundation FLAC encoder 可用性、
+  纯 Rust FLAC encoder、或把 lossless 设为 Windows developer-only；完成前不能把 `audio.convert`
+  升级为 available。
+
+Phase 10br Windows audio-processing dependency spike 已完成：
 
 - 目标是评估是否应直接接入成熟 WebRTC Audio Processing Module，而不是继续手写 VAD gain 逻辑。
 - 结论：WebRTC APM 仍是算法成熟度最高的长期方向，但当前 `webrtc-audio-processing 2.1.0` wrapper

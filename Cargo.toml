@@ -106,6 +106,7 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Media_MediaFoundation",
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows-sys = { version = "0.61", features = [

@@ -125,7 +125,7 @@ fn run_silero_vad_file(path: &Path) -> Result<()> {
     let mut pauses = 0;
     let mut transitions = Vec::new();
     for frame in &frames {
-        match controller.accept(frame.frame) {
+        match controller.accept_probability(frame.probability) {
             crate::voice::vad::VadTransition::SpeechStarted => {
                 resumes += 1;
                 transitions.push(("resume", frame.start_sample, frame.probability));
@@ -139,11 +139,12 @@ fn run_silero_vad_file(path: &Path) -> Result<()> {
     }
 
     println!(
-        "silero-vad-file: OK samples={} frames={} speech={} threshold={:.3} effective_min_start={} effective_pause_ms={} max={:.6} avg={:.6} resumes={} pauses={}",
+        "silero-vad-file: OK samples={} frames={} speech={} threshold={:.3} exit_threshold={:.3} effective_min_start={} effective_pause_ms={} max={:.6} avg={:.6} resumes={} pauses={}",
         samples.len(),
         frames.len(),
         speech,
         vad_cfg.threshold,
+        effective_policy.silence_threshold,
         effective_policy.min_start_voiced_frames,
         effective_policy.pause_silence_ms,
         max,

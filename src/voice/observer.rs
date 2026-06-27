@@ -41,7 +41,7 @@ pub enum SessionPhase {
 mod imp {
     use super::{AsrEvent, SessionPhase, TraceStart};
     use crate::voice::silero::{SileroConfig, SileroVad};
-    use crate::voice::vad::{VadFrame, VadPolicy};
+    use crate::voice::vad::{VadController, VadFrame, VadPolicy, VadTransition};
     use anyhow::{Context, Result};
     use serde_json::json;
     use std::fs::{File, OpenOptions};
@@ -65,20 +65,12 @@ mod imp {
 
     struct SileroTrace {
         detector: SileroVad,
-        state: TraceVadState,
-        voiced_frames: u32,
         first_voiced_start_ms: Option<u64>,
-        silence_ms: u64,
         active_start_ms: Option<u64>,
         active_ms: u64,
         sessions: u32,
         policy: VadPolicy,
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum TraceVadState {
-        Silence,
-        Speech,
+        controller: VadController,
     }
 
     impl RecordingObserver {
@@ -273,14 +265,12 @@ mod imp {
             .map_err(|e| anyhow::anyhow!("create Silero VAD: {e}"))?;
             Ok(Self {
                 detector,
-                state: TraceVadState::Silence,
-                voiced_frames: 0,
                 first_voiced_start_ms: None,
-                silence_ms: 0,
                 active_start_ms: None,
                 active_ms: 0,
                 sessions: 0,
                 policy,
+                controller: VadController::new(policy),
             })
         }
 
@@ -298,7 +288,7 @@ mod imp {
                     "probability": frame.probability,
                     "speech": speech,
                 }));
-                if let Some(event) = self.accept_vad_frame(frame.frame, start_ms, end_ms) {
+                if let Some(event) = self.accept_vad_frame(frame, start_ms, end_ms) {
                     out.push(event);
                 }
             }
@@ -307,62 +297,47 @@ mod imp {
 
         fn accept_vad_frame(
             &mut self,
-            frame: VadFrame,
+            frame: crate::voice::silero::SileroFrame,
             start_ms: u64,
             end_ms: u64,
         ) -> Option<serde_json::Value> {
-            match (self.state, frame) {
-                (TraceVadState::Silence, VadFrame::Speech) => {
-                    if self.voiced_frames == 0 {
+            match self.controller.accept_probability(frame.probability) {
+                VadTransition::SpeechStarted => {
+                    if self.first_voiced_start_ms.is_none() {
                         self.first_voiced_start_ms = Some(start_ms);
                     }
-                    self.voiced_frames += 1;
-                    self.silence_ms = 0;
-                    if self.voiced_frames >= self.policy.min_start_voiced_frames {
-                        let active_start = self
-                            .first_voiced_start_ms
-                            .unwrap_or(start_ms)
-                            .saturating_sub(PRE_ROLL_MS);
-                        self.state = TraceVadState::Speech;
-                        self.voiced_frames = 0;
-                        self.first_voiced_start_ms = None;
-                        self.active_start_ms = Some(active_start);
-                        self.sessions += 1;
-                        Some(json!({
-                            "event": "vad_transition",
-                            "kind": "resume",
-                            "at_ms": active_start,
-                            "detected_at_ms": end_ms,
-                        }))
-                    } else {
-                        None
-                    }
-                }
-                (TraceVadState::Silence, VadFrame::Silence) => {
-                    self.voiced_frames = 0;
+                    let active_start = self
+                        .first_voiced_start_ms
+                        .unwrap_or(start_ms)
+                        .saturating_sub(PRE_ROLL_MS);
                     self.first_voiced_start_ms = None;
-                    None
+                    self.active_start_ms = Some(active_start);
+                    self.sessions += 1;
+                    Some(json!({
+                        "event": "vad_transition",
+                        "kind": "resume",
+                        "at_ms": active_start,
+                        "detected_at_ms": end_ms,
+                    }))
                 }
-                (TraceVadState::Speech, VadFrame::Speech) => {
-                    self.silence_ms = 0;
-                    None
-                }
-                (TraceVadState::Speech, VadFrame::Silence) => {
-                    self.silence_ms += self.policy.frame_ms as u64;
-                    if self.silence_ms >= self.policy.pause_silence_ms as u64 {
-                        self.state = TraceVadState::Silence;
-                        self.silence_ms = 0;
-                        if let Some(start) = self.active_start_ms.take() {
-                            self.active_ms += end_ms.saturating_sub(start);
-                        }
-                        Some(json!({
-                            "event": "vad_transition",
-                            "kind": "pause",
-                            "at_ms": end_ms,
-                        }))
-                    } else {
-                        None
+                VadTransition::SilenceStarted => {
+                    self.first_voiced_start_ms = None;
+                    if let Some(start) = self.active_start_ms.take() {
+                        self.active_ms += end_ms.saturating_sub(start);
                     }
+                    Some(json!({
+                        "event": "vad_transition",
+                        "kind": "pause",
+                        "at_ms": end_ms,
+                    }))
+                }
+                VadTransition::None => {
+                    if matches!(frame.frame, VadFrame::Speech)
+                        && self.first_voiced_start_ms.is_none()
+                    {
+                        self.first_voiced_start_ms = Some(start_ms);
+                    }
+                    None
                 }
             }
         }

@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `fix: clarify windows service registration errors`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `feat: add vad probability hysteresis`（本阶段提交；以 `git log -1` 为准）。
 
-Previous phase commit: `docs: refine windows path capability diagnostics` (`cabaa9a`).
+Previous phase commit: `feat: encode windows lossless audio natively` (`f8c97ac`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,28 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+
+Phase 10bu VAD probability hysteresis 已完成：
+
+- 用户完成 Windows native retained-audio 手动 smoke；本 session 复核
+  `%LOCALAPPDATA%\Shuohua\audio\01KW3RWQJ0YM9CRBT228BX46TM.m4a` 和
+  `%LOCALAPPDATA%\Shuohua\audio\01KW3RXZQ9ZVGJHJJKBH09PRMQ.flac` 存在，对应
+  `%LOCALAPPDATA%\Shuohua\history\2026-06.jsonl` 记录均为 `submitted`、provider 为 `doubao`。
+  该结论验证 compact/lossless native conversion 在真实 recording 下能产物并关联 history；未单独确认
+  Explorer open/reveal/playback，因此 capability 仍保持 `partial`。
+- 两段真实录音暴露 VadPause 会在用户中途停顿后进入 Idle。离线诊断显示当前配置
+  `threshold=0.5`、`pause_silence_ms=1500`、`min_start_voiced_frames=2` 下，两段录音各产生 3 次
+  resume/pause；这是端点策略对超过 1.5s 低概率停顿的正常响应，不是 retained audio 或 Silero init 问题。
+- 本阶段新增通用 VAD probability hysteresis：Silence -> Speech 仍使用配置中的 `threshold`，Speech -> Silence
+  使用派生的较低 exit threshold 统计静音，降低概率在阈值附近抖动导致的过早 pause。没有修改用户
+  `%APPDATA%\Shuohua\config.toml`，也没有加入 Windows 隐式 `pause_silence_ms` 覆盖。
+- engine 恢复 Recording 后不再 reset 再喂 synthetic `VadFrame::Speech`，改为 `reset_to_speech()` 明确进入
+  active 状态，避免人为预置一帧 speech 影响后续计数。`diagnostics silero-vad-file` 和 dev trace 现在复用
+  runtime 同一套 `VadController` 判定。
+- 验证已通过：`cargo fmt --check`、`cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings`、
+  `cargo test --target x86_64-pc-windows-msvc`、`cargo build --target x86_64-pc-windows-msvc`、`cargo test`。
+- 已知风险：这次修正不把长停顿强行合并成同一段；若产品希望“思考 2-3 秒仍保持 Recording”，下一步应调整
+  用户可理解的 VAD sensitivity/endpoint policy，而不是继续暴露更多底层 frame 参数。
 
 Phase 10bt Windows native retained-audio conversion 正在收尾：
 

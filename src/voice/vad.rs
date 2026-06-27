@@ -29,29 +29,38 @@ pub enum VadTransition {
     SilenceStarted,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VadPolicy {
     pub min_start_voiced_frames: u32,
     pub pause_silence_ms: u32,
     pub frame_ms: u32,
+    pub speech_threshold: f32,
+    pub silence_threshold: f32,
 }
 
 impl Default for VadPolicy {
     fn default() -> Self {
+        let speech_threshold = 0.5;
         Self {
             min_start_voiced_frames: 2,
             pause_silence_ms: 1500,
             frame_ms: 32,
+            speech_threshold,
+            silence_threshold: default_silence_threshold(speech_threshold),
         }
     }
 }
 
 impl VadPolicy {
     fn normalized(self) -> Self {
+        let speech_threshold = self.speech_threshold.clamp(0.01, 0.99);
+        let silence_threshold = self.silence_threshold.clamp(0.0, speech_threshold);
         Self {
             min_start_voiced_frames: self.min_start_voiced_frames.max(1),
             pause_silence_ms: self.pause_silence_ms.max(1),
             frame_ms: self.frame_ms.max(1),
+            speech_threshold,
+            silence_threshold,
         }
     }
 }
@@ -61,7 +70,13 @@ pub fn policy_from_config(config: &crate::config::VoiceVadCfg, frame_ms: u32) ->
         min_start_voiced_frames: config.min_start_voiced_frames,
         pause_silence_ms: config.pause_silence_ms,
         frame_ms,
+        speech_threshold: config.threshold,
+        silence_threshold: default_silence_threshold(config.threshold),
     }
+}
+
+fn default_silence_threshold(speech_threshold: f32) -> f32 {
+    (speech_threshold - 0.15).max(speech_threshold * 0.5)
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +103,12 @@ impl VadController {
 
     pub fn reset(&mut self) {
         self.state = VadState::Silence;
+        self.voiced_frames = 0;
+        self.silence_ms = 0;
+    }
+
+    pub fn reset_to_speech(&mut self) {
+        self.state = VadState::Speech;
         self.voiced_frames = 0;
         self.silence_ms = 0;
     }
@@ -125,6 +146,15 @@ impl VadController {
             }
         }
     }
+
+    pub fn accept_probability(&mut self, probability: f32) -> VadTransition {
+        let frame = match self.state {
+            VadState::Silence if probability >= self.policy.speech_threshold => VadFrame::Speech,
+            VadState::Speech if probability >= self.policy.silence_threshold => VadFrame::Speech,
+            _ => VadFrame::Silence,
+        };
+        self.accept(frame)
+    }
 }
 
 #[cfg(test)]
@@ -137,6 +167,8 @@ mod tests {
             min_start_voiced_frames: 2,
             pause_silence_ms: 1500,
             frame_ms: 32,
+            speech_threshold: 0.5,
+            silence_threshold: 0.35,
         });
 
         assert_eq!(controller.accept(VadFrame::Speech), VadTransition::None);
@@ -153,6 +185,8 @@ mod tests {
             min_start_voiced_frames: 1,
             pause_silence_ms: 96,
             frame_ms: 32,
+            speech_threshold: 0.5,
+            silence_threshold: 0.35,
         });
 
         assert_eq!(
@@ -174,6 +208,8 @@ mod tests {
             min_start_voiced_frames: 1,
             pause_silence_ms: 96,
             frame_ms: 32,
+            speech_threshold: 0.5,
+            silence_threshold: 0.35,
         });
 
         assert_eq!(
@@ -196,6 +232,8 @@ mod tests {
             min_start_voiced_frames: 0,
             pause_silence_ms: 0,
             frame_ms: 0,
+            speech_threshold: 0.0,
+            silence_threshold: 1.0,
         });
 
         assert_eq!(
@@ -214,6 +252,8 @@ mod tests {
             min_start_voiced_frames: 1,
             pause_silence_ms: 96,
             frame_ms: 32,
+            speech_threshold: 0.5,
+            silence_threshold: 0.35,
         });
 
         assert_eq!(
@@ -231,6 +271,29 @@ mod tests {
     }
 
     #[test]
+    fn reset_to_speech_starts_fresh_active_window() {
+        let mut controller = VadController::new(VadPolicy {
+            min_start_voiced_frames: 2,
+            pause_silence_ms: 96,
+            frame_ms: 32,
+            speech_threshold: 0.5,
+            silence_threshold: 0.35,
+        });
+
+        controller.reset_to_speech();
+
+        assert_eq!(controller.state(), VadState::Speech);
+        assert_eq!(controller.accept(VadFrame::Silence), VadTransition::None);
+        assert_eq!(controller.accept(VadFrame::Speech), VadTransition::None);
+        assert_eq!(controller.accept(VadFrame::Silence), VadTransition::None);
+        assert_eq!(controller.accept(VadFrame::Silence), VadTransition::None);
+        assert_eq!(
+            controller.accept(VadFrame::Silence),
+            VadTransition::SilenceStarted
+        );
+    }
+
+    #[test]
     fn policy_from_config_uses_explicit_config_values() {
         let policy = policy_from_config(
             &crate::config::VoiceVadCfg {
@@ -244,5 +307,32 @@ mod tests {
         assert_eq!(policy.min_start_voiced_frames, 2);
         assert_eq!(policy.pause_silence_ms, 1_500);
         assert_eq!(policy.frame_ms, 32);
+        assert_eq!(policy.speech_threshold, 0.5);
+        assert_eq!(policy.silence_threshold, 0.35);
+    }
+
+    #[test]
+    fn probability_hysteresis_uses_lower_threshold_after_speech_starts() {
+        let mut controller = VadController::new(VadPolicy {
+            min_start_voiced_frames: 2,
+            pause_silence_ms: 96,
+            frame_ms: 32,
+            speech_threshold: 0.5,
+            silence_threshold: 0.35,
+        });
+
+        assert_eq!(controller.accept_probability(0.49), VadTransition::None);
+        assert_eq!(controller.accept_probability(0.52), VadTransition::None);
+        assert_eq!(
+            controller.accept_probability(0.51),
+            VadTransition::SpeechStarted
+        );
+        assert_eq!(controller.accept_probability(0.40), VadTransition::None);
+        assert_eq!(controller.accept_probability(0.34), VadTransition::None);
+        assert_eq!(controller.accept_probability(0.34), VadTransition::None);
+        assert_eq!(
+            controller.accept_probability(0.34),
+            VadTransition::SilenceStarted
+        );
     }
 }

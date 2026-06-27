@@ -394,7 +394,7 @@ pub(crate) async fn run_with_recorder(
                                             frame.probability,
                                             matches!(frame.frame, VadFrame::Speech),
                                         );
-                                        if vad.controller.accept(frame.frame)
+                                        if vad.controller.accept_probability(frame.probability)
                                             == VadTransition::SilenceStarted
                                         {
                                             tracing::info!(
@@ -623,7 +623,7 @@ pub(crate) async fn run_with_recorder(
                                         frame.probability,
                                         matches!(frame.frame, VadFrame::Speech),
                                     );
-                                    if vad.controller.accept(frame.frame)
+                                    if vad.controller.accept_probability(frame.probability)
                                         == VadTransition::SpeechStarted
                                     {
                                         tracing::info!(
@@ -715,9 +715,7 @@ pub(crate) async fn run_with_recorder(
                 current.record_sent_samples(replay.samples.len() as u64);
             }
             last_sent_sample = replay.end_sample();
-            use crate::voice::vad::VadFrame;
-            vad.controller.reset();
-            vad.controller.accept(VadFrame::Speech);
+            vad.controller.reset_to_speech();
             overlay_send(
                 &params,
                 OverlayCmd::SetState {

@@ -374,12 +374,15 @@ Windows `desktop.text_injection` 在 Phase 10am 只表达 `SendInput` Ctrl+V bac
 Windows `desktop.hotkey` / `desktop.hotkey_suppression` 在 Phase 10an 只表达 `WH_KEYBOARD_LL`
 backend 存在并做过同会话 smoke：
 
-- `desktop.hotkey`：`partial`，backend `wh_keyboard_ll`，reason `runtime_smoke_only`。
-- `desktop.hotkey_suppression`：`partial`，backend `wh_keyboard_ll`，reason `runtime_smoke_only`。
+- `desktop.hotkey`：`partial`，backend `wh_keyboard_ll`，reason
+  `win32_edit_suppression_runtime_smoke`。
+- `desktop.hotkey_suppression`：`partial`，backend `wh_keyboard_ll`，reason
+  `win32_edit_suppression_runtime_smoke`。
 - backend 运行在专用 OS 线程，callback 只写现有 `RawEvent` pipe wire format 并复用共享
   `Suppressor` 判断是否 drop foreground event。
-- ignored runtime smoke 只验证 hook 可收到合成 F16 down/up；它不代表 hold-to-record、IME、真实
-  foreground App、remote desktop 或 UAC/elevation 边界可用。
+- ignored runtime smoke 已验证 hook 可收到合成 key down/up，并且能阻止合成 `A` 输入进入测试进程创建的
+  foreground Win32 `EDIT` control；它不代表 hold-to-record、IME、真实 foreground App、remote desktop 或
+  UAC/elevation 边界可用。
 - 在真实目标 App 和完整 record -> paste session 验证前，不能升级为 `available`。
 
 ## Phase 10ao Windows Minimal Overlay Backend

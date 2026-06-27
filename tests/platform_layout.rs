@@ -1050,6 +1050,8 @@ fn windows_hotkey_backend_uses_low_level_keyboard_hook() {
         "RawEvent",
         "Suppressor",
         "hook_runtime_smoke_receives_synthetic_f16_down_up",
+        "hook_runtime_smoke_suppresses_synthetic_a_from_win32_edit",
+        "GetWindowTextW",
     ] {
         assert!(
             provider.contains(token),
@@ -1076,7 +1078,7 @@ fn windows_hotkey_capability_reports_hook_partial() {
         "CapabilityId::DesktopHotkey",
         "CapabilityId::DesktopHotkeySuppression",
         "wh_keyboard_ll",
-        "runtime_smoke_only",
+        "win32_edit_suppression_runtime_smoke",
         "Validate hotkey press/release tracking across real Windows foreground apps",
         "Validate suppressed down/up pairing, stuck modifier prevention, IME, and UAC boundaries",
     ] {

@@ -19,6 +19,22 @@ current HEAD.
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
 
+Phase 10bz Windows hotkey suppression target smoke 已完成：
+
+- 新增 Windows ignored runtime smoke
+  `hotkey::provider_windows::tests::hook_runtime_smoke_suppresses_synthetic_a_from_win32_edit`，它创建 foreground
+  Win32 `EDIT` control，安装 `WH_KEYBOARD_LL` backend，发送合成 `A` down/up，确认 hook pipe 收到 `RawEvent`
+  down/up 且目标 EDIT 文本仍为空。
+- 本机已通过：
+  `cargo test --target x86_64-pc-windows-msvc hotkey::provider_windows::tests::hook_runtime_smoke_suppresses_synthetic_a_from_win32_edit -- --ignored --exact`。
+- Windows `desktop.hotkey` 和 `desktop.hotkey_suppression` capability 仍为 `partial/wh_keyboard_ll`，reason 从
+  `runtime_smoke_only` 收窄为 `win32_edit_suppression_runtime_smoke`。
+- 本阶段仍不覆盖真实 foreground App、IME、remote desktop、UAC/elevation 或 full record -> paste。
+- 验证已通过：`cargo fmt --check`、
+  `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings`、
+  `cargo test --target x86_64-pc-windows-msvc`、
+  `cargo build --target x86_64-pc-windows-msvc`、`cargo test`。
+
 Phase 10by Windows active-app self foreground smoke 已完成：
 
 - 新增 ignored runtime smoke，创建 foreground Win32 window，并确认 Windows

@@ -254,6 +254,18 @@ fn last_error(context: &'static str) -> anyhow::Error {
 mod tests {
     use super::*;
     use crate::hotkey::combo::{ModType, Side};
+    use anyhow::{anyhow, Result};
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, DispatchMessageW, GetWindowTextLengthW, GetWindowTextW,
+        PeekMessageW, SetForegroundWindow, ShowWindow, TranslateMessage, CW_USEDEFAULT, PM_REMOVE,
+        SW_SHOW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    };
 
     #[test]
     fn maps_letters_digits_function_keys_and_punctuation() {
@@ -318,11 +330,6 @@ mod tests {
     #[ignore = "installs a global keyboard hook and sends a synthetic F16 key press"]
     fn hook_runtime_smoke_receives_synthetic_f16_down_up() {
         use crate::hotkey::{Combo, ModMask, Suppressor};
-        use std::io::Read;
-        use std::time::{Duration, Instant};
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-        };
 
         let (mut reader, writer) = os_pipe::pipe().expect("pipe");
         let suppressor = Arc::new(Mutex::new(Suppressor::new(Combo {
@@ -382,5 +389,168 @@ mod tests {
             }
         }
         assert!(saw_down && saw_up, "expected F16 down/up within 10 seconds");
+    }
+
+    #[test]
+    #[ignore = "installs a global keyboard hook and verifies suppression against a foreground Win32 edit control"]
+    fn hook_runtime_smoke_suppresses_synthetic_a_from_win32_edit() -> Result<()> {
+        use crate::hotkey::{Combo, ModMask, Suppressor};
+
+        let window = EditWindow::create()?;
+        window.focus()?;
+        pump_messages(Duration::from_millis(100));
+
+        let (mut reader, writer) = os_pipe::pipe().expect("pipe");
+        let suppressor = Arc::new(Mutex::new(Suppressor::new(Combo {
+            mods: [crate::hotkey::combo::ModMatcher::NotPresent; 4],
+            key: Some(Key::Char('a')),
+            double: false,
+        })));
+        std::thread::spawn(move || run(writer, suppressor).expect("windows hook"));
+        std::thread::sleep(Duration::from_millis(250));
+
+        send_key(VK_A)?;
+        pump_messages(Duration::from_millis(150));
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut saw_down = false;
+        let mut saw_up = false;
+        while Instant::now() < deadline && !(saw_down && saw_up) {
+            let mut buf = [0u8; 4];
+            reader.read_exact(&mut buf).expect("read hotkey event");
+            if let Some(raw) = RawEvent::decode(buf) {
+                if raw.key == Key::Char('a') && raw.mods == ModMask::empty() {
+                    saw_down |= raw.kind == EventKind::KeyDown;
+                    saw_up |= raw.kind == EventKind::KeyUp;
+                }
+            }
+        }
+        assert!(saw_down && saw_up, "expected A down/up within 10 seconds");
+        assert_eq!(window.text()?, "");
+        Ok(())
+    }
+
+    struct EditWindow {
+        hwnd: HWND,
+    }
+
+    impl EditWindow {
+        fn create() -> Result<Self> {
+            let class = wide_null("EDIT");
+            let title = wide_null("");
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    title.as_ptr(),
+                    WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    480,
+                    180,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if hwnd.is_null() {
+                return Err(last_error("CreateWindowExW"));
+            }
+            unsafe {
+                ShowWindow(hwnd, SW_SHOW);
+            }
+            Ok(Self { hwnd })
+        }
+
+        fn focus(&self) -> Result<()> {
+            unsafe {
+                if SetForegroundWindow(self.hwnd) == 0 {
+                    return Err(last_error("SetForegroundWindow"));
+                }
+            }
+            Ok(())
+        }
+
+        fn text(&self) -> Result<String> {
+            let len = unsafe { GetWindowTextLengthW(self.hwnd) };
+            if len < 0 {
+                return Err(last_error("GetWindowTextLengthW"));
+            }
+            let mut buffer = vec![0u16; len as usize + 1];
+            let copied =
+                unsafe { GetWindowTextW(self.hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
+            if copied == 0 && len > 0 {
+                return Err(last_error("GetWindowTextW"));
+            }
+            buffer.truncate(copied as usize);
+            String::from_utf16(&buffer).map_err(Into::into)
+        }
+    }
+
+    impl Drop for EditWindow {
+        fn drop(&mut self) {
+            unsafe {
+                DestroyWindow(self.hwnd);
+            }
+        }
+    }
+
+    fn send_key(vk: u16) -> Result<()> {
+        let inputs = [
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: vk,
+                        wScan: 0,
+                        dwFlags: 0,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: vk,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+        let sent = unsafe {
+            SendInput(
+                inputs.len() as u32,
+                inputs.as_ptr(),
+                std::mem::size_of::<INPUT>() as i32,
+            )
+        };
+        if sent != inputs.len() as u32 {
+            return Err(last_error("SendInput"));
+        }
+        Ok(())
+    }
+
+    fn pump_messages(duration: Duration) {
+        let until = Instant::now() + duration;
+        while Instant::now() < until {
+            unsafe {
+                let mut msg = std::mem::zeroed();
+                while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn wide_null(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 }

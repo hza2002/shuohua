@@ -346,9 +346,10 @@ Current hotkey baseline:
   wire format to the daemon pipe, and then asks the shared `Suppressor` whether to drop the foreground event.
 - Modifier transitions are forwarded as `FlagsChanged` with a post-transition modifier snapshot, matching the
   tracker contract used by macOS.
-- Capability is `partial/wh_keyboard_ll/runtime_smoke_only` for both `desktop.hotkey` and
-  `desktop.hotkey_suppression` until real foreground App, IME, remote desktop, and UAC/elevation boundaries are
-  validated.
+- Capability is `partial/wh_keyboard_ll/win32_edit_suppression_runtime_smoke` for both `desktop.hotkey` and
+  `desktop.hotkey_suppression` after an ignored runtime smoke verifies synthetic key down/up delivery and
+  suppression against a foreground Win32 `EDIT` control. Real foreground App, IME, remote desktop, and
+  UAC/elevation boundaries are still unvalidated.
 - This phase does not validate audio, overlay, clipboard/paste, or full record -> paste behavior.
 
 ## Clipboard And Text Injection

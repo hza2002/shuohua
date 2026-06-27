@@ -296,8 +296,8 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 platform: PlatformKind::Windows,
                 backend: "wh_keyboard_ll",
                 status: CapabilityStatusKind::Partial,
-                summary: "WH_KEYBOARD_LL hook backend is implemented but needs foreground-app validation",
-                reason: "runtime_smoke_only",
+                summary: "WH_KEYBOARD_LL hook receives synthetic key events and can suppress a foreground Win32 edit target",
+                reason: "win32_edit_suppression_runtime_smoke",
                 next_step: Some("Validate hotkey press/release tracking across real Windows foreground apps"),
             },
             CapabilityStatus {
@@ -305,8 +305,8 @@ fn windows_capabilities() -> Vec<CapabilityStatus> {
                 platform: PlatformKind::Windows,
                 backend: "wh_keyboard_ll",
                 status: CapabilityStatusKind::Partial,
-                summary: "Low-level hook can suppress matched key events but target-app parity is not validated",
-                reason: "runtime_smoke_only",
+                summary: "Low-level hook can suppress matched key down/up events before a foreground Win32 edit target receives them",
+                reason: "win32_edit_suppression_runtime_smoke",
                 next_step: Some("Validate suppressed down/up pairing, stuck modifier prevention, IME, and UAC boundaries"),
             },
             CapabilityStatus {

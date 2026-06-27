@@ -407,9 +407,10 @@ Current active app identity baseline:
   or store the full process path.
 - `profile.routes.<profile>.windows.exe_name` and `.app_user_model_id` can use this identity. AUMID is optional
   because normal unpackaged Win32 apps often do not have one.
-- Capability remains `partial/foreground_window_process_identity/foreground_self_window_runtime_smoke` after an
-  ignored Windows runtime smoke creates a foreground Win32 window and resolves the current test executable identity.
-  Foreground lookup failure falls back to the default profile.
+- Capability remains `partial/foreground_window_process_identity/foreground_profile_route_self_window_smoke` after an
+  ignored Windows runtime smoke creates a foreground Win32 window, resolves the current test executable identity, and
+  verifies that identity can drive `profile.routes` matching. Foreground lookup failure falls back to the default
+  profile.
 - `shuo doctor` reports both `desktop.active_app.current` and `profile.route.current` so route configuration can
   be debugged before hotkey/audio runtime exists. This is read-only and must not trigger recording, provider
   runtime, overlay, clipboard, or paste.

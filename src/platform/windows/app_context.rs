@@ -187,6 +187,25 @@ mod tests {
             app.app_name.as_deref(),
             Some(app_name_from_exe_name(&expected_exe).as_str())
         );
+
+        let routes = crate::config::ProfileRouteCfg {
+            default: "default".to_string(),
+            routes: crate::config::ProfileRoutes::from_iter([(
+                "foreground".to_string(),
+                crate::config::ProfileRouteMatchers {
+                    windows: crate::config::WindowsProfileMatchers {
+                        exe_name: vec![expected_exe.to_ascii_uppercase()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )]),
+        };
+        assert_eq!(
+            routes.matching_profiles(&crate::config::AppIdentity::current_from_app_context(&app)),
+            vec!["foreground"],
+            "foreground Windows exe identity should drive profile route matching"
+        );
         Ok(())
     }
 

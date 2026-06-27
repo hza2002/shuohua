@@ -1627,6 +1627,8 @@ fn windows_active_app_identity_backend_lives_behind_desktop_facade() {
         "windows_exe_name",
         "app_name_from_exe_name",
         "foreground_self_window_runtime_smoke",
+        "ProfileRouteCfg",
+        "current_from_app_context",
         "CreateWindowExW",
         "SetForegroundWindow",
     ] {
@@ -1659,8 +1661,8 @@ fn windows_active_app_capability_reports_process_identity_partial() {
     for token in [
         "CapabilityId::DesktopActiveApp",
         "foreground_window_process_identity",
-        "foreground_self_window_runtime_smoke",
-        "Validate foreground app route matching across packaged and unpackaged Windows apps",
+        "foreground_profile_route_self_window_smoke",
+        "Validate foreground app route matching across packaged Windows apps and broader real app targets",
     ] {
         assert!(
             capability.contains(token),
@@ -1671,6 +1673,7 @@ fn windows_active_app_capability_reports_process_identity_partial() {
     for token in [
         "Phase 10bk Windows AppUserModelID Active App Identity",
         "`partial`，backend `foreground_window_process_identity`，reason",
+        "foreground_profile_route_self_window_smoke",
         "`GetApplicationUserModelId`",
         "AUMID 为空是正常降级",
     ] {
@@ -1682,6 +1685,7 @@ fn windows_active_app_capability_reports_process_identity_partial() {
 
     for token in [
         "Phase 10bk extends the same process handle with best-effort `GetApplicationUserModelId`",
+        "foreground_profile_route_self_window_smoke",
         "`windows_app_user_model_id`",
         "AUMID is optional",
     ] {

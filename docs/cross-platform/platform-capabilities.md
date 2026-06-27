@@ -307,14 +307,15 @@ Windows `desktop.active_app` 第一版只实现 foreground window owner process 
 Windows active app identity now also attempts AppUserModelID lookup from the foreground process handle:
 
 - `desktop.active_app`：`partial`，backend `foreground_window_process_identity`，reason
-  `foreground_self_window_runtime_smoke`。
+  `foreground_profile_route_self_window_smoke`。
 - 实现路径在既有 `GetForegroundWindow` / `GetWindowThreadProcessId` /
   `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` 基础上增加 `GetApplicationUserModelId`。
 - `QueryFullProcessImageNameW` 继续只用于派生 `windows_exe_name`；完整路径不进入 doctor、history 或 IPC。
 - AUMID 为空是正常降级，尤其是 unpackaged Win32 apps；route matching 仍应落回 `exe_name` 或
   `profile.default`。
-- ignored runtime smoke 会创建一个 foreground Win32 window，并确认 `frontmost_app()` 能解析到当前测试
-  进程的 executable identity。它不覆盖 packaged app / Store app / terminal/editor/browser 矩阵。
+- ignored runtime smoke 会创建一个 foreground Win32 window，确认 `frontmost_app()` 能解析到当前测试
+  进程的 executable identity，并验证该 Windows identity 可以驱动 `profile.routes` 命中。它不覆盖
+  packaged app / Store app / terminal/editor/browser 矩阵。
 - 在真实 packaged app / Store app / terminal/editor/browser 矩阵中验证 profile route 命中前，不能升级为
   `available`。
 

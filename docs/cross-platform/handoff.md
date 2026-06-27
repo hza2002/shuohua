@@ -6,9 +6,9 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `feat: add vad probability hysteresis`（本阶段提交；以 `git log -1` 为准）。
+Latest phase commit: `test: add windows profile route smoke` (`e1df866`).
 
-Previous phase commit: `feat: encode windows lossless audio natively` (`f8c97ac`).
+Previous phase commit: `docs: record windows common target smoke` (`c59fbd7`).
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +18,16 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+
+Phase 10cd Windows active app profile route smoke 已完成：
+
+- 扩展 Windows ignored runtime smoke：创建 foreground Win32 window 后，不只验证
+  `frontmost_app()` 能解析当前测试进程 `windows_exe_name` / display name，还验证该 identity 可以驱动
+  `profile.routes.<profile>.windows.exe_name` 命中。
+- Windows `desktop.active_app` capability 仍保持 `partial/foreground_window_process_identity`，reason 收窄为
+  `foreground_profile_route_self_window_smoke`。
+- 仍不能升级为 `available`：packaged app / Store app 的 AUMID route、更多真实应用矩阵、lookup 失败和权限边界
+  尚未覆盖。
 
 Phase 10cc Windows common target record-to-paste smoke 已完成：
 

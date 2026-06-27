@@ -1406,6 +1406,7 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "AddVisual",
         "SetOffsetX2",
         "SetOffsetY2",
+        "bind_animation_probes",
         "SetRoot",
         "Commit",
         "IDCompositionSurface",
@@ -1427,6 +1428,7 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "SetBottomRightRadiusY2",
         "IDCompositionVisual3",
         "SetOpacity2",
+        "SetOpacity",
         "DIRECT2D_SHADOW_OUTSET",
         "DirectComposition or Windows Composition visuals",
         "fallback: Direct2D per-pixel layered surface",
@@ -1476,6 +1478,7 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "panel opacity binding",
         "shadow outset geometry",
         "composition shadow surface",
+        "static animation binding",
         "DirectWrite text",
         "Direct2D fallback now renders state icons through DirectWrite icon glyphs",
     ] {

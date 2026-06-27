@@ -337,9 +337,11 @@ Phase 10bg infrastructure status:
   `IDCompositionVisual3`. The probe uses the same shadow outset geometry as the Direct2D fallback: the composition
   surface includes the renderer-owned outset while panel/content coordinates stay inset. A separate composition shadow surface is
   also bound to the reserved `shadow` visual and draws tapered ambient/key shadow passes only to
-  validate compositor layering. This proves Direct2D/DirectWrite-on-composition-surface plus geometry/clip/opacity/
-  shadow-surface plumbing only; final material, final shadow tuning, icon animation, text-quality tuning, and default
-  backend switching remain separate work.
+  validate compositor layering. The icon visual also has a static animation binding probe through
+  `IDCompositionVisual3::SetOpacity`, separate from the earlier root offset animation probe. This proves
+  Direct2D/DirectWrite-on-composition-surface plus geometry/clip/opacity/shadow-surface/static animation binding
+  plumbing only; final material, final shadow tuning, dynamic icon animation, text-quality tuning, and default backend
+  switching remain separate work.
 - `src/overlay/windows/icons.rs` records the state icon plan using Windows official icon fonts:
   `Segoe Fluent Icons` first, `Segoe MDL2 Assets` fallback. Icon bodies should come from system glyphs; animation
   belongs to composition opacity/scale/rotate/translate once that backend is enabled.

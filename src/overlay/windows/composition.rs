@@ -130,6 +130,7 @@ pub(super) struct CompositionVisualTree {
     panel3: Option<IDCompositionVisual3>,
     content: IDCompositionVisual,
     icon: IDCompositionVisual,
+    icon3: Option<IDCompositionVisual3>,
     status: IDCompositionVisual,
     stats: IDCompositionVisual,
     meta: IDCompositionVisual,
@@ -146,6 +147,7 @@ impl CompositionVisualTree {
         let panel3 = panel.cast::<IDCompositionVisual3>().ok();
         let content = create_visual(device, "content")?;
         let icon = create_visual(device, "icon")?;
+        let icon3 = icon.cast::<IDCompositionVisual3>().ok();
         let status = create_visual(device, "status")?;
         let stats = create_visual(device, "stats")?;
         let meta = create_visual(device, "meta")?;
@@ -189,7 +191,7 @@ impl CompositionVisualTree {
                 .context("IDCompositionVisual::AddVisual body")?;
         }
 
-        Ok(Self {
+        let tree = Self {
             root,
             animations,
             clips,
@@ -199,11 +201,25 @@ impl CompositionVisualTree {
             panel3,
             content,
             icon,
+            icon3,
             status,
             stats,
             meta,
             body,
-        })
+        };
+        tree.bind_animation_probes()?;
+        Ok(tree)
+    }
+
+    fn bind_animation_probes(&self) -> Result<()> {
+        unsafe {
+            if let Some(icon3) = &self.icon3 {
+                icon3
+                    .SetOpacity(&self.animations.icon_static_opacity)
+                    .context("IDCompositionVisual3::SetOpacity icon static animation")?;
+            }
+        }
+        Ok(())
     }
 
     fn apply_scene_contract(
@@ -924,12 +940,14 @@ fn draw_text(
 
 pub(super) struct CompositionAnimations {
     root_static_offset: IDCompositionAnimation,
+    icon_static_opacity: IDCompositionAnimation,
 }
 
 impl CompositionAnimations {
     fn new(device: &IDCompositionDevice) -> Result<Self> {
         Ok(Self {
             root_static_offset: static_animation(device, "root static offset")?,
+            icon_static_opacity: static_animation(device, "icon static opacity")?,
         })
     }
 

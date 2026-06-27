@@ -4,9 +4,11 @@ use anyhow::{Context, Result};
 
 use crate::config::RecordAudioMode;
 
-const RETAINED_AUDIO_TARGET_PEAK: i16 = (i16::MAX as f32 * 0.89) as i16;
-const RETAINED_AUDIO_MIN_PEAK_TO_NORMALIZE: i16 = 512;
-const RETAINED_AUDIO_MAX_GAIN: f32 = 8.0;
+const RETAINED_AUDIO_TARGET_RMS: f32 = 0.12;
+const RETAINED_AUDIO_TARGET_PEAK: f32 = 0.89;
+const RETAINED_AUDIO_MIN_PEAK_TO_NORMALIZE: u16 = 32;
+const RETAINED_AUDIO_ACTIVE_SAMPLE_FLOOR: u16 = 16;
+const RETAINED_AUDIO_MAX_GAIN: f32 = 64.0;
 
 #[derive(Debug)]
 pub(crate) struct AudioOutput {
@@ -58,7 +60,7 @@ impl AudioOutput {
     ) -> Result<PathBuf> {
         let mut published = false;
         let result = (|| -> Result<PathBuf> {
-            normalize_retained_wav_peak(&self.wav_path)?;
+            normalize_retained_wav_loudness(&self.wav_path)?;
             convert(self.mode, &self.wav_path, &self.temp_path)?;
             std::fs::rename(&self.temp_path, &self.final_path).with_context(|| {
                 format!(
@@ -90,25 +92,61 @@ impl AudioOutput {
     }
 }
 
-fn normalize_retained_wav_peak(path: &Path) -> Result<()> {
+fn normalize_retained_wav_loudness(path: &Path) -> Result<()> {
     let (spec, samples) = read_pcm_i16_wav(path)?;
-    let peak = samples
-        .iter()
-        .map(|sample| sample.unsigned_abs())
-        .max()
-        .unwrap_or(0);
-    if peak < RETAINED_AUDIO_MIN_PEAK_TO_NORMALIZE as u16
-        || peak >= RETAINED_AUDIO_TARGET_PEAK as u16
+    let metrics = AudioMetrics::from_samples(&samples);
+    if metrics.peak < RETAINED_AUDIO_MIN_PEAK_TO_NORMALIZE
+        || metrics.rms >= RETAINED_AUDIO_TARGET_RMS
     {
         return Ok(());
     }
 
-    let gain = (RETAINED_AUDIO_TARGET_PEAK as f32 / peak as f32).min(RETAINED_AUDIO_MAX_GAIN);
+    let rms_gain = RETAINED_AUDIO_TARGET_RMS / metrics.rms;
+    let peak_gain = RETAINED_AUDIO_TARGET_PEAK / metrics.peak_normalized();
+    let gain = rms_gain.min(peak_gain).min(RETAINED_AUDIO_MAX_GAIN);
+    if gain <= 1.0 {
+        return Ok(());
+    }
     let normalized = samples
         .into_iter()
         .map(|sample| apply_gain(sample, gain))
         .collect::<Vec<_>>();
     write_pcm_i16_wav(path, spec, &normalized)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AudioMetrics {
+    peak: u16,
+    rms: f32,
+}
+
+impl AudioMetrics {
+    fn from_samples(samples: &[i16]) -> Self {
+        let mut peak = 0u16;
+        let mut active_count = 0usize;
+        let mut square_sum = 0.0f32;
+
+        for sample in samples {
+            let abs = sample.unsigned_abs();
+            peak = peak.max(abs);
+            if abs >= RETAINED_AUDIO_ACTIVE_SAMPLE_FLOOR {
+                let normalized = *sample as f32 / i16::MAX as f32;
+                square_sum += normalized * normalized;
+                active_count += 1;
+            }
+        }
+
+        let rms = if active_count == 0 {
+            0.0
+        } else {
+            (square_sum / active_count as f32).sqrt()
+        };
+        Self { peak, rms }
+    }
+
+    fn peak_normalized(self) -> f32 {
+        self.peak as f32 / i16::MAX as f32
+    }
 }
 
 fn read_pcm_i16_wav(path: &Path) -> Result<(hound::WavSpec, Vec<i16>)> {
@@ -202,13 +240,32 @@ mod tests {
         let wav = dir.join("quiet.wav");
         write_test_wav_with_samples(&wav, &[1000, -1000, 500, -500]);
 
-        normalize_retained_wav_peak(&wav).unwrap();
+        normalize_retained_wav_loudness(&wav).unwrap();
 
         let samples = read_test_wav_samples(&wav);
-        assert_eq!(
-            samples.iter().map(|sample| sample.unsigned_abs()).max(),
-            Some((1000.0 * RETAINED_AUDIO_MAX_GAIN).round() as u16)
-        );
+        let metrics = AudioMetrics::from_samples(&samples);
+        assert!(metrics.rms > 0.10, "rms={}", metrics.rms);
+        assert!(metrics.peak_normalized() <= RETAINED_AUDIO_TARGET_PEAK + 0.001);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn retained_wav_normalization_amplifies_very_low_mic_level() {
+        let dir = std::env::temp_dir().join(format!("shuohua-audio-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("low-mic.wav");
+        write_test_wav_with_samples(&wav, &[120, -120, 80, -80, 0, 64, -64]);
+
+        normalize_retained_wav_loudness(&wav).unwrap();
+
+        let samples = read_test_wav_samples(&wav);
+        let peak = samples
+            .iter()
+            .map(|sample| sample.unsigned_abs())
+            .max()
+            .unwrap();
+        assert!(peak > 5000, "peak={peak}");
+        assert!(AudioMetrics::from_samples(&samples).rms > 0.10);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -219,7 +276,7 @@ mod tests {
         let wav = dir.join("noise.wav");
         write_test_wav_with_samples(&wav, &[12, -12, 8, -8]);
 
-        normalize_retained_wav_peak(&wav).unwrap();
+        normalize_retained_wav_loudness(&wav).unwrap();
 
         assert_eq!(read_test_wav_samples(&wav), vec![12, -12, 8, -8]);
         let _ = std::fs::remove_dir_all(dir);
@@ -237,9 +294,9 @@ mod tests {
         let finished = output
             .finish_with(|_, input, output| {
                 let samples = read_test_wav_samples(input);
-                assert_eq!(
-                    samples.iter().map(|sample| sample.unsigned_abs()).max(),
-                    Some((1000.0 * RETAINED_AUDIO_MAX_GAIN).round() as u16)
+                assert!(
+                    AudioMetrics::from_samples(&samples).peak_normalized()
+                        <= RETAINED_AUDIO_TARGET_PEAK + 0.001
                 );
                 std::fs::write(output, b"converted").unwrap();
                 Ok(())

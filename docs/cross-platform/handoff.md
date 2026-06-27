@@ -6,9 +6,10 @@
 
 ## 最近阶段 commit
 
-Latest phase commit: `test: add windows process probe smoke`（以 `git log -1` 为准）。
+Latest phase commit: `fix: normalize retained audio peak` (`373ec22`)；本阶段后续 loudness fix 尚未提交，
+以 `git log -1` 为准。
 
-Previous phase commit: `test: add retained audio action smoke` (`7fcf71f`).
+Previous phase commit: `test: add windows process probe smoke`.
 
 Note: handoff-only sync commits may be newer than the latest phase commit; use `git log -1` for the exact
 current HEAD.
@@ -18,6 +19,22 @@ current HEAD.
 ## 当前 phase
 
 GUI PoC 冻结，当前主线切到 Windows-first core runtime。
+
+Phase 10ch retained audio loudness normalization 已完成：
+
+- 用户在 Phase 10cg 后重新测试，反馈 retained audio 音量仍然非常小。
+- 复核发现当时 `target\x86_64-pc-windows-msvc\debug\shuo.exe` 时间早于 peak-normalization commit，且最新
+  retained `.flac` 用 `ffmpeg volumedetect` 测得 `mean_volume` 约 `-66 dB`、`max_volume` 约 `-47 dB`，
+  说明保存文件本身仍是低电平；Silero diagnostic 的 `max/avg` 是 VAD probability，不是音频振幅。
+- 修复方向：`voice::audio::finish` 的 retained-audio 发布路径从单纯 peak normalization 改成一次性
+  loudness normalization：按有效样本 RMS 提升低电平录音，并用 peak headroom 限制避免削波。该处理仍只影响
+  `.flac` / `.m4a` 保存文件，不改变 VAD、ASR、状态机或上屏文本。
+- 已通过验证：`cargo fmt --check`、`cargo test --target x86_64-pc-windows-msvc voice::audio`、Windows ignored
+  native conversion smoke `cargo test --target x86_64-pc-windows-msvc native_ -- --ignored`、
+  `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings`、
+  `cargo test --target x86_64-pc-windows-msvc`、`cargo build --target x86_64-pc-windows-msvc`、`cargo test`。
+- 用户重新 build/restart daemon 后录制新样本，反馈 retained audio “现在足够听清了”。该结论确认保存音频
+  回放音量明显改善，但仍不改变 VAD、ASR、audio.capture/audio.convert capability 的可用性等级。
 
 Phase 10cg retained audio peak normalization 已完成：
 

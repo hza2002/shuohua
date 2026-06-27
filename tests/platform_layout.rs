@@ -1417,6 +1417,13 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "CreateTextFormat",
         "D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE",
         "ensure_panel_surface",
+        "IDCompositionRectangleClip",
+        "CreateRectangleClip",
+        "SetClip",
+        "SetTopLeftRadiusX2",
+        "SetBottomRightRadiusY2",
+        "IDCompositionVisual3",
+        "SetOpacity2",
         "DirectComposition or Windows Composition visuals",
         "fallback: Direct2D per-pixel layered surface",
     ] {
@@ -1461,6 +1468,8 @@ fn windows_overlay_composition_infrastructure_is_fallback_gated() {
         "Segoe Fluent Icons",
         "Composition backend",
         "Direct2D/DirectWrite-on-composition-surface",
+        "compositor-owned rounded clipping",
+        "panel opacity binding",
         "DirectWrite text",
         "Direct2D fallback now renders state icons through DirectWrite icon glyphs",
     ] {

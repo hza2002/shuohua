@@ -35,8 +35,9 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
   同一份状态/icon/meta/body 文本计划与 layout frames；Composition probe 已验证 root animation 创建/绑定/
   commit 路径，以及 panel `IDCompositionSurface` 创建/绑定、resize、`BeginDraw::<IDXGISurface>`、
   Direct2D `CreateDxgiSurfaceRenderTarget` 绘制圆角半透明 panel、DirectWrite 绘制系统 icon glyph 与
-  state/stats/meta/body 文本、`EndDraw` 路径，但还未绘制最终 material/shadow/animation，也未切换默认
-  backend。
+  state/stats/meta/body 文本、`EndDraw` 路径，并验证 `IDCompositionRectangleClip` rounded clip 与
+  `IDCompositionVisual3::SetOpacity2` panel opacity binding，但还未绘制最终 material/shadow/animation，也未
+  切换默认 backend。
 - Cross-user 第二账号隔离验证延后；代码已有 user/session scoped pipe/mutex 方向，但不同用户实机
   smoke 未完成。
 - Windows release-grade 验收仍缺 multi-monitor、remote desktop/UAC/elevation、更多目标应用、

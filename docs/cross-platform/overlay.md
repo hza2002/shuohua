@@ -332,9 +332,10 @@ Phase 10bg infrastructure status:
   probe enters `BeginDraw::<IDXGISurface>`, creates a Direct2D render target with
   `CreateDxgiSurfaceRenderTarget`, draws the rounded translucent panel surface, then calls `EndDraw` and commits.
   The same probe now also creates DirectWrite text formats and draws the system icon glyph, state label, stats,
-  meta, and body text into that composition surface. This proves Direct2D/DirectWrite-on-composition-surface
-  plumbing only; final material, shadow, icon animation, text-quality tuning, and default backend switching remain
-  separate work.
+  meta, and body text into that composition surface. The probe also binds compositor-owned rounded clipping through
+  `IDCompositionRectangleClip` on the panel/content visuals and validates panel opacity binding with
+  `IDCompositionVisual3`. This proves Direct2D/DirectWrite-on-composition-surface plus clip/opacity plumbing only; final material,
+  shadow, icon animation, text-quality tuning, and default backend switching remain separate work.
 - `src/overlay/windows/icons.rs` records the state icon plan using Windows official icon fonts:
   `Segoe Fluent Icons` first, `Segoe MDL2 Assets` fallback. Icon bodies should come from system glyphs; animation
   belongs to composition opacity/scale/rotate/translate once that backend is enabled.

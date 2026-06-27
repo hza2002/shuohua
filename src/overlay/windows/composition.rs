@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use windows::core::PCWSTR;
+use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::HWND as WindowsHwnd;
 use windows::Win32::Foundation::{POINT, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
@@ -14,8 +14,9 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
 };
 use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice, IDCompositionAnimation, IDCompositionDevice, IDCompositionSurface,
-    IDCompositionTarget, IDCompositionVisual,
+    DCompositionCreateDevice, IDCompositionAnimation, IDCompositionDevice,
+    IDCompositionRectangleClip, IDCompositionSurface, IDCompositionTarget, IDCompositionVisual,
+    IDCompositionVisual3,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
@@ -115,9 +116,11 @@ impl CompositionRenderer {
 pub(super) struct CompositionVisualTree {
     root: IDCompositionVisual,
     animations: CompositionAnimations,
+    clips: CompositionClips,
     surfaces: CompositionSurfaces,
     shadow: IDCompositionVisual,
     panel: IDCompositionVisual,
+    panel3: Option<IDCompositionVisual3>,
     content: IDCompositionVisual,
     icon: IDCompositionVisual,
     status: IDCompositionVisual,
@@ -129,9 +132,11 @@ pub(super) struct CompositionVisualTree {
 impl CompositionVisualTree {
     fn new(device: &IDCompositionDevice, root: IDCompositionVisual) -> Result<Self> {
         let animations = CompositionAnimations::new(device)?;
+        let clips = CompositionClips::new(device)?;
         let surfaces = CompositionSurfaces::new(device)?;
         let shadow = create_visual(device, "shadow")?;
         let panel = create_visual(device, "panel")?;
+        let panel3 = panel.cast::<IDCompositionVisual3>().ok();
         let content = create_visual(device, "content")?;
         let icon = create_visual(device, "icon")?;
         let status = create_visual(device, "status")?;
@@ -145,6 +150,12 @@ impl CompositionVisualTree {
             panel
                 .SetContent(&surfaces.panel)
                 .context("IDCompositionVisual::SetContent panel surface")?;
+            panel
+                .SetClip(&clips.panel)
+                .context("IDCompositionVisual::SetClip panel rounded clip")?;
+            content
+                .SetClip(&clips.content)
+                .context("IDCompositionVisual::SetClip content rounded clip")?;
             root.AddVisual(&shadow, false, None)
                 .context("IDCompositionVisual::AddVisual shadow")?;
             root.AddVisual(&panel, false, None)
@@ -171,9 +182,11 @@ impl CompositionVisualTree {
         Ok(Self {
             root,
             animations,
+            clips,
             surfaces,
             shadow,
             panel,
+            panel3,
             content,
             icon,
             status,
@@ -212,6 +225,11 @@ impl CompositionVisualTree {
         let stats = visual_offset(metrics, scene.frames.height, scene.frames.row.stats);
         let meta = visual_offset(metrics, scene.frames.height, scene.frames.row.meta);
         let body = visual_offset(metrics, scene.frames.height, scene.frames.body);
+        self.clips.apply_panel_clip(
+            metrics.px(scene.panel_width).max(1) as f32,
+            metrics.px(scene.frames.height).max(1) as f32,
+            metrics.px(scene.corner_radius).max(0) as f32,
+        )?;
         unsafe {
             self.shadow
                 .SetOffsetX2(0.0)
@@ -225,6 +243,11 @@ impl CompositionVisualTree {
             self.panel
                 .SetOffsetY2(0.0)
                 .context("IDCompositionVisual::SetOffsetY panel")?;
+            if let Some(panel3) = &self.panel3 {
+                panel3
+                    .SetOpacity2(1.0)
+                    .context("IDCompositionVisual3::SetOpacity2 panel")?;
+            }
             self.content
                 .SetOffsetX2(0.0)
                 .context("IDCompositionVisual::SetOffsetX content")?;
@@ -263,6 +286,24 @@ impl CompositionVisualTree {
                 .context("IDCompositionVisual::SetOffsetY body")?;
         }
         Ok(())
+    }
+}
+
+pub(super) struct CompositionClips {
+    panel: IDCompositionRectangleClip,
+    content: IDCompositionRectangleClip,
+}
+
+impl CompositionClips {
+    fn new(device: &IDCompositionDevice) -> Result<Self> {
+        let panel = create_rectangle_clip(device, "panel")?;
+        let content = create_rectangle_clip(device, "content")?;
+        Ok(Self { panel, content })
+    }
+
+    fn apply_panel_clip(&self, width: f32, height: f32, radius: f32) -> Result<()> {
+        apply_rounded_clip(&self.panel, width, height, radius, "panel")?;
+        apply_rounded_clip(&self.content, width, height, radius, "content")
     }
 }
 
@@ -348,6 +389,55 @@ fn create_panel_surface(
             )
             .context("IDCompositionDevice::CreateSurface panel")
     }
+}
+
+fn create_rectangle_clip(
+    device: &IDCompositionDevice,
+    name: &'static str,
+) -> Result<IDCompositionRectangleClip> {
+    unsafe {
+        device
+            .CreateRectangleClip()
+            .with_context(|| format!("IDCompositionDevice::CreateRectangleClip {name}"))
+    }
+}
+
+fn apply_rounded_clip(
+    clip: &IDCompositionRectangleClip,
+    width: f32,
+    height: f32,
+    radius: f32,
+    name: &'static str,
+) -> Result<()> {
+    unsafe {
+        clip.SetLeft2(0.0)
+            .with_context(|| format!("IDCompositionRectangleClip::SetLeft2 {name}"))?;
+        clip.SetTop2(0.0)
+            .with_context(|| format!("IDCompositionRectangleClip::SetTop2 {name}"))?;
+        clip.SetRight2(width)
+            .with_context(|| format!("IDCompositionRectangleClip::SetRight2 {name}"))?;
+        clip.SetBottom2(height)
+            .with_context(|| format!("IDCompositionRectangleClip::SetBottom2 {name}"))?;
+        clip.SetTopLeftRadiusX2(radius)
+            .with_context(|| format!("IDCompositionRectangleClip::SetTopLeftRadiusX2 {name}"))?;
+        clip.SetTopLeftRadiusY2(radius)
+            .with_context(|| format!("IDCompositionRectangleClip::SetTopLeftRadiusY2 {name}"))?;
+        clip.SetTopRightRadiusX2(radius)
+            .with_context(|| format!("IDCompositionRectangleClip::SetTopRightRadiusX2 {name}"))?;
+        clip.SetTopRightRadiusY2(radius)
+            .with_context(|| format!("IDCompositionRectangleClip::SetTopRightRadiusY2 {name}"))?;
+        clip.SetBottomLeftRadiusX2(radius)
+            .with_context(|| format!("IDCompositionRectangleClip::SetBottomLeftRadiusX2 {name}"))?;
+        clip.SetBottomLeftRadiusY2(radius)
+            .with_context(|| format!("IDCompositionRectangleClip::SetBottomLeftRadiusY2 {name}"))?;
+        clip.SetBottomRightRadiusX2(radius).with_context(|| {
+            format!("IDCompositionRectangleClip::SetBottomRightRadiusX2 {name}")
+        })?;
+        clip.SetBottomRightRadiusY2(radius).with_context(|| {
+            format!("IDCompositionRectangleClip::SetBottomRightRadiusY2 {name}")
+        })?;
+    }
+    Ok(())
 }
 
 fn draw_dxgi_scene(surface: &IDXGISurface, ctx: CompositionDrawContext<'_>) -> Result<()> {

@@ -35,8 +35,8 @@ Windows 状态图标路线已经从手绘 primitive 转向系统 icon font：`Se
 
 Windows Composition backend 目前仍是 `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE` gated probe：已能创建
 DirectComposition visual tree、绑定/resize panel surface，并用 Direct2D-on-DXGI-surface 绘制圆角半透明
-panel、系统 icon glyph 和文本；默认可见 renderer 仍是 Direct2D per-pixel fallback，最终 shadow/material/
-animation 和默认 backend 切换尚未完成。
+panel、系统 icon glyph 和文本；还验证了 compositor-owned rounded clipping 和 panel opacity binding。
+默认可见 renderer 仍是 Direct2D per-pixel fallback，最终 shadow/material/animation 和默认 backend 切换尚未完成。
 
 `renderer.rs` 也持有 renderer capability skeleton：静态描述当前 renderer 是否可用、材质降级、
 置顶、输入穿透和窗口锚定状态。它复用 `platform::capability` 的 status 类型，不执行窗口创建、

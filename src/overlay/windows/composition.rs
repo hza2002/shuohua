@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Factory, ID2D1RenderTarget, D2D1_DRAW_TEXT_OPTIONS_CLIP,
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
     D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
-    D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
+    D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_DEFAULT,
 };
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice, IDCompositionAnimation, IDCompositionDevice,
@@ -163,6 +163,8 @@ impl CompositionVisualTree {
             panel
                 .SetContent(&surfaces.panel)
                 .context("IDCompositionVisual::SetContent panel surface")?;
+            icon.SetContent(&surfaces.icon)
+                .context("IDCompositionVisual::SetContent icon surface")?;
             panel
                 .SetClip(&clips.panel)
                 .context("IDCompositionVisual::SetClip panel rounded clip")?;
@@ -246,7 +248,18 @@ impl CompositionVisualTree {
             geometry.surface_width as u32,
             geometry.surface_height as u32,
         )?;
+        let icon_width = metrics.px(scene.frames.row.icon.w).max(1) as u32;
+        let icon_height = metrics.px(scene.frames.row.icon.h).max(1) as u32;
+        self.surfaces
+            .ensure_icon_surface(device, &self.icon, icon_width, icon_height)?;
         self.surfaces.draw_panel_probe(CompositionDrawContext {
+            d2d,
+            dwrite,
+            scene,
+            metrics,
+            geometry,
+        })?;
+        self.surfaces.draw_icon_probe(CompositionDrawContext {
             d2d,
             dwrite,
             scene,
@@ -343,17 +356,18 @@ impl CompositionVisualTree {
                     .SetOpacity2(1.0)
                     .context("IDCompositionVisual3::SetOpacity2 icon no animation")?,
                 IconAnimation::Breathe | IconAnimation::Pulse | IconAnimation::Rotate => {
-                    let opacity = opacity_keyframe_animation(
+                    let opacity = repeating_opacity_keyframe_animation(
                         device,
                         "icon state opacity pulse",
                         &[(0.0, 1.0), (0.42, 0.62), (0.84, 1.0)],
+                        0.84,
                     )?;
                     icon3
                         .SetOpacity(&opacity)
                         .context("IDCompositionVisual3::SetOpacity icon pulse animation")?;
                 }
                 IconAnimation::Dots => {
-                    let opacity = opacity_keyframe_animation(
+                    let opacity = repeating_opacity_keyframe_animation(
                         device,
                         "icon thinking opacity dots",
                         &[
@@ -363,13 +377,14 @@ impl CompositionVisualTree {
                             (0.66, 1.0),
                             (0.88, 0.8),
                         ],
+                        0.88,
                     )?;
                     icon3
                         .SetOpacity(&opacity)
                         .context("IDCompositionVisual3::SetOpacity icon dots animation")?;
                 }
                 IconAnimation::Shake => {
-                    let opacity = opacity_keyframe_animation(
+                    let opacity = repeating_opacity_keyframe_animation(
                         device,
                         "icon error opacity alert",
                         &[
@@ -379,6 +394,7 @@ impl CompositionVisualTree {
                             (0.36, 0.45),
                             (0.54, 1.0),
                         ],
+                        0.54,
                     )?;
                     icon3
                         .SetOpacity(&opacity)
@@ -429,6 +445,8 @@ pub(super) struct CompositionSurfaces {
     shadow_size: (u32, u32),
     panel: IDCompositionSurface,
     panel_size: (u32, u32),
+    icon: IDCompositionSurface,
+    icon_size: (u32, u32),
 }
 
 impl CompositionSurfaces {
@@ -438,6 +456,8 @@ impl CompositionSurfaces {
             shadow_size: (1, 1),
             panel: create_surface(device, 1, 1, "panel")?,
             panel_size: (1, 1),
+            icon: create_surface(device, 1, 1, "icon")?,
+            icon_size: (1, 1),
         })
     }
 
@@ -481,6 +501,26 @@ impl CompositionSurfaces {
         Ok(())
     }
 
+    fn ensure_icon_surface(
+        &mut self,
+        device: &IDCompositionDevice,
+        visual: &IDCompositionVisual,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        if self.icon_size == (width, height) {
+            return Ok(());
+        }
+        self.icon = create_surface(device, width, height, "icon")?;
+        self.icon_size = (width, height);
+        unsafe {
+            visual
+                .SetContent(&self.icon)
+                .context("IDCompositionVisual::SetContent resized icon surface")?;
+        }
+        Ok(())
+    }
+
     fn draw_panel_probe(&self, ctx: CompositionDrawContext<'_>) -> Result<()> {
         let rect = RECT {
             left: 0,
@@ -500,6 +540,29 @@ impl CompositionSurfaces {
             self.panel
                 .EndDraw()
                 .context("IDCompositionSurface::EndDraw panel")
+        };
+        result.and(end)
+    }
+
+    fn draw_icon_probe(&self, ctx: CompositionDrawContext<'_>) -> Result<()> {
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: self.icon_size.0 as i32,
+            bottom: self.icon_size.1 as i32,
+        };
+        let mut offset = POINT::default();
+        let surface = unsafe {
+            self.icon
+                .BeginDraw::<IDXGISurface>(Some(&rect), &mut offset)
+                .context("IDCompositionSurface::BeginDraw icon")?
+        };
+
+        let result = draw_dxgi_icon(&surface, ctx, self.icon_size);
+        let end = unsafe {
+            self.icon
+                .EndDraw()
+                .context("IDCompositionSurface::EndDraw icon")
         };
         result.and(end)
     }
@@ -662,7 +725,7 @@ fn draw_dxgi_scene(surface: &IDXGISurface, ctx: CompositionDrawContext<'_>) -> R
     };
     unsafe {
         target.BeginDraw();
-        target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+        target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_DEFAULT);
         target.Clear(Some(&transparent_color()));
         let brush = target
             .CreateSolidColorBrush(
@@ -690,6 +753,51 @@ fn draw_dxgi_scene(surface: &IDXGISurface, ctx: CompositionDrawContext<'_>) -> R
         target
             .EndDraw(None, None)
             .context("ID2D1RenderTarget::EndDraw scene")?;
+    }
+    Ok(())
+}
+
+fn draw_dxgi_icon(
+    surface: &IDXGISurface,
+    ctx: CompositionDrawContext<'_>,
+    icon_size: (u32, u32),
+) -> Result<()> {
+    let target = create_dxgi_render_target(ctx.d2d, surface, "icon")?;
+    unsafe {
+        target.BeginDraw();
+        target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_DEFAULT);
+        target.Clear(Some(&transparent_color()));
+    }
+
+    let icon_format = text_format(
+        ctx.dwrite,
+        icon_font_fallback_order()[0],
+        physical_font_size(
+            ctx.metrics,
+            crate::overlay::layout::scaled_font_size(18.0, ctx.scene.text_scale),
+        ),
+        false,
+        false,
+        false,
+        true,
+    )?;
+    draw_text(
+        &target,
+        &icon_format,
+        &ctx.scene.state_icon.fluent_glyph.to_string(),
+        D2D_RECT_F {
+            left: 0.0,
+            top: 0.0,
+            right: icon_size.0 as f32,
+            bottom: icon_size.1 as f32,
+        },
+        ctx.scene.state_color,
+    )?;
+
+    unsafe {
+        target
+            .EndDraw(None, None)
+            .context("ID2D1RenderTarget::EndDraw icon")?;
     }
     Ok(())
 }
@@ -855,26 +963,6 @@ fn draw_scene_text(
         false,
         true,
         false,
-    )?;
-    let icon_format = text_format(
-        dwrite,
-        icon_font_fallback_order()[0],
-        physical_font_size(
-            metrics,
-            crate::overlay::layout::scaled_font_size(18.0, scene.text_scale),
-        ),
-        false,
-        false,
-        false,
-        true,
-    )?;
-
-    draw_text(
-        target,
-        &icon_format,
-        &scene.state_icon.fluent_glyph.to_string(),
-        metrics.rect_f_from_frame(scene.frames.height, scene.frames.row.icon),
-        scene.state_color,
     )?;
     draw_text(
         target,
@@ -1076,6 +1164,24 @@ fn opacity_keyframe_animation(
         animation
             .End(previous_time.max(1.0), previous_value)
             .with_context(|| format!("IDCompositionAnimation::End {name}"))?;
+    }
+    Ok(animation)
+}
+
+fn repeating_opacity_keyframe_animation(
+    device: &IDCompositionDevice,
+    name: &'static str,
+    keyframes: &[(f64, f32)],
+    duration: f64,
+) -> Result<IDCompositionAnimation> {
+    if duration <= 0.0 {
+        bail!("repeating opacity animation `{name}` requires positive duration");
+    }
+    let animation = opacity_keyframe_animation(device, name, keyframes)?;
+    unsafe {
+        animation
+            .AddRepeat(0.0, duration)
+            .with_context(|| format!("IDCompositionAnimation::AddRepeat {name}"))?;
     }
     Ok(animation)
 }

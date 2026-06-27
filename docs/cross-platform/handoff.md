@@ -39,10 +39,12 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
   `IDCompositionVisual3::SetOpacity2` panel opacity binding。Composition probe 现在也对齐 Direct2D fallback
   的 shadow outset geometry：surface 包含 renderer-owned outset，panel/content 坐标保持 inset。但还未绘制
   最终 material/shadow/animation，也未切换默认 backend。当前 composition shadow surface 只验证独立
-  `shadow` visual 分层和 tapered shadow pass plumbing，不代表最终阴影质感。Icon visual 已绑定静态 opacity
-  animation probe，并会按状态 icon plan 切换 state-driven opacity animation profile；这只证明 animation binding
-  和状态路由可用，不代表 transform/scale/rotate 状态 icon 动画完成。`SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_VISIBLE`
-  是本地 QA 用 manual visible backend gate；默认仍走 Direct2D per-pixel fallback，不能据此升级 capability。
+  `shadow` visual 分层和 tapered shadow pass plumbing，不代表最终阴影质感。Icon glyph 已从 panel surface
+  拆到独立 icon surface，`icon` visual 会按状态 icon plan 切换 looping state-driven opacity animation profile；
+  这只证明独立 icon surface、animation binding 和状态路由可用，不代表 transform/scale/rotate 状态 icon 动画完成。
+  Composition text/icon surface 使用 Direct2D 默认 text antialiasing，不再强制 grayscale。
+  `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_VISIBLE` 是本地 QA 用 manual visible backend gate；默认仍走 Direct2D
+  per-pixel fallback，不能据此升级 capability。
 - Cross-user 第二账号隔离验证延后；代码已有 user/session scoped pipe/mutex 方向，但不同用户实机
   smoke 未完成。
 - Windows release-grade 验收仍缺 multi-monitor、remote desktop/UAC/elevation、更多目标应用、
@@ -60,10 +62,10 @@ Windows-first core runtime 收尾；GUI/Tauri PoC 已从当前 runtime 分支移
 - `cargo test --target x86_64-pc-windows-msvc`
 - `cargo build --target x86_64-pc-windows-msvc`
 - 必要时补 `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings`
-- `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE=1 cargo test --target x86_64-pc-windows-msvc
+- `SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE=1 SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_VISIBLE=1 cargo test --target x86_64-pc-windows-msvc
   overlay::windows::tests::runtime_smoke_creates_shows_hides_and_quits_window -- --ignored --nocapture`
-  已通过，可验证 DirectComposition probe 初始化、panel surface draw 和 DirectWrite text draw 不破坏
-  Direct2D fallback。
+  已通过，可验证 DirectComposition visible probe 初始化、panel/icon surface draw、looping icon opacity animation
+  binding 和 DirectWrite text draw 不破坏 Direct2D fallback。
 
 ## 已知风险
 

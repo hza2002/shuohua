@@ -36,11 +36,13 @@ Windows 状态图标路线已经从手绘 primitive 转向系统 icon font：`Se
 Windows Composition backend 目前仍是 gated probe：`SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_PROBE` 只初始化旁路
 probe，`SHUOHUA_WINDOWS_OVERLAY_COMPOSITION_VISIBLE` 是本地 QA 用 manual visible backend gate。它已能创建
 DirectComposition visual tree、绑定/resize panel surface，并用 Direct2D-on-DXGI-surface 绘制圆角半透明
-panel、系统 icon glyph 和文本；还验证了 compositor-owned rounded clipping 和 panel opacity binding。
+panel 和文本；icon glyph 已拆到独立 icon surface，由 `icon` visual 持有；还验证了 compositor-owned
+rounded clipping 和 panel opacity binding。
 Composition probe 与 Direct2D fallback 共用 shadow outset geometry：surface 包含 renderer-owned outset，
 panel/content 坐标保持 inset。Composition shadow surface 已绑定到独立 `shadow` visual，用于验证分层 plumbing。
 Icon visual 已绑定静态 opacity animation probe，用于验证 composition static animation binding。
-Composition probe 会按状态 icon plan 切换 state-driven opacity animation；transform/scale/rotate 动画仍未实现。
+Composition probe 会按状态 icon plan 切换 looping state-driven opacity animation；transform/scale/rotate 动画仍未实现。
+Composition text/icon surface 使用 Direct2D 默认 text antialiasing，不再强制 grayscale。
 默认可见 renderer 仍是 Direct2D per-pixel fallback，最终 shadow/material/animation 和默认 backend 切换尚未完成。
 
 `renderer.rs` 也持有 renderer capability skeleton：静态描述当前 renderer 是否可用、材质降级、

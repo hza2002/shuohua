@@ -338,13 +338,16 @@ Phase 10bg infrastructure status:
   `IDCompositionVisual3`. The probe uses the same shadow outset geometry as the Direct2D fallback: the composition
   surface includes the renderer-owned outset while panel/content coordinates stay inset. A separate composition shadow surface is
   also bound to the reserved `shadow` visual and draws tapered ambient/key shadow passes only to
-  validate compositor layering. The icon visual also has a static animation binding probe through
-  `IDCompositionVisual3::SetOpacity`, separate from the earlier root offset animation probe. It now also swaps a
-  state-driven opacity animation profile when the overlay state icon plan changes, still without transform/scale/
-  rotate animation. This proves Direct2D/DirectWrite-on-composition-surface plus geometry/clip/opacity/shadow-surface/
-  animation binding plumbing only; final material, final shadow tuning, full dynamic icon animation, text-quality
-  tuning, and default backend switching remain separate work. The manual visible backend gate is for local visual QA
-  only and must not be treated as a capability upgrade.
+  validate compositor layering. The icon visual keeps the earlier static animation binding probe and now owns an
+  independent icon surface rather than drawing the glyph into the panel surface, so `IDCompositionVisual3::SetOpacity`
+  now animates real icon content. It swaps a looping state-driven opacity animation profile when the overlay state
+  icon plan changes, still without transform/scale/rotate animation. Composition text/icon drawing now leaves text
+  antialiasing at Direct2D default instead of forcing grayscale, so Windows can choose the appropriate rendering
+  mode for the target surface. This proves
+  Direct2D/DirectWrite-on-composition-surface plus geometry/clip/opacity/shadow-surface/animation binding plumbing
+  only; final material, final shadow tuning, full dynamic icon animation, text-quality tuning, and default backend
+  switching remain separate work. The manual visible backend gate is for local visual QA only and must not be treated
+  as a capability upgrade.
 - `src/overlay/windows/icons.rs` records the state icon plan using Windows official icon fonts:
   `Segoe Fluent Icons` first, `Segoe MDL2 Assets` fallback. Icon bodies should come from system glyphs; animation
   belongs to composition opacity/scale/rotate/translate once that backend is enabled.

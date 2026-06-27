@@ -98,12 +98,12 @@ impl WindowsRendererBackend {
             self.direct2d
                 .as_ref()
                 .and_then(|renderer| renderer.text_plan(model, cfg, metrics, panel_width).ok())
-                .map(|text| WindowsOverlayScene::from_model(model, cfg, text))
+                .map(|text| WindowsOverlayScene::from_model(model, cfg, panel_width, text))
         } else {
             None
         };
         if let (Some(composition), Some(scene)) = (&self.composition, composition_scene.as_ref()) {
-            if let Err(error) = composition.update_reserved_scene(scene, metrics, panel_width) {
+            if let Err(error) = composition.update_reserved_scene(scene, metrics) {
                 tracing::warn!(
                     ?error,
                     "DirectComposition reserved scene update failed; keeping fallback renderer"

@@ -79,18 +79,12 @@ impl Direct2dRenderer {
         panel_width_logical: f64,
     ) -> Result<()> {
         let text_plan = self.text_plan(model, cfg, metrics, panel_width_logical)?;
-        let scene = WindowsOverlayScene::from_model(model, cfg, text_plan);
+        let scene = WindowsOverlayScene::from_model(model, cfg, panel_width_logical, text_plan);
         let panel_width = metrics.px(panel_width_logical).max(1);
-        let panel_height = metrics
-            .px(
-                L::overlay_frames(panel_width_logical, cfg.core.text_scale, scene.text.lines)
-                    .height,
-            )
-            .max(1);
+        let panel_height = metrics.px(scene.frames.height).max(1);
         let outset = metrics.px(super::DIRECT2D_SHADOW_OUTSET).max(0);
         let width = panel_width + outset * 2;
         let height = panel_height + outset * 2;
-        let frames = L::overlay_frames(panel_width_logical, cfg.core.text_scale, scene.text.lines);
         self.ensure_surface(width, height, metrics)?;
         let surface = self.surface.as_ref().context("Direct2D layered surface")?;
         surface.clear_pixels();
@@ -155,7 +149,7 @@ impl Direct2dRenderer {
                 &surface.target,
                 &icon_format,
                 inset_rect(
-                    metrics.rect_f_from_frame(frames.height, frames.row.icon),
+                    metrics.rect_f_from_frame(scene.frames.height, scene.frames.row.icon),
                     outset,
                 ),
                 scene.state_icon,
@@ -168,7 +162,7 @@ impl Direct2dRenderer {
                 &scene.state_label,
                 text_rect(
                     inset_rect(
-                        metrics.rect_f_from_frame(frames.height, frames.row.status),
+                        metrics.rect_f_from_frame(scene.frames.height, scene.frames.row.status),
                         outset,
                     ),
                     metrics,
@@ -183,7 +177,7 @@ impl Direct2dRenderer {
                 &scene.stats,
                 text_rect(
                     inset_rect(
-                        metrics.rect_f_from_frame(frames.height, frames.row.stats),
+                        metrics.rect_f_from_frame(scene.frames.height, scene.frames.row.stats),
                         outset,
                     ),
                     metrics,
@@ -198,7 +192,7 @@ impl Direct2dRenderer {
                 &scene.meta,
                 text_rect(
                     inset_rect(
-                        metrics.rect_f_from_frame(frames.height, frames.row.meta),
+                        metrics.rect_f_from_frame(scene.frames.height, scene.frames.row.meta),
                         outset,
                     ),
                     metrics,
@@ -213,7 +207,7 @@ impl Direct2dRenderer {
                 &scene.text.text,
                 text_rect(
                     inset_rect(
-                        metrics.rect_f_from_frame(frames.height, frames.body),
+                        metrics.rect_f_from_frame(scene.frames.height, scene.frames.body),
                         outset,
                     ),
                     metrics,

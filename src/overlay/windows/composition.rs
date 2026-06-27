@@ -61,10 +61,8 @@ impl CompositionRenderer {
         &self,
         scene: &WindowsOverlayScene,
         metrics: WindowMetrics,
-        panel_width: f64,
     ) -> Result<()> {
-        self.tree
-            .apply_scene_contract(scene, metrics, panel_width)?;
+        self.tree.apply_scene_contract(scene, metrics)?;
         unsafe {
             self.device
                 .Commit()
@@ -137,23 +135,24 @@ impl CompositionVisualTree {
         &self,
         scene: &WindowsOverlayScene,
         metrics: WindowMetrics,
-        panel_width: f64,
     ) -> Result<()> {
-        let _ = scene;
-        let panel_offset = metrics.px(0.0) as f32;
-        let body_width = metrics.px(crate::overlay::layout::body_width(panel_width)) as f32;
+        let icon = visual_offset(metrics, scene.frames.height, scene.frames.row.icon);
+        let status = visual_offset(metrics, scene.frames.height, scene.frames.row.status);
+        let stats = visual_offset(metrics, scene.frames.height, scene.frames.row.stats);
+        let meta = visual_offset(metrics, scene.frames.height, scene.frames.row.meta);
+        let body = visual_offset(metrics, scene.frames.height, scene.frames.body);
         unsafe {
             self.shadow
-                .SetOffsetX2(panel_offset)
+                .SetOffsetX2(0.0)
                 .context("IDCompositionVisual::SetOffsetX shadow")?;
             self.shadow
-                .SetOffsetY2(panel_offset)
+                .SetOffsetY2(0.0)
                 .context("IDCompositionVisual::SetOffsetY shadow")?;
             self.panel
-                .SetOffsetX2(panel_offset)
+                .SetOffsetX2(0.0)
                 .context("IDCompositionVisual::SetOffsetX panel")?;
             self.panel
-                .SetOffsetY2(panel_offset)
+                .SetOffsetY2(0.0)
                 .context("IDCompositionVisual::SetOffsetY panel")?;
             self.content
                 .SetOffsetX2(0.0)
@@ -161,15 +160,48 @@ impl CompositionVisualTree {
             self.content
                 .SetOffsetY2(0.0)
                 .context("IDCompositionVisual::SetOffsetY content")?;
+            self.icon
+                .SetOffsetX2(icon.0)
+                .context("IDCompositionVisual::SetOffsetX icon")?;
+            self.icon
+                .SetOffsetY2(icon.1)
+                .context("IDCompositionVisual::SetOffsetY icon")?;
+            self.status
+                .SetOffsetX2(status.0)
+                .context("IDCompositionVisual::SetOffsetX status")?;
+            self.status
+                .SetOffsetY2(status.1)
+                .context("IDCompositionVisual::SetOffsetY status")?;
+            self.stats
+                .SetOffsetX2(stats.0)
+                .context("IDCompositionVisual::SetOffsetX stats")?;
+            self.stats
+                .SetOffsetY2(stats.1)
+                .context("IDCompositionVisual::SetOffsetY stats")?;
+            self.meta
+                .SetOffsetX2(meta.0)
+                .context("IDCompositionVisual::SetOffsetX meta")?;
+            self.meta
+                .SetOffsetY2(meta.1)
+                .context("IDCompositionVisual::SetOffsetY meta")?;
             self.body
-                .SetOffsetX2(body_width.max(0.0) * 0.0)
+                .SetOffsetX2(body.0)
                 .context("IDCompositionVisual::SetOffsetX body")?;
             self.body
-                .SetOffsetY2(0.0)
+                .SetOffsetY2(body.1)
                 .context("IDCompositionVisual::SetOffsetY body")?;
         }
         Ok(())
     }
+}
+
+fn visual_offset(
+    metrics: WindowMetrics,
+    surface_height: f64,
+    frame: crate::overlay::layout::LayoutFrame,
+) -> (f32, f32) {
+    let top = surface_height - frame.y - frame.h;
+    (metrics.px(frame.x) as f32, metrics.px(top) as f32)
 }
 
 fn create_visual(device: &IDCompositionDevice, name: &'static str) -> Result<IDCompositionVisual> {

@@ -34,6 +34,8 @@ asr_provider_init = "ASR provider could not be initialized"
 "voice.stop_delay_ms.description" = "Milliseconds of tail audio kept after stopping."
 "voice.record_audio.description" = "off=disabled; lossless=FLAC; compact=AAC 32 kbps, about 75% smaller than FLAC"
 "voice.auto_paste.description" = "Paste recognized text automatically after recognition."
+"voice.preprocess.description" = "Microphone audio preprocessing settings."
+"voice.preprocess.backend.description" = "Preprocessing backend: apple uses macOS system voice processing capture; off disables preprocessing and uses raw capture."
 "voice.vad.description" = "Voice activity detection settings."
 "voice.vad.backend.description" = "VAD backend: off disables pause/resume, silero enables local VAD."
 "voice.vad.threshold.description" = "Silero VAD speech threshold."
@@ -316,6 +318,7 @@ about = "macOS voice input assistant"
 [cli.help.doctor]
 about = "Check local environment and config"
 runtime = "Include runtime checks for configured ASR and LLM components"
+apple_capture_smoke = "Capture about 800ms of real audio to check the Apple voice-processing capture path"
 
 [cli.help.config_template]
 about = "Generate reference config templates from the built-in registry"

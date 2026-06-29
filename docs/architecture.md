@@ -30,7 +30,8 @@
 2. trigger 首次命中 = toggle ON：runtime 取 frontmost app → `daemon::session_start` 按 `[profile]` 路由选 profile → 构造 `SessionParams` → spawn `finish::run_recording`。profile/post/asr 初始化失败直接发 overlay error，不进录音 task。
 3. trigger 二次命中 = Stop；cancel hotkey = Cancel（+ overlay `Dismiss` 清 lingering）。
 4. 录音 task 内：cpal stream → provider session → post chain → dispatch → history → StateStore/Overlay/UDS fanout（见 [voice](modules/voice.md)）。
-5. 热重载：notify watcher 监听 `~/.config/shuohua/`，`config.toml`/`theme/*.toml` 触发 parse + watch 广播给 overlay/i18n/hotkey；UDS `reload_config` 复用同一入口（见 [config](modules/config.md)）。
+5. overlay 交互反向流：AppKit 点击 profile picker → `OverlayAction::BindProfile` → tokio runtime task → `toml_edit` 原子替换 `config.toml` → `reload_now()` 广播；watcher 可能再次捕获 rename，但 subscriber 先 diff。
+6. 热重载：notify watcher 监听 `~/.config/shuohua/`，`config.toml`/`theme/*.toml` 触发 parse + watch 广播给 overlay/i18n/hotkey；UDS `reload_config` 复用同一入口（见 [config](modules/config.md)）。
 
 ## 3. 模块边界与顶层树
 
@@ -80,7 +81,7 @@ External edits 语义是 eventually consistent：watcher 事件或下一次 requ
 | ObjC 互操作 | `objc2` 0.6 + app-kit/foundation 0.3 | 现役标准 |
 | CGEventTap | `core-graphics`(≥0.25) + `core-foundation` | **0.25 `CallbackResult::Drop` 是 suppress 落地依赖** |
 | 录音 | `cpal` | 简单，已验证稳定 |
-| VAD | Silero via `voice_activity_detector`/ORT | WebRTC/RMS 误判高 |
+| VAD | Silero via `voice_activity_detector`/ORT | 能量阈值类方案误判高 |
 | PCM 通道 | `tokio::sync::mpsc::unbounded` | 已在录音路径验证 |
 | 唯一 ID | `ulid` | 26 字符含时序，history record id |
 | WebSocket | `tokio-tungstenite` + `native-tls` | Doubao 用；macOS 原生 Security，无 rustls 配置负担 |

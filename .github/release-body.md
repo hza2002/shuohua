@@ -38,4 +38,4 @@ shuo doctor
 
 ## 变更内容
 
-见 [CHANGELOG.md](https://github.com/hza2002/shuohua/blob/main/CHANGELOG.md) 本版本对应段落。
+<!-- CHANGELOG_SECTION -->

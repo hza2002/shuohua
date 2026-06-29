@@ -29,6 +29,7 @@ sha2            = "0.10"
 tar             = "0.4"
 time            = { version = "0.3", features = ["macros", "serde-human-readable", "formatting", "local-offset"] }
 toml            = "0.8"
+toml_edit       = "0.22"
 async-trait     = "0.1"
 thiserror       = "2"
 uuid            = { version = "1", features = ["v4"] }
@@ -62,6 +63,7 @@ objc2-app-kit   = { version = "0.3", features = [
     "NSImage",
     "NSImageView",
     "NSCell",
+    "NSClipView",
     "NSImageCell",
     "NSPanel",
     "NSParagraphStyle",
@@ -69,7 +71,15 @@ objc2-app-kit   = { version = "0.3", features = [
     "NSResponder",
     "NSRunningApplication",
     "NSScreen",
+    "NSScrollView",
+    "NSScroller",
+    "NSLayoutManager",
+    "NSText",
+    "NSTextContainer",
     "NSTextField",
+    "NSTextStorage",
+    "NSTextView",
+    "NSTrackingArea",
     "NSView",
     "NSVisualEffectView",
     "NSWorkspace",

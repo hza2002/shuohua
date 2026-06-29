@@ -27,8 +27,17 @@ use crate::overlay::OverlayState;
 
 const RADAR_RINGS: usize = 3;
 const RADAR_PERIOD: f64 = 1.8;
+const RADAR_LINE_W: f64 = 1.5;
+const RADAR_INSET: f64 = RADAR_LINE_W;
+const RADAR_START_SCALE: f64 = 0.2;
+const RADAR_END_SCALE: f64 = 1.0;
+const RADAR_START_ALPHA: f64 = 0.85;
 const DOT_COUNT: usize = 3;
 const DOT_PERIOD: f64 = 0.5;
+const DOT_DIAMETER_RATIO: f64 = 0.2;
+const DOT_MIN_DIAMETER: f64 = 3.0;
+const DOT_SPACING_RATIO: f64 = 1.7;
+const DOT_BOUNCE_RATIO: f64 = 0.9;
 const BAR_COUNT: usize = 4;
 /// 各竖条相对电平的高度权重（中间高、两侧低），让电平条有「波形」轮廓。
 const BAR_SHAPE: [f64; BAR_COUNT] = [0.55, 0.95, 1.0, 0.7];
@@ -38,12 +47,24 @@ const BAR_SMOOTH: f64 = 0.4;
 const BAR_FLOOR: f64 = 0.18;
 /// 每条独立摆动的基础角速度（rad/s），错相位形成跳动波浪。
 const BAR_WIGGLE_SPEED: f64 = 7.0;
+const BAR_WIGGLE_BASE: f64 = 0.6;
+const BAR_WIGGLE_SWING: f64 = 0.4;
+const BAR_PHASE_STEP: f64 = 1.3;
+const BAR_WIDTH_DIVISOR: f64 = 2.0;
+const BAR_MIN_W: f64 = 2.0;
+const BAR_MAX_HEIGHT_RATIO: f64 = 0.9;
 /// 人声感知响度（dB）映射窗口：低于地板算静音，高于顶算满格。把线性 RMS 转成对数后
 /// 拉伸到 0–1，正常说话才能填满量程（线性 RMS 很小，直接用几乎不动）。
 const LOUD_FLOOR_DB: f64 = -55.0;
 const LOUD_TOP_DB: f64 = -12.0;
 /// 效果切换淡入时长。
 const FADE_IN: f64 = 0.18;
+const HALO_START_SCALE: f64 = 0.55;
+const HALO_END_SCALE: f64 = 1.6;
+const HALO_PERIOD: f64 = 2.4;
+const HALO_HEAD_ALPHA: f64 = 0.5;
+const COMET_LINE_W: f64 = 2.5;
+const COMET_PERIOD: f64 = 0.9;
 
 /// 彗星尾 spinner：conic 渐变（头亮尾淡）被圆环 mask 裁成环带，整体旋转。
 struct Comet {
@@ -150,14 +171,28 @@ impl IconFx {
             halo.setStartPoint(NSPoint::new(0.5, 0.5));
             halo.setEndPoint(NSPoint::new(1.0, 1.0));
             // 放大 + 淡出的心跳脉冲。
-            halo.add_loop(ns_string!("transform.scale"), 0.55, 1.6, 2.4, false, 0.0);
-            halo.add_loop(ns_string!("opacity"), 0.55, 0.0, 2.4, false, 0.0);
+            halo.add_loop(
+                ns_string!("transform.scale"),
+                HALO_START_SCALE,
+                HALO_END_SCALE,
+                HALO_PERIOD,
+                false,
+                0.0,
+            );
+            halo.add_loop(
+                ns_string!("opacity"),
+                HALO_START_SCALE,
+                0.0,
+                HALO_PERIOD,
+                false,
+                0.0,
+            );
             self.host.addSublayer(&halo);
             self.halo = Some(halo);
         }
         let halo = self.halo.as_ref().unwrap();
         halo.setFrame(bounds);
-        let head = color_from_rgb_alpha(color_rgb, 0.5).CGColor();
+        let head = color_from_rgb_alpha(color_rgb, HALO_HEAD_ALPHA).CGColor();
         let edge = color_from_rgb_alpha(color_rgb, 0.0).CGColor();
         let colors = NSArray::from_slice(&[as_any(&head), as_any(&edge)]);
         unsafe { halo.setColors(Some(&colors)) };
@@ -172,20 +207,20 @@ impl IconFx {
             for i in 0..RADAR_RINGS {
                 let ring = CAShapeLayer::new();
                 ring.setFillColor(None);
-                ring.setLineWidth(1.5);
+                ring.setLineWidth(RADAR_LINE_W);
                 let offset = RADAR_PERIOD * i as f64 / RADAR_RINGS as f64;
                 // 从中心小圈放大到满，同时淡出 → 一圈圈向外发。
                 ring.add_loop(
                     ns_string!("transform.scale"),
-                    0.2,
-                    1.0,
+                    RADAR_START_SCALE,
+                    RADAR_END_SCALE,
                     RADAR_PERIOD,
                     false,
                     offset,
                 );
                 ring.add_loop(
                     ns_string!("opacity"),
-                    0.85,
+                    RADAR_START_ALPHA,
                     0.0,
                     RADAR_PERIOD,
                     false,
@@ -196,7 +231,8 @@ impl IconFx {
             }
             self.radar = Some(rings);
         }
-        let path = unsafe { CGPath::with_ellipse_in_rect(inset(bounds, 1.5), std::ptr::null()) };
+        let path =
+            unsafe { CGPath::with_ellipse_in_rect(inset(bounds, RADAR_INSET), std::ptr::null()) };
         let stroke = color_from_rgb_alpha(color_rgb, 1.0).CGColor();
         for ring in self.radar.as_ref().unwrap() {
             ring.setFrame(bounds);
@@ -209,8 +245,8 @@ impl IconFx {
     // ── Thinking：跳动三点 ──────────────────────────────────────────
 
     fn show_dots(&mut self, bounds: NSRect, color_rgb: u32, activated: bool) {
-        let diameter = (bounds.size.height * 0.2).max(3.0);
-        let spacing = diameter * 1.7;
+        let diameter = (bounds.size.height * DOT_DIAMETER_RATIO).max(DOT_MIN_DIAMETER);
+        let spacing = diameter * DOT_SPACING_RATIO;
         if self.dots.is_none() {
             let mut dots = Vec::with_capacity(DOT_COUNT);
             for i in 0..DOT_COUNT {
@@ -220,7 +256,7 @@ impl IconFx {
                 dot.add_loop(
                     ns_string!("transform.translation.y"),
                     0.0,
-                    diameter * 0.9,
+                    diameter * DOT_BOUNCE_RATIO,
                     DOT_PERIOD,
                     true,
                     offset,
@@ -257,9 +293,9 @@ impl IconFx {
     // ── Recording：音频电平条 ───────────────────────────────────────
 
     fn show_bars(&mut self, bounds: NSRect, color_rgb: u32, level: f32, activated: bool) {
-        let bar_w = (bounds.size.width / (BAR_COUNT as f64 * 2.0)).max(2.0);
+        let bar_w = (bounds.size.width / (BAR_COUNT as f64 * BAR_WIDTH_DIVISOR)).max(BAR_MIN_W);
         let gap = bar_w;
-        let max_h = bounds.size.height * 0.9;
+        let max_h = bounds.size.height * BAR_MAX_HEIGHT_RATIO;
         if self.bars.is_none() {
             let mut bars = Vec::with_capacity(BAR_COUNT);
             for _ in 0..BAR_COUNT {
@@ -283,7 +319,8 @@ impl IconFx {
         let total_w = BAR_COUNT as f64 * bar_w + (BAR_COUNT as f64 - 1.0) * gap;
         let left = cx - total_w / 2.0;
         for (i, bar) in self.bars.as_ref().unwrap().iter().enumerate() {
-            let wiggle = 0.6 + 0.4 * (t * BAR_WIGGLE_SPEED + i as f64 * 1.3).sin();
+            let wiggle = BAR_WIGGLE_BASE
+                + BAR_WIGGLE_SWING * (t * BAR_WIGGLE_SPEED + i as f64 * BAR_PHASE_STEP).sin();
             let v = (base * BAR_SHAPE[i] * wiggle).clamp(0.0, 1.0);
             let h = (v * max_h).clamp(bar_w, max_h);
             let x = left + i as f64 * (bar_w + gap);
@@ -310,7 +347,7 @@ impl IconFx {
 
             let mask = CAShapeLayer::new();
             mask.setFillColor(None);
-            mask.setLineWidth(2.5);
+            mask.setLineWidth(COMET_LINE_W);
             // mask 用 alpha 通道裁剪，描边须不透明；颜色本身不显示。
             mask.setStrokeColor(Some(&color_from_rgb_alpha(0xFFFFFF, 1.0).CGColor()));
             unsafe { gradient.setMask(Some(&mask)) };
@@ -319,7 +356,7 @@ impl IconFx {
                 ns_string!("transform.rotation.z"),
                 0.0,
                 std::f64::consts::TAU,
-                0.9,
+                COMET_PERIOD,
                 false,
                 0.0,
             );
@@ -330,7 +367,7 @@ impl IconFx {
         comet.gradient.setFrame(bounds);
         comet.mask.setFrame(bounds);
         let mask_path =
-            unsafe { CGPath::with_ellipse_in_rect(inset(bounds, 2.5), std::ptr::null()) };
+            unsafe { CGPath::with_ellipse_in_rect(inset(bounds, COMET_LINE_W), std::ptr::null()) };
         comet.mask.setPath(Some(&mask_path));
         // 头亮尾淡：满色扫到透明，沿环带形成彗星尾。
         let head = color_from_rgb_alpha(color_rgb, 1.0).CGColor();

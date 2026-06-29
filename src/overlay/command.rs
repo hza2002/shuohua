@@ -22,6 +22,10 @@ pub enum OverlayCmd {
     SetApp {
         bundle_id: Option<String>,
         app_name: Option<String>,
+        /// 当前选中的 profile 名（meta 行前缀，加粗高亮显示）。
+        profile: String,
+        /// 可供当前 bundle id 绑定的 profile 列表。
+        profiles: Vec<ProfileChoice>,
         chain_summary: String,
     },
     SetText {
@@ -97,9 +101,37 @@ impl OverlayState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextKind {
     Partial,
+    /// 当前无生产方构造（LLM handoff 不再推 Final 到 overlay），但 model 仍处理
+    /// 该变体且测试覆盖，保留为公开 API 的一部分。
+    #[allow(dead_code)]
     Final,
     /// 终态错误文本，覆盖 partial/final，红字显示，5s 后随 overlay 自动 hide。
     Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileChoice {
+    pub id: String,
+    pub display_name: String,
+    pub asr_provider: String,
+    pub chain_summary: String,
+}
+
+impl ProfileChoice {
+    #[cfg(test)]
+    pub(crate) fn test(name: &str) -> Self {
+        Self {
+            id: name.to_string(),
+            display_name: name.to_string(),
+            asr_provider: "fake".to_string(),
+            chain_summary: "test".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OverlayAction {
+    BindProfile { bundle_id: String, profile: String },
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +146,16 @@ pub struct OverlayReceiver {
     wake: mpsc::UnboundedReceiver<()>,
 }
 
+#[derive(Debug, Clone)]
+pub struct OverlayActionHandle {
+    tx: mpsc::UnboundedSender<OverlayAction>,
+}
+
+#[derive(Debug)]
+pub struct OverlayActionReceiver {
+    rx: mpsc::UnboundedReceiver<OverlayAction>,
+}
+
 #[derive(Debug, Default)]
 struct OverlayMailbox {
     queue: VecDeque<OverlayCmd>,
@@ -121,6 +163,28 @@ struct OverlayMailbox {
     latest_partial: Option<OverlayCmd>,
     latest_level: Option<OverlayCmd>,
     wake_pending: bool,
+}
+
+impl OverlayActionHandle {
+    pub fn channel() -> (Self, OverlayActionReceiver) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Self { tx }, OverlayActionReceiver { rx })
+    }
+
+    pub fn send(&self, action: OverlayAction) {
+        let _ = self.tx.send(action);
+    }
+}
+
+impl OverlayActionReceiver {
+    pub async fn recv(&mut self) -> Option<OverlayAction> {
+        self.rx.recv().await
+    }
+
+    #[cfg(test)]
+    pub fn try_recv(&mut self) -> Result<OverlayAction, mpsc::error::TryRecvError> {
+        self.rx.try_recv()
+    }
 }
 
 impl OverlayHandle {
@@ -337,5 +401,23 @@ mod tests {
         }
 
         assert!(saw_dismiss);
+    }
+
+    #[test]
+    fn overlay_action_channel_delivers_bind_profile() {
+        let (tx, mut rx) = OverlayActionHandle::channel();
+
+        tx.send(OverlayAction::BindProfile {
+            bundle_id: "com.example.App".to_string(),
+            profile: "coding".to_string(),
+        });
+
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            OverlayAction::BindProfile {
+                bundle_id: "com.example.App".to_string(),
+                profile: "coding".to_string(),
+            }
+        );
     }
 }

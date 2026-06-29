@@ -6,6 +6,8 @@
 //!
 //! 顶层入口：[`finish::run_recording`]，一次快捷键起停的完整生命周期。
 
+#[cfg(target_os = "macos")]
+pub(crate) mod apple_source;
 pub(crate) mod audio;
 pub(crate) mod capture;
 pub mod dispatch;

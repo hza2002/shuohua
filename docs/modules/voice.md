@@ -19,6 +19,12 @@ voice 只负责把一次 recording 的 capture/ASR/post 结果翻译成 `History
 
 `engine::run` 只负责 recorder 启动这一个 `!Send` 边界，其余在 `run_with_recorder`。测试用 `RecordingStream::for_test` 不依赖 cpal 即可驱动整条生命周期（`engine_lifecycle_tests.rs`）。
 
+capture backend 只允许在 `engine::CaptureStream` 边界分叉。默认 backend 是 Apple VP；
+`voice.preprocess.backend = "off"` 走 cpal 原始采集。两者都必须向 engine 提供同一个
+canonical 契约：16 kHz mono i16 PCM、terminal error 与正常 EOF 可区分、
+stop 后可 drain residual。不要把 Apple helper、TCC、AVAudioEngine 等平台细节泄漏到
+VAD、ASR、finalize、finish 或 post/history。
+
 ## 为什么这么写（别"简化"掉）
 
 - **控制信号 = `SessionControl`，两个 level-triggered 终态闩**（`stop` / `cancel`，各是一个 `CancellationToken`），按消费模式分发，**别退回 `watch` + `borrow_and_update` 的边沿语义**：
@@ -35,20 +41,26 @@ voice 只负责把一次 recording 的 capture/ASR/post 结果翻译成 `History
 `RecordingMode::{Continuous, VadPause}` 是固定模式，运行态由 engine 内的 Active/Idle 表达：
 
 - **VadPause 仅当** `[voice.vad] backend = "silero"` **且** `asr/<provider>.toml.idle_pause = true` 同时成立，否则 Continuous。
-- **Continuous**：始终向一个 provider session 发 PCM，不构造 Silero/timeline/pre-roll，不进 Idle，`sessions[]` ≤ 1。
-- **VadPause**：Active↔Idle 自动切换。静音关 ASR（final 追加到 `pending_output`），有声开新 session（先 dump pre-roll 再喂当前帧）。段间无分隔符——provider 保证 emit 的 segment 直接 concat 即最终文本。
+- **Continuous**：capture 与初始 provider session 同时启动，始终向一个 provider session 发 PCM，不构造 Silero/timeline/pre-roll，不进 Idle，`sessions[]` ≤ 1。
+- **VadPause**：从 Idle-listening 开始：只启动 capture + Silero/timeline/pre-roll，不打开 provider session。VAD `SpeechStarted` 后才打开第一个/下一个 ASR session（先 dump pre-roll 再喂当前帧）并进入 Active；VAD `SilenceStarted` 或 provider `Done` 后关闭当前 session 回 Idle。段间无分隔符——provider 保证 emit 的 segment 直接 concat 即最终文本。
 
 **provider 主动 Done**：任一模式下 provider 自发 `AsrEvent::Done` 都视为该 session 已结束；engine 不再发 `is_last`、不再等第二个 Done。VadPause 在此基础上转 Idle 等下一段，避免被当成 `asr_timeout`。
 
 ## 本模块持有的不变量
 
 - **停止必 drain residual + `stop_delay_ms`**（默认值见 `src/config/main.rs`），否则尾字被切。
-- **Idle 录音资源按模式分**：Continuous 未激活不持 cpal stream（避免 always-recording / 空闲 CPU 开销）；VadPause 的 Idle 继续持有并读 cpal stream 做 VAD/pre-roll，但 **Idle PCM 不发 provider**。
-- **麦克风可用性靠运行时 watchdog，不靠预检**：`recorder::start()` 同步段只校验 cpal build/play；真正判定是主 select 里一个 duration 首帧 watchdog（PCM 全 ≤ `MIN_NONZERO_AMPLITUDE` 判设备不可用，当前值见 `engine.rs`）。阈值不进配置——超过这个窗口几乎一定不是正常设备状态。
+- **Apple capture helper 生命周期跟 daemon 走**：helper server 可在 daemon 生命周期内空闲
+  常驻以避免每次冷启动，但麦克风只能在录音中开启；录音停止、后处理和空闲阶段都不能持有
+  active AVAudioEngine input。daemon stop/退出时 helper 不应残留。
+- **Apple stop/drain 与 cpal 等价**：默认 `backend = "apple"` 虽然没有 raw tap，也不发布 retained
+  audio，但 stop 阶段仍要把 helper 返回的 residual PCM 继续送给 ASR，不能把 stop 简化成
+  kill helper 或丢弃队列。
+- **Idle 录音资源按模式分**：Continuous 未激活不持 cpal stream（避免 always-recording / 空闲 CPU 开销）；VadPause 的 Idle 继续持有并读 cpal stream 做 VAD/pre-roll，但 **Idle PCM 不发 provider**，也不计入 `sessions[]`/provider audio。
+- **麦克风可用性靠运行时 watchdog，不靠预检**：`recorder::start()` 同步段只校验 cpal build/play；Continuous 的真正判定是主 select 里一个 duration 首帧 watchdog（PCM 全 ≤ `MIN_NONZERO_AMPLITUDE` 判设备不可用，当前值见 `engine.rs`）。VadPause 初始 Idle 静音是合法状态，不走 no-audio watchdog；只有进入 Active、开始向 ASR 送音频后才适用同类运行时错误语义。阈值不进配置——超过这个窗口几乎一定不是正常设备状态。
 - **Error/Timeout 路径不上屏不写剪贴板**：任意 terminal error → 跳过 post → 跳过 dispatch → history 写失败状态并保留累积 segments。一般 error 写 `status=Error`；ASR finalize 超时写 `status=Timeout` + `error.kind=asr_timeout`。无语音内容的早期失败（启动前失败、ASR 初连失败、watchdog 无音频）只走 overlay/UDS error/log，不写 history。半成品上屏是 bug。
 
 ## 终态与 history 触发
 
-engine 返回后由 finish 决定写不写 history（schema 见 [schema §2](../schema.md)）。「有可归档内容」判据集中在 `voice::capture`，audio（engine）与 history record 构造（finish）共用以保持一致：喂过音频或有识别文本才落 history + retained audio；toggle 后立即 cancel、什么都没说则都不留，避免 TUI 无法关联的孤儿音频。
+engine 返回后由 finish 决定写不写 history（schema 见 [schema §2](../schema.md)）。「有可归档内容」判据集中在 `voice::capture`，audio（engine）与 history record 构造（finish）共用以保持一致：喂过 provider 音频或有识别文本才落 history + retained audio；toggle 后立即 cancel、VadPause 启动后一直没说话就 stop/cancel，都不留 history 或 retained audio，避免 TUI 无法关联的孤儿音频。
 
 finish append 时只调用 `HistoryService::append`。append 成功后由 history 模块发布 history event 并维护内存统计；append 失败只走 schema 中的 `history_append` error/Notice 语义，不回滚已经完成的 dispatch。

@@ -107,6 +107,10 @@ mod tests {
         let config = crate::config::main::parse(&body).unwrap();
 
         assert_eq!(
+            config.voice.preprocess.backend,
+            crate::config::VoicePreprocessBackend::Apple
+        );
+        assert_eq!(
             config.voice.vad.backend,
             crate::config::VoiceVadBackend::Silero
         );
@@ -133,6 +137,24 @@ mod tests {
             .get("agent")
             .unwrap()
             .contains(&"com.microsoft.VSCode".to_string()));
+    }
+
+    #[test]
+    fn config_template_documents_preprocess_options_without_unimplemented_backends() {
+        let body = render_with_lang(
+            registry()
+                .iter()
+                .find(|template| template.id == "config")
+                .unwrap(),
+            crate::i18n::Lang::ZhCN,
+        );
+
+        assert!(body.contains("[voice.preprocess]"));
+        assert!(body.contains("backend = \"apple\""));
+        assert!(body.contains("apple 使用 macOS 系统语音处理采集"));
+        assert!(body.contains("off 不做预处理"));
+        assert!(!body.contains("预留"));
+        assert!(!body.contains("reserved"));
     }
 
     #[test]

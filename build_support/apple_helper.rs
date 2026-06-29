@@ -1,5 +1,24 @@
 pub const DEFAULT_MACOS_DEPLOYMENT_TARGET: &str = "15.0";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MacosHelperTarget {
+    pub output_name: &'static str,
+    pub source_path: &'static str,
+}
+
+pub fn macos_helper_targets() -> &'static [MacosHelperTarget] {
+    &[
+        MacosHelperTarget {
+            output_name: "apple_helper",
+            source_path: "src/asr/providers/apple_helper.swift",
+        },
+        MacosHelperTarget {
+            output_name: "apple_capture_helper",
+            source_path: "src/voice/apple_capture_helper.swift",
+        },
+    ]
+}
+
 pub fn should_build_macos_helper(target_os: &str) -> bool {
     target_os == "macos"
 }
@@ -24,6 +43,22 @@ mod tests {
     fn non_macos_targets_skip_swift_helper() {
         assert!(!should_build_macos_helper("linux"));
         assert!(should_build_macos_helper("macos"));
+    }
+
+    #[test]
+    fn helper_targets_include_asr_and_capture_helpers() {
+        let targets = macos_helper_targets();
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].output_name, "apple_helper");
+        assert_eq!(
+            targets[0].source_path,
+            "src/asr/providers/apple_helper.swift"
+        );
+        assert_eq!(targets[1].output_name, "apple_capture_helper");
+        assert_eq!(
+            targets[1].source_path,
+            "src/voice/apple_capture_helper.swift"
+        );
     }
 
     #[test]

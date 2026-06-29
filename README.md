@@ -33,6 +33,7 @@
 - 双击右 Option 开始或停止录音，按 Escape 取消；两个全局快捷键均可修改。
 - 实时显示录音、识别和后处理状态。
 - macOS 15+ 可使用豆包等云端 ASR；macOS 26+ 还可选择 Apple 本地 SpeechAnalyzer。
+- 默认使用 macOS 系统语音处理采集，改善麦克风增益、回声和环境噪声处理。
 - 支持规则和 OpenAI-compatible / Anthropic LLM 后处理链。
 - 可按前台应用选择不同 profile、热词、ASR 和后处理配置。
 - 提供 TUI 状态页、历史记录、配置浏览和诊断。

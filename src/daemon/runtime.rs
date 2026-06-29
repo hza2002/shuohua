@@ -5,7 +5,7 @@ use crate::daemon::active_session::{ActiveSession, ShutdownStopResult};
 use crate::daemon::hotkey_input::HotkeyInput;
 use crate::daemon::session_start;
 use crate::hotkey::{Bindings, HotkeyAction, TrackerSet};
-use crate::overlay::{OverlayCmd, OverlayHandle};
+use crate::overlay::{OverlayAction, OverlayActionReceiver, OverlayCmd, OverlayHandle};
 use crate::platform::daemon::{DaemonPlatform, SystemDaemonPlatform};
 use crate::state::StateStore;
 
@@ -16,6 +16,7 @@ pub(super) async fn run_daemon(
     reload_handle: crate::reload::Handle,
     initial_hotkeys: Bindings,
     overlay: OverlayHandle,
+    overlay_actions: OverlayActionReceiver,
     state_store: StateStore,
 ) -> Result<()> {
     run_daemon_with_platform(
@@ -24,6 +25,7 @@ pub(super) async fn run_daemon(
         reload_handle,
         initial_hotkeys,
         overlay,
+        overlay_actions,
         state_store,
     )
     .await
@@ -35,6 +37,7 @@ async fn run_daemon_with_platform(
     reload_handle: crate::reload::Handle,
     initial_hotkeys: Bindings,
     overlay: OverlayHandle,
+    mut overlay_actions: OverlayActionReceiver,
     state_store: StateStore,
 ) -> Result<()> {
     let history = crate::history::HistoryService::new();
@@ -48,6 +51,12 @@ async fn run_daemon_with_platform(
     let listener = crate::ipc::server::bind_default().await?;
     let socket_path = crate::ipc::server::default_socket_path();
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let reload_for_overlay_actions = reload_handle.clone();
+    tokio::spawn(async move {
+        while let Some(action) = overlay_actions.recv().await {
+            handle_overlay_action(action, &reload_for_overlay_actions).await;
+        }
+    });
     let mut ipc_task = tokio::spawn(crate::ipc::server::run(
         listener,
         state_store.clone(),
@@ -156,6 +165,28 @@ async fn run_daemon_with_platform(
                         session.stop();
                     }
                 }
+            }
+        }
+    }
+}
+
+async fn handle_overlay_action(action: OverlayAction, reload: &crate::reload::Handle) {
+    match action {
+        OverlayAction::BindProfile { bundle_id, profile } => {
+            let path = crate::config::default_path();
+            if let Err(error) =
+                crate::config::profile_write::bind_profile_route(&path, &bundle_id, &profile)
+            {
+                tracing::warn!(
+                    error = ?error,
+                    bundle_id,
+                    profile,
+                    "bind profile route failed"
+                );
+                return;
+            }
+            if let Err(error) = reload.reload_now() {
+                tracing::warn!(error = ?error, "reload after profile route bind failed");
             }
         }
     }

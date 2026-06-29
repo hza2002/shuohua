@@ -87,6 +87,10 @@ const CONFIG_VALUES: &[(&str, TemplateValue)] = &[
         ]),
     ),
     (
+        "voice.preprocess",
+        TemplateValue::Table(&[("backend", TemplateValue::String("apple"))]),
+    ),
+    (
         "voice.vad",
         TemplateValue::Table(&[
             ("backend", TemplateValue::String("silero")),

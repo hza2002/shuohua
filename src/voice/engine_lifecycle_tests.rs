@@ -28,6 +28,7 @@ use crate::state::StateStore;
 use crate::voice::engine::{self, EngineOutcome, RecordingMode, SessionParams};
 use crate::voice::observer::{RecordingObserver, TraceStart};
 use crate::voice::recorder::{FinishMode, RecordingStream};
+use crate::voice::vad::VadFrame;
 use crate::voice::SessionControl;
 
 // ---------- 测试用 provider / session ----------
@@ -152,6 +153,10 @@ fn signal_frame(len: usize) -> Vec<i16> {
     vec![1_000; len]
 }
 
+fn silence_frame(len: usize) -> Vec<i16> {
+    vec![0; len]
+}
+
 fn make_recorder() -> (RecordingStream, mpsc::UnboundedSender<Vec<i16>>) {
     let (tx, rx) = mpsc::unbounded_channel();
     (RecordingStream::for_test(rx), tx)
@@ -166,6 +171,7 @@ fn make_params(
     SessionParams {
         auto_paste: false,
         record_audio: RecordAudioMode::Off,
+        preprocess: crate::config::VoicePreprocessCfg::default(),
         vad_trace: false,
         idle_pause,
         finalize_timeout_ms,
@@ -184,6 +190,8 @@ fn make_params(
         stop_delay_ms: 0,
         hotwords: vec![],
         start_app_context: post::AppContext::default(),
+        profile_name: "test".into(),
+        profile_choices: vec![crate::overlay::ProfileChoice::test("test")],
         post_chain: PostChain {
             name: "test".into(),
             processors: vec![],
@@ -237,6 +245,23 @@ async fn drive_engine(
     .expect("engine.run_with_recorder did not return within 5s")
 }
 
+async fn drive_engine_with_vad_frames(
+    provider: Arc<ScriptedProvider>,
+    params: SessionParams,
+    control: SessionControl,
+    rec: RecordingStream,
+    mode: RecordingMode,
+    frames: VecDeque<VadFrame>,
+) -> Option<EngineOutcome> {
+    let handles = fresh_handles();
+    timeout(
+        Duration::from_secs(5),
+        run_owned_with_vad_frames(provider, params, control, rec, mode, handles, frames),
+    )
+    .await
+    .expect("engine.run_with_recorder did not return within 5s")
+}
+
 async fn run_owned(
     provider: Arc<ScriptedProvider>,
     params: SessionParams,
@@ -259,7 +284,138 @@ async fn run_owned(
     .await
 }
 
+async fn run_owned_with_vad_frames(
+    provider: Arc<ScriptedProvider>,
+    params: SessionParams,
+    control: SessionControl,
+    rec: RecordingStream,
+    mode: RecordingMode,
+    handles: RunHandles,
+    frames: VecDeque<VadFrame>,
+) -> Option<EngineOutcome> {
+    engine::run_with_recorder_and_vad_frames(
+        provider.as_ref(),
+        params,
+        control,
+        rec,
+        handles.recording_id,
+        handles.recording_started_at,
+        handles.recording_started_instant,
+        mode,
+        handles.trace,
+        frames,
+    )
+    .await
+}
+
 // ---------- 实际测试 ----------
+
+/// VadPause 初始静音应保持 Idle，不应提前打开 provider session。
+#[tokio::test]
+async fn vad_pause_initial_silence_stays_idle_and_never_opens_provider() {
+    let provider = Arc::new(ScriptedProvider::new(vec![]));
+
+    let state = StateStore::new();
+    let (overlay, _overlay_rx) = OverlayHandle::channel();
+    let params = make_params(state, Some(overlay), true, 200);
+    let control = SessionControl::new();
+    let (pcm_tx, pcm_rx) = mpsc::unbounded_channel();
+    let (rec, finish_rx) = RecordingStream::for_test_observe(pcm_rx);
+
+    pcm_tx.send(silence_frame(480)).unwrap();
+    pcm_tx.send(silence_frame(480)).unwrap();
+
+    let engine_task = tokio::spawn(drive_engine(
+        provider.clone(),
+        params,
+        control.clone(),
+        rec,
+        RecordingMode::VadPause,
+    ));
+
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(
+        provider.opens(),
+        0,
+        "initial silence in VadPause must not open an ASR provider session"
+    );
+
+    control.request_stop();
+    drop(pcm_tx);
+
+    let outcome = engine_task.await.unwrap().expect("engine returned None");
+    assert!(
+        outcome.terminal_error.is_none(),
+        "{:?}",
+        outcome.terminal_error
+    );
+    assert!(!outcome.cancel_requested);
+    assert!(
+        outcome.sessions.is_empty(),
+        "initial silence is not an ASR session"
+    );
+    assert_eq!(
+        outcome.total_audio_samples, 0,
+        "idle-listening PCM is not provider audio"
+    );
+    let modes: Vec<_> = std::iter::from_fn(|| finish_rx.try_recv().ok()).collect();
+    assert_eq!(
+        modes,
+        vec![FinishMode::Discard],
+        "contentless initial-silence stop must discard retained audio, got {modes:?}"
+    );
+    assert_eq!(provider.opens(), 0);
+}
+
+/// VadPause 初始静音期间取消：无内容丢弃 retained audio，且不打开 provider。
+#[tokio::test]
+async fn vad_pause_initial_silence_cancel_discards_without_opening_provider() {
+    let provider = Arc::new(ScriptedProvider::new(vec![]));
+
+    let state = StateStore::new();
+    let (overlay, _overlay_rx) = OverlayHandle::channel();
+    let params = make_params(state, Some(overlay), true, 200);
+    let control = SessionControl::new();
+    let (pcm_tx, pcm_rx) = mpsc::unbounded_channel();
+    let (rec, finish_rx) = RecordingStream::for_test_observe(pcm_rx);
+
+    pcm_tx.send(silence_frame(480)).unwrap();
+    pcm_tx.send(silence_frame(480)).unwrap();
+
+    let engine_task = tokio::spawn(drive_engine(
+        provider.clone(),
+        params,
+        control.clone(),
+        rec,
+        RecordingMode::VadPause,
+    ));
+
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(
+        provider.opens(),
+        0,
+        "initial silence in VadPause must not open an ASR provider session"
+    );
+
+    control.request_cancel();
+    drop(pcm_tx);
+
+    let outcome = engine_task.await.unwrap().expect("engine returned None");
+    assert!(outcome.cancel_requested);
+    assert!(outcome.terminal_error.is_none());
+    assert!(outcome.sessions.is_empty());
+    assert_eq!(
+        outcome.total_audio_samples, 0,
+        "idle-listening PCM is not provider audio"
+    );
+    let modes: Vec<_> = std::iter::from_fn(|| finish_rx.try_recv().ok()).collect();
+    assert_eq!(
+        modes,
+        vec![FinishMode::Discard],
+        "contentless initial-silence cancel must discard retained audio, got {modes:?}"
+    );
+    assert_eq!(provider.opens(), 0);
+}
 
 /// Continuous：PCM → stop → finalize → outcome；返回 1 个 session、无错误。
 #[tokio::test]
@@ -383,14 +539,15 @@ async fn vad_pause_provider_done_does_not_double_finalize() {
     let control = SessionControl::new();
     let (rec, pcm_tx) = make_recorder();
 
-    pcm_tx.send(signal_frame(480)).unwrap();
+    pcm_tx.send(signal_frame(512)).unwrap();
 
-    let engine_task = tokio::spawn(drive_engine(
+    let engine_task = tokio::spawn(drive_engine_with_vad_frames(
         provider.clone(),
         params,
         control.clone(),
         rec,
         RecordingMode::VadPause,
+        VecDeque::from([VadFrame::Speech]),
     ));
 
     // 给 engine 时间处理 PCM → session.send_pcm → AutoDoneSession 触发 Done。
@@ -414,6 +571,70 @@ async fn vad_pause_provider_done_does_not_double_finalize() {
         is_last_calls, 0,
         "provider already sent Done; engine must not send another is_last (calls: {calls:?})"
     );
+}
+
+/// VadPause 初始 Idle 静音可以持续超过 first-audio watchdog；
+/// 之后第一次 speech 不应被旧 deadline 误判成 no_audio。
+#[tokio::test]
+async fn vad_pause_speech_after_long_initial_idle_does_not_trip_no_audio_watchdog() {
+    let (event_tx, event_rx) = mpsc::channel(8);
+    let sent: SentLog = Arc::new(Mutex::new(Vec::new()));
+    let session = Box::new(RecordingSession { sent: sent.clone() });
+    let provider = Arc::new(ScriptedProvider::new(vec![OpenScript::Ok(
+        event_rx, session,
+    )]));
+
+    let state = StateStore::new();
+    let (overlay, _overlay_rx) = OverlayHandle::channel();
+    let params = make_params(state, Some(overlay), true, 200);
+    let control = SessionControl::new();
+    let (rec, pcm_tx) = make_recorder();
+
+    let engine_task = tokio::spawn(drive_engine_with_vad_frames(
+        provider.clone(),
+        params,
+        control.clone(),
+        rec,
+        RecordingMode::VadPause,
+        VecDeque::from([
+            VadFrame::Silence,
+            VadFrame::Silence,
+            VadFrame::Silence,
+            VadFrame::Silence,
+            VadFrame::Speech,
+        ]),
+    ));
+
+    for _ in 0..4 {
+        pcm_tx.send(silence_frame(512)).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert_eq!(provider.opens(), 0);
+
+    pcm_tx.send(signal_frame(512)).unwrap();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(provider.opens(), 1);
+
+    control.request_stop();
+    drop(pcm_tx);
+    event_tx
+        .send(AsrEvent::Segment {
+            text: "late".into(),
+            started_at: Instant::now(),
+            ended_at: Instant::now(),
+        })
+        .await
+        .unwrap();
+    event_tx.send(AsrEvent::Done).await.unwrap();
+
+    let outcome = engine_task.await.unwrap().expect("engine returned None");
+    assert!(
+        outcome.terminal_error.is_none(),
+        "late first speech in VadPause must not trip no_audio watchdog: {:?}",
+        outcome.terminal_error
+    );
+    assert_eq!(outcome.sessions.len(), 1);
+    assert!(sent.lock().unwrap().iter().any(|(_, last)| !*last));
 }
 
 /// Cancel 信号：engine 设 cancel_requested、无 terminal_error、不 dispatch。

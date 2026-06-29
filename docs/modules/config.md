@@ -33,6 +33,10 @@
 | `[profile]` 路由 / `profile/*.toml` / `post/**` | 下次起 session | toggle ON 时选 Profile |
 | 手动 `{"op":"reload_config"}` | 立即 | 走 UDS server，复用同一 parse+broadcast 入口 |
 
+## voice preprocess
+
+`[voice.preprocess].backend` 默认是 `apple`：使用 macOS 系统语音处理采集，把增益、回声和环境噪声处理放在输入链路里。`off` 是原始采集，不做预处理。模板必须导出真实默认值，并在注释里说明这两个已支持取值；未实现的后端不要写进用户模板说明。
+
 ## Hotkey trigger 热替换
 
 CGEventTap 在 OS 层捕获所有键盘事件、不过滤——trigger 切换只影响 `Tracker.on_raw()` 判定。重置成本 = 主循环 select 收到新 keycode → `Tracker::new(new_code)`（归零 `trigger_pressed`，避免旧 trigger 半按串到新），不拆 CGEventTap。parse 失败保留旧 trigger。

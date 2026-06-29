@@ -2,7 +2,7 @@
 
 use crate::asr::types::AsrProvider;
 use crate::history::{HistoryRecord, HistoryService, HistoryStatus};
-use crate::overlay::{OverlayCmd, OverlayHandle, TextKind};
+use crate::overlay::{OverlayCmd, OverlayHandle};
 use crate::state::StateStore;
 use crate::voice::engine::{self, EngineOutcome};
 use crate::voice::history_build::{build_record, HistoryInput};
@@ -87,6 +87,24 @@ async fn complete_recording(
         return;
     }
 
+    if !crate::voice::capture::has_archivable_content(&sessions) {
+        tracing::info!(
+            recording_id,
+            "recording had no content; skipping post and history"
+        );
+        let trace_status = if terminal_error.as_ref().is_some() {
+            params.state.set_error(Some(recording_id.clone()));
+            engine::send_error_overlay(&params, crate::t!("error.asr_runtime"));
+            "empty_error"
+        } else {
+            params.state.set_idle();
+            engine::overlay_send(&params, OverlayCmd::Hide);
+            "empty"
+        };
+        observe_finish(&mut trace, trace_status, total_audio_samples);
+        return;
+    }
+
     let (final_text, pipeline, status, dispatch_error) = if terminal_error.is_some() {
         (raw_text.clone(), Vec::new(), HistoryStatus::Error, None)
     } else {
@@ -124,15 +142,8 @@ async fn complete_recording(
             },
         );
     } else {
-        if let Some(text) = pipeline.iter().rev().find_map(|step| step.text.clone()) {
-            engine::overlay_send(
-                &params,
-                OverlayCmd::SetText {
-                    text,
-                    kind: TextKind::Final,
-                },
-            );
-        }
+        // 不把 LLM/post 输出再推回 overlay：overlay 只镜像 ASR 原文（已在交给 LLM 那一刻
+        // 显示完整），post 结果直接上屏（粘贴），无需二次展示。成功后直接 Hide。
         params.state.set_idle();
     }
 
@@ -240,10 +251,11 @@ mod tests {
     use crate::voice::observer::{RecordingObserver, TraceStart};
     use std::time::Instant;
 
-    fn cancel_outcome(
+    fn test_outcome(
         sessions: Vec<SessionCapture>,
         state: StateStore,
         overlay: OverlayHandle,
+        cancel_requested: bool,
     ) -> EngineOutcome {
         let started_instant = Instant::now();
         let started_at = time::OffsetDateTime::now_utc();
@@ -251,6 +263,7 @@ mod tests {
             params: SessionParams {
                 auto_paste: false,
                 record_audio: crate::config::RecordAudioMode::Off,
+                preprocess: crate::config::VoicePreprocessCfg::default(),
                 vad_trace: false,
                 idle_pause: false,
                 finalize_timeout_ms: 100,
@@ -258,6 +271,8 @@ mod tests {
                 stop_delay_ms: 0,
                 hotwords: vec![],
                 start_app_context: crate::post::AppContext::default(),
+                profile_name: "test".into(),
+                profile_choices: vec![crate::overlay::ProfileChoice::test("test")],
                 post_chain: crate::post::PostChain {
                     name: "test".into(),
                     processors: vec![],
@@ -271,7 +286,7 @@ mod tests {
             recording_started_instant: started_instant,
             app_context: crate::post::AppContext::default(),
             sessions,
-            cancel_requested: true,
+            cancel_requested,
             terminal_error: None,
             total_audio_samples: 0,
             trace: RecordingObserver::start(TraceStart {
@@ -283,6 +298,35 @@ mod tests {
             }),
             provider_name: "test".into(),
         }
+    }
+
+    fn cancel_outcome(
+        sessions: Vec<SessionCapture>,
+        state: StateStore,
+        overlay: OverlayHandle,
+    ) -> EngineOutcome {
+        test_outcome(sessions, state, overlay, true)
+    }
+
+    fn success_outcome(
+        sessions: Vec<SessionCapture>,
+        state: StateStore,
+        overlay: OverlayHandle,
+    ) -> EngineOutcome {
+        test_outcome(sessions, state, overlay, false)
+    }
+
+    fn error_outcome(
+        sessions: Vec<SessionCapture>,
+        state: StateStore,
+        overlay: OverlayHandle,
+    ) -> EngineOutcome {
+        let mut outcome = test_outcome(sessions, state, overlay, false);
+        outcome.terminal_error = Some(HistoryError {
+            kind: "capture".to_string(),
+            msg: "scripted capture failure".to_string(),
+        });
+        outcome
     }
 
     /// Contentless cancel：complete_recording 必须跳过 history append（不发
@@ -320,6 +364,82 @@ mod tests {
         assert!(
             overlay_cmds.iter().any(|c| matches!(c, OverlayCmd::Hide)),
             "cancel must hide the overlay: {overlay_cmds:?}"
+        );
+    }
+
+    /// Contentless success：没有可归档内容时 complete_recording 不写 history
+    /// 或发送 history changed 事件，并回 Idle/Hide overlay。
+    #[tokio::test]
+    async fn contentless_success_skips_history_append_and_event() {
+        let state = StateStore::new();
+        let (_snapshot, mut state_rx) = state.subscribe_with_snapshot();
+        let (overlay, mut overlay_rx) = OverlayHandle::channel();
+        let outcome = success_outcome(Vec::new(), state.clone(), overlay);
+        let control = SessionControl::new();
+        let history = HistoryService::with_dir(
+            std::env::temp_dir().join(format!("shuohua-voice-history-{}", ulid::Ulid::new())),
+        );
+        let mut history_rx = history.subscribe();
+
+        complete_recording(outcome, &control, history).await;
+
+        let mut events = Vec::new();
+        while let Ok(event) = state_rx.try_recv() {
+            events.push(event);
+        }
+        assert!(history_rx.try_recv().is_err());
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, crate::state::StateEvent::StateChanged { .. })),
+            "contentless success must still return daemon to idle"
+        );
+
+        let mut overlay_cmds = Vec::new();
+        while let Ok(cmd) = overlay_rx.try_recv() {
+            overlay_cmds.push(cmd);
+        }
+        assert!(
+            overlay_cmds.iter().any(|c| matches!(c, OverlayCmd::Hide)),
+            "contentless success must hide the overlay: {overlay_cmds:?}"
+        );
+    }
+
+    /// Contentless terminal error：没有 provider audio/text 时仍不写 history，
+    /// 避免产生没有实际录音内容的错误记录。
+    #[tokio::test]
+    async fn contentless_terminal_error_skips_history_append_and_event() {
+        let state = StateStore::new();
+        let (_snapshot, mut state_rx) = state.subscribe_with_snapshot();
+        let (overlay, mut overlay_rx) = OverlayHandle::channel();
+        let outcome = error_outcome(Vec::new(), state.clone(), overlay);
+        let control = SessionControl::new();
+        let history = HistoryService::with_dir(
+            std::env::temp_dir().join(format!("shuohua-voice-history-{}", ulid::Ulid::new())),
+        );
+        let mut history_rx = history.subscribe();
+
+        complete_recording(outcome, &control, history).await;
+
+        while state_rx.try_recv().is_ok() {}
+        assert!(history_rx.try_recv().is_err());
+        assert!(
+            matches!(state.snapshot().state, crate::state::DaemonState::Error),
+            "contentless terminal error must leave daemon in error state"
+        );
+
+        let mut overlay_cmds = Vec::new();
+        while let Ok(cmd) = overlay_rx.try_recv() {
+            overlay_cmds.push(cmd);
+        }
+        assert!(
+            overlay_cmds.iter().any(|c| matches!(
+                c,
+                OverlayCmd::SetState {
+                    state: crate::overlay::OverlayState::Error
+                }
+            )),
+            "contentless terminal error must show error overlay: {overlay_cmds:?}"
         );
     }
 

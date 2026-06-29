@@ -116,6 +116,7 @@ bump，不要通过绕过 dirty check 把其他修改混入 release commit。
 ```bash
 cargo build --release
 ./target/release/shuo doctor
+./target/release/shuo doctor --apple-capture-smoke
 ./target/release/shuo
 ```
 
@@ -178,6 +179,8 @@ Release body 由两部分组成：
 
 - `.github/release-body.md`：固定安装和权限提醒；workflow 会把其中的
   `shuo-*-aarch64-apple-darwin` 渲染成本次 tag 对应的 artifact 名。
+- `CHANGELOG.md` 当前 tag 对应的 `## vX.Y.Z - YYYY-MM-DD` 段落：workflow 会抽取后
+  直接嵌入 Release body，并附上指向该 heading 的链接；如果找不到对应段落，发版失败。
 - GitHub 自动生成 release notes：commit / PR / contributor 摘要。
 
 ## 10. 验证 Artifact

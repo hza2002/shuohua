@@ -79,6 +79,36 @@ jobs:
           name="shuo-v${ver}-aarch64-apple-darwin"
           sed "s/shuo-\\*-aarch64-apple-darwin/${name}/g" \
             .github/release-body.md > dist/release-body.md
+          python3 - "$ver" "$GITHUB_REF_NAME" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          ver = sys.argv[1]
+          tag = sys.argv[2]
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = re.compile(
+              rf"^## v{re.escape(ver)}\b.*?(?=^## v|\Z)",
+              re.MULTILINE | re.DOTALL,
+          )
+          match = pattern.search(changelog)
+          if not match:
+              raise SystemExit(f"CHANGELOG.md is missing section for v{ver}")
+
+          section = match.group(0).strip()
+          heading = section.splitlines()[0].removeprefix("## ").strip()
+          anchor = re.sub(r"[^a-z0-9 _-]", "", heading.lower()).replace(" ", "-")
+          link = (
+              f"https://github.com/hza2002/shuohua/blob/{tag}/"
+              f"CHANGELOG.md#{anchor}"
+          )
+          body = Path("dist/release-body.md").read_text(encoding="utf-8")
+          body = body.replace(
+              "<!-- CHANGELOG_SECTION -->",
+              f"{section}\n\n[查看 CHANGELOG 中的本版本段落]({link})",
+          )
+          Path("dist/release-body.md").write_text(body, encoding="utf-8")
+          PY
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3.0.1

@@ -4,7 +4,9 @@ mod apple_helper;
 mod themes;
 
 fn main() {
-    println!("cargo:rerun-if-changed=src/asr/providers/apple_helper.swift");
+    for target in apple_helper::macos_helper_targets() {
+        println!("cargo:rerun-if-changed={}", target.source_path);
+    }
     println!("cargo:rerun-if-changed=assets/themes");
     println!("cargo:rerun-if-changed=assets/i18n/zh-CN.toml");
     println!("cargo:rerun-if-changed=assets/i18n/en-US.toml");
@@ -28,7 +30,6 @@ fn main() {
         return;
     }
 
-    let helper_out = std::path::Path::new(&out_dir).join("apple_helper");
     let deployment_target = std::env::var("MACOSX_DEPLOYMENT_TARGET")
         .unwrap_or_else(|_| apple_helper::DEFAULT_MACOS_DEPLOYMENT_TARGET.to_string());
     let swift_target = apple_helper::swift_target_triple(
@@ -36,21 +37,25 @@ fn main() {
         &deployment_target,
     )
     .unwrap_or_else(|error| panic!("{error}"));
-    let status = std::process::Command::new("xcrun")
-        .args([
-            "swiftc",
-            "-O",
-            "-parse-as-library",
-            "-target",
-            &swift_target,
-            "-o",
-            helper_out.to_str().expect("helper path is utf-8"),
-            "src/asr/providers/apple_helper.swift",
-        ])
-        .status()
-        .expect("run xcrun swiftc for apple_helper");
-    if !status.success() {
-        panic!("swiftc failed building apple_helper");
+
+    for helper in apple_helper::macos_helper_targets() {
+        let helper_out = std::path::Path::new(&out_dir).join(helper.output_name);
+        let status = std::process::Command::new("xcrun")
+            .args([
+                "swiftc",
+                "-O",
+                "-parse-as-library",
+                "-target",
+                &swift_target,
+                "-o",
+                helper_out.to_str().expect("helper path is utf-8"),
+                helper.source_path,
+            ])
+            .status()
+            .unwrap_or_else(|error| panic!("run xcrun swiftc for {}: {error}", helper.output_name));
+        if !status.success() {
+            panic!("swiftc failed building {}", helper.output_name);
+        }
     }
 }
 

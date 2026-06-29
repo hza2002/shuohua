@@ -25,9 +25,11 @@ pub mod constants {
     pub const H_PAD: f64 = 16.0;
     pub const BOTTOM_PAD: f64 = 7.0;
     pub const HEADER_BODY_GAP: f64 = 2.0;
+    /// 单行 body 的基线高度，也是头部块几何的锚。多行高度由平台层实测，不再估算。
     pub const BODY_LINE_H: f64 = 21.0;
     pub const BODY_W: f64 = WIDTH - H_PAD * 2.0;
-    pub const CHARS_PER_LINE: usize = 38;
+    pub const BODY_TEXT_W: f64 = BODY_W;
+    pub const SCROLL_INDICATOR_TEXT_GAP: f64 = 4.0;
     pub const HEADER_CENTER_Y: f64 = BOTTOM_PAD + BODY_LINE_H + HEADER_BODY_GAP + 12.0;
     pub const ICON_BOX: f64 = 24.0;
     pub const STATE_BOX_H: f64 = 20.0;
@@ -38,7 +40,7 @@ pub mod constants {
     pub const ICON_STATE_GAP: f64 = 5.0;
     pub const STATE_W: f64 = 56.0;
     pub const STATE_STATS_GAP: f64 = 5.0;
-    pub const STATS_W: f64 = 220.0;
+    pub const STATS_W: f64 = 180.0;
     pub const META_GAP: f64 = 8.0;
     pub const META_MIN_W: f64 = 180.0;
 }
@@ -95,93 +97,119 @@ pub fn first_row_frames(top_offset: f64) -> FirstRow {
     }
 }
 
-pub fn display_text_plan(text: &str, max_lines: usize, chars_per_line: usize) -> (String, usize) {
-    let max_lines = max_lines.clamp(1, 8);
-    let chars_per_line = chars_per_line.max(8);
-    let chars = text.chars().count().max(1);
-    let lines = chars.div_ceil(chars_per_line).clamp(1, max_lines);
-    let capacity = chars_per_line * max_lines;
-    if chars <= capacity {
-        return (text.to_string(), lines);
-    }
-
-    let keep = capacity.saturating_sub(1);
-    let tail: String = text
-        .chars()
-        .rev()
-        .take(keep)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    (format!("…{tail}"), max_lines)
+/// 面板几何，由平台层实测的 body 文本高度换算而来。
+///
+/// `body_h`、`line_count` 和 `tail_metrics` 都来自真正绘制 body 的 NSTextView /
+/// NSLayoutManager。layout 不再按固定行高重建多行高度；单行基线 `BODY_LINE_H` 只在
+/// AppKit 无法测量时作为兜底，保持单行时与旧布局一致的头部几何。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodyGeometry {
+    /// body document 内容高度，来自 renderer 实测。
+    pub content_height: f64,
+    /// 面板总高。
+    pub panel_height: f64,
+    /// 头部块相对单行布局上移的量（多出来的 body 高度）。
+    pub top_offset: f64,
+    /// body 视口 frame 高度。
+    pub field_height: f64,
+    /// NSScrollView frame，宽度包含右侧 panel padding 里的悬浮 indicator 区。
+    pub body_viewport: LayoutFrame,
+    /// NSTextView document frame。正文宽度不为 indicator 让位。
+    pub body_document: LayoutFrame,
+    /// follow 模式滚到底时 clip view 的 y offset。
+    pub scroll_bottom_offset: f64,
+    /// 内容真实高度超过视口，需要打开鼠标滚动。
+    pub body_overflow: bool,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct LiveTextPlan {
-    pub segments: String,
-    pub partial: String,
-    pub lines: usize,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodyTailMetrics {
+    pub viewport_height: f64,
+    pub scroll_offset: f64,
 }
 
-impl LiveTextPlan {
-    pub fn full_text(&self) -> String {
-        let mut text = self.segments.clone();
-        text.push_str(&self.partial);
-        text
-    }
-}
-
-pub fn live_text_plan(
-    segments: &[String],
-    partial: &str,
-    max_lines: usize,
-    chars_per_line: usize,
-) -> LiveTextPlan {
-    let full_segments = segments.join("");
-    let mut full = full_segments.clone();
-    full.push_str(partial);
-    let (display, lines) = display_text_plan(&full, max_lines, chars_per_line);
-    if display == full {
-        return LiveTextPlan {
-            segments: full_segments,
-            partial: partial.to_string(),
-            lines,
-        };
-    }
-
-    let visible_chars = display
-        .strip_prefix('…')
-        .unwrap_or(&display)
-        .chars()
-        .count();
-    let partial_chars = partial.chars().count();
-    let visible_partial_chars = partial_chars.min(visible_chars);
-    let visible_segment_chars = visible_chars.saturating_sub(visible_partial_chars);
-    let segment_tail = tail_chars(&full_segments, visible_segment_chars);
-    let partial_tail = tail_chars(partial, visible_partial_chars);
-    LiveTextPlan {
-        segments: if segment_tail.is_empty() {
-            "…".to_string()
-        } else {
-            format!("…{segment_tail}")
-        },
-        partial: partial_tail,
-        lines,
+impl BodyGeometry {
+    pub fn scroll_indicator_frame(
+        &self,
+        min_height: f64,
+        width: f64,
+        visible_y: f64,
+    ) -> Option<LayoutFrame> {
+        if !self.body_overflow {
+            return None;
+        }
+        let content_h = self.body_document.h.max(self.field_height);
+        let ratio = (self.field_height / content_h).clamp(0.0, 1.0);
+        let indicator_h = (self.field_height * ratio)
+            .max(min_height)
+            .min(self.field_height);
+        let scrollable = (content_h - self.field_height).max(1.0);
+        let progress = (visible_y / scrollable).clamp(0.0, 1.0);
+        let y = (self.field_height - indicator_h) * progress;
+        let x = constants::BODY_TEXT_W + constants::SCROLL_INDICATOR_TEXT_GAP;
+        Some(LayoutFrame::new(x, y, width, indicator_h))
     }
 }
 
-pub fn tail_chars(text: &str, count: usize) -> String {
-    if count == 0 {
-        return String::new();
+pub fn body_geometry_with_tail_metrics(
+    body_h: f64,
+    max_text_lines: usize,
+    single_line_h: f64,
+    extra_line_h: f64,
+    line_count: usize,
+    tail_metrics: Option<BodyTailMetrics>,
+) -> BodyGeometry {
+    let single_line_h = single_line_h.max(1.0);
+    let extra_line_h = extra_line_h.max(1.0);
+    let max_lines = max_text_lines.max(1) as f64;
+    let viewport_cap = single_line_h + extra_line_h * (max_lines - 1.0);
+    let content_height = body_h.max(single_line_h);
+    let body_overflow = line_count > max_text_lines.max(1);
+    let (field_height, requested_scroll_offset) = if body_overflow {
+        let field_height = tail_metrics
+            .map(|metrics| metrics.viewport_height)
+            .unwrap_or(viewport_cap)
+            .min(content_height)
+            .max(single_line_h);
+        let requested_scroll_offset = tail_metrics
+            .map(|metrics| metrics.scroll_offset)
+            .unwrap_or((content_height - field_height).max(0.0));
+        (field_height, requested_scroll_offset)
+    } else {
+        (content_height.min(viewport_cap).max(single_line_h), 0.0)
+    };
+    let extra = field_height - single_line_h;
+    let document_height = content_height
+        .max(field_height)
+        .max(requested_scroll_offset + field_height);
+    let scroll_bottom_offset = requested_scroll_offset.clamp(0.0, document_height - field_height);
+    BodyGeometry {
+        content_height,
+        panel_height: constants::BASE_HEIGHT + extra,
+        top_offset: extra,
+        field_height,
+        body_viewport: LayoutFrame::new(
+            constants::H_PAD,
+            constants::BOTTOM_PAD,
+            constants::WIDTH - constants::H_PAD,
+            field_height,
+        ),
+        body_document: LayoutFrame::new(0.0, 0.0, constants::BODY_TEXT_W, document_height),
+        scroll_bottom_offset,
+        body_overflow,
     }
-    text.chars()
-        .rev()
-        .take(count)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect()
+}
+
+pub fn scroll_discovery_should_extend(
+    last_visible_y: Option<f64>,
+    visible_y: f64,
+    programmatic_scroll: bool,
+) -> bool {
+    last_visible_y.is_some_and(|last| (last - visible_y).abs() > 0.5) && !programmatic_scroll
+}
+
+pub fn wants_mouse(visible: bool, body_overflow: bool, pipeline_clickable: bool) -> bool {
+    visible && (body_overflow || pipeline_clickable)
 }
 
 pub fn utf16_len(text: &str) -> usize {
@@ -210,6 +238,37 @@ pub fn header_parts(
         words: words.to_string(),
         app: app.to_string(),
         meta: chain.to_string(),
+    }
+}
+
+/// 把链摘要 `rule:zh_filter → llm:deepseek` 剥成显示用的 `zh_filter → deepseek`：
+/// 去掉每步的 `kind:` 前缀，腾出 meta 行空间给 profile 前缀。链摘要原文（含 kind）
+/// 仍由 history/UDS 保留，这里只影响 overlay 显示。
+pub fn pipeline_display(chain_summary: &str) -> String {
+    chain_summary
+        .split(" → ")
+        .map(|step| step.split_once(':').map_or(step, |(_, name)| name))
+        .collect::<Vec<_>>()
+        .join(" → ")
+}
+
+pub fn profile_chain_display(
+    display_name: &str,
+    asr_provider: &str,
+    chain_summary: &str,
+) -> String {
+    let mut steps = Vec::new();
+    if !asr_provider.is_empty() {
+        steps.push(asr_provider.to_string());
+    }
+    let pipeline = pipeline_display(chain_summary).replace(" → ", " -> ");
+    if !pipeline.is_empty() {
+        steps.extend(pipeline.split(" -> ").map(str::to_string));
+    }
+    if steps.is_empty() {
+        display_name.to_string()
+    } else {
+        format!("{display_name}: {}", steps.join(" -> "))
     }
 }
 
@@ -248,6 +307,50 @@ pub fn panel_frame(
     LayoutFrame::new(x, y, width, height)
 }
 
+pub fn picker_frame(
+    overlay: LayoutFrame,
+    width: f64,
+    height: f64,
+    screen: LayoutFrame,
+) -> LayoutFrame {
+    const GAP: f64 = 6.0;
+    let screen_left = screen.x + constants::WINDOW_MARGIN;
+    let screen_right = screen.x + screen.w - constants::WINDOW_MARGIN;
+    let screen_bottom = screen.y + constants::WINDOW_MARGIN;
+    let screen_top = screen.y + screen.h - constants::WINDOW_MARGIN;
+
+    let width = width.min((screen_right - screen_left).max(1.0));
+    let height = height.min((screen_top - screen_bottom).max(1.0));
+    let x = overlay.x + overlay.w - width;
+    let below = overlay.y - height - GAP;
+    let above = overlay.y + overlay.h + GAP;
+    let below_fits = below >= screen_bottom;
+    let above_fits = above + height <= screen_top;
+    let below_space = overlay.y - GAP - screen_bottom;
+    let above_space = screen_top - (overlay.y + overlay.h + GAP);
+    let y = match (below_fits, above_fits) {
+        (true, false) => below,
+        (false, true) => above,
+        (true, true) => {
+            if below_space >= above_space {
+                below
+            } else {
+                above
+            }
+        }
+        (false, false) => {
+            if above_space >= below_space {
+                above
+            } else {
+                below
+            }
+        }
+    };
+    let x = clamp(x, screen_left, screen_right - width);
+    let y = clamp(y, screen_bottom, screen_top - height);
+    LayoutFrame::new(x, y, width, height)
+}
+
 pub fn clamp(value: f64, min: f64, max: f64) -> f64 {
     if min > max {
         return min;
@@ -280,26 +383,263 @@ pub fn format_duration(ms: u64) -> String {
 mod tests {
     use super::*;
 
+    fn body_geometry_with_line_metrics(
+        body_h: f64,
+        max_text_lines: usize,
+        single_line_h: f64,
+        extra_line_h: f64,
+    ) -> BodyGeometry {
+        let line_count = (((body_h - single_line_h) / extra_line_h).ceil().max(0.0) as usize) + 1;
+        body_geometry_with_tail_metrics(
+            body_h,
+            max_text_lines,
+            single_line_h,
+            extra_line_h,
+            line_count,
+            None,
+        )
+    }
+
     fn visual_center(frame: LayoutFrame, optical_y: f64) -> f64 {
         frame.y + frame.h / 2.0 + optical_y
     }
 
     #[test]
-    fn text_line_count_is_bounded() {
-        assert_eq!(display_text_plan("", 5, 34).1, 1);
-        assert_eq!(display_text_plan("短句", 5, 34).1, 1);
-        assert_eq!(display_text_plan(&"字".repeat(70), 5, 34).1, 3);
-        assert_eq!(display_text_plan(&"字".repeat(300), 5, 34).1, 5);
+    fn single_line_body_keeps_base_geometry() {
+        // 实测高度 ≤ 单行基线时按单行处理：面板高 = BASE_HEIGHT，不上移。
+        let g = body_geometry_with_line_metrics(
+            constants::BODY_LINE_H,
+            3,
+            constants::BODY_LINE_H,
+            constants::BODY_LINE_H,
+        );
+        assert_eq!(g.panel_height, constants::BASE_HEIGHT);
+        assert_eq!(g.top_offset, 0.0);
+        assert_eq!(g.field_height, constants::BODY_LINE_H);
+        assert!(!g.body_overflow);
+
+        let shorter = body_geometry_with_line_metrics(
+            constants::BODY_LINE_H - 5.0,
+            3,
+            constants::BODY_LINE_H,
+            constants::BODY_LINE_H,
+        );
+        assert_eq!(shorter.panel_height, constants::BASE_HEIGHT);
+        assert_eq!(shorter.field_height, constants::BODY_LINE_H);
+        assert!(!shorter.body_overflow);
     }
 
     #[test]
-    fn long_text_keeps_tail() {
-        let text = format!("{}{}", "前".repeat(200), "后".repeat(20));
-        let (visible, lines) = display_text_plan(&text, 5, 20);
-        assert_eq!(lines, 5);
-        assert!(visible.starts_with('…'));
-        assert!(visible.ends_with(&"后".repeat(20)));
-        assert!(!visible.contains(&"前".repeat(120)));
+    fn multi_line_body_grows_panel_by_measured_overflow() {
+        // 实测两行高度 → 面板按多出的真实像素长高，field 跟随实测高度。
+        let two_lines = constants::BODY_LINE_H * 2.0;
+        let g = body_geometry_with_line_metrics(
+            two_lines,
+            3,
+            constants::BODY_LINE_H,
+            constants::BODY_LINE_H,
+        );
+        assert_eq!(g.field_height, two_lines);
+        assert_eq!(g.top_offset, constants::BODY_LINE_H);
+        assert_eq!(
+            g.panel_height,
+            constants::BASE_HEIGHT + constants::BODY_LINE_H
+        );
+        assert!(!g.body_overflow);
+    }
+
+    #[test]
+    fn body_geometry_caps_viewport_at_max_lines() {
+        let g = body_geometry_with_line_metrics(
+            constants::BODY_LINE_H * 8.0,
+            3,
+            constants::BODY_LINE_H,
+            constants::BODY_LINE_H,
+        );
+
+        assert_eq!(g.field_height, constants::BODY_LINE_H * 3.0);
+        assert_eq!(g.top_offset, constants::BODY_LINE_H * 2.0);
+        assert_eq!(
+            g.panel_height,
+            constants::BASE_HEIGHT + constants::BODY_LINE_H * 2.0
+        );
+        assert!(g.body_overflow);
+    }
+
+    #[test]
+    fn capped_viewport_preserves_appkit_tail_scroll_extent() {
+        let single_line_h = 22.0;
+        let extra_line_h = 18.0;
+        let appkit_tail_h = 55.25;
+        let appkit_tail_y = 57.25;
+        let g = body_geometry_with_tail_metrics(
+            112.0,
+            3,
+            single_line_h,
+            extra_line_h,
+            6,
+            Some(BodyTailMetrics {
+                viewport_height: appkit_tail_h,
+                scroll_offset: appkit_tail_y,
+            }),
+        );
+
+        assert_eq!(g.field_height, appkit_tail_h);
+        assert_eq!(g.scroll_bottom_offset, appkit_tail_y);
+        assert_eq!(g.body_document.h, appkit_tail_y + appkit_tail_h);
+        assert!(g.body_overflow);
+    }
+
+    #[test]
+    fn body_overflow_uses_actual_line_count_not_height_cap() {
+        let g = body_geometry_with_tail_metrics(
+            44.0,
+            3,
+            22.0,
+            18.0,
+            4,
+            Some(BodyTailMetrics {
+                viewport_height: 40.0,
+                scroll_offset: 4.0,
+            }),
+        );
+
+        assert!(g.body_overflow);
+        assert_eq!(g.field_height, 40.0);
+        assert_eq!(g.scroll_bottom_offset, 4.0);
+    }
+
+    #[test]
+    fn body_document_height_preserves_measured_content_height() {
+        let g = body_geometry_with_tail_metrics(73.4, 5, 22.0, 18.0, 4, None);
+
+        assert_eq!(g.content_height, 73.4);
+        assert_eq!(g.body_document.h, 73.4);
+        assert!(!g.body_overflow);
+    }
+
+    #[test]
+    fn body_document_height_covers_requested_scroll_extent() {
+        let g = body_geometry_with_tail_metrics(
+            100.0,
+            3,
+            22.0,
+            18.0,
+            5,
+            Some(BodyTailMetrics {
+                viewport_height: 54.0,
+                scroll_offset: 48.0,
+            }),
+        );
+
+        assert_eq!(g.content_height, 100.0);
+        assert_eq!(g.body_document.h, 102.0);
+        assert_eq!(g.scroll_bottom_offset, 48.0);
+        assert!(g.body_overflow);
+    }
+
+    #[test]
+    fn body_geometry_uses_measured_line_height_for_cap_and_growth() {
+        let line_h = 23.5;
+        let content_h = line_h * 8.0;
+        let g = body_geometry_with_line_metrics(content_h, 3, line_h, line_h);
+
+        assert_eq!(g.field_height, line_h * 3.0);
+        assert_eq!(g.top_offset, line_h * 2.0);
+        assert_eq!(g.panel_height, constants::BASE_HEIGHT + line_h * 2.0);
+        assert!(g.body_overflow);
+    }
+
+    #[test]
+    fn body_geometry_counts_vertical_padding_once() {
+        let single_line_h = 23.0;
+        let extra_line_h = 19.0;
+        let content_h = single_line_h + extra_line_h * 7.0;
+        let g = body_geometry_with_line_metrics(content_h, 3, single_line_h, extra_line_h);
+
+        assert_eq!(g.field_height, single_line_h + extra_line_h * 2.0);
+        assert_eq!(g.top_offset, extra_line_h * 2.0);
+        assert_eq!(g.panel_height, constants::BASE_HEIGHT + extra_line_h * 2.0);
+        assert!(g.body_overflow);
+    }
+
+    #[test]
+    fn body_geometry_preserves_measured_content_height() {
+        let single_line_h = 23.0;
+        let extra_line_h = 19.0;
+        let almost_four_lines = single_line_h + extra_line_h * 3.0 + 0.2;
+        let g = body_geometry_with_line_metrics(almost_four_lines, 5, single_line_h, extra_line_h);
+
+        assert_eq!(g.content_height, almost_four_lines);
+        assert_eq!(g.field_height, almost_four_lines);
+        assert_eq!(g.top_offset, almost_four_lines - single_line_h);
+    }
+
+    #[test]
+    fn body_text_width_matches_body_width() {
+        let viewport_w = constants::BODY_W;
+        let text_w = constants::BODY_TEXT_W;
+
+        assert_eq!(text_w, viewport_w);
+    }
+
+    #[test]
+    fn body_geometry_returns_all_body_frames_from_one_source() {
+        let g = body_geometry_with_line_metrics(76.0, 3, 22.0, 18.0);
+
+        assert_eq!(g.body_viewport.h, 58.0);
+        assert_eq!(
+            g.body_document,
+            LayoutFrame::new(0.0, 0.0, constants::BODY_TEXT_W, 76.0)
+        );
+        assert_eq!(g.scroll_bottom_offset, 18.0);
+        assert!(g.body_overflow);
+    }
+
+    #[test]
+    fn scroll_indicator_frame_does_not_reduce_text_width() {
+        let g = body_geometry_with_line_metrics(90.0, 3, 22.0, 18.0);
+        let indicator = g
+            .scroll_indicator_frame(18.0, 3.0, 0.0)
+            .expect("overflow has indicator");
+        assert_eq!(g.body_document.w, constants::BODY_TEXT_W);
+        assert!(indicator.x >= constants::BODY_TEXT_W);
+        assert_eq!(
+            indicator.x - constants::BODY_TEXT_W,
+            constants::SCROLL_INDICATOR_TEXT_GAP
+        );
+        assert_eq!(indicator.w, 3.0);
+    }
+
+    #[test]
+    fn scroll_indicator_tracks_visible_offset() {
+        let g = body_geometry_with_line_metrics(94.0, 3, 22.0, 18.0);
+        let bottom = g.scroll_bottom_offset;
+        let top_indicator = g
+            .scroll_indicator_frame(18.0, 3.0, 0.0)
+            .expect("overflow has indicator");
+        let bottom_indicator = g
+            .scroll_indicator_frame(18.0, 3.0, bottom)
+            .expect("overflow has indicator");
+
+        assert_eq!(top_indicator.y, 0.0);
+        assert!((bottom_indicator.y + bottom_indicator.h - g.field_height).abs() < 0.1);
+    }
+
+    #[test]
+    fn programmatic_scroll_does_not_extend_scroll_discovery() {
+        assert!(scroll_discovery_should_extend(Some(0.0), 9.0, false));
+        assert!(!scroll_discovery_should_extend(Some(0.0), 9.0, true));
+        assert!(!scroll_discovery_should_extend(None, 9.0, false));
+        assert!(!scroll_discovery_should_extend(Some(9.0), 9.2, false));
+    }
+
+    #[test]
+    fn wants_mouse_only_when_visible_and_interactive() {
+        assert!(!wants_mouse(false, true, true));
+        assert!(wants_mouse(true, true, false));
+        assert!(wants_mouse(true, false, true));
+        assert!(!wants_mouse(true, false, false));
     }
 
     #[test]
@@ -316,9 +656,9 @@ mod tests {
     fn first_row_clusters_stats_and_app_on_left_with_wide_meta() {
         let row = first_row_frames(0.0);
         assert!(row.stats.x - (row.status.x + row.status.w) <= 6.0);
-        assert!(row.stats.w >= 210.0);
+        assert!(row.stats.w >= 170.0);
         assert!(row.stats.x < row.meta.x);
-        assert!(row.meta.w >= 180.0);
+        assert!(row.meta.w >= 260.0);
     }
 
     #[test]
@@ -346,6 +686,34 @@ mod tests {
     }
 
     #[test]
+    fn pipeline_display_strips_kind_prefixes() {
+        assert_eq!(
+            pipeline_display("rule:zh_filter → llm:deepseek"),
+            "zh_filter → deepseek"
+        );
+        assert_eq!(pipeline_display("llm:deepseek"), "deepseek");
+        assert_eq!(pipeline_display(""), "");
+        // 无 kind 前缀的步骤原样保留。
+        assert_eq!(pipeline_display("plain → llm:x"), "plain → x");
+    }
+
+    #[test]
+    fn profile_chain_display_puts_asr_first() {
+        assert_eq!(
+            profile_chain_display("Agent", "doubao", "rule:zh_filter → llm:deepseek"),
+            "Agent: doubao -> zh_filter -> deepseek"
+        );
+        assert_eq!(
+            profile_chain_display("Agent", "", "rule:zh_filter"),
+            "Agent: zh_filter"
+        );
+        assert_eq!(
+            profile_chain_display("Agent", "doubao", ""),
+            "Agent: doubao"
+        );
+    }
+
+    #[test]
     fn stats_text_is_inline_metadata() {
         assert_eq!(stats_text("12s", "128字", "Xcode"), "12s · 128字 · Xcode");
         assert_eq!(stats_text("12s", "128字", ""), "12s · 128字");
@@ -362,14 +730,6 @@ mod tests {
     }
 
     #[test]
-    fn live_text_plan_keeps_segments_and_partial_distinct() {
-        let plan = live_text_plan(&["已经定型。".to_string()], "正在识别", 5, 34);
-        assert_eq!(plan.segments, "已经定型。");
-        assert_eq!(plan.partial, "正在识别");
-        assert_eq!(plan.lines, 1);
-    }
-
-    #[test]
     fn positions_overlay_inside_anchor_centered() {
         let anchor = LayoutFrame::new(100.0, 100.0, 800.0, 600.0);
         let screen = LayoutFrame::new(0.0, 0.0, 1200.0, 900.0);
@@ -382,5 +742,50 @@ mod tests {
         let top = panel_frame(anchor, OverlayPosition::Top, 540.0, 86.0, screen);
         assert_eq!(top.x, 230.0);
         assert_eq!(top.y, 598.0);
+    }
+
+    #[test]
+    fn picker_opens_above_bottom_overlay() {
+        let screen = LayoutFrame::new(0.0, 0.0, 1200.0, 900.0);
+        let overlay = LayoutFrame::new(300.0, 16.0, constants::WIDTH, 64.0);
+
+        let picker = picker_frame(overlay, 220.0, 124.0, screen);
+
+        assert!(picker.y >= overlay.y + overlay.h);
+        assert!(picker.y + picker.h <= screen.y + screen.h - constants::WINDOW_MARGIN);
+    }
+
+    #[test]
+    fn picker_right_edge_aligns_with_overlay_right_edge() {
+        let screen = LayoutFrame::new(0.0, 0.0, 1200.0, 900.0);
+        let overlay = LayoutFrame::new(300.0, 320.0, constants::WIDTH, 64.0);
+
+        let picker = picker_frame(overlay, 220.0, 124.0, screen);
+
+        assert_eq!(picker.x + picker.w, overlay.x + overlay.w);
+    }
+
+    #[test]
+    fn picker_opens_below_top_overlay() {
+        let screen = LayoutFrame::new(0.0, 0.0, 1200.0, 900.0);
+        let overlay = LayoutFrame::new(300.0, 820.0, constants::WIDTH, 64.0);
+
+        let picker = picker_frame(overlay, 220.0, 124.0, screen);
+
+        assert!(picker.y + picker.h <= overlay.y);
+        assert!(picker.y >= screen.y + constants::WINDOW_MARGIN);
+    }
+
+    #[test]
+    fn picker_frame_clamps_inside_screen() {
+        let screen = LayoutFrame::new(0.0, 0.0, 360.0, 240.0);
+        let overlay = LayoutFrame::new(10.0, 80.0, constants::WIDTH, 64.0);
+
+        let picker = picker_frame(overlay, 340.0, 210.0, screen);
+
+        assert!(picker.x >= screen.x + constants::WINDOW_MARGIN);
+        assert!(picker.y >= screen.y + constants::WINDOW_MARGIN);
+        assert!(picker.x + picker.w <= screen.x + screen.w - constants::WINDOW_MARGIN);
+        assert!(picker.y + picker.h <= screen.y + screen.h - constants::WINDOW_MARGIN);
     }
 }

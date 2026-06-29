@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 use crate::asr::types::{AsrEvent, AsrSession};
 use crate::history::HistoryError;
-use crate::overlay::{OverlayCmd, OverlayHandle};
+use crate::overlay::{OverlayCmd, OverlayHandle, TextKind};
 use crate::state::StateStore;
 use crate::voice::capture::SegmentCapture;
 use crate::voice::observer::{observe_asr_event, RecordingObserver};
@@ -48,15 +48,31 @@ pub(crate) async fn finalize_provider_session(
     recording_id: &str,
     overlay: Option<&OverlayHandle>,
 ) -> Result<FinalizeOutcome, HistoryError> {
-    if let Err(e) = session.send_pcm(&[], true).await {
-        return Err(HistoryError {
-            kind: "asr_send_last".to_string(),
-            msg: e.to_string(),
-        });
-    }
-
     let timeout = tokio::time::sleep(Duration::from_millis(finalize_timeout_ms));
     tokio::pin!(timeout);
+    let send_last = session.send_pcm(&[], true);
+    tokio::pin!(send_last);
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            return Ok(FinalizeOutcome::Canceled);
+        }
+        _ = &mut timeout => {
+            return Err(HistoryError {
+                kind: "asr_timeout".to_string(),
+                msg: "timeout waiting final".to_string(),
+            });
+        }
+        result = &mut send_last => {
+            if let Err(e) = result {
+                return Err(HistoryError {
+                    kind: "asr_send_last".to_string(),
+                    msg: e.to_string(),
+                });
+            }
+        }
+    }
+
     loop {
         tokio::select! {
             biased;
@@ -119,8 +135,30 @@ pub(crate) async fn finalize_provider_session(
                         observe_asr_event(
                             trace,
                             recording_started_instant,
-                            &AsrEvent::Partial { text, seq },
+                            &AsrEvent::Partial {
+                                text: text.clone(),
+                                seq,
+                            },
                         );
+                        // finalize 阶段 partial 也要喂 overlay：跟录音中
+                        // handle_asr_event 对齐，保证 stop 后 ASR 还有输出时逐字流式
+                        // 可见（LLM 提交兜底是安全网，主力就是这里）。
+                        let live_text: String = pending_segments
+                            .iter()
+                            .map(|s| s.text.as_str())
+                            .collect::<String>()
+                            + &text;
+                        let words = crate::text_stats::compute(&live_text).words as u32;
+                        let dur_ms = recording_started_instant.elapsed().as_millis() as u64;
+                        state.partial(recording_id.to_string(), text.clone());
+                        state.stats(recording_id.to_string(), dur_ms, words);
+                        if let Some(overlay) = overlay {
+                            overlay.send(OverlayCmd::SetStats { dur_ms, words });
+                            overlay.send(OverlayCmd::SetText {
+                                text,
+                                kind: TextKind::Partial,
+                            });
+                        }
                     }
                     Some(AsrEvent::Error { err }) => {
                         tracing::error!(recording_id = %recording_id, error = %err, "ASR event error during final");
@@ -187,6 +225,22 @@ mod tests {
         }
     }
 
+    struct HangingFinalSendSession;
+
+    #[async_trait]
+    impl AsrSession for HangingFinalSendSession {
+        async fn send_pcm(&mut self, _pcm: &[i16], is_last: bool) -> Result<(), AsrError> {
+            if is_last {
+                std::future::pending::<()>().await;
+            }
+            Ok(())
+        }
+
+        async fn close(self: Box<Self>) -> Result<(), AsrError> {
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn channel_close_before_done_is_an_error() {
         let mut session: Box<dyn AsrSession> = Box::new(NoopSession);
@@ -225,6 +279,49 @@ mod tests {
         .expect_err("channel close without Done must fail");
 
         assert_eq!(error.kind, "asr_stream_closed");
+    }
+
+    #[tokio::test]
+    async fn final_send_is_covered_by_finalize_timeout() {
+        let mut session: Box<dyn AsrSession> = Box::new(HangingFinalSendSession);
+        let (_event_tx, mut events) = mpsc::channel(1);
+        let mut pending_segments = Vec::new();
+        let mut session_final_text = None;
+        let mut pending_overlay_segments = 0;
+        let cancel = CancellationToken::new();
+        let mut terminal_error = None;
+        let started = Instant::now();
+        let mut trace = RecordingObserver::start(TraceStart {
+            enabled: false,
+            recording_id: "test-recording".to_string(),
+            provider: "test".to_string(),
+            started_at: "2026-06-19T00:00:00Z".to_string(),
+            started_instant: started,
+        });
+
+        let error = tokio::time::timeout(
+            Duration::from_millis(200),
+            finalize_provider_session(
+                &mut session,
+                &mut events,
+                &mut pending_segments,
+                &mut session_final_text,
+                &mut pending_overlay_segments,
+                20,
+                CancelSignal::new(&cancel),
+                &mut terminal_error,
+                &mut trace,
+                started,
+                &StateStore::new(),
+                "test-recording",
+                None,
+            ),
+        )
+        .await
+        .expect("finalize timeout must cover final send")
+        .unwrap_err();
+
+        assert_eq!(error.kind, "asr_timeout");
     }
 
     #[tokio::test]

@@ -75,6 +75,9 @@ fn localized_command() -> clap::Command {
                 .mut_arg("runtime", |arg| {
                     arg.help(crate::t!("cli.help.doctor.runtime"))
                 })
+                .mut_arg("apple_capture_smoke", |arg| {
+                    arg.help(crate::t!("cli.help.doctor.apple_capture_smoke"))
+                })
         })
         .mut_subcommand("config-template", |cmd| {
             cmd.about(crate::t!("cli.help.config_template.about"))
@@ -134,6 +137,18 @@ mod tests {
         match cli.command {
             Some(Command::Doctor(args)) => {
                 assert!(args.runtime);
+            }
+            other => panic!("expected doctor command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn doctor_flags_parse_apple_capture_smoke() {
+        let cli = Cli::try_parse_from(["shuo", "doctor", "--apple-capture-smoke"]).unwrap();
+
+        match cli.command {
+            Some(Command::Doctor(args)) => {
+                assert!(args.apple_capture_smoke);
             }
             other => panic!("expected doctor command, got {other:?}"),
         }

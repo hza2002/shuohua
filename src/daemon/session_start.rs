@@ -1,7 +1,7 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::sync::Arc;
 
-use crate::overlay::{OverlayCmd, OverlayHandle, TextKind};
+use crate::overlay::{OverlayCmd, OverlayHandle, ProfileChoice, TextKind};
 use crate::state::StateStore;
 use crate::voice::finish::SessionParams;
 use crate::voice::SessionControl;
@@ -79,6 +79,7 @@ pub(super) fn prepare(
         params: SessionParams {
             auto_paste: cfg.voice.auto_paste,
             record_audio: cfg.voice.record_audio,
+            preprocess: cfg.voice.preprocess.clone(),
             vad_trace: cfg.dev.vad_trace,
             idle_pause: runtime.options.idle_pause,
             finalize_timeout_ms: runtime.options.finalize_timeout_ms,
@@ -86,6 +87,8 @@ pub(super) fn prepare(
             stop_delay_ms: cfg.voice.stop_delay_ms,
             hotwords: profile.asr.hotwords,
             start_app_context,
+            profile_name: profile.name,
+            profile_choices: profile_choices(&cfg.profile),
             post_chain,
             post_timeout_ms: cfg.post.timeout_ms,
             overlay: Some(overlay),
@@ -93,6 +96,64 @@ pub(super) fn prepare(
         },
         control: SessionControl::new(),
     })
+}
+
+fn profile_choices(routes: &crate::config::ProfileRouteCfg) -> Vec<ProfileChoice> {
+    let profile_dir = crate::config::profile::default_dir();
+    let mut names = vec![routes.default.clone()];
+    names.extend(
+        routes
+            .routes
+            .keys()
+            .filter(|name| *name != &routes.default)
+            .cloned(),
+    );
+    match std::fs::read_dir(&profile_dir) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+                    continue;
+                }
+                if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
+                    names.push(stem.to_string());
+                }
+            }
+        }
+        Err(error) => {
+            tracing::warn!(error = ?error, dir = %profile_dir.display(), "profile choice scan failed");
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+        .into_iter()
+        .map(|name| {
+            let path = profile_dir.join(format!("{name}.toml"));
+            match std::fs::read_to_string(&path)
+                .with_context(|| format!("read profile {}", path.display()))
+                .and_then(|body| {
+                    crate::config::profile::parse(&body)
+                        .with_context(|| format!("parse profile {}", path.display()))
+                }) {
+                Ok(profile) => ProfileChoice {
+                    id: name,
+                    display_name: profile.name,
+                    asr_provider: profile.asr.provider,
+                    chain_summary: profile.post.chain.join(" → "),
+                },
+                Err(error) => {
+                    tracing::warn!(error = ?error, profile = name, "profile choice load failed");
+                    ProfileChoice {
+                        id: name.clone(),
+                        display_name: name,
+                        asr_provider: String::new(),
+                        chain_summary: String::new(),
+                    }
+                }
+            }
+        })
+        .collect()
 }
 
 pub(super) fn send_error_overlay(overlay: &OverlayHandle, error: SessionStartError) {
@@ -226,6 +287,15 @@ chain = []
         .unwrap();
 
         assert_eq!(start.params.hotwords, ["Rust", "macOS"]);
+        assert_eq!(
+            start.params.profile_choices,
+            [ProfileChoice {
+                id: "default".to_string(),
+                display_name: "default".to_string(),
+                asr_provider: "fake".to_string(),
+                chain_summary: String::new(),
+            }]
+        );
         assert!(start.params.idle_pause);
         assert_eq!(start.params.finalize_timeout_ms, 1234);
         assert_eq!(start.params.post_timeout_ms, 30_000);
@@ -233,6 +303,70 @@ chain = []
             start.params.start_app_context.app_name.as_deref(),
             Some("Example")
         );
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = fs::remove_dir_all(config_home);
+    }
+
+    #[test]
+    fn profile_choices_include_unrouted_profile_files() {
+        let _guard = env_lock();
+        let config_home = temp_config_home();
+        let root = config_home.join("shuohua");
+        write_minimal_config(
+            &root,
+            r#"
+name = "Default"
+
+[asr]
+provider = "fake"
+
+[post]
+chain = []
+"#,
+        );
+        fs::write(
+            root.join("profile/coding.toml"),
+            r#"
+name = "Coding"
+
+[asr]
+provider = "apple"
+
+[post]
+chain = ["rule:zh_filter"]
+"#,
+        )
+        .unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+        let cfg = Arc::new(crate::reload::RuntimeConfig {
+            config: crate::config::load_from(&root.join("config.toml")).unwrap(),
+            theme: crate::config::theme::EffectiveTheme::default(),
+            theme_warning: None,
+        });
+        let (overlay, _rx) = OverlayHandle::channel();
+
+        let start = prepare(
+            &cfg,
+            crate::post::AppContext::default(),
+            StateStore::new(),
+            overlay,
+            |_name, _overrides| {
+                Ok(fake_runtime(
+                    Arc::new(crate::asr::fake::FakeProvider::new()),
+                ))
+            },
+        )
+        .unwrap();
+
+        assert!(start
+            .params
+            .profile_choices
+            .iter()
+            .any(|choice| choice.id == "coding"
+                && choice.display_name == "Coding"
+                && choice.asr_provider == "apple"
+                && choice.chain_summary == "rule:zh_filter"));
 
         std::env::remove_var("XDG_CONFIG_HOME");
         let _ = fs::remove_dir_all(config_home);

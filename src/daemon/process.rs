@@ -4,7 +4,7 @@ use std::thread;
 use crate::daemon::lock::DaemonLock;
 use crate::daemon::runtime;
 use crate::hotkey::{Bindings, HotkeyAction};
-use crate::overlay::OverlayHandle;
+use crate::overlay::{OverlayActionHandle, OverlayHandle};
 use crate::state::StateStore;
 
 pub fn run_daemon_process() -> Result<()> {
@@ -12,6 +12,7 @@ pub fn run_daemon_process() -> Result<()> {
     let _log_guard = crate::log::init_daemon().context("initialize daemon logger")?;
     let cfg_path = crate::config::default_path();
     let (overlay, overlay_rx) = OverlayHandle::channel();
+    let (overlay_action, overlay_action_rx) = OverlayActionHandle::channel();
     let (cfg_rx, reload_handle) =
         crate::reload::watch_with_handle(cfg_path.clone(), Some(overlay.clone()))
             .context("start config watcher")?;
@@ -58,6 +59,7 @@ pub fn run_daemon_process() -> Result<()> {
                 reload_for_daemon,
                 hotkeys,
                 overlay_for_daemon,
+                overlay_action_rx,
                 state_for_daemon,
             )) {
                 tracing::error!(error = ?e, "daemon exited");
@@ -66,6 +68,10 @@ pub fn run_daemon_process() -> Result<()> {
         })
         .context("spawn tokio daemon thread")?;
 
-    crate::overlay::run(overlay_rx, runtime_cfg.theme.overlay.clone());
+    crate::overlay::run(
+        overlay_rx,
+        overlay_action,
+        runtime_cfg.theme.overlay.clone(),
+    );
     Ok(())
 }

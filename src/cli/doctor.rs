@@ -20,6 +20,10 @@ pub struct DoctorArgs {
     /// Include explicit runtime checks for configured ASR and LLM components.
     #[arg(long)]
     pub runtime: bool,
+
+    /// Run Apple voice-processing capture smoke test. This may prompt for microphone permission.
+    #[arg(long)]
+    pub apple_capture_smoke: bool,
 }
 
 pub async fn run(args: DoctorArgs) -> Result<()> {
@@ -42,6 +46,12 @@ pub async fn run(args: DoctorArgs) -> Result<()> {
     report.record_with_step(check_uds().await, "cli.doctor.next_step_daemon");
     report.record_with_step(check_launchd(), "cli.doctor.next_step_launchd");
     report.record_with_step(check_permissions(), "cli.doctor.next_step_permissions");
+    if args.apple_capture_smoke {
+        report.record_with_step(
+            check_apple_capture_smoke().await,
+            "cli.doctor.next_step_microphone_input",
+        );
+    }
     if args.runtime {
         report.record_with_step(check_runtime().await, "cli.doctor.next_step_runtime_config");
     } else {
@@ -49,6 +59,31 @@ pub async fn run(args: DoctorArgs) -> Result<()> {
         report.add_next_step("cli.doctor.next_step_runtime");
     }
     report.into_result()
+}
+
+#[cfg(target_os = "macos")]
+async fn check_apple_capture_smoke() -> CheckStatus {
+    const SMOKE_MS: u64 = 800;
+    println!("voice.apple_capture_smoke: probing {SMOKE_MS}ms capture helper");
+    match crate::voice::apple_source::capture_smoke(SMOKE_MS).await {
+        Ok(result) => {
+            println!(
+                "voice.apple_capture_smoke: OK first_frame_samples={}",
+                result.samples_in_first_frame
+            );
+            CheckStatus::Ok
+        }
+        Err(error) => {
+            println!("voice.apple_capture_smoke: ERROR {error:#}");
+            CheckStatus::Error
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn check_apple_capture_smoke() -> CheckStatus {
+    println!("voice.apple_capture_smoke: ERROR Apple capture smoke is only implemented on macOS");
+    CheckStatus::Error
 }
 
 fn tr(key: &str, vars: &[(&str, String)]) -> String {
@@ -187,6 +222,10 @@ fn check_config() -> CheckStatus {
             println!("  voice.stop_delay_ms = {}", cfg.voice.stop_delay_ms);
             println!("  voice.record_audio = {}", cfg.voice.record_audio);
             println!("  voice.auto_paste = {}", cfg.voice.auto_paste);
+            println!(
+                "  voice.preprocess.backend = {:?}",
+                cfg.voice.preprocess.backend
+            );
             println!("  dev.vad_trace = {}", cfg.dev.vad_trace);
             println!("  ui.language = {:?}", cfg.ui.language);
             println!("  ui.theme = {:?}", cfg.ui.theme);

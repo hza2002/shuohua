@@ -2,14 +2,14 @@ use std::ffi::{c_char, c_int, c_void};
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2::{msg_send, MainThreadOnly};
+use objc2::{define_class, msg_send, MainThreadOnly};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSGlassEffectView,
     NSGlassEffectViewStyle, NSPanel, NSStatusWindowLevel, NSView, NSVisualEffectBlendingMode,
     NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowCollectionBehavior,
     NSWindowStyleMask,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
+use objc2_foundation::{MainThreadMarker, NSObjectProtocol, NSPoint, NSRect, NSSize};
 
 use crate::config::theme::{EffectiveOverlayCfg, GlassStyle};
 use crate::overlay::layout as L;
@@ -21,25 +21,51 @@ pub(super) fn root_frame() -> NSRect {
     )
 }
 
-pub(super) fn make_panel(mtm: MainThreadMarker, frame: NSRect) -> Retained<NSPanel> {
-    let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
-        NSPanel::alloc(mtm),
-        frame,
-        NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
-        NSBackingStoreType::Buffered,
-        false,
-    );
+define_class!(
+    #[unsafe(super = NSPanel)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = ()]
+    pub(super) struct InteractivePanel;
+
+    unsafe impl NSObjectProtocol for InteractivePanel {}
+
+    impl InteractivePanel {
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn can_become_key_window(&self) -> bool {
+            false
+        }
+    }
+);
+
+pub(super) fn make_panel(mtm: MainThreadMarker, frame: NSRect) -> Retained<InteractivePanel> {
+    let panel = InteractivePanel::alloc_panel(mtm, frame);
     unsafe { panel.setReleasedWhenClosed(false) };
     panel.setOpaque(false);
     panel.setBackgroundColor(Some(&NSColor::clearColor()));
     panel.setHasShadow(false);
     panel.setIgnoresMouseEvents(true);
+    panel.setBecomesKeyOnlyIfNeeded(true);
     panel.setLevel(NSStatusWindowLevel);
     panel.setCollectionBehavior(
         NSWindowCollectionBehavior::CanJoinAllSpaces
             | NSWindowCollectionBehavior::FullScreenAuxiliary,
     );
     panel
+}
+
+impl InteractivePanel {
+    fn alloc_panel(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        unsafe {
+            msg_send![
+                super(this),
+                initWithContentRect: frame,
+                styleMask: NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
+                backing: NSBackingStoreType::Buffered,
+                defer: false
+            ]
+        }
+    }
 }
 
 pub(super) fn apply_panel_background_blur(panel: &NSPanel, radius: i64) {
@@ -110,12 +136,25 @@ pub(super) fn build_chrome(
     Retained<NSView>,
     Option<String>,
 ) {
+    make_glass_surface(mtm, root_frame(), cfg)
+}
+
+pub(super) fn make_glass_surface(
+    mtm: MainThreadMarker,
+    frame: NSRect,
+    cfg: &EffectiveOverlayCfg,
+) -> (
+    Retained<NSView>,
+    Option<Retained<NSGlassEffectView>>,
+    Retained<NSView>,
+    Option<String>,
+) {
     let container = NSView::new(mtm);
-    container.setFrame(root_frame());
-    let background = make_background_layer(mtm, cfg);
+    container.setFrame(frame);
+    let background = make_background_layer(mtm, frame, cfg);
 
     if AnyClass::get(c"NSGlassEffectView").is_some() {
-        let glass = NSGlassEffectView::initWithFrame(NSGlassEffectView::alloc(mtm), root_frame());
+        let glass = NSGlassEffectView::initWithFrame(NSGlassEffectView::alloc(mtm), frame);
         #[cfg(debug_assertions)]
         {
             super::debug::dump_glass_selectors(&glass);
@@ -139,7 +178,7 @@ pub(super) fn build_chrome(
     }
 
     let visual = NSVisualEffectView::new(mtm);
-    visual.setFrame(root_frame());
+    visual.setFrame(frame);
     visual.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
     visual.setMaterial(NSVisualEffectMaterial::HUDWindow);
     visual.setState(NSVisualEffectState::Active);
@@ -192,10 +231,11 @@ pub(super) fn apply_glass_settings(
 
 pub(super) fn make_background_layer(
     mtm: MainThreadMarker,
+    frame: NSRect,
     cfg: &EffectiveOverlayCfg,
 ) -> Retained<NSView> {
     let background = NSView::new(mtm);
-    background.setFrame(root_frame());
+    background.setFrame(frame);
     background.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );

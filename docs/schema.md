@@ -225,6 +225,9 @@ compact  → ${XDG_STATE_HOME:-~/.local/state}/shuohua/audio/<recording_id>.m4a
 
 - **`<recording_id>` = history record 的 ULID**。ULID 在 recording 开始时生成；history 与音频用同一 ID join。
 - **格式**：`lossless` 使用 FLAC 无损；`compact` 使用 AAC-LC 32 kbps，实测约比 FLAC 再省 75% 空间。两者输入都是 recorder 生成的 16kHz mono 16-bit canonical PCM。
+- **capture backend 边界**：默认 Apple voice-processing backend 当前不发布 retained audio；
+  `lossless` / `compact` 保存的是支持 retained audio 的原始采集路径输出。需要音频文件时，
+  配置 `voice.preprocess.backend = "off"`。
 - **一次 recording 最多一个音频文件**，含静音段。`.flac` 与 `.m4a` 不应同时存在；TUI 遇到该异常时不擅自选择。
 - **收尾转换**：实时 callback 只写 `<recording_id>.tmp.wav`；录音停止并 finalize 后，用 macOS `/usr/bin/afconvert` 转成临时目标，再原子 rename 为最终文件。成功后删除临时 WAV。
 - **关闭路径 (`record_audio = "off"`, 默认)** 完全跳过写入逻辑。

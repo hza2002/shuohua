@@ -19,3 +19,19 @@ fn swift_target_triple_rejects_invalid_inputs() {
     assert!(apple_helper::swift_target_triple("armv7", "15.0").is_err());
     assert!(apple_helper::swift_target_triple("aarch64", "").is_err());
 }
+
+#[test]
+fn macos_helper_targets_include_asr_and_capture_helpers() {
+    let targets = apple_helper::macos_helper_targets();
+    assert_eq!(targets.len(), 2);
+    assert_eq!(targets[0].output_name, "apple_helper");
+    assert_eq!(
+        targets[0].source_path,
+        "src/asr/providers/apple_helper.swift"
+    );
+    assert_eq!(targets[1].output_name, "apple_capture_helper");
+    assert_eq!(
+        targets[1].source_path,
+        "src/voice/apple_capture_helper.swift"
+    );
+}

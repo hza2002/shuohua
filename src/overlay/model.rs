@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::overlay::command::{OverlayCmd, OverlayState, TextKind};
+use crate::overlay::command::{OverlayCmd, OverlayState, ProfileChoice, TextKind};
 
 /// `SetText{Error}` 后自动 hide overlay 的等待时长。比 notice 长，让用户读完
 /// 错误并决定是否重试。
@@ -32,6 +32,11 @@ pub struct OverlayModel {
     pub level: f32,
     pub bundle_id: Option<String>,
     pub app_name: Option<String>,
+    /// 当前 profile id；用于路由写入/选中判断，不用于展示。
+    pub profile: String,
+    pub profile_display_name: String,
+    pub asr_provider: String,
+    pub profiles: Vec<ProfileChoice>,
     pub chain_summary: String,
     pub segments: Vec<String>,
     pub partial: String,
@@ -63,6 +68,10 @@ impl OverlayModel {
             level: 0.0,
             bundle_id: None,
             app_name: None,
+            profile: String::new(),
+            profile_display_name: String::new(),
+            asr_provider: String::new(),
+            profiles: Vec::new(),
             chain_summary: String::new(),
             segments: Vec::new(),
             partial: String::new(),
@@ -110,10 +119,25 @@ impl OverlayModel {
             OverlayCmd::SetApp {
                 bundle_id,
                 app_name,
+                profile,
+                profiles,
                 chain_summary,
             } => {
                 self.bundle_id = bundle_id;
                 self.app_name = app_name;
+                self.profile = profiles
+                    .iter()
+                    .find(|choice| choice.display_name == profile || choice.id == profile)
+                    .map_or_else(|| profile.clone(), |choice| choice.id.clone());
+                self.profile_display_name = profiles
+                    .iter()
+                    .find(|choice| choice.id == self.profile)
+                    .map_or_else(|| profile.clone(), |choice| choice.display_name.clone());
+                self.asr_provider = profiles
+                    .iter()
+                    .find(|choice| choice.id == self.profile)
+                    .map_or_else(String::new, |choice| choice.asr_provider.clone());
+                self.profiles = profiles;
                 self.chain_summary = chain_summary;
             }
             OverlayCmd::SetText { text, kind } => match kind {
@@ -253,6 +277,47 @@ impl OverlayModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_app_stores_profile_choices() {
+        let mut model = OverlayModel::default();
+
+        model.apply(
+            OverlayCmd::SetApp {
+                bundle_id: Some("com.example.App".into()),
+                app_name: Some("App".into()),
+                profile: "coding".into(),
+                profiles: vec![
+                    ProfileChoice {
+                        id: "default".into(),
+                        display_name: "Default".into(),
+                        asr_provider: "doubao".into(),
+                        chain_summary: "rule:zh_filter".into(),
+                    },
+                    ProfileChoice {
+                        id: "coding".into(),
+                        display_name: "Coding".into(),
+                        asr_provider: "apple".into(),
+                        chain_summary: "llm:deepseek".into(),
+                    },
+                ],
+                chain_summary: "rule:zh_filter".into(),
+            },
+            &crate::config::theme::OverlayStateTheme::default(),
+        );
+
+        assert_eq!(
+            model
+                .profiles
+                .iter()
+                .map(|profile| profile.id.as_str())
+                .collect::<Vec<_>>(),
+            ["default", "coding"]
+        );
+        assert_eq!(model.profile, "coding");
+        assert_eq!(model.profile_display_name, "Coding");
+        assert_eq!(model.asr_provider, "apple");
+    }
     use crate::i18n;
     use crate::overlay::command::{OverlayCmd, OverlayHandle, OverlayState, TextKind};
 

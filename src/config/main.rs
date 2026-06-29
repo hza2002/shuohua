@@ -53,6 +53,8 @@ pub struct VoiceCfg {
     pub auto_paste: bool,
     #[serde(default)]
     pub vad: VoiceVadCfg,
+    #[serde(default)]
+    pub preprocess: VoicePreprocessCfg,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -81,6 +83,7 @@ impl Default for VoiceCfg {
             record_audio: RecordAudioMode::Off,
             auto_paste: default_auto_paste(),
             vad: VoiceVadCfg::default(),
+            preprocess: VoicePreprocessCfg::default(),
         }
     }
 }
@@ -151,6 +154,20 @@ fn default_max_overlap_ms() -> u32 {
 }
 fn default_min_start_voiced_frames() -> u32 {
     2
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum VoicePreprocessBackend {
+    Off,
+    #[default]
+    Apple,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct VoicePreprocessCfg {
+    #[serde(default)]
+    pub backend: VoicePreprocessBackend,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -305,6 +322,7 @@ trigger = "f16"
         assert_eq!(cfg.voice.stop_delay_ms, 800);
         assert_eq!(cfg.voice.record_audio, RecordAudioMode::Off);
         assert!(cfg.voice.auto_paste);
+        assert_eq!(cfg.voice.preprocess.backend, VoicePreprocessBackend::Apple);
         assert_eq!(cfg.ui.language, "auto");
         assert_eq!(cfg.ui.theme, "gruvbox-dark");
         assert_eq!(cfg.ui.theme_tui, "");
@@ -499,6 +517,52 @@ min_start_voiced_frames = 3
         assert_eq!(cfg.voice.vad.pre_roll_ms, 250);
         assert_eq!(cfg.voice.vad.max_overlap_ms, 180);
         assert_eq!(cfg.voice.vad.min_start_voiced_frames, 3);
+    }
+
+    #[test]
+    fn voice_preprocess_defaults_to_apple() {
+        let cfg: Config = toml::from_str(
+            r#"
+[hotkey]
+trigger = "f16"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.voice.preprocess.backend, VoicePreprocessBackend::Apple);
+    }
+
+    #[test]
+    fn voice_preprocess_can_parse_apple_backend() {
+        let cfg: Config = toml::from_str(
+            r#"
+[hotkey]
+trigger = "f16"
+
+[voice.preprocess]
+backend = "apple"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.voice.preprocess.backend, VoicePreprocessBackend::Apple);
+    }
+
+    #[test]
+    fn voice_preprocess_rejects_unknown_backend() {
+        let error = parse(
+            r#"
+[hotkey]
+trigger = "f16"
+
+[voice.preprocess]
+backend = "missing"
+"#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("voice.preprocess.backend"), "{error}");
     }
 
     #[test]

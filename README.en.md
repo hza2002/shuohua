@@ -33,6 +33,7 @@ Right Option x2 → Apple/cloud → Rules/LLM  → Auto-paste
 - Double-tap Right Option to start or stop recording, and press Escape to cancel; both global hotkeys are configurable.
 - Show live recording, transcription, and post-processing status.
 - Use cloud ASR providers such as Doubao on macOS 15+, with Apple SpeechAnalyzer available locally on macOS 26+.
+- Use macOS system voice processing capture by default to improve microphone gain, echo handling, and background-noise treatment.
 - Build post-processing chains from rules and OpenAI-compatible or Anthropic LLMs.
 - Select profiles, hotwords, ASR providers, and processing chains by active app.
 - Inspect status, history, configuration, and diagnostics in a terminal UI.

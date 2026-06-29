@@ -34,6 +34,8 @@ asr_provider_init = "ASR provider 初始化失败"
 "voice.stop_delay_ms.description" = "停止后保留的尾音毫秒数。"
 "voice.record_audio.description" = "off=不保存；lossless=FLAC 无损；compact=AAC 32 kbps，约比 FLAC 再省 75% 空间"
 "voice.auto_paste.description" = "识别完成后是否自动粘贴文本。"
+"voice.preprocess.description" = "麦克风音频预处理设置。"
+"voice.preprocess.backend.description" = "预处理后端：apple 使用 macOS 系统语音处理采集；off 不做预处理，使用原始采集。"
 "voice.vad.description" = "语音活动检测设置。"
 "voice.vad.backend.description" = "VAD 后端：off 关闭暂停/恢复，silero 启用本地 VAD。"
 "voice.vad.threshold.description" = "Silero VAD 的语音判定阈值。"
@@ -316,6 +318,7 @@ about = "macOS 语音输入助手"
 [cli.help.doctor]
 about = "检查本地环境和配置"
 runtime = "检查已配置的 ASR 和 LLM 组件运行路径"
+apple_capture_smoke = "真实采集约 800ms 音频，检查 Apple 语音处理采集链路"
 
 [cli.help.config_template]
 about = "从内置注册表生成参考配置模板"

@@ -59,6 +59,8 @@ fn description_key(name: &str) -> &'static str {
         "voice.stop_delay_ms" => "config.field.voice.stop_delay_ms.description",
         "voice.record_audio" => "config.field.voice.record_audio.description",
         "voice.auto_paste" => "config.field.voice.auto_paste.description",
+        "voice.preprocess" => "config.field.voice.preprocess.description",
+        "voice.preprocess.backend" => "config.field.voice.preprocess.backend.description",
         "voice.vad" => "config.field.voice.vad.description",
         "voice.vad.backend" => "config.field.voice.vad.backend.description",
         "voice.vad.threshold" => "config.field.voice.vad.threshold.description",
@@ -172,6 +174,12 @@ pub fn main_spec() -> ConfigSpec {
                 .allowed_values(["off", "lossless", "compact"]),
         )
         .field(field(FieldSpec::bool, "voice.auto_paste").optional())
+        .field(field(FieldSpec::table, "voice.preprocess").optional())
+        .field(
+            field(FieldSpec::string, "voice.preprocess.backend")
+                .optional()
+                .allowed_values(["off", "apple"]),
+        )
         .field(field(FieldSpec::table, "voice.vad").optional())
         .field(
             field(FieldSpec::string, "voice.vad.backend")

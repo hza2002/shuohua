@@ -21,6 +21,8 @@ shuo doctor           # 环境检查：
                       #   - 打印 effective config：merge 后实际生效的配置
                       #     （voice.record_audio = off | lossless | compact）
                       #   - ASR / LLM Provider：`--runtime` 显式触发；走实际可运行性检查
+                      #   - Apple capture helper：`--apple-capture-smoke` 显式触发；
+                      #     真实采集约 800ms 音频，可能触发 Microphone 权限弹窗
                       #   - launchd 状态：plist 是否装、daemon 是否在跑
 
 shuo config-template  # 一次性导出全部内置模板 registry + theme presets 到指定目录

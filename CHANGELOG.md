@@ -2,6 +2,31 @@
 
 本文件只记录公开发布版本的用户可感知变化，最新版本在最上面。
 
+## v0.3.0 - 2026-06-30
+
+### Added
+
+- Added macOS system voice-processing capture as the default microphone preprocessing path, improving gain, echo handling, and background-noise treatment.
+- Added `[voice.preprocess].backend` with `apple` and `off` options, and updated generated config templates and diagnostics to expose the effective setting.
+- Added `shuo doctor --apple-capture-smoke` to run a short real microphone capture check for the Apple voice-processing path.
+- Added overlay profile switching for the current app, allowing users to bind the frontmost app to another profile from the recording overlay for future sessions.
+
+### Changed
+
+- Open microphone capture and ASR sessions in parallel to reduce recording startup latency.
+- Reuse the Apple capture helper across sessions and keep helper startup/lifecycle timing in daemon logs for easier diagnosis.
+- Improved overlay transcript rendering with measured AppKit text layout, internal scrolling for long ASR text, clearer scroll affordances, and more stable profile picker sizing.
+- Release notes now embed the matching `CHANGELOG.md` section into the GitHub Release body.
+
+### Fixed
+
+- Fixed Apple capture helper lifecycle issues including bounded startup waits, daemon-owned helper lifetime, converter drain on stop, and protocol hardening.
+- Fixed voice startup and cancel paths so capture or ASR startup failures do not wait on the other side indefinitely.
+- Fixed VAD pause sessions so recording starts when speech is detected rather than too early.
+- Fixed finalize behavior so the final ASR send is covered by the finalize timeout and ASR partials remain visible in the overlay after recording stops.
+- Fixed empty or contentless recordings so they do not create misleading history records or run post-processing.
+- Fixed overlay routing and display issues around profile ids, chain summaries, body scrolling, tail geometry, and text sizing.
+
 ## v0.2.0 - 2026-06-24
 
 ### Added

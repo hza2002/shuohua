@@ -1,14 +1,14 @@
 use anyhow::Result;
 
-pub fn plist_path() -> std::path::PathBuf {
-    std::path::PathBuf::new()
-}
-
 pub fn launchd_status() -> super::LaunchdStatus {
     super::LaunchdStatus::Unsupported
 }
 
-pub fn install() -> Result<()> {
+pub fn plist_program() -> Option<std::path::PathBuf> {
+    None
+}
+
+pub async fn install() -> Result<()> {
     unsupported()
 }
 
@@ -16,7 +16,7 @@ pub fn uninstall() -> Result<()> {
     unsupported()
 }
 
-pub fn start() -> Result<()> {
+pub async fn start() -> Result<()> {
     unsupported()
 }
 

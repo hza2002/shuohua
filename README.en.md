@@ -70,8 +70,13 @@ install -m 755 ./shuo ~/.local/bin/shuo
 shuo version
 ```
 
-Make sure `~/.local/bin` is on your `PATH`. If this machine already has
-`/usr/local/bin/shuo`, remove the old file or put `~/.local/bin` earlier in `PATH`.
+`~/.local/bin/shuo` is the only supported install path (per-user, no sudo);
+make sure `~/.local/bin` is on your `PATH`. `shuo update` always installs the
+new binary to this path (creating `~/.local/bin` if needed, never `sudo`-writing
+system dirs); if you were running a binary from elsewhere, the update still
+writes the preferred path and prints a migration notice (fix PATH, repoint the
+service with `shuo service install`, remove the old binary yourself). If
+installed elsewhere, `shuo doctor` / `shuo service status` report the drift.
 
 <details>
 <summary>Build from source</summary>
@@ -167,6 +172,11 @@ shuo service restart
 shuo doctor
 ```
 
+Binaries downloaded by `shuo update` carry no `com.apple.quarantine`, so no
+`xattr` step is needed. If you instead re-download the tarball in a browser and
+overwrite the binary manually, the new binary is quarantined — run
+`xattr -d com.apple.quarantine ~/.local/bin/shuo` once more.
+
 > [!NOTE]
 > Separate Input Monitoring permission is not required. The current implementation uses Accessibility for the global hotkey capability.
 
@@ -207,6 +217,21 @@ See the [CLI documentation](docs/cli.md) for the complete behavior. The develope
 - History is stored as plaintext JSONL and should be treated as sensitive local data.
 - Audio is not retained by default. Enabling `voice.record_audio` writes FLAC or AAC files under `audio/`.
 - Cloud ASR and LLM providers receive the audio or text required by the services you configure.
+
+### Uninstall
+
+There is no one-shot uninstall command — shuo is just one binary, one launchd plist,
+and plaintext config/data, so remove them by hand (history is your only data source,
+kept by default; delete it only if you really mean to):
+
+```bash
+shuo service uninstall            # stop the service and remove the launchd plist (leaves binary/data)
+rm ~/.local/bin/shuo             # remove the binary
+rm -rf ~/.config/shuohua         # remove config (profiles/ASR/post/theme)
+rm -rf ~/.local/state/shuohua    # remove history/audio/logs — unrecoverable
+```
+
+If you set `XDG_CONFIG_HOME` / `XDG_STATE_HOME`, config and data live under `shuohua/` in those directories.
 
 ## Troubleshooting
 

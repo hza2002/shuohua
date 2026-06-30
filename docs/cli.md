@@ -25,6 +25,12 @@ shuo doctor           # 环境检查：
                       #     真实采集约 800ms 音频，可能触发 Microphone 权限弹窗
                       #   - launchd 状态：plist 是否装、daemon 是否在跑
 
+shuo report           # 生成可外发支持包：summary + doctor + 日志 + launchd 兜底日志
+                      #   - 默认写当前目录，成功后打印绝对路径
+                      #   - 不打包 config、history、retained audio
+                      #   - --recording <ULID> 只用于把日志窗口对准该录音前后日期
+                      #   - --out <path> 指定输出目录或最终 .tar.gz 路径
+
 shuo config-template  # 一次性导出全部内置模板 registry + theme presets 到指定目录
                       # （默认 $XDG_CONFIG_HOME/shuohua/templates）；写入前预检全部目标路径，
                       # 任一文件已存在则拒绝覆盖且不写任何文件
@@ -37,11 +43,11 @@ shuo completions fish
 shuo update           # 从 GitHub Release 检查并更新当前 shuo binary
 
 shuo service install  # 装 launchd plist（~/Library/LaunchAgents/）+ launchctl bootstrap
-                      # plist ProgramArguments = ["shuo", "--daemon"]
+                      # plist ProgramArguments = [当前 shuo 绝对路径, "--daemon"]
 shuo service uninstall # launchctl bootout + 删 plist，不删 binary 或用户数据
 
 shuo service start    # launchctl kickstart（daemon 已装但停了）
-shuo service stop     # 通过 UDS 请求 daemon 正常退出，确认旧 PID 消失后才返回
+shuo service stop     # 通过 UDS 请求 daemon 正常退出；未运行时打印未运行并返回 0
 shuo service restart  # stop 成功且旧 PID 已退出后再 start
 shuo service status   # 走 UDS daemon_status op：PID、起来多久、当前是否在录音
 
@@ -74,12 +80,20 @@ shuo completions fish > "$(brew --prefix)/share/fish/vendor_completions.d/shuo.f
   current-thread Tokio runtime，再进入 async dispatch。子命令模块不创建或嵌套
   runtime；需要 Tokio I/O 的 handler 写成 `async fn`，纯文件/进程操作保持同步。
   daemon 和 smart fallback/TUI 各自持有独立 runtime，不归 CLI dispatcher 管理。
-- **app 与 service 生命周期分开**：`shuo update` 只更新当前 binary；
+- **app 与 service 生命周期分开**：`shuo update` 只更新 binary；
   `shuo service ...` 只管理后台 daemon，不删除 binary 或用户数据。
+- **`update` 的安装路径边界**：唯一受支持的安装路径是 `~/.local/bin/shuo`
+  （per-user，单一来源在 `src/install.rs` 的 `InstallLayout`；`HOME` 缺失即报错，
+  不退化成 `/.local/bin`）。update 始终把新 binary 原子写入这个 preferred path
+  （必要时自动建 `~/.local/bin`），**不** sudo 写 `/usr/local/bin` 等系统目录、也不
+  自动删旧 binary。当前运行的 binary 不是 preferred 时不拒绝，而是写入 preferred 后
+  提示迁移（PATH、`shuo service install` repoint、自行删旧）。`shuo doctor` /
+  `shuo service status` 以 preferred 为基准诊断 current exe / plist binary /
+  PATH-first `shuo` 的漂移，结论与从哪运行无关。
 - **`update` 的发布物边界**：从 GitHub latest release 选择匹配当前平台的
   `shuo-vX.Y.Z-<target>.tar.gz` 和 `.sha256`，先校验 SHA-256，再提取归档里的
-  `shuo` 并替换当前 executable。GitHub repo URL 留在 app release 模块，artifact
-  target 和替换细节留在平台模块。
+  `shuo` 并写入 preferred install path。GitHub repo URL 留在 app release 模块，
+  artifact target 和替换细节留在平台模块。
 - **`update` 的版本边界**：默认拒绝跨 major version，提示用户查看 release notes
   后用 `--allow-major`；`0.x` 内 minor / patch 更新不需要额外 flag。
 - **`update` 不重启 daemon**：更新 binary 后只提示运行 `shuo service restart`；
@@ -97,11 +111,17 @@ shuo completions fish > "$(brew --prefix)/share/fish/vendor_completions.d/shuo.f
   ERROR，命令最终返回非 0。warning / skipped 不影响退出码。`--runtime` 未开启时
   runtime skipped 不算失败；开启后 ASR / LLM runtime 失败算失败。daemon status
   查询超时为 1s；LLM runtime 单项超时为 15s。
+- **`report` 是安全支持包，不是配置/历史导出**：report 只收普通 `doctor` 输出、
+  时间窗内 daemon 日志、launchd plist 和 launchd stdout/stderr tail；不收 config
+  文件、history JSONL、retained audio，也不透传 `doctor --runtime`。不带
+  `--recording` 时收最近 3 个本地日期日志；带 `--recording <ULID>` 时只用 ULID
+  内嵌时间定位本地日期，并收前一日、当日、后一日日志，不读取 history。
 - **`service status` 不无限等待 daemon**：UDS daemon_status 查询超时为 1s；超时返回非 0。
 - **`service stop` 等待真实退出**：Shutdown 回包必须是带有效 PID 的 `daemon_status`；
   CLI 随后最多等待 20s，确认该 PID 消失后才打印 stopped。20s 上限覆盖 daemon
-  最多 15s 的 active session graceful shutdown。超时返回非 0，不发送 signal，
-  不强杀进程。
+  最多 15s 的 active session graceful shutdown。daemon UDS 不存在或连接被拒绝时视为
+  已经停止，打印未运行并返回 0；其他 IPC 错误、PID 等待超时返回非 0。
+  失败路径不发送 signal，不强杀进程。
 - **`service restart` 不跨过失败的 stop**：只有 stop 成功并确认旧 PID 已退出后才执行
   launchctl start；Shutdown IPC、PID 等待或超时错误都会原样阻止 start。
 - **默认快捷键兼顾普通键盘**：内置 config template 使用
@@ -116,7 +136,7 @@ shuo completions fish > "$(brew --prefix)/share/fish/vendor_completions.d/shuo.f
 ## 4. 用户旅程
 
 ```
-1. brew install shuohua           # 或从源码 cargo install --path .
+1. install -m 755 ./shuo ~/.local/bin/shuo  # 唯一受支持安装路径，详见 README
 2. shuo doctor                    # 看权限缺哪个，按指示授权
 3. shuo service install           # 装 launchd plist + 启动
 4. 双击右 Option 录音             # 默认快捷键，可在 config.toml 修改
@@ -124,8 +144,10 @@ shuo completions fish > "$(brew --prefix)/share/fish/vendor_completions.d/shuo.f
 6. 想改配置：TUI Configure 打开/创建配置，或直接编辑 toml 文件
 7. shuo update && shuo service restart  # 升级 binary 后重启 daemon
 8. shuo service restart          # 出问题就重启
-9. shuo service uninstall + cargo uninstall  # 不用了
+9. shuo service uninstall && rm ~/.local/bin/shuo  # 不用了（config/state 自行清理）
 ```
+
+> 暂未提供 Homebrew formula；brew 与「用户自装」如何共存留待后续设计。
 
 ## 5. launchd plist 模板
 
@@ -173,7 +195,7 @@ shuo completions fish > "$(brew --prefix)/share/fish/vendor_completions.d/shuo.f
 **关键决策**：
 
 - **Label**：`com.hza2002.shuohua`（reverse-DNS，参考 yabai `com.koekeishiya.yabai` 约定）
-- **KeepAlive { SuccessfulExit: false }**：daemon 崩了自动重启；`shuo service stop` 走 UDS graceful shutdown，daemon runtime 收到 `shutdown` 后先停止当前录音并等待 bounded 收尾，再退出 0，不触发重启。UDS 不可达时 stop 返回错误，避免用 signal kill 触发 KeepAlive 重启。
+- **KeepAlive { SuccessfulExit: false }**：daemon 崩了自动重启；`shuo service stop` 走 UDS graceful shutdown，daemon runtime 收到 `shutdown` 后先停止当前录音并等待 bounded 收尾，再退出 0，不触发重启。daemon 已经未运行时 stop 返回 0；其他 stop 失败不 signal kill，避免触发 KeepAlive 重启。
 - **ThrottleInterval=10s**：防止崩溃循环把系统打爆
 - **ProcessType=Interactive**：AppKit GUI 必须，否则 `NSPanel` 显不出来
 - **StandardOutPath / StandardErrorPath**：保留为兜底。正式 daemon 日志写入 `~/.local/state/shuohua/logs/shuo-YYYY-MM-DD.log`；launchd stdout/stderr 只用于 panic、极早期失败、logger 初始化失败等正式 logger 尚未接管的情况。

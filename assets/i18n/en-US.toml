@@ -282,6 +282,7 @@ uninstalled = "uninstalled {path}"
 started = "started {label}"
 stopped = "stopped {label}"
 status_timeout = "daemon status query timed out after {seconds}s"
+start_health_failed = "launchd accepted the start request, but the daemon did not stay reachable within {seconds}s"
 not_running = "not running"
 plist_installed = "installed {path}"
 plist_not_installed = "not installed {path}"
@@ -292,6 +293,7 @@ action_start = "starting launchd service; if it is not installed, run `shuo serv
 action_stop = "stopping launchd service; if it is not installed, run `shuo service install` first"
 launchctl_command = "launchctl command: {args}"
 launchctl_failed = "launchctl {args} failed with status {status}\nstdout: {stdout}\nstderr: {stderr}"
+diagnostic_accessibility = "diagnostic: launchd started {path}, but macOS rejected its keyboard event tap. Run `shuo service restart` to request Accessibility permission for this binary; after granting it in System Settings, run `shuo service restart` again."
 create_state_dir_failed = "failed to create state directory {path}"
 create_launch_agents_dir_failed = "failed to create LaunchAgents directory {path}"
 resolve_exe_failed = "failed to resolve current shuo executable path"
@@ -311,6 +313,14 @@ refuse_major = "latest version {latest} crosses a major version from {current}; 
 downloading = "downloading {version}"
 updated = "updated shuo: {current} -> {latest} ({path})"
 restart_hint = "if the daemon is running, it will keep using the old version; run `shuo service restart` to load the new binary"
+permission_hint = "macOS may require Accessibility permission again after replacing the binary at {path}. Run `shuo service restart` to request permission for the new binary; after granting it in System Settings, run `shuo service restart` again."
+migrated = "installed to the supported path {preferred} (you were running {previous}). Make sure ~/.local/bin comes first on your PATH, run `shuo service install` to repoint the service at the new binary, then `shuo service restart`. You can remove the old binary at {previous}."
+
+[cli.install]
+home_unset = "HOME is not set, so the install path ~/.local/bin/shuo cannot be resolved; set HOME and retry"
+drift_current_not_preferred = "install.drift: running binary {current} is not the preferred install path {preferred}; reinstall to {preferred}"
+drift_plist_not_preferred = "install.drift: launchd plist points at {plist}, not the preferred install path {preferred}; run `shuo service install` to repoint, then `shuo service restart`"
+drift_path_first_not_preferred = "install.drift: PATH resolves `shuo` to {path_first}, not the preferred install path {preferred}; put ~/.local/bin first on PATH or remove the stray binary"
 
 [cli.help]
 about = "macOS voice input assistant"
@@ -324,6 +334,11 @@ apple_capture_smoke = "Capture about 800ms of real audio to check the Apple voic
 about = "Generate reference config templates from the built-in registry"
 out = "Directory to write generated templates into"
 lang = "Comment language for generated templates: auto, en-US, zh-CN, zh-Hant, zh-TW, zh-HK, or pseudo"
+
+[cli.help.report]
+about = "Create a safe support bundle"
+recording = "Recording ULID used only to align the log window"
+out = "Output directory or final .tar.gz path"
 
 [cli.help.completions]
 about = "Generate shell completion scripts"
@@ -357,6 +372,9 @@ allow_major = "Allow updates across major versions"
 [cli.help.version]
 about = "Print version information"
 
+[cli.report]
+written = "Report written to: {path}"
+
 [cli.doctor]
 version = "version: {version}"
 runtime_skipped = "skipped (run `shuo doctor --runtime` to test configured ASR/LLM runtime paths)"
@@ -382,7 +400,7 @@ daemon_not_running = "not running ({socket} not reachable)"
 daemon_status_timeout = "status query timed out after {seconds}s"
 daemon_ok = "pid={pid} uptime={uptime} state={state} recording={recording}"
 permission_accessibility_missing = "missing or not granted"
-hint_permission_accessibility = "grant the terminal app that starts shuo in System Settings > Privacy & Security > Accessibility"
+hint_permission_accessibility = "run `shuo service start` or `shuo service restart` to request Accessibility permission for the shuo binary; after granting it in System Settings, run the service command again"
 permission_microphone_not_determined = "not determined"
 permission_microphone_denied = "denied"
 permission_microphone_restricted = "restricted by system policy"
@@ -399,6 +417,7 @@ next_step_hotkey = "fix [hotkey] in config.toml"
 next_step_microphone_input = "connect or select a default microphone in System Settings > Sound"
 next_step_daemon = "start the daemon with `shuo service start` or install it with `shuo service install`"
 next_step_launchd = "install the background service with `shuo service install`"
+next_step_install = "reinstall shuo to ~/.local/bin/shuo (see README) and repoint the service with `shuo service install`"
 next_step_permissions = "grant missing macOS permissions in System Settings"
 next_step_runtime = "run `shuo doctor --runtime` after local checks pass"
 next_step_runtime_config = "fix ASR/LLM provider configuration and rerun `shuo doctor --runtime`"

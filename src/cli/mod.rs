@@ -2,6 +2,7 @@ pub mod app;
 pub mod completions;
 pub mod config_template;
 pub mod doctor;
+pub mod report;
 pub mod service;
 
 use anyhow::{Context, Result};
@@ -21,6 +22,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Doctor(doctor::DoctorArgs),
+    Report(report::ReportArgs),
     /// Generate reference config templates from the built-in registry.
     ConfigTemplate(config_template::ConfigTemplateArgs),
     /// Generate shell completion scripts.
@@ -49,6 +51,7 @@ pub fn run_command(command: Command) -> Result<()> {
 async fn dispatch(command: Command) -> Result<()> {
     match command {
         Command::Doctor(args) => doctor::run(args).await,
+        Command::Report(args) => report::run(args),
         Command::ConfigTemplate(args) => config_template::run(args),
         Command::Completions(args) => completions::run(args),
         Command::Service(command) => service::run(command).await,
@@ -87,6 +90,13 @@ fn localized_command() -> clap::Command {
                 .mut_arg("lang", |arg| {
                     arg.help(crate::t!("cli.help.config_template.lang"))
                 })
+        })
+        .mut_subcommand("report", |cmd| {
+            cmd.about(crate::t!("cli.help.report.about"))
+                .mut_arg("recording", |arg| {
+                    arg.help(crate::t!("cli.help.report.recording"))
+                })
+                .mut_arg("out", |arg| arg.help(crate::t!("cli.help.report.out")))
         })
         .mut_subcommand("completions", |cmd| {
             cmd.about(crate::t!("cli.help.completions.about"))
@@ -204,6 +214,39 @@ mod tests {
             Some(Command::Update(args)) => assert!(args.allow_major),
             other => panic!("expected update command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn report_flags_parse_recording_and_out() {
+        let cli = Cli::try_parse_from([
+            "shuo",
+            "report",
+            "--recording",
+            "01HXYZABCDEF0123456789ABCD",
+            "--out",
+            "/tmp/report.tar.gz",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Command::Report(args)) => {
+                assert_eq!(
+                    args.recording.as_deref(),
+                    Some("01HXYZABCDEF0123456789ABCD")
+                );
+                assert_eq!(
+                    args.out.as_deref(),
+                    Some(std::path::Path::new("/tmp/report.tar.gz"))
+                );
+            }
+            other => panic!("expected report command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn report_rejects_runtime_and_include_history_flags() {
+        assert!(Cli::try_parse_from(["shuo", "report", "--runtime"]).is_err());
+        assert!(Cli::try_parse_from(["shuo", "report", "--include-history"]).is_err());
     }
 
     #[test]

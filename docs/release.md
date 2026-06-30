@@ -227,9 +227,10 @@ shuo service restart
 shuo doctor
 ```
 
-`shuo update` 替换当前 `shuo` binary 后不会自动重启已运行 daemon；需要
-`shuo service restart` 让后台服务加载新 binary。当前 release 未签名，更新后仍可能
-需要重新授权 Microphone 和 Accessibility。
+`shuo update` 固定写入 supported preferred path `~/.local/bin/shuo`，不会自动重启已运行
+daemon；如曾从其他路径运行，先用 `shuo service install` 重新指向 launchd plist，再
+`shuo service restart` 让后台服务加载新 binary。当前 release 未签名，更新后仍可能需要
+重新授权 Microphone 和 Accessibility。
 
 ## 12. 出问题时
 

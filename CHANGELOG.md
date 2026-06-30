@@ -2,6 +2,23 @@
 
 本文件只记录公开发布版本的用户可感知变化，最新版本在最上面。
 
+## v0.4.0 - 2026-06-30
+
+### Added
+
+- Added `shuo report` to generate a safe support bundle with summaries, diagnostics, and redacted logs without including config, history, or retained audio.
+
+### Changed
+
+- Standardized the supported install path on `~/.local/bin/shuo`; `shuo update` now writes there without sudo and reports migration guidance when another binary path is in use.
+- Improved `shuo doctor` and `shuo service status` install drift diagnostics for the running binary, launchd plist binary, and first `shuo` on `PATH`.
+
+### Fixed
+
+- Fixed service start/install so launchd success is not reported until the daemon is reachable and stable.
+- Fixed service stop so an already stopped daemon prints `daemon: 未运行` and exits successfully.
+- Fixed daemon IPC absence handling so only missing/refused sockets are treated as not running; other IPC errors are surfaced.
+
 ## v0.3.0 - 2026-06-30
 
 ### Added

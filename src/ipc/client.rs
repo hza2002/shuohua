@@ -54,3 +54,39 @@ impl IpcClient {
         Ok(None)
     }
 }
+
+pub fn connect_error_is_absent(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .any(|error| {
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn connect_error_is_absent_treats_only_missing_and_refused_as_absent() {
+        let missing =
+            anyhow::Error::new(std::io::Error::new(std::io::ErrorKind::NotFound, "missing"))
+                .context("connect UDS /tmp/shuohua.sock");
+        let refused = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "refused",
+        ))
+        .context("connect UDS /tmp/shuohua.sock");
+        let denied = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ))
+        .context("connect UDS /tmp/shuohua.sock");
+
+        assert!(super::connect_error_is_absent(&missing));
+        assert!(super::connect_error_is_absent(&refused));
+        assert!(!super::connect_error_is_absent(&denied));
+    }
+}

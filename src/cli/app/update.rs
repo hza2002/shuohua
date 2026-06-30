@@ -9,6 +9,8 @@ pub struct UpdateOutcome {
     pub from: Version,
     pub to: Version,
     pub installed_path: PathBuf,
+    /// 当前运行的 binary 不是 preferred 路径时，记录旧路径，提示用户迁移。
+    pub migrated_from: Option<PathBuf>,
 }
 
 pub fn current_version() -> Result<Version> {
@@ -70,8 +72,45 @@ pub async fn run(args: crate::cli::app::UpdateArgs) -> Result<()> {
             ]
         )
     );
+    if let Some(previous) = &outcome.migrated_from {
+        println!(
+            "{}",
+            crate::i18n::tr(
+                "cli.app.update.migrated",
+                &[
+                    ("preferred", outcome.installed_path.display().to_string()),
+                    ("previous", previous.display().to_string()),
+                ]
+            )
+        );
+    }
     println!("{}", crate::i18n::tr("cli.app.update.restart_hint", &[]));
+    println!("{}", update_permission_hint(&outcome.installed_path));
+    // 以装好的 preferred binary 为基准报漂移：catch「update 原地成功，但 plist / PATH
+    // 仍指向别的旧 binary」——restart 后 daemon 会拉起错的那个。current 用 installed_path，
+    // 故不重复迁移提示里的 CurrentNotPreferred。
+    for finding in post_update_drift(&outcome.installed_path) {
+        println!("{}", crate::install::render_drift(&finding));
+    }
     Ok(())
+}
+
+fn post_update_drift(installed: &std::path::Path) -> Vec<crate::install::DriftFinding> {
+    let plist = crate::cli::service::plist_program();
+    let path_first = crate::install::path_first_binary();
+    crate::install::diagnose_drift(
+        installed,
+        installed,
+        plist.as_deref(),
+        path_first.as_deref(),
+    )
+}
+
+fn update_permission_hint(installed_path: &std::path::Path) -> String {
+    crate::i18n::tr(
+        "cli.app.update.permission_hint",
+        &[("path", installed_path.display().to_string())],
+    )
 }
 
 async fn install_update(
@@ -97,12 +136,14 @@ async fn install_update(
     let extracted =
         crate::cli::app::archive::extract_shuo_binary(&tarball, &temp_dir, &expected_binary_path)?;
     platform.prepare_executable(&extracted)?;
-    let installed_path = platform.replace_current_exe(&extracted)?;
+    let plan = crate::install::plan_update(&platform.current_exe()?)?;
+    platform.install_executable(&extracted, &plan.target)?;
 
     Ok(UpdateOutcome {
         from,
         to,
-        installed_path,
+        installed_path: plan.target,
+        migrated_from: plan.migrated_from,
     })
 }
 
@@ -149,6 +190,18 @@ mod tests {
 
         let err = ensure_update_allowed(&current, &latest, false).unwrap_err();
         assert!(err.to_string().contains("--allow-major"), "{err:#}");
+    }
+
+    #[test]
+    fn update_permission_hint_names_installed_binary_and_accessibility() {
+        crate::i18n::init("en-US");
+
+        let preferred = crate::install::InstallLayout::preferred_bin().unwrap();
+        let hint = update_permission_hint(&preferred);
+
+        assert!(hint.contains(&preferred.display().to_string()), "{hint}");
+        assert!(hint.contains("Accessibility"), "{hint}");
+        assert!(hint.contains("shuo service restart"), "{hint}");
     }
 
     #[test]

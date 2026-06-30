@@ -33,11 +33,17 @@ pub fn launchd_status() -> LaunchdStatus {
     platform::launchd_status()
 }
 
+/// 已安装 launchd plist 中 `ProgramArguments` 的第一个值（daemon 实际拉起的
+/// binary 绝对路径）。用于安装路径漂移诊断；未安装则为 `None`。
+pub fn plist_program() -> Option<std::path::PathBuf> {
+    platform::plist_program()
+}
+
 pub async fn run(command: ServiceCommand) -> Result<()> {
     match command {
-        ServiceCommand::Install => platform::install(),
+        ServiceCommand::Install => platform::install().await,
         ServiceCommand::Uninstall => platform::uninstall(),
-        ServiceCommand::Start => platform::start(),
+        ServiceCommand::Start => platform::start().await,
         ServiceCommand::Stop => platform::stop().await,
         ServiceCommand::Restart => platform::restart().await,
         ServiceCommand::Status => platform::status().await,

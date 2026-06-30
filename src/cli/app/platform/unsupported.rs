@@ -16,7 +16,7 @@ impl super::UpdatePlatform for UnsupportedUpdatePlatform {
         unsupported()
     }
 
-    fn replace_current_exe(&self, _new_exe: &Path) -> Result<PathBuf> {
+    fn install_executable(&self, _new_exe: &Path, _target: &Path) -> Result<()> {
         unsupported()
     }
 }

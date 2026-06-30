@@ -16,6 +16,7 @@ mod daemon;
 pub mod history;
 mod hotkey;
 mod i18n;
+mod install;
 mod ipc;
 mod log;
 mod overlay;

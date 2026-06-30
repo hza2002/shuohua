@@ -45,6 +45,7 @@ pub async fn run(args: DoctorArgs) -> Result<()> {
     );
     report.record_with_step(check_uds().await, "cli.doctor.next_step_daemon");
     report.record_with_step(check_launchd(), "cli.doctor.next_step_launchd");
+    report.record_with_step(check_install(), "cli.doctor.next_step_install");
     report.record_with_step(check_permissions(), "cli.doctor.next_step_permissions");
     if args.apple_capture_smoke {
         report.record_with_step(
@@ -628,7 +629,8 @@ async fn query_daemon_status() -> Result<Option<String>> {
     let socket = crate::ipc::server::default_socket_path();
     let mut client = match crate::ipc::client::IpcClient::connect(&socket).await {
         Ok(client) => client,
-        Err(_) => return Ok(None),
+        Err(error) if crate::ipc::client::connect_error_is_absent(&error) => return Ok(None),
+        Err(error) => return Err(error),
     };
     client.send(&Command::DaemonStatus).await?;
     client
@@ -690,6 +692,44 @@ fn check_launchd() -> CheckStatus {
             CheckStatus::Warning
         }
     }
+}
+
+fn check_install() -> CheckStatus {
+    let preferred = match crate::install::InstallLayout::preferred_bin() {
+        Ok(path) => path,
+        Err(e) => {
+            println!("install.paths: ERROR {e:#}");
+            return CheckStatus::Error;
+        }
+    };
+    let current = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(e) => {
+            println!("install.paths: ERROR {e:#}");
+            return CheckStatus::Error;
+        }
+    };
+    println!(
+        "install.paths: current={} preferred={}",
+        current.display(),
+        preferred.display()
+    );
+    let plist = crate::cli::service::plist_program();
+    let path_first = crate::install::path_first_binary();
+    let findings = crate::install::diagnose_drift(
+        &current,
+        &preferred,
+        plist.as_deref(),
+        path_first.as_deref(),
+    );
+    if findings.is_empty() {
+        println!("install.paths: OK");
+        return CheckStatus::Ok;
+    }
+    for finding in &findings {
+        println!("install.paths: {}", crate::install::render_drift(finding));
+    }
+    CheckStatus::Warning
 }
 
 fn check_permissions() -> CheckStatus {

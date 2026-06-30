@@ -70,8 +70,11 @@ install -m 755 ./shuo ~/.local/bin/shuo
 shuo version
 ```
 
-请确认 `~/.local/bin` 已在 `PATH` 中；如果机器上曾安装过
-`/usr/local/bin/shuo`，请移除旧文件或确保 `~/.local/bin` 在 `PATH` 中更靠前。
+`~/.local/bin/shuo` 是唯一受支持的安装路径（per-user，无需 sudo）；请确认
+`~/.local/bin` 已在 `PATH` 中。`shuo update` 始终把新 binary 装到这个路径（必要时
+自动创建 `~/.local/bin`，永不 sudo 写系统目录）；若你是从别处运行的 binary，更新
+仍会写入 preferred 路径并提示你迁移（调整 PATH、`shuo service install` 重新指向、
+自行删除旧 binary）。装错位置时 `shuo doctor` / `shuo service status` 会报路径漂移。
 
 <details>
 <summary>从源码构建</summary>
@@ -169,6 +172,10 @@ shuo service restart
 shuo doctor
 ```
 
+`shuo update` 下载的 binary 不带 `com.apple.quarantine`，无需再 `xattr`。若你改用
+浏览器手动重新下载 tarball 覆盖安装，新 binary 会带 quarantine，需再执行一次
+`xattr -d com.apple.quarantine ~/.local/bin/shuo`。
+
 > [!NOTE]
 > 不需要单独授予 Input Monitoring。当前实现使用 Accessibility 覆盖全局热键所需能力。
 
@@ -209,6 +216,20 @@ shuo completions zsh > "$(brew --prefix)/share/zsh/site-functions/_shuo"
 - history 以明文 JSONL 保存，请按本机敏感数据管理。
 - 录音默认不落盘；启用 `voice.record_audio` 后写入 `audio/`，可选 FLAC 或 AAC。
 - 使用云端 ASR 或 LLM 时，相关音频或文本会发送给你配置的第三方服务。
+
+### 卸载
+
+没有「一键卸载」命令——shuo 只有一个 binary、一份 launchd plist 和纯文本配置/数据，
+手动删即可（history 是你唯一的数据源，默认保留，确实要删再删）：
+
+```bash
+shuo service uninstall            # 停服务并删 launchd plist（不碰 binary/数据）
+rm ~/.local/bin/shuo             # 删 binary
+rm -rf ~/.config/shuohua         # 删配置（profile/ASR/post/theme）
+rm -rf ~/.local/state/shuohua    # 删 history/audio/logs —— 不可恢复
+```
+
+设了 `XDG_CONFIG_HOME` / `XDG_STATE_HOME` 时，配置与数据在对应目录下的 `shuohua/`。
 
 ## 排障
 

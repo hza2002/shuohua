@@ -989,6 +989,9 @@ fn navigation_marks_only_modules_with_problems() {
     let mut page = ConfigurePage::new();
     page.module = ConfigureModule::AsrProvider;
     page.focus = ConfigureFocus::Fields;
+    // This render test owns its module problem inputs; do not inherit counts
+    // from whichever XDG_CONFIG_HOME another parallel test or CI image exposes.
+    page.overview_counts = Vec::new();
     let theme = TuiTheme::default();
 
     let render = |page: &ConfigurePage| {

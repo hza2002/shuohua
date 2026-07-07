@@ -4,10 +4,11 @@ use crate::asr::types::AsrProvider;
 use crate::history::{HistoryRecord, HistoryService, HistoryStatus};
 use crate::overlay::{OverlayCmd, OverlayHandle};
 use crate::state::StateStore;
+use crate::voice::capture::{SegmentCapture, SessionCapture};
 use crate::voice::engine::{self, EngineOutcome};
 use crate::voice::history_build::{build_record, HistoryInput};
 use crate::voice::observer::observe_finish;
-use crate::voice::post_dispatch::dispatch_with_post_chain;
+use crate::voice::post_dispatch::{dispatch_with_post_chain, DispatchContext};
 use crate::voice::SessionControl;
 
 pub use crate::voice::engine::SessionParams;
@@ -45,13 +46,31 @@ async fn complete_recording(
         mut trace,
         provider_name,
     } = outcome;
-    let session_texts = crate::voice::capture::session_texts(&sessions);
-    let raw_text = session_texts.concat();
+    let real_session_texts = crate::voice::capture::session_texts(&sessions);
+    let has_new_asr_text = !real_session_texts.is_empty();
+    // resume 录音只有音频没新文本时不算有内容：不写记录，避免盖掉想续写的可恢复
+    // 记录（见 voice.md）。engine 的 retained audio 判定同源，保持一致。
+    let has_real_content =
+        crate::voice::capture::has_archivable_content_for(&sessions, params.start.is_seed());
+    // seed 只在本次 recording 真有新 ASR 文本时才参与 history/post（见 voice.md）。
+    let seed_text = params
+        .start
+        .seed()
+        .and_then(|seed| seed.non_empty_text())
+        .filter(|_| has_new_asr_text);
+    let mut effective_session_texts = Vec::new();
+    if let Some(text) = seed_text {
+        effective_session_texts.push(text.to_string());
+    }
+    effective_session_texts.extend(real_session_texts);
+    let effective_raw_text = effective_session_texts.concat();
 
     if cancel_requested {
         tracing::info!(recording_id, "recording canceled");
         params.state.set_idle();
-        if crate::voice::capture::has_archivable_content(&sessions) {
+        if has_real_content {
+            let history_sessions =
+                sessions_with_resume_seed(seed_text.map(str::to_string), sessions);
             let history_result = append_history(
                 history.clone(),
                 HistoryInput {
@@ -60,9 +79,9 @@ async fn complete_recording(
                     started_at: recording_started_at,
                     ended_at: time::OffsetDateTime::now_utc(),
                     started_instant: recording_started_instant,
-                    asr_text: raw_text.clone(),
-                    final_text: raw_text,
-                    sessions,
+                    asr_text: effective_raw_text.clone(),
+                    final_text: effective_raw_text,
+                    sessions: history_sessions,
                     pipeline: Vec::new(),
                     app: app_context.bundle_id,
                     status: HistoryStatus::Canceled,
@@ -87,7 +106,7 @@ async fn complete_recording(
         return;
     }
 
-    if !crate::voice::capture::has_archivable_content(&sessions) {
+    if !has_real_content {
         tracing::info!(
             recording_id,
             "recording had no content; skipping post and history"
@@ -106,16 +125,24 @@ async fn complete_recording(
     }
 
     let (final_text, pipeline, status, dispatch_error) = if terminal_error.is_some() {
-        (raw_text.clone(), Vec::new(), HistoryStatus::Error, None)
+        (
+            effective_raw_text.clone(),
+            Vec::new(),
+            HistoryStatus::Error,
+            None,
+        )
     } else {
         let outcome = dispatch_with_post_chain(
-            &session_texts,
+            &effective_session_texts,
             params.auto_paste,
-            &app_context,
             &params.post_chain,
             params.post_timeout_ms,
-            params.overlay.as_ref(),
-            control.cancel_signal(),
+            DispatchContext {
+                recording_id: &recording_id,
+                app_context: &app_context,
+                overlay: params.overlay.as_ref(),
+                cancel: control.cancel_signal(),
+            },
         )
         .await;
         (
@@ -156,6 +183,7 @@ async fn complete_recording(
         HistoryStatus::Timeout => "timeout",
     };
     let should_hide = terminal_error.is_none() && dispatch_error.is_none();
+    let history_sessions = sessions_with_resume_seed(seed_text.map(str::to_string), sessions);
     let history_result = append_history(
         history,
         HistoryInput {
@@ -164,9 +192,9 @@ async fn complete_recording(
             started_at: recording_started_at,
             ended_at: time::OffsetDateTime::now_utc(),
             started_instant: recording_started_instant,
-            asr_text: raw_text,
+            asr_text: effective_raw_text,
             final_text,
-            sessions,
+            sessions: history_sessions,
             pipeline,
             app: app_context.bundle_id,
             status: history_status,
@@ -184,6 +212,33 @@ async fn complete_recording(
         engine::overlay_send(&params, OverlayCmd::Hide);
     }
     observe_finish(&mut trace, trace_status, total_audio_samples);
+}
+
+fn sessions_with_resume_seed(
+    seed_text: Option<String>,
+    sessions: Vec<SessionCapture>,
+) -> Vec<SessionCapture> {
+    let Some(seed_text) = seed_text.filter(|text| !text.trim().is_empty()) else {
+        return sessions;
+    };
+    let Some(seed_instant) = sessions.first().map(|session| session.started_at) else {
+        return sessions;
+    };
+    let mut merged = Vec::with_capacity(sessions.len() + 1);
+    merged.push(SessionCapture {
+        started_at: seed_instant,
+        ended_at: seed_instant,
+        audio_samples: 0,
+        segments: vec![SegmentCapture {
+            text: seed_text,
+            started_at: seed_instant,
+            ended_at: seed_instant,
+        }],
+        final_text: None,
+        partial_text: None,
+    });
+    merged.extend(sessions);
+    merged
 }
 
 async fn append_history(
@@ -247,9 +302,13 @@ fn history_status_for_completion(
 mod tests {
     use super::*;
     use crate::history::HistoryError;
+    use crate::post::{PipelineText, PostError};
+    use crate::voice::capture::SegmentCapture;
     use crate::voice::capture::SessionCapture;
     use crate::voice::observer::{RecordingObserver, TraceStart};
-    use std::time::Instant;
+    use crate::voice::resume::ResumeSeed;
+    use async_trait::async_trait;
+    use std::time::{Duration, Instant};
 
     fn test_outcome(
         sessions: Vec<SessionCapture>,
@@ -265,7 +324,9 @@ mod tests {
                 record_audio: crate::config::RecordAudioMode::Off,
                 preprocess: crate::config::VoicePreprocessCfg::default(),
                 vad_trace: false,
+                apple_backend_trace: false,
                 idle_pause: false,
+                open_timeout_ms: 100,
                 finalize_timeout_ms: 100,
                 vad: crate::config::VoiceVadCfg::default(),
                 stop_delay_ms: 0,
@@ -278,6 +339,7 @@ mod tests {
                     processors: vec![],
                 },
                 post_timeout_ms: 100,
+                start: crate::voice::resume::RecordingStart::Fresh,
                 overlay: Some(overlay),
                 state,
             },
@@ -327,6 +389,43 @@ mod tests {
             msg: "scripted capture failure".to_string(),
         });
         outcome
+    }
+
+    struct PanicProcessor;
+
+    #[async_trait]
+    impl crate::post::PostProcessor for PanicProcessor {
+        fn name(&self) -> &str {
+            "panic"
+        }
+
+        async fn process(
+            &self,
+            _input: PipelineText,
+            _ctx: &crate::post::AppContext,
+        ) -> std::result::Result<PipelineText, PostError> {
+            panic!("seed-only resume must not run post processors");
+        }
+    }
+
+    struct AppendProcessor {
+        suffix: &'static str,
+    }
+
+    #[async_trait]
+    impl crate::post::PostProcessor for AppendProcessor {
+        fn name(&self) -> &str {
+            "append"
+        }
+
+        async fn process(
+            &self,
+            mut input: PipelineText,
+            _ctx: &crate::post::AppContext,
+        ) -> std::result::Result<PipelineText, PostError> {
+            input.text.push_str(self.suffix);
+            Ok(input)
+        }
     }
 
     /// Contentless cancel：complete_recording 必须跳过 history append（不发
@@ -403,6 +502,186 @@ mod tests {
             overlay_cmds.iter().any(|c| matches!(c, OverlayCmd::Hide)),
             "contentless success must hide the overlay: {overlay_cmds:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn resume_seed_without_new_recording_content_does_not_run_post_or_append() {
+        let (overlay, _rx) = OverlayHandle::channel();
+        let state = StateStore::new();
+        let history = HistoryService::with_dir(
+            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::new())),
+        );
+        let mut outcome = success_outcome(Vec::new(), state, overlay);
+        outcome.params.post_chain.processors = vec![Box::new(PanicProcessor)];
+        outcome.params.start = crate::voice::resume::RecordingStart::Seed(ResumeSeed {
+            text: "old text".to_string(),
+        });
+
+        complete_recording(outcome, &SessionControl::new(), history.clone()).await;
+
+        let page = history
+            .page(crate::history::HistoryQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(page.records.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resume_seed_cancel_without_new_recording_content_does_not_append() {
+        let (overlay, _rx) = OverlayHandle::channel();
+        let state = StateStore::new();
+        let history = HistoryService::with_dir(
+            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::new())),
+        );
+        let mut outcome = cancel_outcome(Vec::new(), state, overlay);
+        outcome.params.start = crate::voice::resume::RecordingStart::Seed(ResumeSeed {
+            text: "old text".to_string(),
+        });
+
+        complete_recording(outcome, &SessionControl::new(), history.clone()).await;
+
+        let page = history
+            .page(crate::history::HistoryQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(page.records.is_empty());
+    }
+
+    /// Resume 抓到音频但 ASR 没识别出新文本（如环境噪音）：不写 history，避免盖
+    /// 掉它想续写的那条可恢复记录，也不复用 seed 跑 post。
+    #[tokio::test]
+    async fn resume_audio_without_new_asr_text_skips_history_to_preserve_recoverable() {
+        let (overlay, _rx) = OverlayHandle::channel();
+        let state = StateStore::new();
+        let history = HistoryService::with_dir(
+            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::new())),
+        );
+        let base = Instant::now();
+        let sessions = vec![SessionCapture {
+            started_at: base + Duration::from_millis(500),
+            ended_at: base + Duration::from_millis(1_500),
+            audio_samples: 16_000,
+            segments: vec![],
+            final_text: None,
+            partial_text: None,
+        }];
+        let mut outcome = success_outcome(sessions, state, overlay);
+        outcome.recording_started_instant = base;
+        outcome.params.post_chain.processors = vec![Box::new(PanicProcessor)];
+        outcome.params.start = crate::voice::resume::RecordingStart::Seed(ResumeSeed {
+            text: "old text".to_string(),
+        });
+
+        complete_recording(outcome, &SessionControl::new(), history.clone()).await;
+
+        let page = history
+            .page(crate::history::HistoryQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            page.records.is_empty(),
+            "resume with audio-but-no-new-text must not append a record"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_success_after_new_content_appends_seed_plus_new_asr() {
+        let (overlay, _rx) = OverlayHandle::channel();
+        let state = StateStore::new();
+        let history = HistoryService::with_dir(
+            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::new())),
+        );
+        let base = Instant::now();
+        let sessions = vec![SessionCapture {
+            started_at: base + Duration::from_millis(500),
+            ended_at: base + Duration::from_millis(1_500),
+            audio_samples: 16_000,
+            segments: vec![SegmentCapture {
+                text: "new text".to_string(),
+                started_at: base + Duration::from_millis(500),
+                ended_at: base + Duration::from_millis(1_500),
+            }],
+            final_text: None,
+            partial_text: None,
+        }];
+        let mut outcome = success_outcome(sessions, state, overlay);
+        outcome.recording_started_instant = base;
+        outcome.params.post_chain.processors = vec![Box::new(AppendProcessor { suffix: "." })];
+        outcome.params.start = crate::voice::resume::RecordingStart::Seed(ResumeSeed {
+            text: "old text ".to_string(),
+        });
+
+        complete_recording(outcome, &SessionControl::new(), history.clone()).await;
+
+        let page = history
+            .page(crate::history::HistoryQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(page.records.len(), 1);
+        let record = &page.records[0];
+        assert_eq!(record.status, HistoryStatus::Submitted);
+        assert_eq!(record.asr.text, "old text new text");
+        assert_eq!(record.text, "old text new text.");
+        assert_eq!(record.pipeline.len(), 1);
+        assert_eq!(
+            record.pipeline[0].text.as_deref(),
+            Some("old text new text.")
+        );
+        assert_eq!(record.asr.sessions.len(), 2);
+        assert_eq!(record.asr.sessions[0].audio_ms, 0);
+        assert_eq!(record.asr.audio_ms, 1_000);
+    }
+
+    #[tokio::test]
+    async fn resume_cancel_after_new_content_appends_canceled_seed_plus_new_asr() {
+        let (overlay, _rx) = OverlayHandle::channel();
+        let state = StateStore::new();
+        let history = HistoryService::with_dir(
+            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::new())),
+        );
+        let base = Instant::now();
+        let sessions = vec![SessionCapture {
+            started_at: base + Duration::from_millis(500),
+            ended_at: base + Duration::from_millis(1_500),
+            audio_samples: 16_000,
+            segments: vec![SegmentCapture {
+                text: "new text".to_string(),
+                started_at: base + Duration::from_millis(500),
+                ended_at: base + Duration::from_millis(1_500),
+            }],
+            final_text: None,
+            partial_text: None,
+        }];
+        let mut outcome = cancel_outcome(sessions, state, overlay);
+        outcome.recording_started_instant = base;
+        outcome.params.start = crate::voice::resume::RecordingStart::Seed(ResumeSeed {
+            text: "old text ".to_string(),
+        });
+
+        complete_recording(outcome, &SessionControl::new(), history.clone()).await;
+
+        let page = history
+            .page(crate::history::HistoryQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(page.records.len(), 1);
+        let record = &page.records[0];
+        assert_eq!(record.status, HistoryStatus::Canceled);
+        assert_eq!(record.asr.text, "old text new text");
+        assert_eq!(record.text, "old text new text");
+        assert_eq!(record.asr.sessions.len(), 2);
+        assert_eq!(record.asr.sessions[0].audio_ms, 0);
+        assert_eq!(record.asr.audio_ms, 1_000);
     }
 
     /// Contentless terminal error：没有 provider audio/text 时仍不写 history，

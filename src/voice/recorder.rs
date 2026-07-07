@@ -17,6 +17,7 @@ use rubato::{Fft, FixedSync, Indexing, Resampler};
 use std::path::{Path, PathBuf};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::config::VoicePreprocessBackend;
 use crate::voice::audio::AudioOutput;
 
 const DST_RATE_HZ: u32 = 16_000;
@@ -164,7 +165,11 @@ impl RecordingStream {
 
 /// 启动一路录音。`audio_output = Some(...)` 时把同一份 PCM 写入临时 WAV，
 /// 录音线程停止后转换成最终 retained-audio 文件。
-pub fn start(audio_output: Option<AudioOutput>) -> Result<RecordingStream> {
+pub fn start(
+    audio_output: Option<AudioOutput>,
+    backend: VoicePreprocessBackend,
+    channel_probe: bool,
+) -> Result<RecordingStream> {
     let (pcm_tx, pcm_rx) = mpsc::unbounded_channel::<Vec<i16>>();
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<FinishMode>();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
@@ -173,7 +178,15 @@ pub fn start(audio_output: Option<AudioOutput>) -> Result<RecordingStream> {
     std::thread::Builder::new()
         .name("cpal-recorder".into())
         .spawn(move || {
-            if let Err(e) = run_recorder(pcm_tx, stop_rx, audio_output, ready_tx, audio_result_tx) {
+            if let Err(e) = run_recorder(
+                pcm_tx,
+                stop_rx,
+                audio_output,
+                backend,
+                channel_probe,
+                ready_tx,
+                audio_result_tx,
+            ) {
                 tracing::warn!(error = ?e, "recorder thread exited with error");
             }
         })
@@ -195,15 +208,29 @@ fn run_recorder(
     pcm_tx: mpsc::UnboundedSender<Vec<i16>>,
     stop_rx: std::sync::mpsc::Receiver<FinishMode>,
     audio_output: Option<AudioOutput>,
+    backend: VoicePreprocessBackend,
+    channel_probe: bool,
     ready_tx: std::sync::mpsc::Sender<Result<()>>,
     audio_result_tx: oneshot::Sender<Result<Option<PathBuf>>>,
 ) -> Result<()> {
     let audio_wav_path = audio_output.as_ref().map(|output| output.wav_path.clone());
-    let startup = build_recorder_stream(audio_wav_path);
+    let startup = build_recorder_stream(audio_wav_path, channel_probe);
     match startup {
         Ok((stream, audio_rx, wav, src_rate)) => {
+            let mut processor = match PcmProcessor::new(src_rate, backend, pcm_tx, wav) {
+                Ok(processor) => processor,
+                Err(error) => {
+                    let msg = format!("{error:#}");
+                    drop(stream);
+                    if let Some(output) = audio_output {
+                        output.discard();
+                    }
+                    let _ = audio_result_tx.send(Err(anyhow!(msg.clone())));
+                    let _ = ready_tx.send(Err(anyhow!(msg)));
+                    return Err(error);
+                }
+            };
             let _ = ready_tx.send(Ok(()));
-            let mut processor = PcmProcessor::new(src_rate, pcm_tx, wav);
             let mut finish_mode = FinishMode::Discard;
 
             loop {
@@ -282,7 +309,10 @@ type RecorderStreamSetup = (
     u32,
 );
 
-fn build_recorder_stream(audio_wav_path: Option<PathBuf>) -> Result<RecorderStreamSetup> {
+fn build_recorder_stream(
+    audio_wav_path: Option<PathBuf>,
+    channel_probe: bool,
+) -> Result<RecorderStreamSetup> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -301,9 +331,15 @@ fn build_recorder_stream(audio_wav_path: Option<PathBuf>) -> Result<RecorderStre
     let sample_format = supported.sample_format();
     let config = supported.into();
     let stream = match sample_format {
-        SampleFormat::F32 => build_input_stream::<f32>(&device, config, channels, audio_tx),
-        SampleFormat::I16 => build_input_stream::<i16>(&device, config, channels, audio_tx),
-        SampleFormat::U16 => build_input_stream::<u16>(&device, config, channels, audio_tx),
+        SampleFormat::F32 => {
+            build_input_stream::<f32>(&device, config, channels, channel_probe, audio_tx)
+        }
+        SampleFormat::I16 => {
+            build_input_stream::<i16>(&device, config, channels, channel_probe, audio_tx)
+        }
+        SampleFormat::U16 => {
+            build_input_stream::<u16>(&device, config, channels, channel_probe, audio_tx)
+        }
         other => bail!("recorder requires F32/I16/U16 input, got {other:?}"),
     }
     .context("build input stream")?;
@@ -347,14 +383,23 @@ fn build_input_stream<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
     channels: usize,
+    channel_probe: bool,
     audio_tx: std::sync::mpsc::Sender<Vec<f32>>,
 ) -> Result<cpal::Stream>
 where
     T: InputSample + SizedSample,
 {
+    #[cfg(feature = "dev")]
+    let mut probe = (channel_probe && channels > 1).then(|| ChannelProbe::new(channels));
+    #[cfg(not(feature = "dev"))]
+    let _ = channel_probe;
     let stream = device.build_input_stream(
         config,
         move |data: &[T], _: &cpal::InputCallbackInfo| {
+            #[cfg(feature = "dev")]
+            if let Some(probe) = probe.as_mut() {
+                probe.observe(data);
+            }
             let mono = input_to_mono(data, channels);
             if mono.is_empty() {
                 return;
@@ -395,39 +440,128 @@ impl InputSample for u16 {
     }
 }
 
+/// 多通道 → mono：所有通道求平均，而不是只取 `frame[0]`。
+///
+/// 单通道走快路径。多通道取均值是最稳妥的设备无关策略：普通立体声 mic 正常混音；
+/// 遇到 default input 变成多通道 aggregate（例如残留的 voice-processing aggregate，
+/// 通道 0 可能是近静音的参考通道）时，真正有语音的通道仍会进入 mono，不会像
+/// 只取 `frame[0]` 那样把整段人声丢成静音。均值会让信号幅度按通道数缩小，但
+/// VAD/ASR 对电平不敏感，远好过丢信号。
 fn input_to_mono<T: InputSample>(data: &[T], channels: usize) -> Vec<f32> {
     if channels == 0 || data.is_empty() {
         return Vec::new();
     }
+    if channels == 1 {
+        return data.iter().map(|sample| sample.to_f32()).collect();
+    }
+    let inv = 1.0 / channels as f32;
     data.chunks_exact(channels)
-        .map(|frame| frame[0].to_f32())
+        .map(|frame| frame.iter().map(|sample| sample.to_f32()).sum::<f32>() * inv)
         .collect()
+}
+
+/// dev-only 多通道探针（`dev.apple_backend_trace`）：`channels > 1` 时统计启动
+/// 前若干帧的 per-channel RMS/peak，一次性打日志。用来确认哪个通道有信号——
+/// 例如 VP aggregate 残留导致 default input 变成 3ch、mono 取的 `frame[0]` 恰好
+/// 是近静音的参考通道时，这里能立刻看出真正有语音的通道。
+#[cfg(feature = "dev")]
+struct ChannelProbe {
+    channels: usize,
+    sum_sq: Vec<f64>,
+    peak: Vec<f32>,
+    frames: usize,
+    logged: bool,
+}
+
+#[cfg(feature = "dev")]
+impl ChannelProbe {
+    const PROBE_FRAMES: usize = 8_192;
+
+    fn new(channels: usize) -> Self {
+        Self {
+            channels,
+            sum_sq: vec![0.0; channels],
+            peak: vec![0.0; channels],
+            frames: 0,
+            logged: false,
+        }
+    }
+
+    fn observe<T: InputSample>(&mut self, data: &[T]) {
+        if self.logged {
+            return;
+        }
+        for frame in data.chunks_exact(self.channels) {
+            for (ch, sample) in frame.iter().enumerate() {
+                let value = sample.to_f32();
+                self.sum_sq[ch] += (value as f64) * (value as f64);
+                let magnitude = value.abs();
+                if magnitude > self.peak[ch] {
+                    self.peak[ch] = magnitude;
+                }
+            }
+            self.frames += 1;
+        }
+        if self.frames >= Self::PROBE_FRAMES {
+            let rms: Vec<f32> = self
+                .sum_sq
+                .iter()
+                .map(|sum| (sum / self.frames as f64).sqrt() as f32)
+                .collect();
+            tracing::info!(
+                channels = self.channels,
+                frames = self.frames,
+                per_channel_rms = ?rms,
+                per_channel_peak = ?self.peak,
+                "cpal multi-channel input probe"
+            );
+            self.logged = true;
+        }
+    }
 }
 
 struct PcmProcessor {
     resampler: Resampler16k,
+    preprocess: PreprocessStage,
     pcm_tx: mpsc::UnboundedSender<Vec<i16>>,
     wav: Option<WavWriter>,
+    preprocess_error: Option<anyhow::Error>,
     resample_error: Option<anyhow::Error>,
     audio_error: Option<anyhow::Error>,
 }
 
 impl PcmProcessor {
-    fn new(src_rate: u32, pcm_tx: mpsc::UnboundedSender<Vec<i16>>, wav: Option<WavWriter>) -> Self {
-        Self {
-            resampler: Resampler16k::new(src_rate),
+    fn new(
+        src_rate: u32,
+        backend: VoicePreprocessBackend,
+        pcm_tx: mpsc::UnboundedSender<Vec<i16>>,
+        wav: Option<WavWriter>,
+    ) -> Result<Self> {
+        let preprocess = PreprocessStage::new(backend, src_rate)?;
+        let resample_src_rate = preprocess.output_sample_rate(src_rate);
+        Ok(Self {
+            resampler: Resampler16k::new(resample_src_rate),
+            preprocess,
             pcm_tx,
             wav,
+            preprocess_error: None,
             resample_error: None,
             audio_error: None,
-        }
+        })
     }
 
     fn process_mono_chunk(&mut self, mono: &[f32]) {
-        if self.resample_error.is_some() {
+        if self.preprocess_error.is_some() || self.resample_error.is_some() {
             return;
         }
-        match self.resampler.process(mono) {
+        let processed = match self.preprocess.process_mono_chunk(mono) {
+            Ok(processed) => processed,
+            Err(error) => {
+                self.preprocess_error = Some(error);
+                return;
+            }
+        };
+        match self.resampler.process(&processed) {
             Ok(pcm) => self.publish_pcm(&pcm),
             Err(error) => self.resample_error = Some(error),
         }
@@ -439,7 +573,17 @@ impl PcmProcessor {
             return Ok(());
         }
 
-        if self.resample_error.is_none() {
+        if self.preprocess_error.is_none() && self.resample_error.is_none() {
+            match self.preprocess.finish() {
+                Ok(processed) => match self.resampler.process(&processed) {
+                    Ok(pcm) => self.publish_pcm(&pcm),
+                    Err(error) => self.resample_error = Some(error),
+                },
+                Err(error) => self.preprocess_error = Some(error),
+            }
+        }
+
+        if self.preprocess_error.is_none() && self.resample_error.is_none() {
             match self.resampler.finish() {
                 Ok(pcm) => self.publish_pcm(&pcm),
                 Err(error) => self.resample_error = Some(error),
@@ -450,6 +594,9 @@ impl PcmProcessor {
             wav.finalize().context("finalize wav")?;
         }
 
+        if let Some(error) = self.preprocess_error.take() {
+            return Err(error);
+        }
         if let Some(error) = self.resample_error.take() {
             return Err(error);
         }
@@ -476,9 +623,71 @@ impl PcmProcessor {
     }
 }
 
+enum PreprocessStage {
+    Off,
+    WebRtc(Box<crate::voice::webrtc_apm::WebRtcPreprocessor>),
+}
+
+impl PreprocessStage {
+    fn new(backend: VoicePreprocessBackend, src_rate: u32) -> Result<Self> {
+        match backend {
+            VoicePreprocessBackend::Off => Ok(Self::Off),
+            VoicePreprocessBackend::WebRtc => {
+                crate::voice::webrtc_apm::WebRtcPreprocessor::new(src_rate)
+                    .map(Box::new)
+                    .map(Self::WebRtc)
+            }
+            VoicePreprocessBackend::Apple => {
+                bail!("voice preprocess backend \"apple\" is not available in cpal recorder")
+            }
+        }
+    }
+
+    fn output_sample_rate(&self, src_rate: u32) -> u32 {
+        match self {
+            Self::Off => src_rate,
+            Self::WebRtc(processor) => processor.output_sample_rate(),
+        }
+    }
+
+    fn process_mono_chunk(&mut self, mono: &[f32]) -> Result<Vec<f32>> {
+        match self {
+            Self::Off => Ok(mono.to_vec()),
+            Self::WebRtc(processor) => processor.process_mono_chunk(mono),
+        }
+    }
+
+    fn finish(&mut self) -> Result<Vec<f32>> {
+        match self {
+            Self::Off => Ok(Vec::new()),
+            Self::WebRtc(processor) => processor.finish(),
+        }
+    }
+}
+
+pub(crate) struct ResamplerForPreprocess {
+    inner: ResamplerF32,
+}
+
+impl ResamplerForPreprocess {
+    pub(crate) fn new(src_rate: u32, dst_rate: u32) -> Self {
+        Self {
+            inner: ResamplerF32::new(src_rate, dst_rate),
+        }
+    }
+
+    pub(crate) fn process(&mut self, mono: &[f32]) -> Result<Vec<f32>> {
+        self.inner.process(mono)
+    }
+
+    pub(crate) fn finish(&mut self) -> Result<Vec<f32>> {
+        self.inner.finish()
+    }
+}
+
 enum Resampler16k {
     Passthrough,
-    Rubato(Box<RubatoResampler16k>),
+    Rubato(Box<ResamplerF32>),
 }
 
 impl Resampler16k {
@@ -486,27 +695,28 @@ impl Resampler16k {
         if src_rate == DST_RATE_HZ {
             Self::Passthrough
         } else {
-            Self::Rubato(Box::new(RubatoResampler16k::new(src_rate)))
+            Self::Rubato(Box::new(ResamplerF32::new(src_rate, DST_RATE_HZ)))
         }
     }
 
     fn process(&mut self, mono: &[f32]) -> Result<Vec<i16>> {
         match self {
             Self::Passthrough => Ok(mono_to_i16(mono)),
-            Self::Rubato(resampler) => resampler.process(mono),
+            Self::Rubato(resampler) => Ok(mono_to_i16(&resampler.process(mono)?)),
         }
     }
 
     fn finish(&mut self) -> Result<Vec<i16>> {
         match self {
             Self::Passthrough => Ok(Vec::new()),
-            Self::Rubato(resampler) => resampler.finish(),
+            Self::Rubato(resampler) => Ok(mono_to_i16(&resampler.finish()?)),
         }
     }
 }
 
-struct RubatoResampler16k {
+struct ResamplerF32 {
     src_rate: u32,
+    dst_rate: u32,
     inner: Fft<f32>,
     pending: Vec<f32>,
     output_buf: Vec<f32>,
@@ -515,11 +725,11 @@ struct RubatoResampler16k {
     trim_output_frames: usize,
 }
 
-impl RubatoResampler16k {
-    fn new(src_rate: u32) -> Self {
+impl ResamplerF32 {
+    fn new(src_rate: u32, dst_rate: u32) -> Self {
         let inner = Fft::<f32>::new(
             src_rate as usize,
-            DST_RATE_HZ as usize,
+            dst_rate as usize,
             1024,
             2,
             1,
@@ -530,6 +740,7 @@ impl RubatoResampler16k {
         let trim_output_frames = inner.output_delay();
         Self {
             src_rate,
+            dst_rate,
             inner,
             pending: Vec::new(),
             output_buf,
@@ -539,7 +750,7 @@ impl RubatoResampler16k {
         }
     }
 
-    fn process(&mut self, mono: &[f32]) -> Result<Vec<i16>> {
+    fn process(&mut self, mono: &[f32]) -> Result<Vec<f32>> {
         if mono.is_empty() {
             return Ok(Vec::new());
         }
@@ -555,7 +766,7 @@ impl RubatoResampler16k {
         Ok(output)
     }
 
-    fn finish(&mut self) -> Result<Vec<i16>> {
+    fn finish(&mut self) -> Result<Vec<f32>> {
         let mut output = Vec::new();
         let mut pending_output = None;
         if !self.pending.is_empty() {
@@ -566,7 +777,8 @@ impl RubatoResampler16k {
             pending_output = Some(produced);
         }
 
-        let target_frames = ((self.input_frames as f64 * DST_RATE_HZ as f64) / self.src_rate as f64)
+        let target_frames = ((self.input_frames as f64 * self.dst_rate as f64)
+            / self.src_rate as f64)
             .round() as usize;
         if !self.pending.is_empty() {
             unreachable!("partial processing drains pending input");
@@ -600,7 +812,7 @@ impl RubatoResampler16k {
             .context("resample recorder audio")
     }
 
-    fn append_output(&mut self, output: &mut Vec<i16>, produced: usize, cap: Option<usize>) {
+    fn append_output(&mut self, output: &mut Vec<f32>, produced: usize, cap: Option<usize>) {
         let mut start = 0;
         if self.trim_output_frames > 0 {
             let trimmed = self.trim_output_frames.min(produced);
@@ -617,7 +829,7 @@ impl RubatoResampler16k {
             return;
         }
 
-        output.extend(mono_to_i16(&self.output_buf[start..end]));
+        output.extend_from_slice(&self.output_buf[start..end]);
         self.output_frames += end - start;
     }
 }
@@ -634,10 +846,7 @@ fn resample_input_to_16k_mono_i16<T: InputSample>(
 
 #[cfg(test)]
 fn resample_to_16k_mono_i16(data: &[f32], channels: usize, src_rate: u32) -> Vec<i16> {
-    if channels == 0 || data.is_empty() {
-        return Vec::new();
-    }
-    let mono: Vec<f32> = data.chunks_exact(channels).map(|f| f[0]).collect();
+    let mono = input_to_mono(data, channels);
     resample_mono_to_16k_i16(&mono, src_rate)
 }
 
@@ -701,13 +910,27 @@ mod tests {
     }
 
     #[test]
-    fn resample_takes_first_channel_for_stereo() {
-        // 2ch interleaved；左声道 = 0.5，右声道 = -0.5
-        let data = vec![0.5, -0.5, 0.5, -0.5];
+    fn resample_averages_channels_for_stereo() {
+        // 2ch interleaved：帧内两通道求均值。L=0.5,R=0.3 → 0.4
+        let data = vec![0.5, 0.3, 0.5, 0.3];
         let out = resample_to_16k_mono_i16(&data, 2, 16_000);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0], out[1]);
-        assert!(out[0] > 0); // 左声道是正值
+        assert_eq!(out[0], (0.4_f32 * 32767.0).round() as i16);
+    }
+
+    #[test]
+    fn downmix_preserves_signal_when_only_non_first_channel_is_loud() {
+        // 3ch aggregate 场景：通道 0（参考通道）静音，语音在通道 2。
+        // 取 frame[0] 会得到静音；均值保留信号（1/3 幅度）。
+        let data = vec![0.0, 0.0, 0.9, 0.0, 0.0, 0.9];
+        let out = resample_to_16k_mono_i16(&data, 3, 16_000);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], (0.3_f32 * 32767.0).round() as i16);
+        assert!(
+            out[0] > 8,
+            "downmixed signal must clear the VAD noise floor"
+        );
     }
 
     #[test]

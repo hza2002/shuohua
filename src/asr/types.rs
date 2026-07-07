@@ -101,6 +101,8 @@ pub enum AsrError {
     Quota,
     #[error("protocol: {0}")]
     Protocol(String),
+    #[error("timeout opening ASR session")]
+    OpenTimeout,
     #[error("timeout waiting final")]
     #[allow(dead_code)]
     Timeout,

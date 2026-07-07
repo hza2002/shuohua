@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use toml::value::Table;
 
-use crate::config::schema::{self, SchemaId};
+use crate::config::schema;
 use crate::config::spec::validate_value;
 
 #[derive(Debug, Clone)]
@@ -69,9 +69,8 @@ impl fmt::Debug for ProcessorConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct PostDirs {
-    pub rule: PathBuf,
-    pub llm: PathBuf,
+pub struct PostDir {
+    pub dir: PathBuf,
 }
 
 pub fn default_dir() -> PathBuf {
@@ -80,20 +79,20 @@ pub fn default_dir() -> PathBuf {
 
 pub fn load_components(
     chain: &[String],
-    dirs: &PostDirs,
+    dir: &PostDir,
     llm_overrides: &Table,
 ) -> Result<PostChainConfig> {
-    load_chain_config(chain, dirs, llm_overrides)
+    load_chain_config(chain, dir, llm_overrides)
 }
 
 pub fn load_chain_config(
     chain: &[String],
-    dirs: &PostDirs,
+    dir: &PostDir,
     llm_overrides: &Table,
 ) -> Result<PostChainConfig> {
     let mut processors = Vec::with_capacity(chain.len());
     for id in chain {
-        processors.push(load_component(id, dirs, llm_overrides)?);
+        processors.push(load_component(id, dir, llm_overrides)?);
     }
     Ok(PostChainConfig {
         name: chain.join(" → "),
@@ -101,26 +100,23 @@ pub fn load_chain_config(
     })
 }
 
-fn load_component(id: &str, dirs: &PostDirs, llm_overrides: &Table) -> Result<ProcessorConfig> {
-    let (kind, name) = id
-        .split_once(':')
-        .with_context(|| format!("post chain item {id:?} must be kind:name"))?;
-    let path = match kind {
-        "rule" => dirs.rule.join(format!("{name}.toml")),
-        "llm" => dirs.llm.join(format!("{name}.toml")),
-        other => anyhow::bail!("unknown post component kind {other:?} in {id:?}"),
-    };
+fn load_component(id: &str, dir: &PostDir, llm_overrides: &Table) -> Result<ProcessorConfig> {
+    crate::config::inventory::validate_config_file_id(id)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("invalid post component id {id:?}"))?;
+    let path = dir.dir.join(format!("{id}.toml"));
     let body = std::fs::read_to_string(&path)
         .with_context(|| format!("read post component {}", path.display()))?;
     let mut value: toml::Value = toml::from_str(&body)
         .with_context(|| format!("parse post component {}", path.display()))?;
-    if kind == "llm" {
-        if let Some(override_value) = llm_overrides.get(name) {
+    let kind = crate::config::post::kind_from_value(id, &path, &value)?;
+    if kind == crate::config::post::PostKind::Llm {
+        if let Some(override_value) = llm_overrides.get(id) {
             let override_table = override_value.as_table().with_context(|| {
-                format!("post.llm.{name} override for {id:?} must be a TOML table")
+                format!("post.overrides.{id} override for {id:?} must be a TOML table")
             })?;
             merge_table(&mut value, override_table)
-                .with_context(|| format!("merge post.llm.{name} override into {id:?}"))?;
+                .with_context(|| format!("merge post.overrides.{id} override into {id:?}"))?;
         }
     }
     validate_component_value(kind, &value)
@@ -131,57 +127,12 @@ fn load_component(id: &str, dirs: &PostDirs, llm_overrides: &Table) -> Result<Pr
     cfg.into_config(id)
 }
 
-pub fn load_llm_config(
-    id: &str,
-    dirs: &PostDirs,
-    llm_overrides: &Table,
-) -> Result<ProcessorConfig> {
-    let (kind, name) = id
-        .split_once(':')
-        .with_context(|| format!("post chain item {id:?} must be kind:name"))?;
-    anyhow::ensure!(
-        kind == "llm",
-        "runtime LLM check only supports llm components"
-    );
-    let path = dirs.llm.join(format!("{name}.toml"));
-    let body = std::fs::read_to_string(&path)
-        .with_context(|| format!("read post component {}", path.display()))?;
-    let mut value: toml::Value = toml::from_str(&body)
-        .with_context(|| format!("parse post component {}", path.display()))?;
-    if let Some(override_value) = llm_overrides.get(name) {
-        let override_table = override_value
-            .as_table()
-            .with_context(|| format!("post.llm.{name} override for {id:?} must be a TOML table"))?;
-        merge_table(&mut value, override_table)
-            .with_context(|| format!("merge post.llm.{name} override into {id:?}"))?;
-    }
-    validate_component_value(kind, &value)
-        .with_context(|| format!("validate post component {}", path.display()))?;
-    let cfg: ProcessorCfg = value
-        .try_into()
-        .with_context(|| format!("parse post component {}", path.display()))?;
-    match cfg {
-        ProcessorCfg::Llm {
-            format,
-            name,
-            base_url,
-            api_key,
-            model,
-            extra_body,
-            system_prompt,
-            prompt,
-        } => Ok(ProcessorConfig::Llm {
-            id: id.to_string(),
-            format,
-            provider_name: name.clone(),
-            base_url: base_url.unwrap_or_else(|| default_base_url(format, &name)),
-            api_key,
-            model,
-            extra_body,
-            system_prompt,
-            prompt,
-        }),
-        ProcessorCfg::Rule { .. } => anyhow::bail!("expected llm config"),
+pub fn load_llm_config(id: &str, dir: &PostDir, llm_overrides: &Table) -> Result<ProcessorConfig> {
+    match load_component(id, dir, llm_overrides)? {
+        cfg @ ProcessorConfig::Llm { .. } => Ok(cfg),
+        ProcessorConfig::Rule { .. } => {
+            anyhow::bail!("post component {id:?} is not an llm component")
+        }
     }
 }
 
@@ -195,12 +146,11 @@ fn merge_table(value: &mut toml::Value, overrides: &Table) -> Result<()> {
     Ok(())
 }
 
-fn validate_component_value(kind: &str, value: &toml::Value) -> Result<()> {
-    let spec = match kind {
-        "rule" => schema::spec_for(SchemaId::PostRule),
-        "llm" => schema::spec_for(SchemaId::PostLlm),
-        other => anyhow::bail!("unknown post component kind {other:?}"),
-    };
+fn validate_component_value(
+    kind: crate::config::post::PostKind,
+    value: &toml::Value,
+) -> Result<()> {
+    let spec = schema::spec_for(kind.schema_id());
     crate::config::main::reject_schema_diagnostics(validate_value(&spec, value))
 }
 
@@ -208,14 +158,17 @@ fn validate_component_value(kind: &str, value: &toml::Value) -> Result<()> {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ProcessorCfg {
     Rule {
+        #[serde(default)]
+        #[serde(rename = "name")]
+        _name: Option<String>,
         patterns: Vec<String>,
     },
     Llm {
         #[serde(default = "default_format")]
         format: ProviderFormatCfg,
-        name: String,
         #[serde(default)]
-        base_url: Option<String>,
+        name: Option<String>,
+        base_url: String,
         api_key: String,
         model: String,
         #[serde(default)]
@@ -240,7 +193,7 @@ fn default_format() -> ProviderFormatCfg {
 impl ProcessorCfg {
     fn into_config(self, id: &str) -> Result<ProcessorConfig> {
         match self {
-            ProcessorCfg::Rule { patterns } => Ok(ProcessorConfig::Rule {
+            ProcessorCfg::Rule { _name, patterns } => Ok(ProcessorConfig::Rule {
                 id: id.to_string(),
                 patterns,
             }),
@@ -256,8 +209,8 @@ impl ProcessorCfg {
             } => Ok(ProcessorConfig::Llm {
                 id: id.to_string(),
                 format,
-                provider_name: name.clone(),
-                base_url: base_url.unwrap_or_else(|| default_base_url(format, &name)),
+                provider_name: name.unwrap_or_else(|| id.to_string()),
+                base_url,
                 api_key,
                 model,
                 extra_body,
@@ -271,22 +224,10 @@ impl ProcessorCfg {
 #[cfg(test)]
 fn load_llm_config_for_test(
     id: &str,
-    dirs: &PostDirs,
+    dir: &PostDir,
     llm_overrides: &Table,
 ) -> Result<ProcessorConfig> {
-    load_llm_config(id, dirs, llm_overrides)
-}
-
-fn default_base_url(format: ProviderFormatCfg, name: &str) -> String {
-    match format {
-        ProviderFormatCfg::Anthropic => "https://api.anthropic.com".to_string(),
-        ProviderFormatCfg::Openai => match name {
-            "openai" => "https://api.openai.com/v1".to_string(),
-            "deepseek" => "https://api.deepseek.com".to_string(),
-            "openrouter" => "https://openrouter.ai/api/v1".to_string(),
-            _ => "https://api.openai.com/v1".to_string(),
-        },
-    }
+    load_llm_config(id, dir, llm_overrides)
 }
 
 #[cfg(test)]
@@ -304,10 +245,10 @@ mod tests {
     #[test]
     fn parses_openai_and_anthropic_llm_processor_configs() {
         let dir = temp_dir();
-        let llm = dir.join("llm");
-        fs::create_dir_all(&llm).unwrap();
+        let post = dir.join("post");
+        fs::create_dir_all(&post).unwrap();
         fs::write(
-            llm.join("openai_cleanup.toml"),
+            post.join("openai_cleanup.toml"),
             r#"
 type = "llm"
 format = "openai"
@@ -323,33 +264,31 @@ thinking = { type = "disabled" }
         )
         .unwrap();
         fs::write(
-            llm.join("anthropic_cleanup.toml"),
+            post.join("anthropic_cleanup.toml"),
             r#"
 type = "llm"
 format = "anthropic"
 name = "anthropic"
+base_url = "https://api.anthropic.com"
 api_key = "sk-ant-test"
 model = "claude-haiku-4-5"
 prompt = "{{text}}"
 "#,
         )
         .unwrap();
-        let dirs = PostDirs {
-            rule: dir.join("rule"),
-            llm,
-        };
+        let dir = PostDir { dir: post };
 
         let chain = load_components(
             &[
-                "llm:openai_cleanup".to_string(),
-                "llm:anthropic_cleanup".to_string(),
+                "openai_cleanup".to_string(),
+                "anthropic_cleanup".to_string(),
             ],
-            &dirs,
+            &dir,
             &Table::new(),
         )
         .unwrap();
 
-        assert_eq!(chain.name, "llm:openai_cleanup → llm:anthropic_cleanup");
+        assert_eq!(chain.name, "openai_cleanup → anthropic_cleanup");
         assert_eq!(chain.processors.len(), 2);
         assert!(matches!(
             &chain.processors[0],
@@ -359,7 +298,7 @@ prompt = "{{text}}"
                 provider_name,
                 base_url,
                 ..
-            } if id == "llm:openai_cleanup"
+            } if id == "openai_cleanup"
                 && provider_name == "deepseek"
                 && base_url == "https://api.deepseek.com"
         ));
@@ -371,22 +310,20 @@ prompt = "{{text}}"
                 provider_name,
                 base_url,
                 ..
-            } if id == "llm:anthropic_cleanup"
+            } if id == "anthropic_cleanup"
                 && provider_name == "anthropic"
                 && base_url == "https://api.anthropic.com"
         ));
-        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(dir.dir);
     }
 
     #[test]
-    fn loads_rule_and_llm_components_from_post_dirs() {
-        let dir = temp_dir();
-        let rule = dir.join("rule");
-        let llm = dir.join("llm");
-        fs::create_dir_all(&rule).unwrap();
-        fs::create_dir_all(&llm).unwrap();
+    fn loads_rule_and_llm_components_from_post_dir() {
+        let root = temp_dir();
+        let post = root.join("post");
+        fs::create_dir_all(&post).unwrap();
         fs::write(
-            rule.join("zh_filter.toml"),
+            post.join("zh_filter.toml"),
             r#"
 type = "rule"
 patterns = ["嗯", "啊"]
@@ -394,32 +331,33 @@ patterns = ["嗯", "啊"]
         )
         .unwrap();
         fs::write(
-            llm.join("deepseek.toml"),
+            post.join("deepseek.toml"),
             r#"
 type = "llm"
 format = "openai"
 name = "deepseek"
+base_url = "https://api.deepseek.com"
 api_key = "sk-test"
 model = "deepseek-chat"
 prompt = "{{text}}"
 "#,
         )
         .unwrap();
-        let dirs = PostDirs { rule, llm };
+        let dir = PostDir { dir: post };
 
         let chain = load_components(
-            &["rule:zh_filter".to_string(), "llm:deepseek".to_string()],
-            &dirs,
+            &["zh_filter".to_string(), "deepseek".to_string()],
+            &dir,
             &Table::new(),
         )
         .unwrap();
 
-        assert_eq!(chain.name, "rule:zh_filter → llm:deepseek");
+        assert_eq!(chain.name, "zh_filter → deepseek");
         assert_eq!(chain.processors.len(), 2);
         assert!(matches!(
             &chain.processors[0],
             ProcessorConfig::Rule { id, patterns }
-                if id == "rule:zh_filter" && patterns == &vec!["嗯".to_string(), "啊".to_string()]
+                if id == "zh_filter" && patterns == &vec!["嗯".to_string(), "啊".to_string()]
         ));
         assert!(matches!(
             &chain.processors[1],
@@ -428,55 +366,87 @@ prompt = "{{text}}"
                 provider_name,
                 base_url,
                 ..
-            } if id == "llm:deepseek"
+            } if id == "deepseek"
                 && provider_name == "deepseek"
                 && base_url == "https://api.deepseek.com"
         ));
-        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn loads_named_rule_component() {
-        let dir = temp_dir();
-        let rule = dir.join("rule");
-        fs::create_dir_all(&rule).unwrap();
+        let root = temp_dir();
+        let post = root.join("post");
+        fs::create_dir_all(&post).unwrap();
         fs::write(
-            rule.join("zh_filter.toml"),
+            post.join("zh_filter.toml"),
             r#"
 type = "rule"
 patterns = ["嗯", "呃", "啊"]
 "#,
         )
         .unwrap();
-        let dirs = PostDirs {
-            rule,
-            llm: dir.join("llm"),
-        };
+        let dir = PostDir { dir: post };
 
-        let chain = load_components(&["rule:zh_filter".to_string()], &dirs, &Table::new()).unwrap();
+        let chain = load_components(&["zh_filter".to_string()], &dir, &Table::new()).unwrap();
 
-        assert_eq!(chain.name, "rule:zh_filter");
+        assert_eq!(chain.name, "zh_filter");
         assert_eq!(chain.processors.len(), 1);
         assert!(matches!(
             &chain.processors[0],
             ProcessorConfig::Rule { id, patterns }
-                if id == "rule:zh_filter"
+                if id == "zh_filter"
                     && patterns == &vec!["嗯".to_string(), "呃".to_string(), "啊".to_string()]
         ));
-        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn nameless_llm_component_falls_back_to_id_for_provider_name() {
+        let root = temp_dir();
+        let post = root.join("post");
+        fs::create_dir_all(&post).unwrap();
+        fs::write(
+            post.join("cleaner.toml"),
+            r#"
+type = "llm"
+base_url = "https://api.deepseek.com"
+api_key = "sk-test"
+model = "deepseek-chat"
+prompt = "{{text}}"
+"#,
+        )
+        .unwrap();
+        let dir = PostDir { dir: post };
+
+        let cfg = load_llm_config_for_test("cleaner", &dir, &Table::new()).unwrap();
+
+        assert!(matches!(
+            &cfg,
+            ProcessorConfig::Llm {
+                id,
+                provider_name,
+                base_url,
+                ..
+            } if id == "cleaner"
+                && provider_name == "cleaner"
+                && base_url == "https://api.deepseek.com"
+        ));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn applies_llm_component_overrides() {
-        let dir = temp_dir();
-        let llm = dir.join("llm");
-        fs::create_dir_all(&llm).unwrap();
+        let root = temp_dir();
+        let post = root.join("post");
+        fs::create_dir_all(&post).unwrap();
         fs::write(
-            llm.join("deepseek.toml"),
+            post.join("deepseek.toml"),
             r#"
 type = "llm"
 format = "openai"
 name = "deepseek"
+base_url = "https://api.deepseek.com"
 api_key = "sk-test"
 model = "deepseek-chat"
 prompt = "{{text}}"
@@ -492,13 +462,10 @@ prompt = "{{text}}"
                 extra_body = { thinking = { type = "disabled" } }
             }),
         );
-        let dirs = PostDirs {
-            rule: dir.join("rule"),
-            llm,
-        };
+        let dir = PostDir { dir: post };
 
-        let cfg = load_llm_config_for_test("llm:deepseek", &dirs, &overrides).unwrap();
-        let chain = load_components(&["llm:deepseek".to_string()], &dirs, &overrides).unwrap();
+        let cfg = load_llm_config_for_test("deepseek", &dir, &overrides).unwrap();
+        let chain = load_components(&["deepseek".to_string()], &dir, &overrides).unwrap();
 
         assert!(matches!(
             &cfg,
@@ -511,7 +478,7 @@ prompt = "{{text}}"
                 && system_prompt.as_deref() == Some("terminal")
                 && extra_body.get("thinking") == Some(&serde_json::json!({ "type": "disabled" }))
         ));
-        assert_eq!(chain.name, "llm:deepseek");
+        assert_eq!(chain.name, "deepseek");
         assert!(matches!(
             &chain.processors[0],
             ProcessorConfig::Llm {
@@ -520,24 +487,25 @@ prompt = "{{text}}"
                 system_prompt,
                 extra_body,
                 ..
-            } if id == "llm:deepseek"
+            } if id == "deepseek"
                 && model == "deepseek-v4-flash"
                 && system_prompt.as_deref() == Some("terminal")
                 && extra_body.get("thinking") == Some(&serde_json::json!({ "type": "disabled" }))
         ));
-        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn rejects_unknown_llm_override_fields() {
-        let dir = temp_dir();
-        let llm = dir.join("llm");
-        fs::create_dir_all(&llm).unwrap();
+        let root = temp_dir();
+        let post = root.join("post");
+        fs::create_dir_all(&post).unwrap();
         fs::write(
-            llm.join("deepseek.toml"),
+            post.join("deepseek.toml"),
             r#"
 type = "llm"
 name = "deepseek"
+base_url = "https://api.deepseek.com"
 api_key = "sk-test"
 model = "deepseek-chat"
 prompt = "{{text}}"
@@ -553,23 +521,36 @@ prompt = "{{text}}"
                     .collect(),
             ),
         );
-        let dirs = PostDirs {
-            rule: dir.join("rule"),
-            llm,
-        };
+        let dir = PostDir { dir: post };
 
-        let error = load_llm_config_for_test("llm:deepseek", &dirs, &overrides).unwrap_err();
+        let error = load_llm_config_for_test("deepseek", &dir, &overrides).unwrap_err();
         let error = format!("{error:#}");
 
         assert!(error.contains("modle"), "{error}");
         assert!(error.contains("unknown field"), "{error}");
-        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_invalid_post_component_file_id_before_reading_file() {
+        let root = temp_dir();
+        let dir = PostDir {
+            dir: root.join("post"),
+        };
+
+        let error = load_components(&["BadName".to_string()], &dir, &Table::new()).unwrap_err();
+        let error = format!("{error:#}");
+
+        assert!(error.contains("invalid post component id"), "{error}");
+        assert!(error.contains("lowercase letter first"), "{error}");
+        assert!(!error.contains("read post component"), "{error}");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn processor_config_debug_redacts_api_key() {
         let config = ProcessorConfig::Llm {
-            id: "llm:deepseek".to_string(),
+            id: "deepseek".to_string(),
             format: ProviderFormatCfg::Openai,
             provider_name: "deepseek".to_string(),
             base_url: "https://api.deepseek.com".to_string(),

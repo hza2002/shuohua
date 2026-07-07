@@ -76,6 +76,7 @@ const CONFIG_VALUES: &[(&str, TemplateValue)] = &[
         TemplateValue::Table(&[
             ("trigger", TemplateValue::String("right_option:double")),
             ("cancel", TemplateValue::String("escape")),
+            ("resume", TemplateValue::String("shift+right_option:double")),
         ]),
     ),
     (
@@ -88,7 +89,7 @@ const CONFIG_VALUES: &[(&str, TemplateValue)] = &[
     ),
     (
         "voice.preprocess",
-        TemplateValue::Table(&[("backend", TemplateValue::String("apple"))]),
+        TemplateValue::Table(&[("backend", TemplateValue::String("webrtc"))]),
     ),
     (
         "voice.vad",
@@ -103,12 +104,19 @@ const CONFIG_VALUES: &[(&str, TemplateValue)] = &[
     ),
     (
         "dev",
-        TemplateValue::Table(&[("vad_trace", TemplateValue::Bool(false))]),
+        TemplateValue::Table(&[
+            ("vad_trace", TemplateValue::Bool(false)),
+            ("apple_backend_trace", TemplateValue::Bool(false)),
+        ]),
     ),
     (
         "overlay",
         TemplateValue::Table(&[
             ("position", TemplateValue::String("bottom")),
+            (
+                "width",
+                TemplateValue::Integer(crate::overlay::layout::constants::DEFAULT_WIDTH_PX as i64),
+            ),
             ("max_text_lines", TemplateValue::Integer(5)),
         ]),
     ),
@@ -180,26 +188,57 @@ const CONFIG_VALUES: &[(&str, TemplateValue)] = &[
 ];
 
 const ASR_APPLE_VALUES: &[(&str, TemplateValue)] = &[
+    ("type", TemplateValue::String("apple")),
+    ("name", TemplateValue::String("Apple Local ASR")),
     ("language", TemplateValue::String("zh-CN")),
     ("install_assets", TemplateValue::Bool(true)),
-    ("idle_pause", TemplateValue::Bool(false)),
+    ("local_vad", TemplateValue::String("off")),
+    ("open_timeout_ms", TemplateValue::Integer(5000)),
     ("finalize_timeout_ms", TemplateValue::Integer(5000)),
 ];
 
 const ASR_DOUBAO_VALUES: &[(&str, TemplateValue)] = &[
+    ("type", TemplateValue::String("doubao")),
+    ("name", TemplateValue::String("Doubao ASR")),
     ("app_key", TemplateValue::String("")),
     ("access_key", TemplateValue::String("")),
     (
         "resource_id",
         TemplateValue::String("volc.bigasr.sauc.duration"),
     ),
-    ("language", TemplateValue::String("")),
+    ("language", TemplateValue::String("auto")),
     ("enable_itn", TemplateValue::Bool(true)),
     ("enable_punc", TemplateValue::Bool(true)),
     ("enable_ddc", TemplateValue::Bool(true)),
     ("stream_mode", TemplateValue::Integer(2)),
     ("ai_vad", TemplateValue::Bool(false)),
-    ("idle_pause", TemplateValue::Bool(true)),
+    ("local_vad", TemplateValue::String("auto")),
+    ("open_timeout_ms", TemplateValue::Integer(12_000)),
+    ("finalize_timeout_ms", TemplateValue::Integer(12_000)),
+];
+
+const ASR_TENCENT_VALUES: &[(&str, TemplateValue)] = &[
+    ("type", TemplateValue::String("tencent")),
+    ("name", TemplateValue::String("Tencent ASR")),
+    ("app_id", TemplateValue::String("")),
+    ("secret_id", TemplateValue::String("")),
+    ("secret_key", TemplateValue::String("")),
+    ("engine_model_type", TemplateValue::String("16k_zh")),
+    ("convert_num_mode", TemplateValue::Integer(1)),
+    ("filter_modal", TemplateValue::Integer(1)),
+    ("filter_punc", TemplateValue::Bool(false)),
+    ("filter_dirty", TemplateValue::Integer(0)),
+    ("need_vad", TemplateValue::Bool(false)),
+    ("vad_silence_time", TemplateValue::Integer(1000)),
+    ("max_speak_time", TemplateValue::Integer(60_000)),
+    ("sentence_strategy", TemplateValue::Integer(0)),
+    ("noise_threshold", TemplateValue::Float(0.0)),
+    ("hotword_weight", TemplateValue::Integer(10)),
+    ("hotword_id", TemplateValue::String("")),
+    ("customization_id", TemplateValue::String("")),
+    ("replace_text_id", TemplateValue::String("")),
+    ("local_vad", TemplateValue::String("auto")),
+    ("open_timeout_ms", TemplateValue::Integer(12_000)),
     ("finalize_timeout_ms", TemplateValue::Integer(12_000)),
 ];
 
@@ -208,7 +247,7 @@ const DEFAULT_PROFILE_VALUES: &[(&str, TemplateValue)] = &[
     (
         "asr",
         TemplateValue::Table(&[
-            ("provider", TemplateValue::String("doubao")),
+            ("instance", TemplateValue::String("doubao")),
             ("hotwords", TemplateValue::StringArray(&[])),
         ]),
     ),
@@ -216,11 +255,11 @@ const DEFAULT_PROFILE_VALUES: &[(&str, TemplateValue)] = &[
         "post",
         TemplateValue::Table(&[(
             "chain",
-            TemplateValue::StringArray(&["rule:zh_filter", "llm:deepseek"]),
+            TemplateValue::StringArray(&["zh_filter", "deepseek"]),
         )]),
     ),
     (
-        "post.llm",
+        "post.overrides",
         TemplateValue::Table(&[(
             "deepseek",
             TemplateValue::Table(&[
@@ -243,7 +282,7 @@ const CHAT_PROFILE_VALUES: &[(&str, TemplateValue)] = &[
     (
         "asr",
         TemplateValue::Table(&[
-            ("provider", TemplateValue::String("doubao")),
+            ("instance", TemplateValue::String("doubao")),
             ("hotwords", TemplateValue::StringArray(&[])),
         ]),
     ),
@@ -251,11 +290,11 @@ const CHAT_PROFILE_VALUES: &[(&str, TemplateValue)] = &[
         "post",
         TemplateValue::Table(&[(
             "chain",
-            TemplateValue::StringArray(&["rule:zh_filter", "llm:deepseek"]),
+            TemplateValue::StringArray(&["zh_filter", "deepseek"]),
         )]),
     ),
     (
-        "post.llm",
+        "post.overrides",
         TemplateValue::Table(&[(
             "deepseek",
             TemplateValue::Table(&[
@@ -275,7 +314,7 @@ const AGENT_PROFILE_VALUES: &[(&str, TemplateValue)] = &[
     (
         "asr",
         TemplateValue::Table(&[
-            ("provider", TemplateValue::String("doubao")),
+            ("instance", TemplateValue::String("doubao")),
             ("hotwords", TemplateValue::StringArray(&[])),
         ]),
     ),
@@ -283,11 +322,11 @@ const AGENT_PROFILE_VALUES: &[(&str, TemplateValue)] = &[
         "post",
         TemplateValue::Table(&[(
             "chain",
-            TemplateValue::StringArray(&["rule:zh_filter", "llm:deepseek"]),
+            TemplateValue::StringArray(&["zh_filter", "deepseek"]),
         )]),
     ),
     (
-        "post.llm",
+        "post.overrides",
         TemplateValue::Table(&[(
             "deepseek",
             TemplateValue::Table(&[
@@ -410,6 +449,7 @@ bundle_id: {{bundle_id}}
 只输出整理后的最终文本。"#;
 
 const ZH_FILTER_VALUES: &[(&str, TemplateValue)] = &[
+    ("name", TemplateValue::String("Chinese Filler Filter")),
     ("type", TemplateValue::String("rule")),
     (
         "patterns",
@@ -429,7 +469,9 @@ const DEEPSEEK_VALUES: &[(&str, TemplateValue)] = &[
     ("model", TemplateValue::String("deepseek-chat")),
     (
         "system_prompt",
-        TemplateValue::MultilineString("你是 ASR 文本整理器。保留用户原意，只清理口误、重复、标点和明确的识别错误。只输出整理后的文本。"),
+        TemplateValue::MultilineString(
+            "你是 ASR 文本整理器。保留用户原意，只清理口误、重复、标点和明确的识别错误。只输出整理后的文本。",
+        ),
     ),
     ("prompt", TemplateValue::String("{{text}}")),
     (
@@ -496,6 +538,15 @@ const TEMPLATES: &[Template] = &[
         values: ASR_DOUBAO_VALUES,
     },
     Template {
+        id: "asr/tencent",
+        kind: TemplateKind::Asr,
+        path: "asr/tencent.toml",
+        title: "Tencent ASR",
+        description: "Starter config for the Tencent Cloud realtime ASR provider.",
+        schema: SchemaId::AsrTencent,
+        values: ASR_TENCENT_VALUES,
+    },
+    Template {
         id: "profile/default",
         kind: TemplateKind::Profile,
         path: "profile/default.toml",
@@ -524,36 +575,36 @@ const TEMPLATES: &[Template] = &[
         values: AGENT_PROFILE_VALUES,
     },
     Template {
-        id: "post/rule/zh_filter",
+        id: "post/zh_filter",
         kind: TemplateKind::PostRule,
-        path: "post/rule/zh_filter.toml",
+        path: "post/zh_filter.toml",
         title: "Chinese speech cleanup rule",
         description: "Rule processor for common Chinese filler words.",
         schema: SchemaId::PostRule,
         values: ZH_FILTER_VALUES,
     },
     Template {
-        id: "post/llm/deepseek",
+        id: "post/deepseek",
         kind: TemplateKind::PostLlm,
-        path: "post/llm/deepseek.toml",
+        path: "post/deepseek.toml",
         title: "DeepSeek",
         description: "OpenAI-compatible DeepSeek post-processing preset.",
         schema: SchemaId::PostLlm,
         values: DEEPSEEK_VALUES,
     },
     Template {
-        id: "post/llm/openai",
+        id: "post/openai",
         kind: TemplateKind::PostLlm,
-        path: "post/llm/openai.toml",
+        path: "post/openai.toml",
         title: "OpenAI",
         description: "OpenAI post-processing preset.",
         schema: SchemaId::PostLlm,
         values: OPENAI_VALUES,
     },
     Template {
-        id: "post/llm/anthropic",
+        id: "post/anthropic",
         kind: TemplateKind::PostLlm,
-        path: "post/llm/anthropic.toml",
+        path: "post/anthropic.toml",
         title: "Anthropic",
         description: "Anthropic post-processing preset.",
         schema: SchemaId::PostLlm,

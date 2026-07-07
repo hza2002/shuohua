@@ -33,11 +33,12 @@
 //! - 音频 codec 写死 raw PCM 16kHz s16le mono；gzip 收益小不做
 
 use crate::asr::types::*;
-use crate::config::asr::doubao::{load_config_with_overrides, DoubaoConfig};
+use crate::config::asr::doubao::DoubaoConfig;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
+use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::net::TcpStream;
@@ -51,10 +52,10 @@ use toml::value::Table;
 
 const ENDPOINT: &str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
 
-pub use crate::config::asr::doubao::config_path;
-
 #[cfg(test)]
-use crate::config::asr::doubao::{default_finalize_timeout_ms, default_resource_id};
+use crate::config::asr::doubao::{
+    default_finalize_timeout_ms, default_open_timeout_ms, default_resource_id,
+};
 
 // ============================================================
 // 2. Provider
@@ -65,10 +66,17 @@ pub struct DoubaoProvider {
 }
 
 impl DoubaoProvider {
-    pub fn new_with_overrides(overrides: Option<&Table>) -> anyhow::Result<Self> {
-        Ok(Self {
-            config: load_config_with_overrides(overrides)?,
-        })
+    fn from_config(config: DoubaoConfig) -> Self {
+        Self { config }
+    }
+
+    pub(crate) fn new_from_path_with_overrides(
+        path: &Path,
+        overrides: Option<&Table>,
+    ) -> anyhow::Result<Self> {
+        Ok(Self::from_config(DoubaoConfig::from_path_with_overrides(
+            path, overrides,
+        )?))
     }
 
     pub fn finalize_timeout_ms(&self) -> u64 {
@@ -77,7 +85,8 @@ impl DoubaoProvider {
 
     pub fn options(&self) -> crate::asr::providers::ProviderOptions {
         crate::asr::providers::ProviderOptions {
-            idle_pause: self.config.idle_pause,
+            local_vad: self.config.local_vad,
+            open_timeout_ms: self.config.open_timeout_ms,
             finalize_timeout_ms: self.config.finalize_timeout_ms,
         }
     }
@@ -237,6 +246,17 @@ impl AsrSession for DoubaoSession {
         self.cancel.cancel();
         // dropping cmd_tx 也会让 task 退出；这里靠 cancel 提前打断 stream.next()
         Ok(())
+    }
+}
+
+impl Drop for DoubaoSession {
+    fn drop(&mut self) {
+        // drop-safe 兜底：session 被 drop 而没走 close() 时，cancel token 唤醒
+        // session_task 的 biased cancel 臂，关闭 websocket 写半边并结束任务。
+        // 仅靠 drop cmd_tx 不够：发完末帧后 cmd_rx.recv() 臂被 last_sent 关掉，
+        // task 会一直等 server Done，stall 时泄漏 ws + 任务。cancel 幂等，
+        // 与 close() 先 cancel 后 drop 不冲突。
+        self.cancel.cancel();
     }
 }
 
@@ -425,9 +445,7 @@ async fn handle_response(
     };
 
     if frame.msg_type == SRV_MSG_ERROR {
-        let msg = std::str::from_utf8(&frame.payload)
-            .unwrap_or("<non-utf8>")
-            .to_string();
+        let msg = doubao_server_error_summary(&frame.payload);
         let _ = evt_tx
             .send(AsrEvent::Error {
                 err: AsrError::Server(msg),
@@ -516,6 +534,48 @@ async fn handle_response(
     } else {
         ResponseAction::Continue
     }
+}
+
+fn doubao_server_error_summary(payload: &[u8]) -> String {
+    let Some(value) = serde_json::from_slice::<Value>(payload).ok() else {
+        return format!("doubao server error payload_bytes={}", payload.len());
+    };
+    let mut parts = Vec::new();
+    for name in ["code", "error_code", "message", "error", "msg"] {
+        if let Some(text) = value.get(name).and_then(Value::as_str) {
+            let text = sanitize_remote_error_text(text, 256);
+            if !text.is_empty() {
+                parts.push(format!("{name}={text}"));
+            }
+        }
+    }
+    if parts.is_empty() {
+        format!("doubao server error payload_bytes={}", payload.len())
+    } else {
+        format!("doubao server error {}", parts.join(" "))
+    }
+}
+
+fn sanitize_remote_error_text(text: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    let mut last_was_space = false;
+    for ch in text.trim().chars() {
+        let mapped = if ch.is_control() { ' ' } else { ch };
+        if mapped.is_whitespace() {
+            if !last_was_space {
+                out.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            out.push(mapped);
+            last_was_space = false;
+        }
+        if out.chars().count() >= max_chars {
+            out.push_str("... [truncated]");
+            break;
+        }
+    }
+    out.trim().to_string()
 }
 
 // ============================================================
@@ -721,23 +781,72 @@ fn compute_partial_text(utterances: &[DoubaoUtterance]) -> String {
 mod tests {
     use super::*;
 
+    /// drop-safe 兜底：DoubaoSession 被 drop（没走 close()）时，cancel token 必须
+    /// 被 cancel，从而唤醒 session_task 的 cancel 臂、关闭 ws 退出任务。
+    /// 不连真实 endpoint，直接断言 drop 把 token cancel 掉、并让一个 watch 该 token
+    /// 的任务终止（等价于 session_task 的 cancel 臂行为）。
+    #[tokio::test]
+    async fn drop_without_close_cancels_session_token() {
+        let (cmd_tx, _cmd_rx) = mpsc::channel::<PcmCmd>(4);
+        let cancel = CancellationToken::new();
+        let session = Box::new(DoubaoSession {
+            cmd_tx,
+            cancel: cancel.clone(),
+        });
+
+        // 模拟 session_task 的 cancel 臂：被 cancel 即退出。
+        let watcher = {
+            let cancel = cancel.clone();
+            tokio::spawn(async move {
+                cancel.cancelled().await;
+            })
+        };
+
+        assert!(!cancel.is_cancelled());
+        drop(session); // 没走 close()，靠 Drop 兜底
+
+        assert!(cancel.is_cancelled(), "drop must cancel the session token");
+        tokio::time::timeout(Duration::from_secs(1), watcher)
+            .await
+            .expect("watcher task must terminate after drop")
+            .expect("watcher join");
+    }
+
+    /// close() 先 cancel，再 drop session 时不能重复出错——cancel 幂等。
+    #[tokio::test]
+    async fn close_then_drop_is_idempotent() {
+        let (cmd_tx, _cmd_rx) = mpsc::channel::<PcmCmd>(4);
+        let cancel = CancellationToken::new();
+        let session = Box::new(DoubaoSession {
+            cmd_tx,
+            cancel: cancel.clone(),
+        });
+
+        session.close().await.unwrap(); // cancel 一次
+        assert!(cancel.is_cancelled());
+        // session 已被 close() 消费并 drop，Drop 再 cancel 一次也不 panic。
+    }
+
     #[test]
-    fn parses_idle_pause_and_finalize_timeout_fields() {
+    fn parses_local_vad_and_session_timeout_fields() {
         let cfg: DoubaoConfig = toml::from_str(
             r#"
+type = "doubao"
 app_key = "ak"
 access_key = "sk"
-idle_pause = true
+local_vad = "on"
+open_timeout_ms = 9000
 finalize_timeout_ms = 7000
 "#,
         )
         .unwrap();
-        assert!(cfg.idle_pause);
+        assert_eq!(cfg.local_vad, crate::config::asr::LocalVadMode::On);
+        assert_eq!(cfg.open_timeout_ms, 9000);
         assert_eq!(cfg.finalize_timeout_ms, 7000);
     }
 
     #[test]
-    fn idle_pause_defaults_off_and_finalize_timeout_default() {
+    fn local_vad_defaults_auto_and_session_timeout_defaults() {
         let cfg: DoubaoConfig = toml::from_str(
             r#"
 app_key = "ak"
@@ -745,7 +854,8 @@ access_key = "sk"
 "#,
         )
         .unwrap();
-        assert!(!cfg.idle_pause);
+        assert_eq!(cfg.local_vad, crate::config::asr::LocalVadMode::Auto);
+        assert_eq!(cfg.open_timeout_ms, 12_000);
         assert_eq!(cfg.finalize_timeout_ms, 12_000);
     }
 
@@ -753,6 +863,7 @@ access_key = "sk"
     fn provider_options_reflect_config() {
         let provider = DoubaoProvider {
             config: DoubaoConfig {
+                _name: None,
                 app_key: "ak".into(),
                 access_key: "sk".into(),
                 resource_id: default_resource_id(),
@@ -762,7 +873,8 @@ access_key = "sk"
                 enable_ddc: true,
                 stream_mode: None,
                 ai_vad: None,
-                idle_pause: true,
+                local_vad: crate::config::asr::LocalVadMode::On,
+                open_timeout_ms: 9000,
                 finalize_timeout_ms: 7000,
             },
         };
@@ -770,7 +882,8 @@ access_key = "sk"
         assert_eq!(
             provider.options(),
             crate::asr::providers::ProviderOptions {
-                idle_pause: true,
+                local_vad: crate::config::asr::LocalVadMode::On,
+                open_timeout_ms: 9000,
                 finalize_timeout_ms: 7000,
             }
         );
@@ -845,6 +958,37 @@ access_key = "sk"
         data.extend_from_slice(body);
         let parsed = parse_response_frame(&data).unwrap();
         assert_eq!(parsed.msg_type, SRV_MSG_ERROR);
+    }
+
+    #[test]
+    fn server_error_summary_sanitizes_structured_fields() {
+        let body = serde_json::json!({
+            "code": "bad\tcode",
+            "message": format!("first line\n{}", "x".repeat(300)),
+        })
+        .to_string();
+
+        let summary = doubao_server_error_summary(body.as_bytes());
+
+        assert!(summary.contains("code=bad code"));
+        assert!(summary.contains("message=first line"));
+        assert!(summary.contains("[truncated]"));
+        assert!(!summary.contains('\n'));
+        assert!(!summary.contains('\t'));
+    }
+
+    #[test]
+    fn server_error_summary_omits_unstructured_payload() {
+        let payload = b"PROMPT: secret recognized text";
+
+        let summary = doubao_server_error_summary(payload);
+
+        assert_eq!(
+            summary,
+            format!("doubao server error payload_bytes={}", payload.len())
+        );
+        assert!(!summary.contains("PROMPT"));
+        assert!(!summary.contains("secret"));
     }
 
     #[test]
@@ -969,6 +1113,7 @@ access_key = "sk"
     #[test]
     fn full_client_request_payload_includes_hotwords_when_present() {
         let cfg = DoubaoConfig {
+            _name: None,
             app_key: "k".into(),
             access_key: "a".into(),
             resource_id: default_resource_id(),
@@ -978,7 +1123,8 @@ access_key = "sk"
             enable_ddc: false,
             stream_mode: None,
             ai_vad: None,
-            idle_pause: false,
+            local_vad: crate::config::asr::LocalVadMode::Off,
+            open_timeout_ms: default_open_timeout_ms(),
             finalize_timeout_ms: default_finalize_timeout_ms(),
         };
         let ctx = SessionCtx {
@@ -1000,6 +1146,7 @@ access_key = "sk"
     #[test]
     fn full_client_request_payload_injects_experimental_knobs_when_set() {
         let cfg = DoubaoConfig {
+            _name: None,
             app_key: "k".into(),
             access_key: "a".into(),
             resource_id: default_resource_id(),
@@ -1009,7 +1156,8 @@ access_key = "sk"
             enable_ddc: true,
             stream_mode: Some(2),
             ai_vad: Some(true),
-            idle_pause: false,
+            local_vad: crate::config::asr::LocalVadMode::Off,
+            open_timeout_ms: default_open_timeout_ms(),
             finalize_timeout_ms: default_finalize_timeout_ms(),
         };
         let ctx = SessionCtx {
@@ -1024,6 +1172,7 @@ access_key = "sk"
     #[test]
     fn full_client_request_payload_omits_experimental_knobs_when_none() {
         let cfg = DoubaoConfig {
+            _name: None,
             app_key: "k".into(),
             access_key: "a".into(),
             resource_id: default_resource_id(),
@@ -1033,7 +1182,8 @@ access_key = "sk"
             enable_ddc: true,
             stream_mode: None,
             ai_vad: None,
-            idle_pause: false,
+            local_vad: crate::config::asr::LocalVadMode::Off,
+            open_timeout_ms: default_open_timeout_ms(),
             finalize_timeout_ms: default_finalize_timeout_ms(),
         };
         let ctx = SessionCtx {
@@ -1048,6 +1198,7 @@ access_key = "sk"
     #[test]
     fn full_client_request_payload_skips_corpus_when_no_hotwords() {
         let cfg = DoubaoConfig {
+            _name: None,
             app_key: "k".into(),
             access_key: "a".into(),
             resource_id: default_resource_id(),
@@ -1057,7 +1208,8 @@ access_key = "sk"
             enable_ddc: false,
             stream_mode: None,
             ai_vad: None,
-            idle_pause: false,
+            local_vad: crate::config::asr::LocalVadMode::Off,
+            open_timeout_ms: default_open_timeout_ms(),
             finalize_timeout_ms: default_finalize_timeout_ms(),
         };
         let ctx = SessionCtx {

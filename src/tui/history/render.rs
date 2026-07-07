@@ -3,13 +3,13 @@ use std::time::SystemTime;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::config::theme::TuiTheme;
 use crate::history::{AggregateStats, AnalyticsPeriod, AnalyticsPoint, HistoryRecord};
 use crate::tui::history::{
-    AnalyticsChart, AnalyticsMetric, Confirm, HistoryDetail, HistoryPage, HistoryView,
+    AnalyticsChart, AnalyticsMetric, Confirm, HistoryDetail, HistoryPage, HistoryView, ListHit,
 };
 use crate::tui::ui;
 
@@ -36,6 +36,10 @@ pub(super) fn render_history(frame: &mut Frame, page: &HistoryPage, area: Rect, 
     );
 
     if page.view == HistoryView::Analytics {
+        // No clickable record list or detail tabs in analytics view.
+        *page.list_hit.borrow_mut() = None;
+        page.detail_tabs.borrow_mut().clear();
+        *page.detail_hit.borrow_mut() = None;
         render_analytics(frame, page, chunks[1], theme);
         return;
     }
@@ -45,11 +49,19 @@ pub(super) fn render_history(frame: &mut Frame, page: &HistoryPage, area: Rect, 
         .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
         .split(chunks[1]);
     let records = page.filtered();
-    let visible = visible_range_for_selection(
+    let visible = ui::visible_range_for_selection(
         page.selected,
         records.len(),
         body[0].height.saturating_sub(2) as usize,
     );
+    // Capture the list geometry so on_mouse can map a click to a record row.
+    *page.list_hit.borrow_mut() = Some(ListHit {
+        x: body[0].x + 1,
+        y: body[0].y + 1,
+        width: body[0].width.saturating_sub(2),
+        height: (visible.end - visible.start) as u16,
+        first: visible.start,
+    });
     let items: Vec<ListItem> = records[visible.clone()]
         .iter()
         .enumerate()
@@ -72,6 +84,13 @@ pub(super) fn render_history(frame: &mut Frame, page: &HistoryPage, area: Rect, 
         body[0],
     );
 
+    // Clickable detail sub-tab bar on top, detail content below.
+    let detail_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(body[1]);
+    render_detail_tabs(frame, page, detail_area[0], theme);
+
     let selected = records
         .get(page.selected)
         .map(|record| history_detail_text(page, theme, record, page.detail))
@@ -89,13 +108,18 @@ pub(super) fn render_history(frame: &mut Frame, page: &HistoryPage, area: Rect, 
     } else {
         selected
     };
+    // Pre-wrap so scroll offsets map 1:1 to rows (no ratatui `Wrap`), then clamp
+    // and record the scroll bounds + pane rect for keyboard/wheel scrolling.
+    let block = Block::default().borders(Borders::ALL);
+    let inner = block.inner(detail_area[1]);
+    let wrapped = ui::wrap_styled_lines(&selected, (inner.width as usize).max(1));
+    let max_scroll = (wrapped.len() as u16).saturating_sub(inner.height);
+    page.detail_max_scroll.set(max_scroll);
+    *page.detail_hit.borrow_mut() = Some(detail_area[1]);
+    let scroll = page.detail_scroll.min(max_scroll);
     frame.render_widget(
-        Paragraph::new(selected).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .title(history_detail_title(page.detail))
-                .borders(Borders::ALL),
-        ),
-        body[1],
+        Paragraph::new(wrapped).scroll((scroll, 0)).block(block),
+        detail_area[1],
     );
 }
 
@@ -326,6 +350,41 @@ fn history_list_line(
     ])
 }
 
+/// Render the clickable detail sub-tab bar and register a hit rect per tab so
+/// `on_mouse` can switch views on click. The active tab is bracketed and
+/// accent-highlighted; `h/l` still cycles the same set.
+fn render_detail_tabs(frame: &mut Frame, page: &HistoryPage, area: Rect, theme: &TuiTheme) {
+    let mut tabs = page.detail_tabs.borrow_mut();
+    tabs.clear();
+    let mut spans = Vec::new();
+    let mut x = area.x;
+    let right = area.x + area.width;
+    for detail in HistoryDetail::ALL {
+        let label = history_detail_title(detail);
+        let selected = detail == page.detail;
+        let text = if selected {
+            format!("[{label}]")
+        } else {
+            format!(" {label} ")
+        };
+        let w = ui::display_width(&text) as u16;
+        if x < right {
+            tabs.push((Rect::new(x, area.y, w.min(right - x), 1), detail));
+        }
+        let style = if selected {
+            Style::default()
+                .fg(ui::accent(theme))
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(ui::muted(theme))
+        };
+        spans.push(Span::styled(text, style));
+        spans.push(Span::raw(" "));
+        x += w + 1;
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
 fn history_detail_title(detail: HistoryDetail) -> String {
     match detail {
         HistoryDetail::Details => crate::t!("tui.history.detail.details"),
@@ -447,40 +506,52 @@ fn history_details_lines(
         .map(format_system_time)
         .unwrap_or_else(|| "-".to_string());
     let mut lines = vec![
-        kv_line("status", format!("{:?}", record.status), ui::success(theme)),
         kv_line(
+            theme,
+            "status",
+            format!("{:?}", record.status),
+            ui::success(theme),
+        ),
+        kv_line(
+            theme,
             "app",
             short_app_label(record.app.as_deref()),
             ui::accent(theme),
         ),
         kv_line(
+            theme,
             "started",
             format_local_time(record.started_at),
             ui::fg(theme),
         ),
         kv_line(
+            theme,
             "total",
             format_duration(record.duration_ms),
             ui::warning(theme),
         ),
         kv_line(
+            theme,
             "speech",
             format_duration(record.asr.duration_ms),
             ui::warning(theme),
         ),
         kv_line(
+            theme,
             "effective",
             format_duration(record.asr.audio_ms),
             ui::warning(theme),
         ),
         kv_line(
+            theme,
             "words",
             record.text_stats().words.to_string(),
             ui::accent(theme),
         ),
-        kv_line("asr", record.asr.provider.clone(), ui::info(theme)),
-        kv_line("pipeline", pipeline_summary(record), ui::fg(theme)),
+        kv_line(theme, "asr", record.asr.provider.clone(), ui::info(theme)),
+        kv_line(theme, "pipeline", pipeline_summary(record), ui::fg(theme)),
         kv_line(
+            theme,
             "audio",
             status,
             if info.exists() {
@@ -489,14 +560,20 @@ fn history_details_lines(
                 ui::muted(theme)
             },
         ),
-        kv_line(crate::t!("tui.history.audio.size"), size, ui::fg(theme)),
         kv_line(
+            theme,
+            crate::t!("tui.history.audio.size"),
+            size,
+            ui::fg(theme),
+        ),
+        kv_line(
+            theme,
             crate::t!("tui.history.audio.mtime"),
             modified,
             ui::fg(theme),
         ),
         Line::from(""),
-        kv_line("text", "", ui::fg(theme)),
+        kv_line(theme, "text", "", ui::fg(theme)),
     ];
     lines.extend(text_lines(record.text.clone()));
     lines
@@ -513,11 +590,16 @@ fn confirm_text(confirm: &Confirm) -> String {
     }
 }
 
-fn kv_line(label: impl Into<String>, value: impl Into<String>, color: Color) -> Line<'static> {
+fn kv_line(
+    theme: &TuiTheme,
+    label: impl Into<String>,
+    value: impl Into<String>,
+    color: Color,
+) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("{}: ", label.into()),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(ui::muted(theme)),
         ),
         value_span(value.into(), color),
     ])
@@ -557,21 +639,6 @@ fn format_system_time(value: SystemTime) -> String {
         return "-".to_string();
     };
     format_local_time(datetime)
-}
-
-pub(super) fn visible_range_for_selection(
-    selected: usize,
-    total: usize,
-    visible_len: usize,
-) -> std::ops::Range<usize> {
-    if total == 0 || visible_len == 0 {
-        return 0..0;
-    }
-    let visible_len = visible_len.min(total);
-    let half = visible_len / 2;
-    let mut start = selected.saturating_sub(half);
-    start = start.min(total - visible_len);
-    start..start + visible_len
 }
 
 fn pipeline_summary(record: &HistoryRecord) -> String {

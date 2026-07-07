@@ -3,6 +3,7 @@ mod fallback;
 mod hotkey_input;
 mod lock;
 mod process;
+mod resume;
 mod runtime;
 mod session_start;
 

@@ -126,11 +126,14 @@ mod tests {
         let future = dispatch_with_post_chain(
             &segment_texts,
             false,
-            &app_context,
             &post_chain,
             60_000,
-            None,
-            control.cancel_signal(),
+            crate::voice::post_dispatch::DispatchContext {
+                recording_id: "test-recording",
+                app_context: &app_context,
+                overlay: None,
+                cancel: control.cancel_signal(),
+            },
         );
         tokio::pin!(future);
 

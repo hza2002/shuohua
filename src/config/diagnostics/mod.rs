@@ -33,16 +33,16 @@ mod tests {
         let root = home.join("shuohua");
         fs::create_dir_all(root.join("profile")).unwrap();
         fs::create_dir_all(root.join("asr")).unwrap();
-        fs::create_dir_all(root.join("post/llm")).unwrap();
+        fs::create_dir_all(root.join("post")).unwrap();
         fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
         fs::write(root.join("profile/broken.toml"), "[asr\n").unwrap();
         fs::write(
             root.join("asr/apple.toml"),
-            "idle_pause = true\nunknown = 1\n",
+            "type = \"apple\"\nlocal_vad = \"on\"\nunknown = 1\n",
         )
         .unwrap();
         fs::write(
-            root.join("post/llm/broken.toml"),
+            root.join("post/broken.toml"),
             "type = \"llm\"\napi_key = \"\"\n",
         )
         .unwrap();
@@ -61,7 +61,7 @@ mod tests {
         assert!(report
             .diagnostics
             .iter()
-            .any(|d| d.source.ends_with("post/llm/broken.toml")));
+            .any(|d| d.source.ends_with("post/broken.toml")));
         let _ = fs::remove_dir_all(home);
     }
 
@@ -70,17 +70,17 @@ mod tests {
         let home = temp_config_home();
         let root = home.join("shuohua");
         fs::create_dir_all(root.join("profile")).unwrap();
-        fs::create_dir_all(root.join("post/rule")).unwrap();
+        fs::create_dir_all(root.join("post")).unwrap();
         fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
         fs::write(
             root.join("profile/default.toml"),
             r#"
 name = "default"
 [asr]
-provider = "doubao"
+instance = "doubao"
 
 [post]
-chain = ["rule:missing", "llm:missing", "bad-item", "other:name"]
+chain = ["missing", "deepseek"]
 "#,
         )
         .unwrap();
@@ -90,27 +90,74 @@ chain = ["rule:missing", "llm:missing", "bad-item", "other:name"]
         assert!(report.diagnostics.iter().any(|d| {
             d.scope == DiagnosticScope::Profile
                 && d.source.ends_with("profile/default.toml")
-                && d.path == "asr.provider"
+                && d.path == "asr.instance"
                 && d.message.contains("asr/doubao.toml")
         }));
         assert!(report.diagnostics.iter().any(|d| {
             d.scope == DiagnosticScope::Profile
                 && d.source.ends_with("profile/default.toml")
                 && d.path == "post.chain"
-                && d.message.contains("post/rule/missing.toml")
+                && d.message.contains("post/missing.toml")
         }));
-        assert!(report.diagnostics.iter().any(|d| {
-            d.scope == DiagnosticScope::Profile
-                && d.source.ends_with("profile/default.toml")
-                && d.path == "post.chain"
-                && d.message.contains("post chain item")
-        }));
-        assert!(report.diagnostics.iter().any(|d| {
-            d.scope == DiagnosticScope::Profile
-                && d.source.ends_with("profile/default.toml")
-                && d.path == "post.chain"
-                && d.message.contains("unknown post component kind")
-        }));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn local_diagnostics_rejects_dangling_and_non_llm_overrides() {
+        let home = temp_config_home();
+        let root = home.join("shuohua");
+        fs::create_dir_all(root.join("profile")).unwrap();
+        fs::create_dir_all(root.join("post")).unwrap();
+        fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
+        fs::write(
+            root.join("post/zh_filter.toml"),
+            "type = \"rule\"\npatterns = []\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("profile/default.toml"),
+            r#"
+[asr]
+instance = "apple"
+
+[post]
+chain = ["zh_filter"]
+
+[post.overrides.stray]
+model = "x"
+
+[post.overrides.zh_filter]
+model = "x"
+"#,
+        )
+        .unwrap();
+
+        let report = run_local_from_config_home(&home);
+
+        assert!(
+            report.diagnostics.iter().any(|d| {
+                d.scope == DiagnosticScope::Profile
+                    && d.source.ends_with("profile/default.toml")
+                    && d.path == "post.overrides"
+                    && d.severity == Severity::Error
+                    && d.message.contains("stray")
+                    && d.message.contains("not in the chain")
+            }),
+            "dangling override should error: {:?}",
+            report.diagnostics
+        );
+        assert!(
+            report.diagnostics.iter().any(|d| {
+                d.scope == DiagnosticScope::Profile
+                    && d.source.ends_with("profile/default.toml")
+                    && d.path == "post.overrides"
+                    && d.severity == Severity::Error
+                    && d.message.contains("zh_filter")
+                    && d.message.contains("non-llm")
+            }),
+            "rule-target override should error: {:?}",
+            report.diagnostics
+        );
         let _ = fs::remove_dir_all(home);
     }
 
@@ -127,6 +174,29 @@ chain = ["rule:missing", "llm:missing", "bad-item", "other:name"]
             .diagnostics
             .iter()
             .all(|d| d.source.starts_with(&root)));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn local_diagnostics_rejects_non_identifier_config_file_names() {
+        let home = temp_config_home();
+        let root = home.join("shuohua");
+        fs::create_dir_all(root.join("post")).unwrap();
+        fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
+        fs::write(
+            root.join("post/Zh Filter.toml"),
+            "type = \"rule\"\npatterns = []\n",
+        )
+        .unwrap();
+
+        let report = run_local_from_config_home(&home);
+
+        assert!(report.diagnostics.iter().any(|d| {
+            d.scope == DiagnosticScope::PostProcessor
+                && d.source.ends_with("post/Zh Filter.toml")
+                && d.severity == Severity::Error
+                && d.message.contains("invalid file name")
+        }));
         let _ = fs::remove_dir_all(home);
     }
 
@@ -200,10 +270,10 @@ background_blur_radius = 3
     fn unreferenced_llm_draft_empty_api_key_is_warning() {
         let home = temp_config_home();
         let root = home.join("shuohua");
-        fs::create_dir_all(root.join("post/llm")).unwrap();
+        fs::create_dir_all(root.join("post")).unwrap();
         fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
         fs::write(
-            root.join("post/llm/draft.toml"),
+            root.join("post/draft.toml"),
             "type = \"llm\"\nname = \"draft\"\napi_key = \"\"\nmodel = \"m\"\nprompt = \"{{text}}\"\n",
         )
         .unwrap();
@@ -211,12 +281,12 @@ background_blur_radius = 3
         let report = run_local_from_config_home(&home);
 
         assert!(report.diagnostics.iter().any(|d| {
-            d.source.ends_with("post/llm/draft.toml")
+            d.source.ends_with("post/draft.toml")
                 && d.path == "api_key"
                 && d.severity == Severity::Warning
         }));
         assert!(!report.diagnostics.iter().any(|d| {
-            d.source.ends_with("post/llm/draft.toml")
+            d.source.ends_with("post/draft.toml")
                 && d.path == "api_key"
                 && d.severity == Severity::Error
         }));
@@ -228,15 +298,15 @@ background_blur_radius = 3
         let home = temp_config_home();
         let root = home.join("shuohua");
         fs::create_dir_all(root.join("profile")).unwrap();
-        fs::create_dir_all(root.join("post/llm")).unwrap();
+        fs::create_dir_all(root.join("post")).unwrap();
         fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
         fs::write(
             root.join("profile/default.toml"),
-            "name = \"default\"\n[asr]\nprovider = \"apple\"\n[post]\nchain = [\"llm:draft\"]\n",
+            "name = \"default\"\n[asr]\ninstance = \"apple\"\n[post]\nchain = [\"draft\"]\n",
         )
         .unwrap();
         fs::write(
-            root.join("post/llm/draft.toml"),
+            root.join("post/draft.toml"),
             "type = \"llm\"\nname = \"draft\"\napi_key = \"\"\nmodel = \"m\"\nprompt = \"{{text}}\"\n",
         )
         .unwrap();
@@ -244,7 +314,7 @@ background_blur_radius = 3
         let report = run_local_from_config_home(&home);
 
         assert!(report.diagnostics.iter().any(|d| {
-            d.source.ends_with("post/llm/draft.toml")
+            d.source.ends_with("post/draft.toml")
                 && d.path == "api_key"
                 && d.severity == Severity::Error
         }));
@@ -256,7 +326,7 @@ background_blur_radius = 3
         let home = temp_config_home();
         let root = home.join("shuohua");
         fs::create_dir_all(root.join("profile")).unwrap();
-        fs::create_dir_all(root.join("post/llm")).unwrap();
+        fs::create_dir_all(root.join("post")).unwrap();
         fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
         fs::write(
             root.join("profile/default.toml"),
@@ -264,18 +334,18 @@ background_blur_radius = 3
 name = "default"
 
 [asr]
-provider = "apple"
+instance = "apple"
 
 [post]
-chain = ["llm:deepseek"]
+chain = ["deepseek"]
 
-[post.llm.deepseek]
+[post.overrides.deepseek]
 modle = "typo"
 "#,
         )
         .unwrap();
         fs::write(
-            root.join("post/llm/deepseek.toml"),
+            root.join("post/deepseek.toml"),
             r#"
 type = "llm"
 name = "deepseek"
@@ -302,31 +372,38 @@ prompt = "{{text}}"
         let home = temp_config_home();
         let root = home.join("shuohua");
         fs::create_dir_all(root.join("profile")).unwrap();
-        fs::create_dir_all(root.join("post/llm")).unwrap();
+        fs::create_dir_all(root.join("asr")).unwrap();
+        fs::create_dir_all(root.join("post")).unwrap();
         fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
+        fs::write(
+            root.join("asr/apple.toml"),
+            "type = \"apple\"\nlocal_vad = \"on\"\n",
+        )
+        .unwrap();
         fs::write(
             root.join("profile/default.toml"),
             r#"
 name = "default"
 [asr]
-provider = "apple"
+instance = "apple"
 language = "zh-CN"
 hotwords = ["Rust"]
 
 [post]
-chain = ["llm:deepseek"]
+chain = ["deepseek"]
 
-[post.llm.deepseek]
+[post.overrides.deepseek]
 model = "deepseek-chat"
 "#,
         )
         .unwrap();
         fs::write(
-            root.join("post/llm/deepseek.toml"),
+            root.join("post/deepseek.toml"),
             r#"
 type = "llm"
 format = "openai"
 name = "deepseek"
+base_url = "https://api.deepseek.com"
 api_key = "sk-test"
 model = "deepseek-chat"
 prompt = "{{text}}"
@@ -337,15 +414,121 @@ prompt = "{{text}}"
         let plan = runtime_check_plan_from_config_home(&home).unwrap();
 
         assert_eq!(plan.profiles.len(), 1);
-        assert_eq!(plan.asr_targets()[0].provider, "apple");
+        assert_eq!(plan.asr_targets()[0].instance.id, "apple");
         assert_eq!(plan.asr_targets()[0].hotwords, vec!["Rust"]);
-        assert_eq!(plan.llm_targets()[0].id, "llm:deepseek");
+        assert_eq!(plan.llm_targets()[0].id, "deepseek");
         assert_eq!(
             plan.llm_targets()[0]
                 .overrides
                 .get("model")
                 .and_then(toml::Value::as_str),
             Some("deepseek-chat")
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn asr_diagnostics_rejects_asr_file_missing_type_field() {
+        let home = temp_config_home();
+        let root = home.join("shuohua");
+        fs::create_dir_all(root.join("asr")).unwrap();
+        fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
+        // Valid identifier stem but missing `type` field — should report an error.
+        fs::write(root.join("asr/whisper.toml"), "api_key = \"x\"\n").unwrap();
+
+        let report = run_local_from_config_home(&home);
+
+        assert!(
+            report.diagnostics.iter().any(|d| {
+                d.scope == DiagnosticScope::AsrProvider
+                    && d.source.ends_with("asr/whisper.toml")
+                    && d.severity == Severity::Error
+            }),
+            "expected an error for asr/whisper.toml, got: {:?}",
+            report.diagnostics
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn asr_diagnostics_accepts_custom_typed_instance_and_profile_referencing_it() {
+        let home = temp_config_home();
+        let root = home.join("shuohua");
+        fs::create_dir_all(root.join("profile")).unwrap();
+        fs::create_dir_all(root.join("asr")).unwrap();
+        fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
+        fs::write(
+            root.join("asr/team.toml"),
+            "type = \"doubao\"\napp_key = \"k\"\naccess_key = \"s\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("profile/default.toml"),
+            "name = \"default\"\n[asr]\ninstance = \"team\"\n",
+        )
+        .unwrap();
+
+        let report = run_local_from_config_home(&home);
+
+        assert!(
+            !report.diagnostics.iter().any(|d| {
+                d.source.ends_with("asr/team.toml") || d.source.ends_with("profile/default.toml")
+            }),
+            "expected no errors, got: {:?}",
+            report.diagnostics
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn profile_referencing_missing_custom_asr_instance_reports_error() {
+        let home = temp_config_home();
+        let root = home.join("shuohua");
+        fs::create_dir_all(root.join("profile")).unwrap();
+        fs::create_dir_all(root.join("asr")).unwrap();
+        fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
+        fs::write(
+            root.join("profile/default.toml"),
+            "name = \"default\"\n[asr]\ninstance = \"team\"\n",
+        )
+        .unwrap();
+        // No asr/team.toml — should report missing file.
+
+        let report = run_local_from_config_home(&home);
+
+        assert!(
+            report.diagnostics.iter().any(|d| {
+                d.scope == DiagnosticScope::Profile
+                    && d.source.ends_with("profile/default.toml")
+                    && d.path == "asr.instance"
+                    && d.message.contains("asr/team.toml")
+            }),
+            "expected missing-instance error mentioning asr/team.toml, got: {:?}",
+            report.diagnostics
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn asr_instance_file_missing_type_field_reports_error() {
+        let home = temp_config_home();
+        let root = home.join("shuohua");
+        fs::create_dir_all(root.join("asr")).unwrap();
+        fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
+        // File exists but has no `type` field.
+        fs::write(root.join("asr/team.toml"), "app_key = \"k\"\n").unwrap();
+
+        let report = run_local_from_config_home(&home);
+
+        assert!(
+            report.diagnostics.iter().any(|d| {
+                d.scope == DiagnosticScope::AsrProvider
+                    && d.source.ends_with("asr/team.toml")
+                    && d.severity == Severity::Error
+                    && d.message.contains("type")
+            }),
+            "expected missing-type error for asr/team.toml, got: {:?}",
+            report.diagnostics
         );
         let _ = fs::remove_dir_all(home);
     }

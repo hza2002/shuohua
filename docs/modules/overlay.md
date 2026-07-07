@@ -19,24 +19,25 @@
 
 AppKit 交互只通过 `OverlayAction` 反向通知 daemon。当前只有 `BindProfile { bundle_id, profile }`：daemon runtime 写 `config.toml` 的 `[profile]` 路由并 `reload_now()`，其中 `profile` 必须是路由 id/文件 stem（如 `agent`），不是展示名。`SetApp.profiles` 是 daemon 从 profile 文件汇总出的轻量 `ProfileChoice { id, display_name, asr_provider, chain_summary }` snapshot，renderer 只渲染，不读配置文件；`display_name` 只用于 UI。AppKit callback 不写文件、不 await future，只做本地状态或 mpsc 非阻塞 send。
 
-**文本高度不估算**：body 显示为 `NSScrollView + NSTextView`，面板视口高度按 `max_text_lines` 封顶，超出内容在 body 内部滚动。AppKit renderer 必须用同一个 `NSTextView/layoutManager` 测出内容真实高度、真实 line fragment 数、单行高度、后续行高增量、最后 `max_text_lines` 条 line fragment 的 viewport 高度和 scroll offset，再交给 `layout::body_geometry_with_tail_metrics`；`BodyGeometry` 是唯一权威，renderer 设置 panel height、body viewport、document frame、follow 滚动 offset、scroll indicator frame 都使用这个返回值。document frame 高度必须覆盖真实内容高度和 AppKit tail scroll extent（`scroll_offset + viewport_height`），否则安全 scroll offset 会被 clip view clamp 回去，最大行数外的上一行会露出。overflow 由真实 line count 判定，不由高度 cap 反推。别引入「字数×每行字数」、固定 `BODY_LINE_H` 多行推导或第二套 indicator 比例算法；`BODY_LINE_H` 只作初始/兜底单行基线。
+**文本高度不估算**：body 显示为 `NSScrollView + NSTextView`，面板视口高度按 `max_text_lines` 封顶，超出内容在 body 内部滚动。AppKit renderer 必须用同一个 `NSTextView/layoutManager` 测出内容真实高度、真实 line fragment 数、单行高度、后续行高增量、最后 `max_text_lines` 条 line fragment 的 viewport 高度和 scroll offset，再交给 `layout::body_geometry_with_tail_metrics_for_width`；`BodyGeometry` 是唯一权威，renderer 设置 panel height、body viewport、document frame、follow 滚动 offset、scroll indicator frame 都使用这个返回值。document frame 高度必须覆盖真实内容高度和 AppKit tail scroll extent（`scroll_offset + viewport_height`），否则安全 scroll offset 会被 clip view clamp 回去，最大行数外的上一行会露出。overflow 由真实 line count 判定，不由高度 cap 反推。别引入「字数×每行字数」、固定 `BODY_LINE_H` 多行推导或第二套 indicator 比例算法；`BODY_LINE_H` 只作初始/兜底单行基线。
 
-body 布局数值分三类：`WIDTH/H_PAD/BOTTOM_PAD/HEADER_BODY_GAP/BASE_HEIGHT/BODY_LINE_H` 和 indicator 宽度/最小高度/短 fade 时长是设计常量；`textContainerInset`、`usedRectForTextContainer`、真实 line fragment 高度和数量、glyph/used bounding、最后 N 行 line fragment viewport/offset、document visible rect 是 AppKit 派生值；额外顶部遮罩、顶部 fade、status bar hint、固定像素 guard、字数估算行高、为滚动条缩窄正文宽度都不属于布局解法。
+body 布局数值分三类：`[overlay].width` 是用户可调的面板总宽，`H_PAD/BOTTOM_PAD/HEADER_BODY_GAP/BASE_HEIGHT/BODY_LINE_H` 和 indicator 宽度/最小高度/短 fade 时长是设计常量；`textContainerInset`、`usedRectForTextContainer`、真实 line fragment 高度和数量、glyph/used bounding、最后 N 行 line fragment viewport/offset、document visible rect 是 AppKit 派生值；额外顶部遮罩、顶部 fade、status bar hint、固定像素 guard、字数估算行高、为滚动条缩窄正文宽度都不属于布局解法。
 
 **overlay 只镜像 ASR 原文**：整个 recording 生命周期里，ASR 返回的所有事件（Partial/Segment/Final）都增量转发到 overlay——包括 finalize 阶段的 Partial。**不显示任何后处理链路内容**：Thinking 只改状态图标，LLM/post 结果直接上屏不推 overlay。
 
 ## 三条反馈通道
 
-- **Notice**：meta 行（平时显示 `app · chain`）临时换黄字 warn，默认 3000ms 到点恢复（voice 侧常量 `NOTICE_TTL_MS`）。用于非阻断 warn（post step 失败/超时）。
+- **Notice**：meta 行（平时显示 `profile: asr → chain`）临时换黄字 warn，默认 3000ms 到点恢复（voice 侧常量 `NOTICE_TTL_MS`）。用于非阻断 warn（post step 失败/超时）。
 - **Error**：text 区（平时显示 partial/final）换红字，盖住 partial/final（`display_text()` 优先级 error>final>segments+partial）。`ERROR_TTL_MS=5000`（比 notice 长，留用户读完决定重试）。
 - **延期 Hide**：成功路径发 `Hide` 时若 notice 还活，设 `pending_hide`，等 notice 到期再隐藏；新 session 的 `SetState{Connecting}` 抢断 lingering；ESC 走 `Dismiss` 强制立刻关。避免 warn 一闪被 Hide 吞掉、Error 不被自动粘贴流程截胡。
 
 ## 交互与焦点闸
 
-- 鼠标事件默认穿透；每帧按 `visible && (body_overflow || bundle_id.is_some())` 切 `setIgnoresMouseEvents`。
+- 鼠标事件默认穿透；每帧按 `visible && (body_overflow || (bundle_id.is_some() && notice.is_none()))` 切 `setIgnoresMouseEvents`。
 - 主 panel 和 picker panel 都是 `InteractivePanel`，`canBecomeKeyWindow=false`，`becomesKeyOnlyIfNeeded=true`，显示用 `orderFrontRegardless()`，不调用 `makeKeyAndOrderFront()`。
 - body hover 进入时暂停自动跟随；离开时恢复 follow 并滚到底。body 正文不为滚动条让位；`NSTextContainer.lineFragmentPadding=0`，正文宽度与 body 内容区等宽，左右贴近同一 panel padding。滚动指示条在初始化时作为悬浮 layer 挂到 body 上，位于正文右侧的固定视觉间距后；frame 更新禁用隐式 Core Animation 动画，避免从旧位置滑入，opacity 使用短 fade 进入/退出。内容首次超过最大行数或用户滚动时，指示条短暂出现后隐藏；不做顶部/底部 fade 或 status bar。
-- pipeline/meta 区域仅在当前会话有 bundle id 时可点。点击打开 profile picker，picker 只列出可替换 profile（不含当前 profile），点击行发送 `OverlayAction::BindProfile`；绑定下次会话生效。meta 长链路右对齐并从头部截断，保留右侧实际链路尾部；picker 按可选项宽度自适应、右侧与主 panel 右侧对齐、profile 前缀高亮。picker 关闭只看鼠标是否仍在 picker 内；离开 picker 800ms 后自动关闭，主 panel 不续期 picker。
+- Header 左侧 icon/status/stats 按实际文本宽度紧凑排列，最多到内容中线左侧；右侧 pipeline/meta 使用 `[content_mid, content_right]` rail。短链路按实测文本宽度收缩 frame 并贴到 `content_right`，形成右对齐视觉；长链路占满整个右 rail，文本左对齐并尾部截断，优先保留 profile 名称和左侧主语义，不侵入左侧状态区。
+- pipeline/meta 区域仅在当前会话有 bundle id 且 notice 未覆盖 meta 时可点。点击打开 profile picker；picker 顶部显示当前 profile/pipeline 作为不可点击的 current 上下文，下面只列可替换 profile，点击可替换行发送 `OverlayAction::BindProfile`；绑定下次会话生效。picker 按当前项和可选项宽度自适应、右侧与主 panel 内容右边界对齐、profile 前缀高亮。picker 关闭只看鼠标是否仍在 picker 内；离开 picker 800ms 后自动关闭，主 panel 不续期 picker。
 
 ## 平台边界
 

@@ -1,5 +1,7 @@
 use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
@@ -66,6 +68,7 @@ const PROFILE_PICKER_TITLE_X: f64 = 10.0;
 const PROFILE_PICKER_TITLE_Y: f64 = 5.0;
 const PROFILE_PICKER_TITLE_H_PAD: f64 = 20.0;
 const PROFILE_PICKER_TITLE_V_PAD: f64 = 8.0;
+const PROFILE_PICKER_CURRENT_ALPHA: f64 = 0.72;
 const PROFILE_PICKER_MEASURE_W: f64 = 1000.0;
 const PROFILE_PICKER_WIDTH_EXTRA: f64 = 28.0;
 const PROFILE_PICKER_MIN_W: f64 = 180.0;
@@ -77,7 +80,6 @@ const INITIAL_PANEL_Y: f64 = 860.0;
 const ERROR_SHAKE_OFFSET: f64 = 4.0;
 const ERROR_SHAKE_DURATION: f64 = 0.05;
 const ERROR_SHAKE_REPEAT_COUNT: f32 = 3.0;
-const BODY_ERROR_FADE: f64 = 0.10;
 const BODY_FINAL_FADE: f64 = 0.18;
 const HEADER_TEXT_FADE: f64 = 0.16;
 const ICON_CHANGE_FADE: f64 = 0.18;
@@ -85,8 +87,54 @@ const LIVE_SEGMENT_ALPHA: f64 = 0.88;
 const DEFAULT_SCREEN_W: f64 = 1440.0;
 const DEFAULT_SCREEN_H: f64 = 900.0;
 
-fn body_text_width() -> f64 {
-    L::constants::BODY_TEXT_W
+fn body_text_width(panel_width: f64) -> f64 {
+    (panel_width - L::constants::H_PAD * 2.0).max(1.0)
+}
+
+fn body_text_fade_duration(has_error_text: bool, final_appeared: bool) -> Option<f64> {
+    if has_error_text {
+        None
+    } else if final_appeared {
+        Some(BODY_FINAL_FADE)
+    } else {
+        None
+    }
+}
+
+fn status_text_fade_duration() -> Option<f64> {
+    None
+}
+
+fn body_plain_text_color(has_error_text: bool, primary: u32, error: u32) -> u32 {
+    if has_error_text {
+        error
+    } else {
+        primary
+    }
+}
+
+fn status_label_text_color(_state: OverlayState, state_color: u32) -> u32 {
+    state_color
+}
+
+fn selectable_profile_choices(profiles: &[ProfileChoice], current_id: &str) -> Vec<ProfileChoice> {
+    profiles
+        .iter()
+        .filter(|profile| profile.id != current_id)
+        .cloned()
+        .collect()
+}
+
+fn profile_picker_title_x_in_row() -> f64 {
+    PROFILE_PICKER_TITLE_X - PROFILE_PICKER_ROW_X
+}
+
+fn profile_chain_line_break(alignment: NSTextAlignment) -> NSLineBreakMode {
+    if alignment == NSTextAlignment::Right {
+        NSLineBreakMode::ByTruncatingHead
+    } else {
+        NSLineBreakMode::ByTruncatingTail
+    }
 }
 
 /// 状态图标的动画曲线。只剩 Idle 符号的缓慢 alpha 呼吸；其余状态的动效都是 icon_fx
@@ -128,6 +176,7 @@ struct DelegateIvars {
     rx: OnceCell<RefCell<OverlayReceiver>>,
     actions: OnceCell<OverlayActionHandle>,
     cfg: OnceCell<EffectiveOverlayCfg>,
+    on_screen: OnceCell<Arc<AtomicBool>>,
     timer: OnceCell<Retained<NSTimer>>,
 }
 
@@ -153,7 +202,13 @@ define_class!(
                 .get()
                 .cloned()
                 .expect("overlay actions initialized");
-            let overlay = OverlayView::new(mtm, actions, cfg);
+            let on_screen = self
+                .ivars()
+                .on_screen
+                .get()
+                .cloned()
+                .unwrap_or_default();
+            let overlay = OverlayView::new(mtm, actions, cfg, on_screen);
             self.ivars().overlay.set(RefCell::new(overlay)).ok();
 
             let timer = unsafe {
@@ -190,22 +245,29 @@ impl OverlayDelegate {
         rx: OverlayReceiver,
         actions: OverlayActionHandle,
         cfg: EffectiveOverlayCfg,
+        on_screen: Arc<AtomicBool>,
     ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(DelegateIvars {
             overlay: OnceCell::new(),
             rx: OnceCell::from(RefCell::new(rx)),
             actions: OnceCell::from(actions),
             cfg: OnceCell::from(cfg),
+            on_screen: OnceCell::from(on_screen),
             timer: OnceCell::new(),
         });
         unsafe { msg_send![super(this), init] }
     }
 }
 
-pub fn run(rx: OverlayReceiver, actions: OverlayActionHandle, cfg: EffectiveOverlayCfg) {
+pub fn run(
+    rx: OverlayReceiver,
+    actions: OverlayActionHandle,
+    cfg: EffectiveOverlayCfg,
+    on_screen: Arc<AtomicBool>,
+) {
     let mtm = MainThreadMarker::new().expect("AppKit must run on main thread");
     let app = NSApplication::sharedApplication(mtm);
-    let delegate = OverlayDelegate::new(mtm, rx, actions, cfg);
+    let delegate = OverlayDelegate::new(mtm, rx, actions, cfg, on_screen);
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     app.run();
 }
@@ -214,6 +276,10 @@ struct OverlayView {
     mtm: MainThreadMarker,
     cfg: EffectiveOverlayCfg,
     actions: OverlayActionHandle,
+    /// Published to the hotkey suppressor: true whenever the panel is on
+    /// screen, so ESC is captured (and dismisses) instead of leaking to the
+    /// foreground app. Written only here (single writer), in `render`.
+    overlay_on_screen: Arc<AtomicBool>,
     model: OverlayModel,
     panel: Retained<InteractivePanel>,
     /// root content view。glass/background/labels 都是它的直接子视图。
@@ -426,10 +492,15 @@ impl ProfileRowView {
 }
 
 impl OverlayView {
-    fn new(mtm: MainThreadMarker, actions: OverlayActionHandle, cfg: EffectiveOverlayCfg) -> Self {
+    fn new(
+        mtm: MainThreadMarker,
+        actions: OverlayActionHandle,
+        cfg: EffectiveOverlayCfg,
+        overlay_on_screen: Arc<AtomicBool>,
+    ) -> Self {
         let initial_frame = NSRect::new(
             NSPoint::new(INITIAL_PANEL_X, INITIAL_PANEL_Y),
-            NSSize::new(L::constants::WIDTH, L::constants::BASE_HEIGHT),
+            NSSize::new(cfg.core.width, L::constants::BASE_HEIGHT),
         );
         let panel = make_panel(mtm, initial_frame);
         apply_panel_background_blur(&panel, cfg.macos.background_blur_radius);
@@ -439,7 +510,12 @@ impl OverlayView {
             tracing::warn!(area = "overlay_chrome", message = %error);
         }
 
-        let row = L::first_row_frames(0.0);
+        let row = L::first_row_frames_with_text_widths(
+            cfg.core.width,
+            0.0,
+            L::constants::STATE_W,
+            cfg.core.width * L::constants::HEADER_STATS_FALLBACK_FRACTION,
+        );
         let icon_fx_view = NSView::new(mtm);
         icon_fx_view.setFrame(to_nsrect(row.icon));
         icon_fx_view.setWantsLayer(true);
@@ -467,7 +543,7 @@ impl OverlayView {
             false,
             cfg.core.text.tertiary,
         );
-        meta.setAlignment(NSTextAlignment::Right);
+        meta.setAlignment(NSTextAlignment::Left);
         let pipeline_clicked = Rc::new(Cell::new(false));
         let pipeline_click =
             PipelineClickView::new(mtm, to_nsrect(row.meta), pipeline_clicked.clone());
@@ -475,11 +551,11 @@ impl OverlayView {
         let body_frame = NSRect::new(
             NSPoint::new(L::constants::H_PAD, L::constants::BOTTOM_PAD),
             NSSize::new(
-                L::constants::WIDTH - L::constants::H_PAD,
+                cfg.core.width - L::constants::H_PAD,
                 L::constants::BODY_LINE_H,
             ),
         );
-        let body_scroll = make_body_scroll(mtm, body_frame);
+        let body_scroll = make_body_scroll(mtm, body_frame, cfg.core.width);
         let body_scroll_indicator = make_body_scroll_indicator(cfg.core.text.primary);
         if let Some(layer) = body_scroll.layer() {
             layer.addSublayer(&body_scroll_indicator);
@@ -488,8 +564,9 @@ impl OverlayView {
             .documentView()
             .and_then(|view| view.downcast::<NSTextView>().ok())
             .expect("body scroll document view is NSTextView");
-        // meta 行右对齐，长链路保留最右侧的实际 provider/processor 尾部。
-        meta.setLineBreakMode(NSLineBreakMode::ByTruncatingHead);
+        status.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+        stats.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+        meta.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
 
         // labels 后 addSubview = z-order 在前。glass 在 build_chrome 里已经先进 container 当底色，
         // 这里追加 labels 自然叠在 glass 上面。
@@ -511,6 +588,7 @@ impl OverlayView {
             mtm,
             cfg,
             actions,
+            overlay_on_screen,
             model,
             panel,
             container,
@@ -612,6 +690,12 @@ impl OverlayView {
     }
 
     fn render(&mut self) {
+        // Publish panel visibility for the ESC-suppression gate. This is the
+        // single write point: every model mutation (apply/tick, and the
+        // Relabel/ReloadConfig paths) funnels through render, so the atomic
+        // always mirrors the authoritative `model.visible`.
+        self.overlay_on_screen
+            .store(self.model.visible, Ordering::Relaxed);
         self.update_body_hover();
         self.update_profile_interaction();
         // 淡出动画结束且仍不可见 → 真正下屏。若期间又变可见，留给下面的可见分支取走
@@ -646,7 +730,8 @@ impl OverlayView {
         self.update_body_text();
         let line_metrics = self.measure_body_line_metrics();
         let content_h = self.measure_body_height(&line_metrics);
-        let geo = L::body_geometry_with_tail_metrics(
+        let geo = L::body_geometry_with_tail_metrics_for_width(
+            self.overlay_width(),
             content_h,
             self.cfg.core.max_text_lines,
             line_metrics.single,
@@ -654,6 +739,7 @@ impl OverlayView {
             line_metrics.line_count,
             line_metrics.tail,
         );
+        self.render_header();
         let height = geo.panel_height;
         let height_changed = self.last_height != Some(height);
         self.last_height = Some(height);
@@ -686,7 +772,6 @@ impl OverlayView {
         }
 
         self.update_body_follow_after_layout(&geo);
-        self.render_header();
     }
 
     fn update_profile_interaction(&mut self) {
@@ -694,7 +779,7 @@ impl OverlayView {
             if let Some(choice) = self.pending_profile_choice.borrow_mut().take() {
                 self.model.profile = choice.id;
                 self.model.profile_display_name = choice.display_name;
-                self.model.asr_provider = choice.asr_provider;
+                self.model.asr_instance = choice.asr_instance;
                 self.model.chain_summary = choice.chain_summary;
                 self.last_meta_text.clear();
             }
@@ -738,7 +823,7 @@ impl OverlayView {
     /// error/final 单色，live 的 segments/partial 双色。
     fn update_body_text(&mut self) {
         let text_color = if !self.model.error_text.is_empty() {
-            self.cfg.core.text.error
+            body_plain_text_color(true, self.cfg.core.text.primary, self.cfg.core.state.error)
         } else {
             self.cfg.core.text.primary
         };
@@ -760,10 +845,10 @@ impl OverlayView {
         let display_text = self.model.display_text();
 
         if self.last_visible_text != display_text {
-            if !self.model.error_text.is_empty() {
-                fade_view(&self.body_text, BODY_ERROR_FADE);
-            } else if final_appeared {
-                fade_view(&self.body_text, BODY_FINAL_FADE);
+            if let Some(duration) =
+                body_text_fade_duration(!self.model.error_text.is_empty(), final_appeared)
+            {
+                fade_view(&self.body_text, duration);
             }
             match &plain {
                 Some(text) => self.set_body_plain(text, text_color),
@@ -828,6 +913,7 @@ impl OverlayView {
 
     fn render_header(&mut self) {
         let (state, label, color_rgb) = self.effective_state();
+        let status_color_rgb = status_label_text_color(state, color_rgb);
         let dur = L::format_duration(self.model.dur_ms);
         let app = self
             .model
@@ -839,11 +925,13 @@ impl OverlayView {
         let header = L::header_parts(&label, &dur, &words_text, app, &self.model.chain_summary);
         self.render_state_icon(state, color_rgb);
         if self.last_status_text != header.state {
-            fade_view(&self.status, HEADER_TEXT_FADE);
+            if let Some(duration) = status_text_fade_duration() {
+                fade_view(&self.status, duration);
+            }
             self.status
                 .setStringValue(&NSString::from_str(&header.state));
             self.status
-                .setTextColor(Some(&color_from_rgb_alpha(color_rgb, 1.0)));
+                .setTextColor(Some(&color_from_rgb_alpha(status_color_rgb, 1.0)));
             self.last_status_text = header.state;
         }
 
@@ -871,7 +959,7 @@ impl OverlayView {
         } else {
             let meta_text = L::profile_chain_display(
                 &self.model.profile_display_name,
-                &self.model.asr_provider,
+                &self.model.asr_instance,
                 &header.meta,
             );
             // dedup key：profile 与 pipeline 用控制字符分隔，避免与 notice 文案撞键。
@@ -1035,7 +1123,7 @@ impl OverlayView {
 
     /// meta 行：`Profile:` 加粗高亮，后接完整链路（tertiary 暗色）。
     fn render_meta_text(&self, display_name: &str, text: &str) {
-        self.render_profile_chain_text(&self.meta, display_name, text, NSTextAlignment::Right);
+        self.render_profile_chain_text(&self.meta, display_name, text, NSTextAlignment::Left);
     }
 
     fn render_profile_chain_text(
@@ -1060,10 +1148,11 @@ impl OverlayView {
         let profile_color = color_from_rgb_alpha(self.cfg.core.text.primary, 1.0);
         let pipeline_color = color_from_rgb_alpha(self.cfg.core.text.tertiary, 1.0);
         let bold_font = NSFont::boldSystemFontOfSize(typography::META);
-        // attributed string 不带 paragraph style 时按 natural（左）对齐，会无视 field 的
-        // setAlignment(.Right)，导致 meta 左靠、右侧空一大块。显式加右对齐段落样式。
+        // attributed string 不带 paragraph style 时按 natural 对齐，会无视 field 的
+        // setAlignment；显式写入段落样式，让主 overlay 和 picker 共享同一渲染路径。
         let paragraph = NSMutableParagraphStyle::new();
         paragraph.setAlignment(alignment);
+        paragraph.setLineBreakMode(profile_chain_line_break(alignment));
         unsafe {
             let _: () = msg_send![
                 &attributed,
@@ -1113,17 +1202,21 @@ impl OverlayView {
     }
 
     fn layout(&mut self, geo: &L::BodyGeometry, animated: bool) {
-        let full = NSRect::new(
-            NSPoint::new(0.0, 0.0),
-            NSSize::new(L::constants::WIDTH, geo.panel_height),
-        );
+        let width = self.overlay_width();
+        let full = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, geo.panel_height));
         // 材质层和色层必须跟 root 同步动画，避免 Liquid Glass 边缘与实际外框短暂错位。
         set_view_frame(&self.container, full, animated);
         if let Some(glass) = &self.glass {
             set_view_frame(glass, full, animated);
         }
         set_view_frame(&self.background, full, animated);
-        let row = L::first_row_frames(geo.top_offset);
+        let row = L::first_row_frames_with_text_widths_and_meta(
+            width,
+            geo.top_offset,
+            self.header_label_width(&self.status, L::constants::STATE_BOX_H),
+            self.header_label_width(&self.stats, L::constants::META_BOX_H),
+            self.header_label_width(&self.meta, L::constants::META_BOX_H),
+        );
         set_view_frame(&self.state_icon, to_nsrect(row.icon), animated);
         set_view_frame(&self.icon_fx_view, to_nsrect(row.icon), animated);
         set_view_frame(&self.status, to_nsrect(row.status), animated);
@@ -1135,6 +1228,11 @@ impl OverlayView {
         );
         set_view_frame(&self.body_scroll, to_nsrect(geo.body_viewport), animated);
         self.body_text.setFrame(to_nsrect(geo.body_document));
+        unsafe {
+            if let Some(container) = self.body_text.textContainer() {
+                container.setContainerSize(NSSize::new(geo.body_document.w, f64::MAX));
+            }
+        }
         let became_overflow = geo.body_overflow && !self.body_overflow;
         self.body_overflow = geo.body_overflow;
         if became_overflow {
@@ -1143,7 +1241,7 @@ impl OverlayView {
         self.panel.setIgnoresMouseEvents(!L::wants_mouse(
             self.model.visible,
             self.body_overflow,
-            self.model.bundle_id.is_some(),
+            self.model.bundle_id.is_some() && self.model.notice.is_none(),
         ));
     }
 
@@ -1156,7 +1254,7 @@ impl OverlayView {
         let frame = to_nsrect(L::panel_frame(
             from_nsrect(anchor),
             self.cfg.core.position,
-            L::constants::WIDTH,
+            self.overlay_width(),
             height,
             from_nsrect(screen),
         ));
@@ -1171,6 +1269,17 @@ impl OverlayView {
             }
             self.last_panel_frame = Some(frame);
         }
+    }
+
+    fn header_label_width(&self, field: &NSTextField, height: f64) -> f64 {
+        field
+            .sizeThatFits(NSSize::new(f64::MAX, height))
+            .width
+            .ceil()
+    }
+
+    fn overlay_width(&self) -> f64 {
+        self.cfg.core.width
     }
 
     /// 热重载入口：原地调 setter，不换 view。fallback 路径下 SPI 不可用，整段 noop（已经在 init 时报过错）。
@@ -1224,19 +1333,18 @@ impl OverlayView {
         let Some(bundle_id) = self.model.bundle_id.clone() else {
             return;
         };
-        let profiles = self
-            .model
-            .profiles
-            .iter()
-            .filter(|profile| profile.id != self.model.profile)
-            .cloned()
-            .collect::<Vec<_>>();
-        if profiles.is_empty() {
+        let profiles = selectable_profile_choices(&self.model.profiles, &self.model.profile);
+        let current_text = L::profile_chain_display(
+            &self.model.profile_display_name,
+            &self.model.asr_instance,
+            &self.model.chain_summary,
+        );
+        if profiles.is_empty() && current_text.is_empty() {
             return;
         }
         let row_h = PROFILE_PICKER_ROW_H;
-        let width = self.profile_picker_width(&profiles, row_h);
-        let height = row_h * profiles.len() as f64 + PROFILE_PICKER_V_PAD * 2.0;
+        let width = self.profile_picker_width(&current_text, &profiles, row_h);
+        let height = row_h * (profiles.len() + 1) as f64 + PROFILE_PICKER_V_PAD * 2.0;
         let Some(parent_frame) = self.last_panel_frame else {
             return;
         };
@@ -1264,8 +1372,35 @@ impl OverlayView {
         if let Some(error) = error {
             tracing::warn!(area = "overlay_profile_picker", message = %error);
         }
+        let current_title = label(
+            self.mtm,
+            NSRect::new(
+                NSPoint::new(
+                    PROFILE_PICKER_TITLE_X,
+                    height - PROFILE_PICKER_V_PAD - row_h + PROFILE_PICKER_TITLE_Y,
+                ),
+                NSSize::new(
+                    width - PROFILE_PICKER_TITLE_H_PAD,
+                    row_h - PROFILE_PICKER_TITLE_V_PAD,
+                ),
+            ),
+            typography::META,
+            false,
+            self.cfg.core.text.secondary,
+        );
+        current_title.setAlignment(NSTextAlignment::Left);
+        current_title.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+        current_title.setAlphaValue(PROFILE_PICKER_CURRENT_ALPHA);
+        self.render_profile_chain_text(
+            &current_title,
+            &self.model.profile_display_name,
+            &current_text,
+            NSTextAlignment::Left,
+        );
+        container.addSubview(&current_title);
+
         for (idx, profile) in profiles.iter().enumerate() {
-            let y = height - PROFILE_PICKER_V_PAD - row_h * (idx + 1) as f64;
+            let y = height - PROFILE_PICKER_V_PAD - row_h * (idx + 2) as f64;
             let row = ProfileRowView::new(
                 self.mtm,
                 NSRect::new(
@@ -1281,7 +1416,7 @@ impl OverlayView {
             let title = label(
                 self.mtm,
                 NSRect::new(
-                    NSPoint::new(PROFILE_PICKER_TITLE_X, PROFILE_PICKER_TITLE_Y),
+                    NSPoint::new(profile_picker_title_x_in_row(), PROFILE_PICKER_TITLE_Y),
                     NSSize::new(
                         width - PROFILE_PICKER_TITLE_H_PAD,
                         row_h - PROFILE_PICKER_TITLE_V_PAD,
@@ -1295,7 +1430,7 @@ impl OverlayView {
             title.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
             let title_text = L::profile_chain_display(
                 &profile.display_name,
-                &profile.asr_provider,
+                &profile.asr_instance,
                 &profile.chain_summary,
             );
             self.render_profile_chain_text(
@@ -1312,37 +1447,42 @@ impl OverlayView {
         self.profile_panel = Some(panel);
     }
 
-    fn profile_picker_width(&self, profiles: &[ProfileChoice], row_h: f64) -> f64 {
-        (profiles
+    fn profile_picker_width(
+        &self,
+        current_text: &str,
+        profiles: &[ProfileChoice],
+        row_h: f64,
+    ) -> f64 {
+        let current_w =
+            self.profile_picker_title_width(&self.model.profile_display_name, current_text, row_h);
+        let profile_w = profiles
             .iter()
             .map(|profile| {
                 let title_text = L::profile_chain_display(
                     &profile.display_name,
-                    &profile.asr_provider,
+                    &profile.asr_instance,
                     &profile.chain_summary,
                 );
-                let title = label(
-                    self.mtm,
-                    NSRect::new(
-                        NSPoint::new(0.0, 0.0),
-                        NSSize::new(PROFILE_PICKER_MEASURE_W, row_h),
-                    ),
-                    typography::META,
-                    false,
-                    self.cfg.core.text.secondary,
-                );
-                self.render_profile_chain_text(
-                    &title,
-                    &profile.display_name,
-                    &title_text,
-                    NSTextAlignment::Left,
-                );
-                title.sizeThatFits(NSSize::new(f64::MAX, row_h)).width
+                self.profile_picker_title_width(&profile.display_name, &title_text, row_h)
             })
-            .fold(0.0, f64::max)
-            .ceil()
-            + PROFILE_PICKER_WIDTH_EXTRA)
+            .fold(0.0, f64::max);
+        (current_w.max(profile_w).ceil() + PROFILE_PICKER_WIDTH_EXTRA)
             .clamp(PROFILE_PICKER_MIN_W, PROFILE_PICKER_MAX_W)
+    }
+
+    fn profile_picker_title_width(&self, display_name: &str, title_text: &str, row_h: f64) -> f64 {
+        let title = label(
+            self.mtm,
+            NSRect::new(
+                NSPoint::new(0.0, 0.0),
+                NSSize::new(PROFILE_PICKER_MEASURE_W, row_h),
+            ),
+            typography::META,
+            false,
+            self.cfg.core.text.secondary,
+        );
+        self.render_profile_chain_text(&title, display_name, title_text, NSTextAlignment::Left);
+        title.sizeThatFits(NSSize::new(f64::MAX, row_h)).width
     }
 
     fn close_profile_panel(&mut self) {
@@ -1414,7 +1554,11 @@ impl OverlayView {
     }
 }
 
-fn make_body_scroll(mtm: MainThreadMarker, frame: NSRect) -> Retained<BodyScrollView> {
+fn make_body_scroll(
+    mtm: MainThreadMarker,
+    frame: NSRect,
+    panel_width: f64,
+) -> Retained<BodyScrollView> {
     let this = BodyScrollView::alloc(mtm).set_ivars(BodyScrollIvars::default());
     let scroll: Retained<BodyScrollView> = unsafe { msg_send![super(this), initWithFrame: frame] };
     scroll.setDrawsBackground(false);
@@ -1428,7 +1572,7 @@ fn make_body_scroll(mtm: MainThreadMarker, frame: NSRect) -> Retained<BodyScroll
         NSTextView::alloc(mtm),
         NSRect::new(
             NSPoint::new(0.0, 0.0),
-            NSSize::new(body_text_width(), L::constants::BODY_LINE_H),
+            NSSize::new(body_text_width(panel_width), L::constants::BODY_LINE_H),
         ),
     );
     text.setEditable(false);
@@ -1441,7 +1585,7 @@ fn make_body_scroll(mtm: MainThreadMarker, frame: NSRect) -> Retained<BodyScroll
             container.setLineFragmentPadding(0.0);
             container.setWidthTracksTextView(true);
             container.setHeightTracksTextView(false);
-            container.setContainerSize(NSSize::new(body_text_width(), f64::MAX));
+            container.setContainerSize(NSSize::new(body_text_width(panel_width), f64::MAX));
         }
     }
     scroll.setDocumentView(Some(&text));
@@ -1713,6 +1857,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn selectable_profiles_exclude_current_and_preserve_order() {
+        let profiles = vec![
+            ProfileChoice::test("default"),
+            ProfileChoice::test("agent"),
+            ProfileChoice::test("meeting"),
+        ];
+
+        let choices = selectable_profile_choices(&profiles, "agent");
+
+        assert_eq!(
+            choices
+                .iter()
+                .map(|choice| choice.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["default", "meeting"]
+        );
+    }
+
+    #[test]
+    fn profile_picker_titles_share_the_same_visual_left_edge() {
+        assert_eq!(
+            PROFILE_PICKER_ROW_X + profile_picker_title_x_in_row(),
+            PROFILE_PICKER_TITLE_X
+        );
+    }
+
+    #[test]
+    fn profile_chain_truncates_from_the_side_opposite_alignment() {
+        assert_eq!(
+            profile_chain_line_break(NSTextAlignment::Right),
+            NSLineBreakMode::ByTruncatingHead
+        );
+        assert_eq!(
+            profile_chain_line_break(NSTextAlignment::Left),
+            NSLineBreakMode::ByTruncatingTail
+        );
+    }
+
+    #[test]
     fn state_symbols_match_overlay_semantics() {
         assert_eq!(state_symbol(OverlayState::Idle), "waveform.circle");
         assert_eq!(
@@ -1725,6 +1908,39 @@ mod tests {
         assert_eq!(
             state_symbol(OverlayState::Error),
             "exclamationmark.triangle.fill"
+        );
+    }
+
+    #[test]
+    fn body_error_text_updates_without_fade_snapshot() {
+        assert_eq!(body_text_fade_duration(true, false), None);
+    }
+
+    #[test]
+    fn final_text_still_uses_subtle_fade() {
+        assert_eq!(body_text_fade_duration(false, true), Some(BODY_FINAL_FADE));
+    }
+
+    #[test]
+    fn status_text_updates_without_fade_snapshot() {
+        assert_eq!(status_text_fade_duration(), None);
+    }
+
+    #[test]
+    fn error_body_text_uses_error_color_for_visibility() {
+        assert_eq!(body_plain_text_color(true, 0xFBF1C7, 0xCC241D), 0xCC241D);
+        assert_eq!(body_plain_text_color(false, 0xFBF1C7, 0xCC241D), 0xFBF1C7);
+    }
+
+    #[test]
+    fn status_text_uses_state_color_for_consistency() {
+        assert_eq!(
+            status_label_text_color(OverlayState::Error, 0xCC241D),
+            0xCC241D
+        );
+        assert_eq!(
+            status_label_text_color(OverlayState::Recording, 0xFB4934),
+            0xFB4934
         );
     }
 

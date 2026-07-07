@@ -10,8 +10,8 @@
 2. **查模块文档**：按 [CLAUDE.md 路由表](../CLAUDE.md) 找对应模块的不变量/边界——很多"bug"其实是踩了不变量。
 3. **看 history**：`~/.local/state/shuohua/history/YYYY-MM.jsonl`（字段含 `status`/`error.kind`/`asr.sessions[]`/`pipeline[]`，见 [schema §2](schema.md)）。一次录音 = 一行，能还原 ASR/post/dispatch 整条结果。
 4. **看 daemon 日志**：`~/.local/state/shuohua/logs/shuo-YYYY-MM-DD.log`（低频诊断锚点，见 [architecture](architecture.md) 日志节）。前台 `shuo --daemon` 会同时 mirror 到 stderr。**日志不记识别正文/高频事件**，正文事实以 history 为准。
-5. **必要时听音频**：`~/.local/state/shuohua/audio/<id>.flac|.m4a`（需 `voice.record_audio ≠ off` 且使用支持 retained audio 的 capture backend；默认 Apple backend 当前不发布 retained audio；`<id>` = history ULID，见 [schema §3](schema.md)）。判断是录音问题还是识别问题。
-6. **深入 VAD/ASR 时序**：`--features dev` 构建 + `config.toml` 设 `dev.vad_trace = true` → 每次录音写 `~/.local/state/shuohua/traces/<id>.jsonl`（VAD frame/transition、ASR event 时间、session 切分，见 [schema §4](schema.md)）。用于离线评估 pause/resume 切分质量。trace 可随时删，不被 TUI 消费。
+5. **必要时听音频**：`~/.local/state/shuohua/audio/<id>.flac|.m4a`（需 `voice.record_audio ≠ off` 且使用支持 retained audio 的 capture backend；Apple backend 当前不发布 retained audio；`<id>` = history ULID，见 [schema §3](schema.md)）。判断是录音问题还是识别问题。
+6. **深入 VAD/ASR 时序**：`--features dev` 构建 + `config.toml` 设 `dev.vad_trace = true` → 每次录音写 `~/.local/state/shuohua/traces/<id>.jsonl`（VAD frame/transition、ASR event 时间、session 切分，见 [schema §4](schema.md)）。用于离线评估 pause/resume 切分质量。Apple backend 诊断同样要求 dev build，并设 `dev.apple_backend_trace = true`：它会在 cpal 输入 `channels > 1` 时打 per-channel RMS/peak 探针；不进正式日志/history/report。
 7. **改完验证**：`cargo fmt && cargo check && cargo test`；macOS 权限/录音/上屏由用户手测。
 
 ## 常见定位捷径

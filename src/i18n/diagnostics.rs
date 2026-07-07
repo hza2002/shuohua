@@ -88,6 +88,7 @@ fn diagnose_pair(base_lang: Lang, base: &Dict, other_lang: Lang, other: &Dict) -
     diagnostics
 }
 
-fn is_allowed_empty(key: &str) -> bool {
-    matches!(key, "tui.footer_status")
+fn is_allowed_empty(_key: &str) -> bool {
+    // No i18n value is intentionally empty.
+    false
 }

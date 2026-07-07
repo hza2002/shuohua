@@ -113,7 +113,7 @@ pub enum TextKind {
 pub struct ProfileChoice {
     pub id: String,
     pub display_name: String,
-    pub asr_provider: String,
+    pub asr_instance: String,
     pub chain_summary: String,
 }
 
@@ -123,7 +123,7 @@ impl ProfileChoice {
         Self {
             id: name.to_string(),
             display_name: name.to_string(),
-            asr_provider: "fake".to_string(),
+            asr_instance: "fake".to_string(),
             chain_summary: "test".to_string(),
         }
     }

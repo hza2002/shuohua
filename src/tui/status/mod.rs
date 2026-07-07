@@ -9,6 +9,7 @@ use crate::tui::page::{KeyOutcome, Page};
 use crate::tui::status::render::render_status;
 
 mod render;
+mod waveform;
 
 #[cfg(test)]
 mod tests;
@@ -30,7 +31,6 @@ pub struct StatusPage {
     pub session_meta: Option<SessionMeta>,
     pub session_phase: Option<SessionPhase>,
     pub meters: Vec<AudioMeter>,
-    pub meter_width: usize,
 }
 
 impl StatusPage {
@@ -49,7 +49,6 @@ impl StatusPage {
             session_meta: None,
             session_phase: None,
             meters: Vec::new(),
-            meter_width: 160,
         }
     }
 
@@ -63,10 +62,6 @@ impl StatusPage {
             }
         }
         self.dur_ms
-    }
-
-    pub fn meter_capacity_for_terminal_width(width: u16) -> usize {
-        (width.saturating_sub(11).max(16) as usize).min(MAX_METER_HISTORY)
     }
 
     fn trim_meters_to_capacity(&mut self) {

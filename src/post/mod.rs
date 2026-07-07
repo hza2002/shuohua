@@ -3,8 +3,9 @@
 //! 数据契约：
 //! - [`PipelineText`] 流过整条链。`raw` 永远是原始 ASR 文本；`text` 是当前
 //!   in-flight 版本；`segments` 是本次 recording 的 ASR session 文本列表。
-//! - run_chain "链不阻塞"：单步 processor 失败/超时**跳过**，下一个继续用上一步
-//!   的 text。最差产出 == raw（不会丢内容）。
+//! - chain "链不阻塞"：单步 processor 失败/超时**跳过**，下一个继续用上一步
+//!   的 text。最差产出 == raw（不会丢内容）。逐步逻辑在 [`run_step`]；整条链的
+//!   循环在 `voice::post_dispatch`。
 
 pub mod app_context;
 pub mod llm;
@@ -83,7 +84,7 @@ pub struct PipelineText {
     pub raw: String,
     /// 本次 recording 的 ASR session 文本列表。
     pub segments: Vec<String>,
-    /// 当前 in-flight 版本。run_chain 跑完即最终上屏文本。
+    /// 当前 in-flight 版本。整条链跑完即最终上屏文本。
     pub text: String,
 }
 
@@ -105,10 +106,61 @@ pub struct AppContext {
     pub app_name: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostFailureReason {
+    AuthFailed,
+    PermissionDenied,
+    RateLimited,
+    QuotaOrBilling,
+    ModelNotFound,
+    Timeout,
+    Network,
+    InvalidRequest,
+    InvalidResponse,
+    ProviderOverloaded,
+    ProviderError,
+}
+
+impl PostFailureReason {
+    pub fn i18n_key(self) -> &'static str {
+        match self {
+            Self::AuthFailed => "notice.llm_reason_auth_failed",
+            Self::PermissionDenied => "notice.llm_reason_permission_denied",
+            Self::RateLimited => "notice.llm_reason_rate_limited",
+            Self::QuotaOrBilling => "notice.llm_reason_quota_or_billing",
+            Self::ModelNotFound => "notice.llm_reason_model_not_found",
+            Self::Timeout => "notice.llm_reason_timeout",
+            Self::Network => "notice.llm_reason_network",
+            Self::InvalidRequest => "notice.llm_reason_invalid_request",
+            Self::InvalidResponse => "notice.llm_reason_invalid_response",
+            Self::ProviderOverloaded => "notice.llm_reason_provider_overloaded",
+            Self::ProviderError => "notice.llm_reason_provider_error",
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum PostError {
-    #[error("{0}")]
-    Failed(String),
+    #[error("{message}")]
+    Failed {
+        reason: PostFailureReason,
+        message: String,
+    },
+}
+
+impl PostError {
+    pub fn failed_with_reason(reason: PostFailureReason, message: impl Into<String>) -> Self {
+        Self::Failed {
+            reason,
+            message: message.into(),
+        }
+    }
+
+    pub fn reason(&self) -> PostFailureReason {
+        match self {
+            Self::Failed { reason, .. } => *reason,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,6 +170,7 @@ pub struct PipelineStep {
     pub duration_ms: f64,
     pub text: Option<String>,
     pub error: Option<String>,
+    pub failure_reason: Option<PostFailureReason>,
 }
 
 impl PipelineStep {
@@ -128,16 +181,19 @@ impl PipelineStep {
             duration_ms: elapsed.as_secs_f64() * 1000.0,
             text: Some(text),
             error: None,
+            failure_reason: None,
         }
     }
 
-    fn error(name: &str, elapsed: Duration, err: String) -> Self {
+    fn error(name: &str, elapsed: Duration, err: PostError) -> Self {
+        let failure_reason = Some(err.reason());
         Self {
             name: name.to_string(),
             status: PipelineStepStatus::Error,
             duration_ms: elapsed.as_secs_f64() * 1000.0,
             text: None,
-            error: Some(err),
+            error: Some(err.to_string()),
+            failure_reason,
         }
     }
 
@@ -148,6 +204,7 @@ impl PipelineStep {
             duration_ms: elapsed.as_secs_f64() * 1000.0,
             text: None,
             error: Some("timeout".to_string()),
+            failure_reason: Some(PostFailureReason::Timeout),
         }
     }
 }
@@ -171,52 +228,71 @@ pub trait PostProcessor: Send + Sync {
     ) -> Result<PipelineText, PostError>;
 }
 
-/// 跑整条链。失败/超时跳过该步，链路继续用上一步的 text；最差产出 == raw。
-pub async fn run_chain(
-    chain: &[Box<dyn PostProcessor>],
-    initial: PipelineText,
+/// 跑单步 processor：成功用新 text 前进；失败/超时跳过该步、原样返回 upstream
+/// text（chain「不阻塞」语义由调用方循环组合）。整条 chain 的运行只有两处：
+/// `voice::post_dispatch`（生产路径，额外套 cancel / overlay notice）和测试里的
+/// `run_chain` helper，都复用本函数，避免逐步逻辑重复漂移。
+pub(crate) async fn run_step(
+    recording_id: &str,
+    processor: &dyn PostProcessor,
+    input: PipelineText,
     ctx: &AppContext,
     timeout: Duration,
-) -> (PipelineText, Vec<PipelineStep>) {
-    let mut current = initial;
-    let mut steps = Vec::with_capacity(chain.len());
-    for p in chain {
-        let started = Instant::now();
-        match tokio::time::timeout(timeout, p.process(current.clone(), ctx)).await {
-            Ok(Ok(out)) => {
-                let step = PipelineStep::ok(p.name(), started.elapsed(), out.text.clone());
-                tracing::debug!(
-                    step = %p.name(),
-                    duration_ms = step.duration_ms,
-                    "post step succeeded"
-                );
-                current = out;
-                steps.push(step);
-            }
-            Ok(Err(e)) => {
-                tracing::warn!(step = %p.name(), error = %e, "post step failed; skipped");
-                steps.push(PipelineStep::error(
-                    p.name(),
-                    started.elapsed(),
-                    e.to_string(),
-                ));
-            }
-            Err(_) => {
-                tracing::warn!(
-                    step = %p.name(),
-                    timeout_ms = timeout.as_millis(),
-                    "post step timed out; skipped"
-                );
-                steps.push(PipelineStep::timeout(p.name(), started.elapsed()));
-            }
+) -> (PipelineStep, PipelineText) {
+    let started = Instant::now();
+    match tokio::time::timeout(timeout, processor.process(input.clone(), ctx)).await {
+        Ok(Ok(out)) => {
+            let step = PipelineStep::ok(processor.name(), started.elapsed(), out.text.clone());
+            (step, out)
+        }
+        Ok(Err(e)) => {
+            let step = PipelineStep::error(processor.name(), started.elapsed(), e);
+            tracing::warn!(
+                recording_id,
+                step = %step.name,
+                duration_ms = step.duration_ms,
+                failure_reason = ?step.failure_reason,
+                error = %step.error.as_deref().unwrap_or("unknown post error"),
+                "post step failed; skipped"
+            );
+            (step, input)
+        }
+        Err(_) => {
+            let step = PipelineStep::timeout(processor.name(), started.elapsed());
+            tracing::warn!(
+                recording_id,
+                step = %processor.name(),
+                duration_ms = step.duration_ms,
+                timeout_ms = timeout.as_millis(),
+                "post step timed out; skipped"
+            );
+            (step, input)
         }
     }
-    (current, steps)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 与生产 `voice::post_dispatch` 循环等价的最小 chain 跑法（无 cancel /
+    /// overlay），逐步复用共享的 `run_step`，用于验证 chain 组合语义。
+    async fn run_chain(
+        recording_id: &str,
+        chain: &[Box<dyn PostProcessor>],
+        initial: PipelineText,
+        ctx: &AppContext,
+        timeout: Duration,
+    ) -> (PipelineText, Vec<PipelineStep>) {
+        let mut current = initial;
+        let mut steps = Vec::with_capacity(chain.len());
+        for p in chain {
+            let (step, next) = run_step(recording_id, p.as_ref(), current, ctx, timeout).await;
+            current = next;
+            steps.push(step);
+        }
+        (current, steps)
+    }
 
     struct UpcaseProcessor;
     #[async_trait]
@@ -247,7 +323,10 @@ mod tests {
             _input: PipelineText,
             _ctx: &AppContext,
         ) -> Result<PipelineText, PostError> {
-            Err(PostError::Failed("intentional".into()))
+            Err(PostError::failed_with_reason(
+                PostFailureReason::ProviderError,
+                "intentional",
+            ))
         }
     }
 
@@ -271,6 +350,7 @@ mod tests {
     async fn empty_chain_returns_initial_unchanged() {
         let initial = PipelineText::new("hello".into(), vec!["hello".into()]);
         let (out, steps) = run_chain(
+            "test-recording",
             &[],
             initial.clone(),
             &AppContext::default(),
@@ -286,6 +366,7 @@ mod tests {
     async fn single_processor_transforms_text() {
         let chain: Vec<Box<dyn PostProcessor>> = vec![Box::new(UpcaseProcessor)];
         let (out, steps) = run_chain(
+            "test-recording",
             &chain,
             PipelineText::new("hi".into(), vec!["hi".into()]),
             &AppContext::default(),
@@ -306,6 +387,7 @@ mod tests {
         let chain: Vec<Box<dyn PostProcessor>> =
             vec![Box::new(FailProcessor), Box::new(UpcaseProcessor)];
         let (out, steps) = run_chain(
+            "test-recording",
             &chain,
             PipelineText::new("hi".into(), vec!["hi".into()]),
             &AppContext::default(),
@@ -324,6 +406,7 @@ mod tests {
             vec![Box::new(StallProcessor), Box::new(UpcaseProcessor)];
         // 真实 50ms timeout（StallProcessor 60s sleep > 50ms）→ skip → Upcase 接 "hi"
         let (out, steps) = run_chain(
+            "test-recording",
             &chain,
             PipelineText::new("hi".into(), vec!["hi".into()]),
             &AppContext::default(),
@@ -339,6 +422,7 @@ mod tests {
         let chain: Vec<Box<dyn PostProcessor>> =
             vec![Box::new(FailProcessor), Box::new(FailProcessor)];
         let (out, steps) = run_chain(
+            "test-recording",
             &chain,
             PipelineText::new("raw text".into(), vec!["raw text".into()]),
             &AppContext::default(),
@@ -354,14 +438,14 @@ mod tests {
     #[test]
     fn builds_runtime_chain_from_config_processors() {
         let chain = build_chain(crate::config::post::PostChainConfig {
-            name: "rule:zh_filter → llm:deepseek".to_string(),
+            name: "zh_filter → deepseek".to_string(),
             processors: vec![
                 crate::config::post::ProcessorConfig::Rule {
-                    id: "rule:zh_filter".to_string(),
+                    id: "zh_filter".to_string(),
                     patterns: vec!["嗯".to_string(), "啊".to_string()],
                 },
                 crate::config::post::ProcessorConfig::Llm {
-                    id: "llm:deepseek".to_string(),
+                    id: "deepseek".to_string(),
                     format: crate::config::post::ProviderFormatCfg::Openai,
                     provider_name: "deepseek".to_string(),
                     base_url: "https://api.deepseek.com".to_string(),
@@ -375,9 +459,9 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(chain.name, "rule:zh_filter → llm:deepseek");
+        assert_eq!(chain.name, "zh_filter → deepseek");
         assert_eq!(chain.processors.len(), 2);
-        assert_eq!(chain.processors[0].name(), "rule:zh_filter");
-        assert_eq!(chain.processors[1].name(), "llm:deepseek");
+        assert_eq!(chain.processors[0].name(), "zh_filter");
+        assert_eq!(chain.processors[1].name(), "deepseek");
     }
 }

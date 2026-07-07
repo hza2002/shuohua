@@ -132,8 +132,14 @@ mod tests {
         assert!(dir.join("profile/default.toml").exists());
         assert!(dir.join("asr/apple.toml").exists());
         assert!(dir.join("asr/doubao.toml").exists());
-        assert!(dir.join("post/rule/zh_filter.toml").exists());
-        assert!(dir.join("post/llm/openai.toml").exists());
+        let tencent = std::fs::read_to_string(dir.join("asr/tencent.toml")).unwrap();
+        assert!(tencent.contains("type = \"tencent\""));
+        assert!(tencent.contains("engine_model_type = \"16k_zh\""));
+        assert!(tencent.contains("filter_modal = 1"));
+        assert!(tencent.contains("convert_num_mode = 1"));
+        assert!(tencent.contains("need_vad = false"));
+        assert!(dir.join("post/zh_filter.toml").exists());
+        assert!(dir.join("post/openai.toml").exists());
         assert!(dir.join("theme/gruvbox-dark.toml").exists());
         assert!(dir.join("theme/catppuccin-latte.toml").exists());
         assert!(!dir.join("theme/light.toml").exists());

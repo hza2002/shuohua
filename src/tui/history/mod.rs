@@ -16,7 +16,8 @@ use crate::tui::audio::{
     AudioInfo,
 };
 use crate::tui::history::render::render_history;
-use crate::tui::page::{KeyOutcome, Page};
+use crate::tui::page::{KeyHint, KeyOutcome, MouseKind, Page};
+use std::cell::RefCell;
 
 mod render;
 
@@ -37,6 +38,17 @@ pub enum HistoryDetail {
 }
 
 impl HistoryDetail {
+    /// All detail views in tab order (h/l cycles through these, and the sub-tab
+    /// bar renders them left to right).
+    pub const ALL: [HistoryDetail; 6] = [
+        Self::Details,
+        Self::Asr,
+        Self::Pipeline,
+        Self::Sessions,
+        Self::Error,
+        Self::Json,
+    ];
+
     pub fn next(self) -> Self {
         match self {
             Self::Details => Self::Asr,
@@ -154,6 +166,17 @@ pub struct HistoryAnalyticsState {
     pub warning: Option<String>,
 }
 
+/// Geometry of the currently rendered record list, captured each frame so a
+/// mouse click can be mapped to the record under the cursor.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ListHit {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub first: usize,
+}
+
 #[derive(Debug)]
 pub struct HistoryPage {
     pub records: Vec<HistoryRecord>,
@@ -175,6 +198,19 @@ pub struct HistoryPage {
     refresh_responses_pending: u8,
     pending_history_requests: VecDeque<HistoryRequestKind>,
     pending_analytics_requests: VecDeque<AnalyticsRequestKind>,
+    /// Record-list geometry from the last render; consumed by `on_mouse`.
+    pub(crate) list_hit: RefCell<Option<ListHit>>,
+    /// Detail sub-tab hit regions from the last render; consumed by `on_mouse`.
+    pub(crate) detail_tabs: RefCell<Vec<(ratatui::layout::Rect, HistoryDetail)>>,
+    /// Vertical scroll offset of the right detail pane; reset when the selected
+    /// record or the detail view changes.
+    pub detail_scroll: u16,
+    /// Max detail scroll (content rows beyond the viewport), recomputed each
+    /// render so scroll handlers can clamp.
+    pub detail_max_scroll: std::cell::Cell<u16>,
+    /// Detail pane rect from the last render; a wheel here scrolls the detail
+    /// instead of moving the record selection.
+    pub(crate) detail_hit: RefCell<Option<ratatui::layout::Rect>>,
 }
 
 impl HistoryPage {
@@ -199,28 +235,79 @@ impl HistoryPage {
             refresh_responses_pending: 0,
             pending_history_requests: VecDeque::new(),
             pending_analytics_requests: VecDeque::new(),
+            list_hit: RefCell::new(None),
+            detail_tabs: RefCell::new(Vec::new()),
+            detail_scroll: 0,
+            detail_max_scroll: std::cell::Cell::new(0),
+            detail_hit: RefCell::new(None),
         }
     }
 
-    pub fn filtered(&self) -> Vec<&HistoryRecord> {
-        if self.search.is_empty() {
-            return self.records.iter().collect();
+    /// Click selects the record under the cursor; wheel scrolls the selection.
+    pub fn on_mouse(&mut self, column: u16, row: u16, kind: MouseKind) -> KeyOutcome {
+        // Wheel over the right detail pane scrolls its text; elsewhere it moves
+        // the record selection.
+        let over_detail = self.detail_hit.borrow().is_some_and(|r| {
+            column >= r.x && column < r.x + r.width && row >= r.y && row < r.y + r.height
+        });
+        match kind {
+            MouseKind::ScrollDown if over_detail => {
+                self.scroll_detail(1);
+                KeyOutcome::none()
+            }
+            MouseKind::ScrollUp if over_detail => {
+                self.scroll_detail(-1);
+                KeyOutcome::none()
+            }
+            MouseKind::ScrollDown => {
+                self.move_down();
+                self.auto_load_more_outcome()
+            }
+            MouseKind::ScrollUp => {
+                self.move_up();
+                KeyOutcome::none()
+            }
+            MouseKind::Down => {
+                // A click on a detail sub-tab switches the view; tabs win over
+                // the record list if regions ever overlap.
+                let tab = self
+                    .detail_tabs
+                    .borrow()
+                    .iter()
+                    .find(|(rect, _)| {
+                        column >= rect.x
+                            && column < rect.x + rect.width
+                            && row >= rect.y
+                            && row < rect.y + rect.height
+                    })
+                    .map(|(_, detail)| *detail);
+                if let Some(detail) = tab {
+                    self.select_detail(detail);
+                    return KeyOutcome::none();
+                }
+                let target = self.list_hit.borrow().and_then(|hit| {
+                    let in_bounds = column >= hit.x
+                        && column < hit.x + hit.width
+                        && row >= hit.y
+                        && row < hit.y + hit.height;
+                    in_bounds.then(|| hit.first + (row - hit.y) as usize)
+                });
+                if let Some(idx) = target {
+                    if idx < self.filtered().len() {
+                        self.selected = idx;
+                        self.detail_scroll = 0;
+                    }
+                }
+                KeyOutcome::none()
+            }
         }
-        let query = self.search.to_lowercase();
-        self.records
-            .iter()
-            .filter(|record| {
-                [
-                    record.id.as_str(),
-                    record.app.as_deref().unwrap_or_default(),
-                    record.asr.text.as_str(),
-                    &record.text,
-                ]
-                .join("\n")
-                .to_lowercase()
-                .contains(&query)
-            })
-            .collect()
+    }
+
+    /// The visible record set. The daemon already applies `query` filtering
+    /// server-side (identical field/substring logic), so the loaded page IS the
+    /// match set — we do not re-filter locally.
+    pub fn filtered(&self) -> Vec<&HistoryRecord> {
+        self.records.iter().collect()
     }
 
     pub fn selected_record(&self) -> Option<&HistoryRecord> {
@@ -239,27 +326,46 @@ impl HistoryPage {
         if len > 0 {
             self.selected = (self.selected + 1).min(len - 1);
         }
+        self.detail_scroll = 0;
     }
 
     pub fn move_up(&mut self) {
         self.selected = self.selected.saturating_sub(1);
+        self.detail_scroll = 0;
     }
 
     pub fn move_top(&mut self) {
         self.selected = 0;
+        self.detail_scroll = 0;
     }
 
     pub fn move_bottom(&mut self) {
         let len = self.filtered().len();
         self.selected = len.saturating_sub(1);
+        self.detail_scroll = 0;
     }
 
     pub fn next_detail(&mut self) {
         self.detail = self.detail.next();
+        self.detail_scroll = 0;
     }
 
     pub fn prev_detail(&mut self) {
         self.detail = self.detail.prev();
+        self.detail_scroll = 0;
+    }
+
+    pub fn select_detail(&mut self, detail: HistoryDetail) {
+        self.detail = detail;
+        self.detail_scroll = 0;
+    }
+
+    /// Scroll the right detail pane, clamped to the content height recorded at
+    /// the last render.
+    pub fn scroll_detail(&mut self, delta: i32) {
+        let max = self.detail_max_scroll.get();
+        let next = (self.detail_scroll as i32 + delta).clamp(0, max as i32);
+        self.detail_scroll = next as u16;
     }
 
     pub fn start_search(&mut self) {
@@ -820,6 +926,9 @@ impl Page for HistoryPage {
         }
         match key.code {
             KeyCode::Char('s') => self.toggle_view(),
+            KeyCode::Char('m') if self.view == HistoryView::Records => {
+                return self.load_more_outcome()
+            }
             KeyCode::Char('p') if self.view == HistoryView::Analytics => {
                 self.pending_analytics_requests
                     .push_back(AnalyticsRequestKind::Standalone);
@@ -849,6 +958,15 @@ impl Page for HistoryPage {
             }
             KeyCode::Char('l') | KeyCode::Right => self.next_detail(),
             KeyCode::Char('h') | KeyCode::Left => self.prev_detail(),
+            // Scroll the right detail pane when its content overflows.
+            KeyCode::PageDown => self.scroll_detail(4),
+            KeyCode::PageUp => self.scroll_detail(-4),
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll_detail(4)
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll_detail(-4)
+            }
             KeyCode::Esc => {
                 if !self.search.is_empty() {
                     self.clear_search();
@@ -865,6 +983,50 @@ impl Page for HistoryPage {
             _ => {}
         }
         KeyOutcome::none()
+    }
+
+    // Keep in sync with `on_key` above.
+    fn key_hints(&self) -> Vec<KeyHint> {
+        if self.confirm.is_some() {
+            return vec![KeyHint::new("y/n", "tui.hint.confirm")];
+        }
+        if self.searching {
+            return vec![
+                KeyHint::new("Enter", "tui.hint.search_done"),
+                KeyHint::new("Esc", "tui.hint.search_clear"),
+            ];
+        }
+        match self.view {
+            HistoryView::Records => {
+                let mut hints = vec![
+                    KeyHint::new("/", "tui.hint.search"),
+                    KeyHint::new("j/k", "tui.hint.move"),
+                    KeyHint::new("h/l", "tui.hint.detail"),
+                ];
+                // Surface the scroll keys only when the detail overflows.
+                if self.detail_max_scroll.get() > 0 {
+                    hints.push(KeyHint::new("PgUp/PgDn", "tui.hint.scroll"));
+                }
+                hints.extend([
+                    KeyHint::new("Enter", "tui.hint.copy"),
+                    KeyHint::new("Y", "tui.hint.copy_asr"),
+                    KeyHint::new("o", "tui.hint.open_audio"),
+                    KeyHint::new("r", "tui.hint.reveal"),
+                    KeyHint::new("d", "tui.hint.del_audio"),
+                    KeyHint::new("x", "tui.hint.del_history"),
+                    KeyHint::new("m", "tui.hint.more"),
+                    KeyHint::new("s", "tui.hint.analytics"),
+                ]);
+                hints
+            }
+            HistoryView::Analytics => vec![
+                KeyHint::new("s", "tui.hint.records"),
+                KeyHint::new("p", "tui.hint.period"),
+                KeyHint::new("[/]", "tui.hint.anchor"),
+                KeyHint::new("v", "tui.hint.metric"),
+                KeyHint::new("c", "tui.hint.chart"),
+            ],
+        }
     }
 
     fn render(&self, frame: &mut Frame, area: Rect, theme: &TuiTheme, _footer_status: &str) {

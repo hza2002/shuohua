@@ -10,18 +10,21 @@
 use crate::platform::{autotype, clipboard};
 use anyhow::{Context, Result};
 
-pub fn dispatch(text: &str, auto_paste: bool) -> Result<()> {
+pub fn dispatch(recording_id: &str, text: &str, auto_paste: bool) -> Result<()> {
     if text.is_empty() {
         // 没识别出文本就别污染剪贴板。voice 层应在调用前就拦掉，这里多一道防线。
         return Ok(());
     }
     clipboard::write_string(text).context("write clipboard")?;
-    tracing::debug!("clipboard write succeeded");
 
     if auto_paste {
         match autotype::paste() {
-            Ok(()) => tracing::debug!("auto paste succeeded"),
-            Err(e) => tracing::warn!(error = ?e, "auto paste failed; text remains on clipboard"),
+            Ok(()) => {}
+            Err(e) => tracing::warn!(
+                recording_id,
+                error = ?e,
+                "auto paste failed; text remains on clipboard"
+            ),
         }
     }
     Ok(())

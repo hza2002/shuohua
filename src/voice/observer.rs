@@ -50,6 +50,8 @@ mod imp {
     use std::time::Instant;
 
     const SAMPLE_RATE: u64 = 16_000;
+    const LEVEL_WINDOW_SAMPLES: u64 = SAMPLE_RATE / 20;
+    const SIGNAL_AMPLITUDE_THRESHOLD: u16 = 8;
     const VAD_THRESHOLD: f32 = 0.5;
     const PRE_ROLL_MS: u64 = 300;
 
@@ -60,7 +62,19 @@ mod imp {
     struct TraceInner {
         writer: BufWriter<File>,
         vad: SileroTrace,
+        level: AudioLevelTrace,
         started_instant: Instant,
+    }
+
+    struct AudioLevelTrace {
+        window_sum_squares: f64,
+        window_samples: u64,
+        windows: u64,
+        max_rms: f32,
+        max_peak: f32,
+        window_peak_abs: u16,
+        peak_abs: u16,
+        clipped: bool,
     }
 
     struct SileroTrace {
@@ -108,6 +122,7 @@ mod imp {
             let mut inner = TraceInner {
                 writer: BufWriter::new(file),
                 vad: SileroTrace::new()?,
+                level: AudioLevelTrace::default(),
                 started_instant: start.started_instant,
             };
             inner.write(json!({
@@ -131,6 +146,7 @@ mod imp {
             let Some(inner) = self.inner.as_mut() else {
                 return;
             };
+            inner.level.accept(samples);
             let events = inner.vad.accept(samples);
             for event in events {
                 inner.write(event);
@@ -239,6 +255,7 @@ mod imp {
                 return;
             };
             let summary = inner.vad.finish(audio_ms);
+            let level = inner.level.finish();
             inner.write(json!({
                 "event": "recording_end",
                 "status": status,
@@ -247,6 +264,13 @@ mod imp {
                     "active_ms": summary.active_ms,
                     "saved_ms": audio_ms.saturating_sub(summary.active_ms),
                     "sessions": summary.sessions,
+                },
+                "audio_level": {
+                    "windows": level.windows,
+                    "max_rms": level.max_rms,
+                    "max_peak": level.max_peak,
+                    "clipped": level.clipped,
+                    "has_signal": level.has_signal,
                 }
             }));
             let _ = inner.writer.flush();
@@ -262,6 +286,75 @@ mod imp {
     struct VadSummary {
         active_ms: u64,
         sessions: u32,
+    }
+
+    struct AudioLevelSummary {
+        windows: u64,
+        max_rms: f32,
+        max_peak: f32,
+        clipped: bool,
+        has_signal: bool,
+    }
+
+    impl AudioLevelTrace {
+        fn accept(&mut self, samples: &[i16]) {
+            for &sample in samples {
+                let abs = sample.unsigned_abs();
+                self.peak_abs = self.peak_abs.max(abs);
+                self.window_peak_abs = self.window_peak_abs.max(abs);
+                self.clipped |= abs >= i16::MAX as u16;
+                let normalized = f64::from(sample) / f64::from(i16::MAX);
+                self.window_sum_squares += normalized * normalized;
+                self.window_samples += 1;
+                if self.window_samples >= LEVEL_WINDOW_SAMPLES {
+                    self.finish_window();
+                }
+            }
+        }
+
+        fn finish(&mut self) -> AudioLevelSummary {
+            if self.window_samples > 0 {
+                self.finish_window();
+            }
+            AudioLevelSummary {
+                windows: self.windows,
+                max_rms: self.max_rms,
+                max_peak: self.max_peak,
+                clipped: self.clipped,
+                has_signal: self.peak_abs > SIGNAL_AMPLITUDE_THRESHOLD,
+            }
+        }
+
+        fn finish_window(&mut self) {
+            let rms = if self.window_samples == 0 {
+                0.0
+            } else {
+                (self.window_sum_squares / self.window_samples as f64).sqrt() as f32
+            };
+            self.max_rms = self.max_rms.max(rms.clamp(0.0, 1.0));
+            self.max_peak = self
+                .max_peak
+                .max((self.window_peak_abs as f32 / i16::MAX as f32).clamp(0.0, 1.0));
+            self.windows += 1;
+            self.window_sum_squares = 0.0;
+            self.window_samples = 0;
+            self.window_peak_abs = 0;
+        }
+    }
+
+    impl Default for AudioLevelTrace {
+        fn default() -> Self {
+            Self {
+                window_sum_squares: 0.0,
+                window_samples: 0,
+                windows: 0,
+                max_rms: 0.0,
+                max_peak: 0.0,
+                window_peak_abs: 0,
+                peak_abs: 0,
+                clipped: false,
+            }
+        }
     }
 
     impl SileroTrace {
@@ -453,6 +546,11 @@ pub(crate) fn observe_asr_event(trace: &mut RecordingObserver, started: Instant,
 }
 
 #[inline]
+pub(crate) fn observe_asr_event_at(trace: &mut RecordingObserver, t_ms: u64, event: &AsrEvent) {
+    trace.on_asr_event(t_ms, event);
+}
+
+#[inline]
 pub(crate) fn observe_asr_error(trace: &mut RecordingObserver, started: Instant, err: AsrError) {
     observe_asr_event(trace, started, &AsrEvent::Error { err });
 }
@@ -527,6 +625,36 @@ mod tests {
         assert!(body.contains(r#""event":"asr_segment""#));
         assert!(body.contains(r#""event":"recording_end""#));
         assert!(body.contains(r#""audio_ms":1600"#));
+        assert!(body.contains(r#""audio_level""#));
+        assert!(body.contains(r#""has_signal":false"#));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn summarizes_capture_audio_levels_in_trace_end() {
+        let dir = std::env::temp_dir().join(format!("shuohua-trace-level-{}", ulid::Ulid::new()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut trace = RecordingObserver::start_in_dir(
+            &dir,
+            TraceStart {
+                enabled: true,
+                recording_id: "01LEVEL".to_string(),
+                provider: "apple".to_string(),
+                started_at: "2026-06-16T00:00:00Z".to_string(),
+                started_instant: Instant::now(),
+            },
+        )
+        .unwrap();
+        trace.on_pcm(&vec![i16::MAX / 4; 1600]);
+        trace.on_finish("submitted", 100);
+
+        let body = fs::read_to_string(dir.join("01LEVEL.jsonl")).unwrap();
+        assert!(body.contains(r#""audio_level""#));
+        assert!(body.contains(r#""windows":2"#));
+        assert!(body.contains(r#""has_signal":true"#));
+        assert!(body.contains(r#""clipped":false"#));
 
         let _ = fs::remove_dir_all(dir);
     }

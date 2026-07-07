@@ -148,6 +148,7 @@ mod tests {
             audio_samples: 16_000 * 1_500 / 1_000,
             segments,
             final_text: None,
+            partial_text: None,
         }];
         let input = HistoryInput {
             id: "01HXYZABCDEF0123456789ABCD".to_string(),
@@ -211,6 +212,7 @@ mod tests {
                 audio_samples: 16_000 * 800 / 1_000,
                 segments: vec![segment(base, "hello ", 0, 600)],
                 final_text: None,
+                partial_text: None,
             },
             SessionCapture {
                 started_at: base + Duration::from_millis(2_000),
@@ -218,6 +220,7 @@ mod tests {
                 audio_samples: 16_000 * 900 / 1_000,
                 segments: vec![segment(base, "world", 2_100, 2_800)],
                 final_text: None,
+                partial_text: None,
             },
         ];
         let input = HistoryInput {
@@ -249,6 +252,60 @@ mod tests {
         assert_eq!(record.asr.duration_ms, 2_900);
         let net_saved_ms = record.asr.duration_ms as i64 - record.asr.audio_ms as i64;
         assert_eq!(net_saved_ms, 2_900 - (800 + 900));
+    }
+
+    #[test]
+    fn zero_audio_seed_session_preserves_text_without_audio_cost() {
+        let recording_start = OffsetDateTime::from_unix_timestamp(1_750_000_000).unwrap();
+        let base = Instant::now();
+        let sessions = vec![
+            SessionCapture {
+                started_at: base + Duration::from_millis(100),
+                ended_at: base + Duration::from_millis(100),
+                audio_samples: 0,
+                segments: vec![segment(base, "old text ", 100, 100)],
+                final_text: None,
+                partial_text: None,
+            },
+            SessionCapture {
+                started_at: base + Duration::from_millis(100),
+                ended_at: base + Duration::from_millis(1_100),
+                audio_samples: 16_000,
+                segments: vec![segment(base, "new text", 100, 1_100)],
+                final_text: None,
+                partial_text: None,
+            },
+        ];
+        let input = HistoryInput {
+            id: "01HXYZABCDEF0123456789ABCD".to_string(),
+            provider: "fake".to_string(),
+            started_at: recording_start,
+            ended_at: recording_start + time::Duration::milliseconds(1_200),
+            started_instant: base,
+            asr_text: "old text new text".to_string(),
+            final_text: "old text new text.".to_string(),
+            sessions,
+            pipeline: Vec::new(),
+            app: None,
+            status: HistoryStatus::Submitted,
+            error: None,
+        };
+
+        let record = build_record(input);
+
+        assert_eq!(record.asr.text, "old text new text");
+        assert_eq!(record.asr.sessions.len(), 2);
+        assert_eq!(
+            record.asr.sessions[0].started_at,
+            record.asr.sessions[0].ended_at
+        );
+        assert_eq!(
+            record.asr.sessions[0].started_at,
+            record.asr.sessions[1].started_at
+        );
+        assert_eq!(record.asr.sessions[0].audio_ms, 0);
+        assert_eq!(record.asr.audio_ms, 1_000);
+        assert_eq!(record.asr.duration_ms, 1_000);
     }
 
     #[test]
@@ -286,6 +343,7 @@ mod tests {
                 audio_samples: 16_000 * 800 / 1_000,
                 segments: vec![segment(base, "a", 0, 700)],
                 final_text: None,
+                partial_text: None,
             },
             SessionCapture {
                 started_at: base + Duration::from_millis(700),
@@ -293,6 +351,7 @@ mod tests {
                 audio_samples: 16_000 * 800 / 1_000,
                 segments: vec![segment(base, "b", 800, 1_400)],
                 final_text: None,
+                partial_text: None,
             },
         ];
         let input = HistoryInput {

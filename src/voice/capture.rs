@@ -23,6 +23,7 @@ pub(crate) struct SessionCapture {
     pub audio_samples: u64,
     pub segments: Vec<SegmentCapture>,
     pub final_text: Option<String>,
+    pub partial_text: Option<String>,
 }
 
 pub(crate) fn samples_to_ms(samples: u64) -> u64 {
@@ -44,15 +45,24 @@ pub(crate) fn instant_to_datetime(
 pub(crate) fn session_text_from_parts(
     segments: &[SegmentCapture],
     final_text: Option<&str>,
+    partial_text: Option<&str>,
 ) -> String {
     if let Some(text) = final_text.filter(|s| !s.is_empty()) {
         return text.to_string();
     }
-    segments.iter().map(|s| s.text.as_str()).collect()
+    let mut text: String = segments.iter().map(|s| s.text.as_str()).collect();
+    if let Some(partial) = partial_text.filter(|s| !s.is_empty()) {
+        text.push_str(partial);
+    }
+    text
 }
 
 pub(crate) fn session_text(session: &SessionCapture) -> String {
-    session_text_from_parts(&session.segments, session.final_text.as_deref())
+    session_text_from_parts(
+        &session.segments,
+        session.final_text.as_deref(),
+        session.partial_text.as_deref(),
+    )
 }
 
 pub(crate) fn session_texts(sessions: &[SessionCapture]) -> Vec<String> {
@@ -70,6 +80,17 @@ pub(crate) fn session_texts(sessions: &[SessionCapture]) -> Vec<String> {
 /// 两者都不留，避免产生 TUI 无法关联的孤儿音频文件。
 pub(crate) fn has_archivable_content(sessions: &[SessionCapture]) -> bool {
     !session_texts(sessions).is_empty() || sessions.iter().any(|s| s.audio_samples > 0)
+}
+
+/// resume（带 seed）录音的留存判据：必须有**新的** ASR 文本才算——普通录音
+/// 「喂过音频或有文本」即可，但 resume 若只有音频、没识别出新文本，只是一次没
+/// 接上话的尝试；这时写 history / 留音频会盖掉它想续写的那条可恢复记录（见
+/// voice.md）。engine（retained audio）与 finish（history）共用，保持两者一致。
+pub(crate) fn has_archivable_content_for(sessions: &[SessionCapture], is_resume: bool) -> bool {
+    if is_resume {
+        return !session_texts(sessions).is_empty();
+    }
+    has_archivable_content(sessions)
 }
 
 #[cfg(test)]
@@ -94,8 +115,23 @@ mod tests {
             audio_samples: 16_000 * 900 / 1_000,
             segments: vec![segment(base, "a", 0, 100), segment(base, "b", 100, 200)],
             final_text: Some("ab.".to_string()),
+            partial_text: Some("ignored".to_string()),
         };
         assert_eq!(session_text(&session), "ab.");
+    }
+
+    #[test]
+    fn session_text_uses_partial_when_final_is_absent() {
+        let base = Instant::now();
+        let session = SessionCapture {
+            started_at: base,
+            ended_at: base + Duration::from_millis(900),
+            audio_samples: 16_000 * 900 / 1_000,
+            segments: vec![segment(base, "a", 0, 100)],
+            final_text: None,
+            partial_text: Some("b".to_string()),
+        };
+        assert_eq!(session_text(&session), "ab");
     }
 
     #[test]
@@ -111,6 +147,7 @@ mod tests {
             audio_samples: 16_000,
             segments: vec![],
             final_text: None,
+            partial_text: None,
         };
         assert!(has_archivable_content(std::slice::from_ref(&audio_only)));
 
@@ -121,6 +158,7 @@ mod tests {
             audio_samples: 0,
             segments: vec![segment(base, "hi", 0, 100)],
             final_text: None,
+            partial_text: None,
         };
         assert!(has_archivable_content(std::slice::from_ref(&with_text)));
     }

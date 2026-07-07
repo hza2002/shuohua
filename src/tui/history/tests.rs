@@ -5,6 +5,7 @@ use crate::history::{
     PipelineStepHistory, PipelineStepStatus,
 };
 use crate::tui::history::render::*;
+use crate::tui::ui;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn sample_record(id: &str, day: u8) -> HistoryRecord {
@@ -154,10 +155,10 @@ fn truncate_display_marks_long_values() {
 
 #[test]
 fn visible_range_keeps_selected_near_middle() {
-    assert_eq!(visible_range_for_selection(0, 100, 9), 0..9);
-    assert_eq!(visible_range_for_selection(4, 100, 9), 0..9);
-    assert_eq!(visible_range_for_selection(20, 100, 9), 16..25);
-    assert_eq!(visible_range_for_selection(98, 100, 9), 91..100);
+    assert_eq!(ui::visible_range_for_selection(0, 100, 9), 0..9);
+    assert_eq!(ui::visible_range_for_selection(4, 100, 9), 0..9);
+    assert_eq!(ui::visible_range_for_selection(20, 100, 9), 16..25);
+    assert_eq!(ui::visible_range_for_selection(98, 100, 9), 91..100);
 }
 
 #[test]
@@ -317,17 +318,6 @@ fn near_tail_navigation_auto_loads_more_history() {
             ..
         })
     ));
-}
-
-#[test]
-fn manual_load_more_key_is_ignored() {
-    let mut page = HistoryPage::new();
-    page.records = vec![sample_record("01HXYZABCDEF0123456789AAA1", 3)];
-
-    let outcome = page.on_key(press('m'));
-
-    assert!(outcome.command.is_none());
-    assert!(!page.loading_more);
 }
 
 #[test]
@@ -736,17 +726,18 @@ fn history_changed_keeps_existing_selection_on_same_record() {
 }
 
 #[test]
-fn history_changed_preserves_filtered_selection() {
+fn history_changed_preserves_selection() {
     let mut page = HistoryPage::new();
     page.records = vec![
         sample_record("01HXYZABCDEF0123456789AAA2", 4),
         sample_record("01HXYZABCDEF0123456789AAA1", 3),
     ];
-    page.search = "AAA1".to_string();
-    page.selected = 0;
+    page.selected = 1;
 
     page.apply_event(&Event::HistoryChanged, true);
 
+    // HistoryChanged only marks a refresh; the loaded page (the server's match
+    // set) and the current selection index are left untouched.
     assert_eq!(
         page.selected_record().unwrap().id,
         "01HXYZABCDEF0123456789AAA1"
@@ -924,4 +915,172 @@ fn refresh_errors_unblock_history_changed_refresh() {
 
     assert!(!page.refresh_in_flight);
     assert_eq!(page.refresh_commands().len(), 3);
+}
+
+#[test]
+fn filtered_trusts_server_results_without_local_refilter() {
+    // The daemon already filters by `query`; the loaded page IS the match set.
+    // filtered() must not re-filter locally, or an in-flight query would hide
+    // server-returned rows that don't substring-match the raw search buffer.
+    let mut page = HistoryPage::new();
+    page.records = vec![sample_record("aaa", 1), sample_record("bbb", 2)];
+    page.search = "no-such-substring".to_string();
+
+    assert_eq!(page.filtered().len(), 2);
+}
+
+#[test]
+fn m_key_requests_load_more() {
+    let mut page = HistoryPage::new();
+
+    let outcome = page.on_key(press('m'));
+
+    assert!(matches!(
+        outcome.command,
+        Some(crate::ipc::protocol::Command::GetHistory { .. })
+    ));
+    assert!(page.loading_more);
+}
+
+#[test]
+fn list_click_selects_row_under_cursor() {
+    let mut page = HistoryPage::new();
+    page.records = (0..5)
+        .map(|i| sample_record(&format!("id{i}"), (i + 1) as u8))
+        .collect();
+    *page.list_hit.borrow_mut() = Some(super::ListHit {
+        x: 1,
+        y: 3,
+        width: 40,
+        height: 5,
+        first: 0,
+    });
+
+    page.on_mouse(10, 5, crate::tui::page::MouseKind::Down);
+
+    // row 5 - list top 3 = visible offset 2, first index 0 -> record 2.
+    assert_eq!(page.selected, 2);
+}
+
+#[test]
+fn list_click_outside_rows_keeps_selection() {
+    let mut page = HistoryPage::new();
+    page.records = (0..3)
+        .map(|i| sample_record(&format!("id{i}"), (i + 1) as u8))
+        .collect();
+    page.selected = 1;
+    *page.list_hit.borrow_mut() = Some(super::ListHit {
+        x: 1,
+        y: 3,
+        width: 40,
+        height: 3,
+        first: 0,
+    });
+
+    // Click below the last rendered row must not change selection.
+    page.on_mouse(10, 20, crate::tui::page::MouseKind::Down);
+
+    assert_eq!(page.selected, 1);
+}
+
+#[test]
+fn detail_scroll_clamps_and_resets_on_selection_change() {
+    let mut page = HistoryPage::new();
+    page.records = (0..3)
+        .map(|i| sample_record(&format!("id{i}"), (i + 1) as u8))
+        .collect();
+    page.detail_max_scroll.set(10);
+
+    page.scroll_detail(4);
+    assert_eq!(page.detail_scroll, 4);
+    page.scroll_detail(100);
+    assert_eq!(page.detail_scroll, 10, "clamped to content height");
+    page.scroll_detail(-100);
+    assert_eq!(page.detail_scroll, 0);
+
+    // Scrolled into a long detail, then moving selection resets the offset.
+    page.detail_scroll = 6;
+    page.move_down();
+    assert_eq!(page.detail_scroll, 0, "new record resets detail scroll");
+
+    // Switching the detail view also resets it.
+    page.detail_scroll = 5;
+    page.next_detail();
+    assert_eq!(page.detail_scroll, 0, "new detail view resets scroll");
+}
+
+#[test]
+fn scroll_hint_shown_only_when_detail_overflows() {
+    use crate::tui::page::Page;
+    let mut page = HistoryPage::new();
+    page.records = vec![sample_record("id0", 1)];
+
+    page.detail_max_scroll.set(0);
+    assert!(
+        !page.key_hints().iter().any(|h| h.keys == "PgUp/PgDn"),
+        "no scroll hint when the detail fits"
+    );
+
+    page.detail_max_scroll.set(5);
+    assert!(
+        page.key_hints().iter().any(|h| h.keys == "PgUp/PgDn"),
+        "scroll hint appears once the detail overflows"
+    );
+}
+
+#[test]
+fn wheel_over_detail_pane_scrolls_detail_not_list() {
+    let mut page = HistoryPage::new();
+    page.records = (0..5)
+        .map(|i| sample_record(&format!("id{i}"), (i + 1) as u8))
+        .collect();
+    page.selected = 2;
+    page.detail_max_scroll.set(10);
+    *page.detail_hit.borrow_mut() = Some(ratatui::layout::Rect::new(40, 3, 40, 10));
+
+    // Wheel inside the detail rect scrolls the detail, selection unchanged.
+    page.on_mouse(50, 5, crate::tui::page::MouseKind::ScrollDown);
+    assert_eq!(page.selected, 2, "selection must not move");
+    assert_eq!(page.detail_scroll, 1, "detail scrolled instead");
+
+    // Wheel outside the detail rect moves the selection as before.
+    page.on_mouse(5, 5, crate::tui::page::MouseKind::ScrollDown);
+    assert_eq!(page.selected, 3);
+}
+
+#[test]
+fn detail_tab_click_switches_detail_view() {
+    let mut page = HistoryPage::new();
+    page.records = vec![sample_record("id0", 1)];
+    assert_eq!(page.detail, super::HistoryDetail::Details);
+
+    // The renderer registers one hit rect per detail sub-tab.
+    *page.detail_tabs.borrow_mut() = vec![
+        (
+            ratatui::layout::Rect::new(0, 0, 8, 1),
+            super::HistoryDetail::Details,
+        ),
+        (
+            ratatui::layout::Rect::new(8, 0, 6, 1),
+            super::HistoryDetail::Asr,
+        ),
+    ];
+
+    // Clicking the second tab switches the detail view (not the record list).
+    page.on_mouse(9, 0, crate::tui::page::MouseKind::Down);
+    assert_eq!(page.detail, super::HistoryDetail::Asr);
+}
+
+#[test]
+fn scroll_moves_selection() {
+    let mut page = HistoryPage::new();
+    page.records = (0..5)
+        .map(|i| sample_record(&format!("id{i}"), (i + 1) as u8))
+        .collect();
+    page.selected = 0;
+
+    page.on_mouse(0, 0, crate::tui::page::MouseKind::ScrollDown);
+    assert_eq!(page.selected, 1);
+    page.on_mouse(0, 0, crate::tui::page::MouseKind::ScrollUp);
+    assert_eq!(page.selected, 0);
 }

@@ -144,6 +144,17 @@ fn push_main(inventory: &mut ConfigInventory, root: &Path) {
 fn push_profiles(inventory: &mut ConfigInventory, root: &Path) {
     for path in toml_files(&root.join("profile")) {
         let source = path.clone();
+        if let Err(error) = validate_config_file_stem(&path) {
+            push_entry(
+                inventory,
+                InventoryModule::Profile,
+                file_stem(&path, "profile"),
+                error,
+                source,
+                InventoryStatus::Error,
+            );
+            continue;
+        }
         match read_toml(&path).and_then(|value| {
             value
                 .as_table()
@@ -171,11 +182,8 @@ fn push_profiles(inventory: &mut ConfigInventory, root: &Path) {
 }
 
 fn push_post(inventory: &mut ConfigInventory, root: &Path) {
-    let dir = root.join("post");
-    for subdir in ["rule", "llm"] {
-        for path in toml_files(&dir.join(subdir)) {
-            push_toml_summary(inventory, InventoryModule::PostProcessor, &path);
-        }
+    for path in toml_files(&root.join("post")) {
+        push_toml_summary(inventory, InventoryModule::PostProcessor, &path);
     }
 }
 
@@ -190,6 +198,17 @@ fn push_theme(inventory: &mut ConfigInventory, root: &Path) {
     for path in toml_files(&root.join("theme")) {
         found = true;
         let source = path.clone();
+        if let Err(error) = validate_config_file_stem(&path) {
+            push_entry(
+                inventory,
+                InventoryModule::Theme,
+                file_stem(&path, "theme"),
+                error,
+                source,
+                InventoryStatus::Error,
+            );
+            continue;
+        }
         match read_toml(&path).and_then(|value| {
             value
                 .as_table()
@@ -227,6 +246,17 @@ fn push_theme(inventory: &mut ConfigInventory, root: &Path) {
 }
 
 fn push_toml_summary(inventory: &mut ConfigInventory, module: InventoryModule, path: &Path) {
+    if let Err(error) = validate_config_file_stem(path) {
+        push_entry(
+            inventory,
+            module,
+            file_stem(path, module.label()),
+            error,
+            path.to_path_buf(),
+            InventoryStatus::Error,
+        );
+        return;
+    }
     match read_toml(path).and_then(|value| {
         value
             .as_table()
@@ -342,10 +372,9 @@ fn read_toml(path: &Path) -> anyhow::Result<toml::Value> {
 
 fn display_value(key: &str, value: &toml::Value) -> String {
     if is_secret_key(key) {
-        return if value.as_str().is_some_and(str::is_empty) {
-            "<empty>".to_string()
-        } else {
-            "<set>".to_string()
+        return match value.as_str() {
+            Some("") | None => "<empty>".to_string(),
+            Some(_) => crate::config::spec::SECRET_MASK.to_string(),
         };
     }
     match value {
@@ -379,6 +408,32 @@ fn file_stem(path: &Path, fallback: &str) -> String {
         .to_string()
 }
 
+pub(crate) fn validate_config_file_stem(path: &Path) -> Result<(), String> {
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return Err("invalid file name: expected UTF-8 TOML stem".to_string());
+    };
+    validate_config_file_id(stem).map_err(|error| format!("invalid file name: {error}"))
+}
+
+pub(crate) fn validate_config_file_id(id: &str) -> Result<(), String> {
+    if is_valid_config_file_stem(id) {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid file id {id:?}; use a lowercase letter first, then lowercase letters, digits, '-' or '_' (examples: default, zh_filter, team-1). Put display text in name = \"...\"."
+        ))
+    }
+}
+
+pub(crate) fn is_valid_config_file_stem(stem: &str) -> bool {
+    let mut chars = stem.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_lowercase()
+        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
+}
+
 fn config_home() -> PathBuf {
     crate::config::paths::config_home()
 }
@@ -398,13 +453,25 @@ mod tests {
     }
 
     #[test]
+    fn config_file_ids_use_lowercase_letter_first_rule() {
+        for valid in ["default", "a1_b-c", "zh_filter", "team-1"] {
+            assert!(is_valid_config_file_stem(valid), "{valid}");
+            assert!(validate_config_file_id(valid).is_ok(), "{valid}");
+        }
+        for invalid in ["", "1abc", "Abc", "my profile", "zh.filter"] {
+            assert!(!is_valid_config_file_stem(invalid), "{invalid}");
+            let error = validate_config_file_id(invalid).unwrap_err();
+            assert!(error.contains("lowercase letter first"), "{error}");
+        }
+    }
+
+    #[test]
     fn inventory_summarizes_main_profile_asr_and_post_files() {
         let home = temp_config_home();
         let root = home.join("shuohua");
         fs::create_dir_all(root.join("profile")).unwrap();
         fs::create_dir_all(root.join("asr")).unwrap();
-        fs::create_dir_all(root.join("post/rule")).unwrap();
-        fs::create_dir_all(root.join("post/llm")).unwrap();
+        fs::create_dir_all(root.join("post")).unwrap();
         fs::create_dir_all(root.join("theme")).unwrap();
         fs::write(
             root.join("config.toml"),
@@ -422,20 +489,24 @@ backend = "silero"
             r#"
 name = "default"
 [asr]
-provider = "apple"
+instance = "apple"
 [post]
-chain = ["rule:zh_filter", "llm:deepseek"]
+chain = ["zh_filter", "deepseek"]
 "#,
         )
         .unwrap();
-        fs::write(root.join("asr/apple.toml"), "idle_pause = true\n").unwrap();
         fs::write(
-            root.join("post/rule/zh_filter.toml"),
+            root.join("asr/apple.toml"),
+            "type = \"apple\"\nlocal_vad = \"on\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("post/zh_filter.toml"),
             "type = \"rule\"\npatterns = []\n",
         )
         .unwrap();
         fs::write(
-            root.join("post/llm/deepseek.toml"),
+            root.join("post/deepseek.toml"),
             "type = \"llm\"\nname = \"deepseek\"\napi_key = \"sk-test\"\nmodel = \"deepseek-chat\"\nprompt = \"{{text}}\"\n",
         )
         .unwrap();
@@ -457,26 +528,26 @@ chain = ["rule:zh_filter", "llm:deepseek"]
         }));
         assert!(inventory.entries().any(|entry| {
             entry.module == InventoryModule::Profile
-                && entry.key == "default.asr.provider"
-                && entry.field_path.as_deref() == Some("asr.provider")
+                && entry.key == "default.asr.instance"
+                && entry.field_path.as_deref() == Some("asr.instance")
                 && entry.summary.contains("apple")
         }));
         assert!(inventory.entries().any(|entry| {
             entry.module == InventoryModule::Profile
                 && entry.key == "default.post.chain"
                 && entry.field_path.as_deref() == Some("post.chain")
-                && entry.summary.contains("llm:deepseek")
+                && entry.summary.contains("deepseek")
         }));
         assert!(inventory.entries().any(|entry| {
             entry.module == InventoryModule::AsrProvider
-                && entry.key == "apple.idle_pause"
-                && entry.field_path.as_deref() == Some("idle_pause")
-                && entry.summary == "true"
+                && entry.key == "apple.local_vad"
+                && entry.field_path.as_deref() == Some("local_vad")
+                && entry.summary == "on"
         }));
         assert!(inventory.entries().any(|entry| {
             entry.module == InventoryModule::PostProcessor
                 && entry.key == "deepseek.api_key"
-                && entry.summary == "<set>"
+                && entry.summary == crate::config::spec::SECRET_MASK
         }));
         assert!(inventory.entries().any(|entry| {
             entry.module == InventoryModule::Theme
@@ -513,6 +584,30 @@ chain = ["rule:zh_filter", "llm:deepseek"]
     }
 
     #[test]
+    fn inventory_rejects_non_identifier_config_file_names() {
+        let home = temp_config_home();
+        let root = home.join("shuohua");
+        fs::create_dir_all(root.join("profile")).unwrap();
+        fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
+        fs::write(
+            root.join("profile/My Profile.toml"),
+            "name = \"My Profile\"\n[asr]\ninstance = \"apple\"\n",
+        )
+        .unwrap();
+
+        let inventory = load_from_config_home(&home);
+
+        assert!(inventory.entries().any(|entry| {
+            entry.module == InventoryModule::Profile
+                && entry.key == "My Profile"
+                && entry.status == InventoryStatus::Error
+                && entry.summary.contains("invalid file name")
+        }));
+
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn overview_summary_counts_scanned_sources_not_zero() {
         let home = temp_config_home();
         let root = home.join("shuohua");
@@ -520,7 +615,7 @@ chain = ["rule:zh_filter", "llm:deepseek"]
         fs::write(root.join("config.toml"), "[hotkey]\ntrigger = \"f16\"\n").unwrap();
         fs::write(
             root.join("profile/default.toml"),
-            "name = \"default\"\n[asr]\nprovider = \"apple\"\n",
+            "name = \"default\"\n[asr]\ninstance = \"apple\"\n",
         )
         .unwrap();
 

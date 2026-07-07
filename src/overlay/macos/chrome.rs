@@ -14,10 +14,10 @@ use objc2_foundation::{MainThreadMarker, NSObjectProtocol, NSPoint, NSRect, NSSi
 use crate::config::theme::{EffectiveOverlayCfg, GlassStyle};
 use crate::overlay::layout as L;
 
-pub(super) fn root_frame() -> NSRect {
+pub(super) fn root_frame(width: f64) -> NSRect {
     NSRect::new(
         NSPoint::new(0.0, 0.0),
-        NSSize::new(L::constants::WIDTH, L::constants::BASE_HEIGHT),
+        NSSize::new(width, L::constants::BASE_HEIGHT),
     )
 }
 
@@ -136,7 +136,7 @@ pub(super) fn build_chrome(
     Retained<NSView>,
     Option<String>,
 ) {
-    make_glass_surface(mtm, root_frame(), cfg)
+    make_glass_surface(mtm, root_frame(cfg.core.width), cfg)
 }
 
 pub(super) fn make_glass_surface(
@@ -157,8 +157,10 @@ pub(super) fn make_glass_surface(
         let glass = NSGlassEffectView::initWithFrame(NSGlassEffectView::alloc(mtm), frame);
         #[cfg(debug_assertions)]
         {
-            super::debug::dump_glass_selectors(&glass);
-            super::debug::probe_glass_state_ranges(&glass);
+            if glass_probe_enabled() {
+                super::debug::dump_glass_selectors(&glass);
+                super::debug::probe_glass_state_ranges(&glass);
+            }
         }
         let missing = apply_glass_settings(&glass, cfg);
         glass.setAutoresizingMask(
@@ -193,6 +195,11 @@ pub(super) fn make_glass_surface(
         background,
         Some("NSGlassEffectView unavailable — falling back to HUD material".to_string()),
     )
+}
+
+#[cfg(debug_assertions)]
+fn glass_probe_enabled() -> bool {
+    std::env::var_os("SHUOHUA_OVERLAY_GLASS_PROBE").is_some()
 }
 
 /// 把 cfg 里所有 chrome 旋钮拍到 glass 上。返回检测到不可用的 SPI 列表（私有 selector 没 respond）。

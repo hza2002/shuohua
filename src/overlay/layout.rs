@@ -19,7 +19,8 @@ impl LayoutFrame {
 }
 
 pub mod constants {
-    pub const WIDTH: f64 = 572.0;
+    pub const DEFAULT_WIDTH_PX: usize = 600;
+    pub const WIDTH: f64 = DEFAULT_WIDTH_PX as f64;
     pub const BASE_HEIGHT: f64 = 64.0;
     pub const WINDOW_MARGIN: f64 = 16.0;
     pub const H_PAD: f64 = 16.0;
@@ -27,8 +28,6 @@ pub mod constants {
     pub const HEADER_BODY_GAP: f64 = 2.0;
     /// 单行 body 的基线高度，也是头部块几何的锚。多行高度由平台层实测，不再估算。
     pub const BODY_LINE_H: f64 = 21.0;
-    pub const BODY_W: f64 = WIDTH - H_PAD * 2.0;
-    pub const BODY_TEXT_W: f64 = BODY_W;
     pub const SCROLL_INDICATOR_TEXT_GAP: f64 = 4.0;
     pub const HEADER_CENTER_Y: f64 = BOTTOM_PAD + BODY_LINE_H + HEADER_BODY_GAP + 12.0;
     pub const ICON_BOX: f64 = 24.0;
@@ -40,9 +39,9 @@ pub mod constants {
     pub const ICON_STATE_GAP: f64 = 5.0;
     pub const STATE_W: f64 = 56.0;
     pub const STATE_STATS_GAP: f64 = 5.0;
-    pub const STATS_W: f64 = 180.0;
     pub const META_GAP: f64 = 8.0;
-    pub const META_MIN_W: f64 = 180.0;
+    pub const HEADER_STATS_FALLBACK_FRACTION: f64 = 0.25;
+    pub const PICKER_GAP: f64 = 6.0;
 }
 
 pub fn frame_y_for_visual_center(center_y: f64, height: f64, optical_y: f64) -> f64 {
@@ -57,10 +56,48 @@ pub struct FirstRow {
     pub meta: LayoutFrame,
 }
 
+#[cfg(test)]
 pub fn first_row_frames(top_offset: f64) -> FirstRow {
+    first_row_frames_with_text_widths(
+        constants::WIDTH,
+        top_offset,
+        constants::STATE_W,
+        constants::WIDTH * constants::HEADER_STATS_FALLBACK_FRACTION,
+    )
+}
+
+pub fn first_row_frames_with_text_widths(
+    width: f64,
+    top_offset: f64,
+    status_text_w: f64,
+    stats_text_w: f64,
+) -> FirstRow {
+    first_row_frames_with_text_widths_and_meta(
+        width,
+        top_offset,
+        status_text_w,
+        stats_text_w,
+        f64::INFINITY,
+    )
+}
+
+pub fn first_row_frames_with_text_widths_and_meta(
+    width: f64,
+    top_offset: f64,
+    status_text_w: f64,
+    stats_text_w: f64,
+    meta_text_w: f64,
+) -> FirstRow {
     use constants::*;
     let center_y = HEADER_CENTER_Y + top_offset;
-    let mut x = H_PAD;
+    let content_left = H_PAD;
+    let content_right = (width - H_PAD).max(content_left);
+    let content_mid = (content_left + content_right) / 2.0;
+    let meta_rail_w = (content_right - content_mid).max(0.0);
+    let meta_w = meta_text_w.max(0.0).min(meta_rail_w);
+    let meta_x = content_right - meta_w;
+    let left_rail_right = content_mid - META_GAP;
+    let mut x = content_left;
     let icon = LayoutFrame::new(
         x,
         frame_y_for_visual_center(center_y, ICON_BOX, ICON_OPTICAL_Y),
@@ -68,28 +105,27 @@ pub fn first_row_frames(top_offset: f64) -> FirstRow {
         ICON_BOX,
     );
     x += ICON_BOX + ICON_STATE_GAP;
+    let status_w = status_text_w.max(0.0).min((left_rail_right - x).max(0.0));
     let status = LayoutFrame::new(
         x,
         frame_y_for_visual_center(center_y, STATE_BOX_H, STATE_OPTICAL_Y),
-        STATE_W,
+        status_w,
         STATE_BOX_H,
     );
-    x += STATE_W + STATE_STATS_GAP;
+    x += status_w + STATE_STATS_GAP;
+    let stats_w = stats_text_w.max(0.0).min((left_rail_right - x).max(0.0));
     let stats = LayoutFrame::new(
         x,
         frame_y_for_visual_center(center_y, META_BOX_H, META_OPTICAL_Y),
-        STATS_W,
+        stats_w,
         META_BOX_H,
     );
-    x += STATS_W + META_GAP;
-    let right = WIDTH - H_PAD;
-    let meta_w = (right - x).max(META_MIN_W);
     FirstRow {
         icon,
         status,
         stats,
         meta: LayoutFrame::new(
-            x,
+            meta_x,
             frame_y_for_visual_center(center_y, META_BOX_H, META_OPTICAL_Y),
             meta_w,
             META_BOX_H,
@@ -146,12 +182,33 @@ impl BodyGeometry {
         let scrollable = (content_h - self.field_height).max(1.0);
         let progress = (visible_y / scrollable).clamp(0.0, 1.0);
         let y = (self.field_height - indicator_h) * progress;
-        let x = constants::BODY_TEXT_W + constants::SCROLL_INDICATOR_TEXT_GAP;
+        let x = self.body_document.w + constants::SCROLL_INDICATOR_TEXT_GAP;
         Some(LayoutFrame::new(x, y, width, indicator_h))
     }
 }
 
+#[cfg(test)]
 pub fn body_geometry_with_tail_metrics(
+    body_h: f64,
+    max_text_lines: usize,
+    single_line_h: f64,
+    extra_line_h: f64,
+    line_count: usize,
+    tail_metrics: Option<BodyTailMetrics>,
+) -> BodyGeometry {
+    body_geometry_with_tail_metrics_for_width(
+        constants::WIDTH,
+        body_h,
+        max_text_lines,
+        single_line_h,
+        extra_line_h,
+        line_count,
+        tail_metrics,
+    )
+}
+
+pub fn body_geometry_with_tail_metrics_for_width(
+    width: f64,
     body_h: f64,
     max_text_lines: usize,
     single_line_h: f64,
@@ -183,6 +240,7 @@ pub fn body_geometry_with_tail_metrics(
         .max(field_height)
         .max(requested_scroll_offset + field_height);
     let scroll_bottom_offset = requested_scroll_offset.clamp(0.0, document_height - field_height);
+    let body_text_w = (width - constants::H_PAD * 2.0).max(1.0);
     BodyGeometry {
         content_height,
         panel_height: constants::BASE_HEIGHT + extra,
@@ -191,10 +249,10 @@ pub fn body_geometry_with_tail_metrics(
         body_viewport: LayoutFrame::new(
             constants::H_PAD,
             constants::BOTTOM_PAD,
-            constants::WIDTH - constants::H_PAD,
+            (width - constants::H_PAD).max(1.0),
             field_height,
         ),
-        body_document: LayoutFrame::new(0.0, 0.0, constants::BODY_TEXT_W, document_height),
+        body_document: LayoutFrame::new(0.0, 0.0, body_text_w, document_height),
         scroll_bottom_offset,
         body_overflow,
     }
@@ -241,34 +299,23 @@ pub fn header_parts(
     }
 }
 
-/// 把链摘要 `rule:zh_filter → llm:deepseek` 剥成显示用的 `zh_filter → deepseek`：
-/// 去掉每步的 `kind:` 前缀，腾出 meta 行空间给 profile 前缀。链摘要原文（含 kind）
-/// 仍由 history/UDS 保留，这里只影响 overlay 显示。
-pub fn pipeline_display(chain_summary: &str) -> String {
-    chain_summary
-        .split(" → ")
-        .map(|step| step.split_once(':').map_or(step, |(_, name)| name))
-        .collect::<Vec<_>>()
-        .join(" → ")
-}
-
 pub fn profile_chain_display(
     display_name: &str,
-    asr_provider: &str,
+    asr_instance: &str,
     chain_summary: &str,
 ) -> String {
     let mut steps = Vec::new();
-    if !asr_provider.is_empty() {
-        steps.push(asr_provider.to_string());
+    if !asr_instance.is_empty() {
+        steps.push(asr_instance.to_string());
     }
-    let pipeline = pipeline_display(chain_summary).replace(" → ", " -> ");
+    let pipeline = chain_summary.replace(" -> ", " → ");
     if !pipeline.is_empty() {
-        steps.extend(pipeline.split(" -> ").map(str::to_string));
+        steps.extend(pipeline.split(" → ").map(str::to_string));
     }
     if steps.is_empty() {
         display_name.to_string()
     } else {
-        format!("{display_name}: {}", steps.join(" -> "))
+        format!("{display_name}: {}", steps.join(" → "))
     }
 }
 
@@ -313,7 +360,6 @@ pub fn picker_frame(
     height: f64,
     screen: LayoutFrame,
 ) -> LayoutFrame {
-    const GAP: f64 = 6.0;
     let screen_left = screen.x + constants::WINDOW_MARGIN;
     let screen_right = screen.x + screen.w - constants::WINDOW_MARGIN;
     let screen_bottom = screen.y + constants::WINDOW_MARGIN;
@@ -321,13 +367,13 @@ pub fn picker_frame(
 
     let width = width.min((screen_right - screen_left).max(1.0));
     let height = height.min((screen_top - screen_bottom).max(1.0));
-    let x = overlay.x + overlay.w - width;
-    let below = overlay.y - height - GAP;
-    let above = overlay.y + overlay.h + GAP;
+    let x = overlay.x + overlay.w - constants::H_PAD - width;
+    let below = overlay.y - height - constants::PICKER_GAP;
+    let above = overlay.y + overlay.h + constants::PICKER_GAP;
     let below_fits = below >= screen_bottom;
     let above_fits = above + height <= screen_top;
-    let below_space = overlay.y - GAP - screen_bottom;
-    let above_space = screen_top - (overlay.y + overlay.h + GAP);
+    let below_space = overlay.y - constants::PICKER_GAP - screen_bottom;
+    let above_space = screen_top - (overlay.y + overlay.h + constants::PICKER_GAP);
     let y = match (below_fits, above_fits) {
         (true, false) => below,
         (false, true) => above,
@@ -577,8 +623,8 @@ mod tests {
 
     #[test]
     fn body_text_width_matches_body_width() {
-        let viewport_w = constants::BODY_W;
-        let text_w = constants::BODY_TEXT_W;
+        let viewport_w = constants::WIDTH - constants::H_PAD * 2.0;
+        let text_w = constants::WIDTH - constants::H_PAD * 2.0;
 
         assert_eq!(text_w, viewport_w);
     }
@@ -590,7 +636,7 @@ mod tests {
         assert_eq!(g.body_viewport.h, 58.0);
         assert_eq!(
             g.body_document,
-            LayoutFrame::new(0.0, 0.0, constants::BODY_TEXT_W, 76.0)
+            LayoutFrame::new(0.0, 0.0, constants::WIDTH - constants::H_PAD * 2.0, 76.0)
         );
         assert_eq!(g.scroll_bottom_offset, 18.0);
         assert!(g.body_overflow);
@@ -602,10 +648,11 @@ mod tests {
         let indicator = g
             .scroll_indicator_frame(18.0, 3.0, 0.0)
             .expect("overflow has indicator");
-        assert_eq!(g.body_document.w, constants::BODY_TEXT_W);
-        assert!(indicator.x >= constants::BODY_TEXT_W);
+        let body_text_w = constants::WIDTH - constants::H_PAD * 2.0;
+        assert_eq!(g.body_document.w, body_text_w);
+        assert!(indicator.x >= body_text_w);
         assert_eq!(
-            indicator.x - constants::BODY_TEXT_W,
+            indicator.x - body_text_w,
             constants::SCROLL_INDICATOR_TEXT_GAP
         );
         assert_eq!(indicator.w, 3.0);
@@ -654,11 +701,54 @@ mod tests {
 
     #[test]
     fn first_row_clusters_stats_and_app_on_left_with_wide_meta() {
-        let row = first_row_frames(0.0);
+        let row = first_row_frames_with_text_widths(constants::WIDTH, 0.0, 72.0, 120.0);
         assert!(row.stats.x - (row.status.x + row.status.w) <= 6.0);
-        assert!(row.stats.w >= 170.0);
+        assert_eq!(row.stats.w, 120.0);
         assert!(row.stats.x < row.meta.x);
-        assert!(row.meta.w >= 260.0);
+        assert_eq!(row.meta.x, constants::WIDTH / 2.0);
+    }
+
+    #[test]
+    fn first_row_uses_left_and_right_content_rails() {
+        let row = first_row_frames_with_text_widths(constants::WIDTH, 0.0, 72.0, 120.0);
+        let content_left = constants::H_PAD;
+        let content_right = constants::WIDTH - constants::H_PAD;
+        let content_mid = (content_left + content_right) / 2.0;
+
+        assert_eq!(row.icon.x, content_left);
+        assert_eq!(row.meta.x, content_mid);
+        assert_eq!(row.meta.x + row.meta.w, content_right);
+    }
+
+    #[test]
+    fn first_row_left_cluster_never_crosses_midline_gap() {
+        let row = first_row_frames_with_text_widths(constants::WIDTH, 0.0, 220.0, 220.0);
+        let content_mid = constants::WIDTH / 2.0;
+
+        assert!(row.status.x + row.status.w <= content_mid - constants::META_GAP);
+        assert!(row.stats.x + row.stats.w <= content_mid - constants::META_GAP);
+        assert_eq!(row.meta.x, content_mid);
+    }
+
+    #[test]
+    fn first_row_short_meta_hugs_content_right_edge() {
+        let row =
+            first_row_frames_with_text_widths_and_meta(constants::WIDTH, 0.0, 72.0, 120.0, 96.0);
+        let content_right = constants::WIDTH - constants::H_PAD;
+
+        assert_eq!(row.meta.w, 96.0);
+        assert_eq!(row.meta.x + row.meta.w, content_right);
+    }
+
+    #[test]
+    fn first_row_long_meta_uses_full_right_rail() {
+        let row =
+            first_row_frames_with_text_widths_and_meta(constants::WIDTH, 0.0, 72.0, 120.0, 900.0);
+        let content_mid = constants::WIDTH / 2.0;
+        let content_right = constants::WIDTH - constants::H_PAD;
+
+        assert_eq!(row.meta.x, content_mid);
+        assert_eq!(row.meta.x + row.meta.w, content_right);
     }
 
     #[test]
@@ -686,25 +776,13 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_display_strips_kind_prefixes() {
-        assert_eq!(
-            pipeline_display("rule:zh_filter → llm:deepseek"),
-            "zh_filter → deepseek"
-        );
-        assert_eq!(pipeline_display("llm:deepseek"), "deepseek");
-        assert_eq!(pipeline_display(""), "");
-        // 无 kind 前缀的步骤原样保留。
-        assert_eq!(pipeline_display("plain → llm:x"), "plain → x");
-    }
-
-    #[test]
     fn profile_chain_display_puts_asr_first() {
         assert_eq!(
-            profile_chain_display("Agent", "doubao", "rule:zh_filter → llm:deepseek"),
-            "Agent: doubao -> zh_filter -> deepseek"
+            profile_chain_display("Agent", "doubao", "zh_filter → deepseek"),
+            "Agent: doubao → zh_filter → deepseek"
         );
         assert_eq!(
-            profile_chain_display("Agent", "", "rule:zh_filter"),
+            profile_chain_display("Agent", "", "zh_filter"),
             "Agent: zh_filter"
         );
         assert_eq!(
@@ -756,13 +834,16 @@ mod tests {
     }
 
     #[test]
-    fn picker_right_edge_aligns_with_overlay_right_edge() {
+    fn picker_right_edge_aligns_with_overlay_content_right_rail() {
         let screen = LayoutFrame::new(0.0, 0.0, 1200.0, 900.0);
         let overlay = LayoutFrame::new(300.0, 320.0, constants::WIDTH, 64.0);
 
         let picker = picker_frame(overlay, 220.0, 124.0, screen);
 
-        assert_eq!(picker.x + picker.w, overlay.x + overlay.w);
+        assert_eq!(
+            picker.x + picker.w,
+            overlay.x + overlay.w - constants::H_PAD
+        );
     }
 
     #[test]

@@ -219,6 +219,7 @@ fn check_config() -> CheckStatus {
             println!("{}", tr("cli.doctor.effective_config", &[]));
             println!("  hotkey.trigger = {:?}", cfg.hotkey.trigger);
             println!("  hotkey.cancel = {:?}", cfg.hotkey.cancel);
+            println!("  hotkey.resume = {:?}", cfg.hotkey.resume);
             println!("  post.timeout_ms = {}", cfg.post.timeout_ms);
             println!("  voice.stop_delay_ms = {}", cfg.voice.stop_delay_ms);
             println!("  voice.record_audio = {}", cfg.voice.record_audio);
@@ -228,6 +229,10 @@ fn check_config() -> CheckStatus {
                 cfg.voice.preprocess.backend
             );
             println!("  dev.vad_trace = {}", cfg.dev.vad_trace);
+            println!(
+                "  dev.apple_backend_trace = {}",
+                cfg.dev.apple_backend_trace
+            );
             println!("  ui.language = {:?}", cfg.ui.language);
             println!("  ui.theme = {:?}", cfg.ui.theme);
             println!("  ui.theme_tui = {:?}", cfg.ui.theme_tui);
@@ -275,16 +280,20 @@ fn check_microphone_input() -> CheckStatus {
 
 fn check_hotkey() -> CheckStatus {
     match crate::config::load_from(&crate::config::default_path()).and_then(|cfg| {
-        crate::hotkey::Bindings::parse(&cfg.hotkey.trigger, &cfg.hotkey.cancel)
+        crate::hotkey::Bindings::parse(&cfg.hotkey.trigger, &cfg.hotkey.cancel, &cfg.hotkey.resume)
             .map(|bindings| (cfg, bindings))
     }) {
         Ok((cfg, bindings)) => {
             let trigger = bindings
-                .combo_for(crate::hotkey::HotkeyAction::ToggleRecord)
+                .combo_for(crate::hotkey::HotkeyAction::Toggle)
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "<missing>".to_string());
             let cancel = bindings
-                .combo_for(crate::hotkey::HotkeyAction::CancelRecord)
+                .combo_for(crate::hotkey::HotkeyAction::Cancel)
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "<missing>".to_string());
+            let resume = bindings
+                .combo_for(crate::hotkey::HotkeyAction::Resume)
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "<missing>".to_string());
             println!(
@@ -295,7 +304,9 @@ fn check_hotkey() -> CheckStatus {
                         ("trigger_raw", format!("{:?}", cfg.hotkey.trigger)),
                         ("trigger", trigger),
                         ("cancel_raw", format!("{:?}", cfg.hotkey.cancel)),
-                        ("cancel", cancel)
+                        ("cancel", cancel),
+                        ("resume_raw", format!("{:?}", cfg.hotkey.resume)),
+                        ("resume", resume)
                     ]
                 )
             );
@@ -369,82 +380,125 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) -> CheckStatus {
         },
         hotwords: target.hotwords.clone(),
     };
-    match target.provider.as_str() {
-        "apple" => check_apple_runtime(target, ctx).await,
-        "doubao" => match crate::asr::providers::doubao::DoubaoProvider::new_with_overrides(Some(
-            &target.overrides,
-        )) {
-            Ok(provider) => {
-                let caps = provider.caps();
-                println!("{}", asr_runtime_probe_line("doubao", &target.profiles));
-                match provider.check_runtime(ctx).await {
-                    Ok(()) => println!(
-                        "asr.doubao.runtime: OK profiles=[{}] hotwords={} multilingual={}",
-                        target.profiles.join(", "),
-                        caps.hotwords,
-                        caps.multilingual
-                    ),
-                    Err(e) => {
-                        println!(
-                            "asr.doubao.runtime: ERROR profiles=[{}] {e}",
-                            target.profiles.join(", ")
-                        );
-                        println!(
-                            "hint: {}",
-                            tr(
-                                "cli.doctor.hint_doubao_runtime",
-                                &[(
-                                    "path",
-                                    crate::asr::providers::doubao::config_path()
-                                        .display()
-                                        .to_string()
-                                )]
-                            )
-                        );
-                        return CheckStatus::Error;
+    match target.instance.kind {
+        crate::config::asr::instance::AsrKind::Apple => check_apple_runtime(target, ctx).await,
+        crate::config::asr::instance::AsrKind::Doubao => {
+            match crate::asr::providers::doubao::DoubaoProvider::new_from_path_with_overrides(
+                &target.instance.path,
+                Some(&target.overrides),
+            ) {
+                Ok(provider) => {
+                    let caps = provider.caps();
+                    println!(
+                        "{}",
+                        asr_runtime_probe_line(target.instance.kind.as_str(), &target.profiles)
+                    );
+                    match provider.check_runtime(ctx).await {
+                        Ok(()) => println!(
+                            "asr.doubao.runtime: OK profiles=[{}] hotwords={} multilingual={}",
+                            target.profiles.join(", "),
+                            caps.hotwords,
+                            caps.multilingual
+                        ),
+                        Err(e) => {
+                            println!(
+                                "asr.doubao.runtime: ERROR profiles=[{}] {e}",
+                                target.profiles.join(", ")
+                            );
+                            println!(
+                                "hint: {}",
+                                tr(
+                                    "cli.doctor.hint_doubao_runtime",
+                                    &[("path", target.instance.path.display().to_string())]
+                                )
+                            );
+                            return CheckStatus::Error;
+                        }
                     }
+                    CheckStatus::Ok
                 }
-                CheckStatus::Ok
+                Err(e) => {
+                    println!(
+                        "asr.doubao.runtime: ERROR profiles=[{}] {e:#}",
+                        target.profiles.join(", ")
+                    );
+                    println!(
+                        "hint: {}",
+                        tr(
+                            "cli.doctor.hint_edit_path",
+                            &[("path", target.instance.path.display().to_string())]
+                        )
+                    );
+                    CheckStatus::Error
+                }
             }
-            Err(e) => {
-                println!(
-                    "asr.doubao.runtime: ERROR profiles=[{}] {e:#}",
-                    target.profiles.join(", ")
-                );
-                println!(
-                    "hint: {}",
-                    tr(
-                        "cli.doctor.hint_edit_path",
-                        &[(
-                            "path",
-                            crate::asr::providers::doubao::config_path()
-                                .display()
-                                .to_string()
-                        )]
-                    )
-                );
-                CheckStatus::Error
+        }
+        crate::config::asr::instance::AsrKind::Tencent => {
+            match crate::asr::providers::tencent::TencentProvider::new_from_path_with_overrides(
+                &target.instance.path,
+                Some(&target.overrides),
+            ) {
+                Ok(provider) => {
+                    let caps = provider.caps();
+                    println!(
+                        "{}",
+                        asr_runtime_probe_line(target.instance.kind.as_str(), &target.profiles)
+                    );
+                    match provider.check_runtime(ctx).await {
+                        Ok(()) => println!(
+                            "asr.tencent.runtime: OK profiles=[{}] hotwords={} multilingual={}",
+                            target.profiles.join(", "),
+                            caps.hotwords,
+                            caps.multilingual
+                        ),
+                        Err(e) => {
+                            println!(
+                                "asr.tencent.runtime: ERROR profiles=[{}] {e}",
+                                target.profiles.join(", ")
+                            );
+                            println!(
+                                "hint: {}",
+                                tr(
+                                    "cli.doctor.hint_edit_path",
+                                    &[("path", target.instance.path.display().to_string())]
+                                )
+                            );
+                            return CheckStatus::Error;
+                        }
+                    }
+                    CheckStatus::Ok
+                }
+                Err(e) => {
+                    println!(
+                        "asr.tencent.runtime: ERROR profiles=[{}] {e:#}",
+                        target.profiles.join(", ")
+                    );
+                    println!(
+                        "hint: {}",
+                        tr(
+                            "cli.doctor.hint_edit_path",
+                            &[("path", target.instance.path.display().to_string())]
+                        )
+                    );
+                    CheckStatus::Error
+                }
             }
-        },
-        other => {
-            println!(
-                "asr.{other}.runtime: ERROR {}",
-                tr(
-                    "cli.doctor.asr_unsupported_provider",
-                    &[("profiles", target.profiles.join(", "))]
-                )
-            );
-            CheckStatus::Error
         }
     }
 }
 
 #[cfg(target_os = "macos")]
 async fn check_apple_runtime(target: AsrRuntimeTarget, ctx: SessionCtx) -> CheckStatus {
-    match crate::asr::providers::apple::AppleProvider::new_with_overrides(Some(&target.overrides)) {
+    match crate::asr::providers::apple::AppleProvider::new_from_path_with_overrides(
+        &target.instance.path,
+        Some(&target.overrides),
+    ) {
         Ok(provider) => {
             let caps = provider.caps();
-            println!("{}", asr_runtime_probe_line("apple", &target.profiles));
+            println!(
+                "{}",
+                asr_runtime_probe_line(target.instance.kind.as_str(), &target.profiles)
+            );
             if let Some(notice) = provider.runtime_check_notice() {
                 println!("{}", notice.line);
             }
@@ -464,12 +518,7 @@ async fn check_apple_runtime(target: AsrRuntimeTarget, ctx: SessionCtx) -> Check
                         "hint: {}",
                         tr(
                             "cli.doctor.hint_apple_runtime",
-                            &[(
-                                "path",
-                                crate::asr::providers::apple::config_path()
-                                    .display()
-                                    .to_string()
-                            )]
+                            &[("path", target.instance.path.display().to_string())]
                         )
                     );
                     return CheckStatus::Error;
@@ -486,12 +535,7 @@ async fn check_apple_runtime(target: AsrRuntimeTarget, ctx: SessionCtx) -> Check
                 "hint: {}",
                 tr(
                     "cli.doctor.hint_edit_path",
-                    &[(
-                        "path",
-                        crate::asr::providers::apple::config_path()
-                            .display()
-                            .to_string()
-                    )]
+                    &[("path", target.instance.path.display().to_string())]
                 )
             );
             CheckStatus::Error
@@ -502,7 +546,8 @@ async fn check_apple_runtime(target: AsrRuntimeTarget, ctx: SessionCtx) -> Check
 #[cfg(not(target_os = "macos"))]
 async fn check_apple_runtime(target: AsrRuntimeTarget, _ctx: SessionCtx) -> CheckStatus {
     println!(
-        "asr.apple.runtime: ERROR profiles=[{}] Apple ASR provider is only implemented on macOS",
+        "asr.{}.runtime: ERROR profiles=[{}] Apple ASR provider is only implemented on macOS",
+        target.instance.kind.as_str(),
         target.profiles.join(", ")
     );
     CheckStatus::Error
@@ -519,12 +564,11 @@ fn asr_runtime_probe_line(provider: &str, profiles: &[String]) -> String {
 }
 
 async fn check_llm_runtime(target: LlmRuntimeTarget) -> CheckStatus {
-    let dirs = crate::config::post::PostDirs {
-        rule: crate::config::post::default_dir().join("rule"),
-        llm: crate::config::post::default_dir().join("llm"),
+    let dir = crate::config::post::PostDir {
+        dir: crate::config::post::default_dir(),
     };
     let processor_cfg =
-        match crate::config::post::load_llm_config(&target.id, &dirs, &target.overrides) {
+        match crate::config::post::load_llm_config(&target.id, &dir, &target.overrides) {
             Ok(cfg) => cfg,
             Err(e) => {
                 println!(

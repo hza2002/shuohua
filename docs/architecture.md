@@ -26,9 +26,9 @@
 
 `daemon::process` 初始化 log/config/i18n/overlay 后在 tokio 线程跑 `daemon::runtime`。
 
-1. 键盘事件：`platform::daemon` 启 CGEventTap（Default 模式可吞）→ 4 字节 `RawEvent` → pipe → `daemon::hotkey_input` bridge → mpsc → runtime 内 `TrackerSet`。回调同步问 `Mutex<Suppressor>` 决定 Drop/Keep。
+1. 键盘事件：`platform::daemon` 启 CGEventTap（Default 模式可吞）→ 4 字节 `RawEvent` → pipe → `daemon::hotkey_input` bridge → mpsc → runtime 内 `TrackerSet`。回调同步问 `Mutex<Suppressor>` 决定 Drop/Keep；cancel 键是否吞额外看 overlay 是否在屏——overlay 线程经 `Arc<AtomicBool> overlay_on_screen` 单向发布可见性（wait-free，非 mpsc 例外，只发布不等待），suppressor 在 OS 线程直读，runtime 亦读它决定 cancel 是否发 `Dismiss`。trigger/cancel/resume 三个 binding 同时匹配，优先级为 cancel > resume > toggle。
 2. trigger 首次命中 = toggle ON：runtime 取 frontmost app → `daemon::session_start` 按 `[profile]` 路由选 profile → 构造 `SessionParams` → spawn `finish::run_recording`。profile/post/asr 初始化失败直接发 overlay error，不进录音 task。
-3. trigger 二次命中 = Stop；cancel hotkey = Cancel（+ overlay `Dismiss` 清 lingering）。
+3. trigger 二次命中 = Stop；cancel hotkey = Cancel：有活动 session 就取消,只要 overlay 在屏（含无 session 的 Error 屏）就发 `Dismiss` 关掉,idle 则放行透传。resume hotkey 只在没有活动 session 时生效：读取最新一条 history，若是可恢复的 `canceled` 或 `asr_timeout` 就带 seed 开新 recording，否则等同开新 recording。
 4. 录音 task 内：cpal stream → provider session → post chain → dispatch → history → StateStore/Overlay/UDS fanout（见 [voice](modules/voice.md)）。
 5. overlay 交互反向流：AppKit 点击 profile picker → `OverlayAction::BindProfile` → tokio runtime task → `toml_edit` 原子替换 `config.toml` → `reload_now()` 广播；watcher 可能再次捕获 rename，但 subscriber 先 diff。
 6. 热重载：notify watcher 监听 `~/.config/shuohua/`，`config.toml`/`theme/*.toml` 触发 parse + watch 广播给 overlay/i18n/hotkey；UDS `reload_config` 复用同一入口（见 [config](modules/config.md)）。
@@ -58,7 +58,7 @@ src/
 └── text_stats.rs  UAX #29 word count（history/UDS 共用）
 ```
 
-**单向依赖原则**：`reload` 依赖各模块对外 API，不被反向 import；`voice::engine` 不调 `post::run_chain` / `voice::dispatch` / history；`voice::finish` 构造 `HistoryRecord` 后只通过 `HistoryService` append；`ipc`/TUI 只能经 UDS 和 `crate::history` facade 访问 history，不直接读写 JSONL store primitives；`platform` 业务层调 facade，macOS 实现在 `platform::macos`，非 macOS 返回明确 unsupported。**不抽 Plugin trait**——voice/overlay/debug 固定模块，直接 `tokio::spawn`，配置变化走 `watch::Receiver<Arc<Config>>` 广播。
+**单向依赖原则**：`reload` 依赖各模块对外 API，不被反向 import；`voice::engine` 不调 post chain 执行（`voice::post_dispatch`）/ `voice::dispatch` / history；`voice::finish` 构造 `HistoryRecord` 后只通过 `HistoryService` append；`ipc`/TUI 只能经 UDS 和 `crate::history` facade 访问 history，不直接读写 JSONL store primitives；`platform` 业务层调 facade，macOS 实现在 `platform::macos`，非 macOS 返回明确 unsupported。**不抽 Plugin trait**——voice/overlay/debug 固定模块，直接 `tokio::spawn`，配置变化走 `watch::Receiver<Arc<Config>>` 广播。
 
 ### 3.1 HistoryService 与 lazy analytics
 
@@ -87,7 +87,7 @@ External edits 语义是 eventually consistent：watcher 事件或下一次 requ
 | WebSocket | `tokio-tungstenite` + `native-tls` | Doubao 用；macOS 原生 Security，无 rustls 配置负担 |
 | TUI | `ratatui` + `crossterm` | 唯一前台 UI |
 | 文件监听 | `notify` | 监听**目录**避免 inode 替换 |
-| 取消 | `tokio-util` `CancellationToken` | Doubao / IPC server 用（voice 录音取消走 watch channel） |
+| 取消 | `tokio-util` `CancellationToken` | Doubao / IPC server 用；voice 录音 stop/cancel 走 `SessionControl` 两个终态闩（见 voice.md） |
 | 时间戳 | `time` | RFC3339，比 chrono 轻 |
 | 错误 | `thiserror`(库) + `anyhow`(main) | 见 §5 |
 | 日志 | `tracing` + subscriber + appender | 见 §6 |
@@ -104,7 +104,7 @@ daemon 业务统一 `tracing` → `~/.local/state/shuohua/logs/shuo-YYYY-MM-DD.l
 
 - 等级是内部标签，不暴露配置/环境变量。crate 默认收 DEBUG，依赖收 WARN。
 - 只记低频锚点（daemon ready、recording started/ended、config reload、各类异常）。
-- **不记**识别正文、clipboard、prompt、hotwords 明细、post 输入输出、可能含正文的 provider 原始响应；**不记**每个 partial/segment/VAD frame/PCM（即使 debug build）。高频/正文观测走 `voice/observer` dev sidecar（`--features dev` + `dev.vad_trace`）。
+- **不记**识别正文、clipboard、prompt、hotwords 明细、post 输入输出、可能含正文的 provider 原始响应；**不记**每个 partial/segment/VAD frame/PCM（即使 debug build）。高频/正文观测走 dev sidecar：`voice/observer` 的 VAD/ASR trace（`--features dev` + `dev.vad_trace`），以及 Apple backend 本机诊断（`--features dev` + `dev.apple_backend_trace`：多通道 per-channel 探针等）。
 - 日志是诊断 sidecar，不是 session 事实源——事实以 history JSONL 为准。
 
 ## 7. i18n

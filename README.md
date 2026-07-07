@@ -30,10 +30,10 @@
 右 Option 双击 → Apple/云端 → 规则/LLM  → 自动粘贴
 ```
 
-- 双击右 Option 开始或停止录音，按 Escape 取消；两个全局快捷键均可修改。
+- 双击右 Option 开始或停止录音，按 Escape 取消，Shift+双击右 Option 续接上次转写；开始/取消/续写三个全局快捷键均可修改。
 - 实时显示录音、识别和后处理状态。
-- macOS 15+ 可使用豆包等云端 ASR；macOS 26+ 还可选择 Apple 本地 SpeechAnalyzer。
-- 默认使用 macOS 系统语音处理采集，改善麦克风增益、回声和环境噪声处理。
+- macOS 15+ 可使用豆包、腾讯云等云端 ASR；macOS 26+ 还可选择 Apple 本地 SpeechAnalyzer。
+- 默认使用原始麦克风采集；可切换到 macOS 系统语音处理采集作为噪声、回声或增益问题的兜底。
 - 支持规则和 OpenAI-compatible / Anthropic LLM 后处理链。
 - 可按前台应用选择不同 profile、热词、ASR 和后处理配置。
 - 提供 TUI 状态页、历史记录、配置浏览和诊断。
@@ -46,7 +46,7 @@
 |---|---|
 | 操作系统 | macOS 15 或更高版本 |
 | CPU | Apple Silicon（当前 Release 仅提供 arm64 artifact） |
-| 云端 ASR | macOS 15+ 可使用豆包等云端 provider |
+| 云端 ASR | macOS 15+ 可使用豆包、腾讯云等云端 provider |
 | Apple 本地 ASR | SpeechAnalyzer 仅在 macOS 26+ 可用 |
 | 权限 | Microphone、Accessibility |
 
@@ -110,17 +110,28 @@ shuo config-template --out ~/.config/shuohua --lang zh-CN
 trigger = "ctrl+shift+space"
 # 双击按键
 # trigger = "right_option:double"
+# cancel = "escape"                      # 取消本次录音
+# resume = "shift+right_option:double"   # 从上次转写续写
 ```
 
-然后选择 ASR：
+然后选择 ASR。profile 通过 `[asr].instance` 引用一个 ASR 实例，实例文件
+`~/.config/shuohua/asr/<name>.toml` 用 `type` 指定 provider（模板已生成
+`doubao` / `tencent` / `apple` 三个实例）：
 
-- **所有支持的 macOS 版本**：可保留 `provider = "doubao"`，并在
-  `~/.config/shuohua/asr/doubao.toml` 填入豆包凭据。当前 provider 使用
-  `app_key` / `access_key` 鉴权，获取方式见豆包语音
+- **所有支持的 macOS 版本**：默认 profile（`~/.config/shuohua/profile/default.toml`）
+  的 `[asr].instance = "doubao"`，在实例文件 `~/.config/shuohua/asr/doubao.toml`
+  填入豆包凭据。当前 provider 使用 `app_key` / `access_key` 鉴权，获取方式见豆包语音
   [旧版控制台快速入门](https://www.volcengine.com/docs/6561/163043)，协议参数见
   [大模型流式语音识别 API](https://www.volcengine.com/docs/6561/1354869)。
-- **macOS 26+**：也可把 `~/.config/shuohua/profile/default.toml` 中的
-  `provider = "doubao"` 改为 `provider = "apple"`，使用本地 SpeechAnalyzer。
+- **腾讯云**：把 `instance` 改为 `"tencent"`，在 `~/.config/shuohua/asr/tencent.toml`
+  填入 `app_id` / `secret_id` / `secret_key`。
+- **macOS 26+**：把 `instance` 改为 `"apple"`，使用本地 SpeechAnalyzer（实例
+  `~/.config/shuohua/asr/apple.toml` 已由模板生成，无需凭据）。
+
+可选麦克风预处理在 `~/.config/shuohua/config.toml` 的
+`voice.preprocess.backend` 配置。默认 `webrtc`（WebRTC 降噪/高通/数字增益，启动开销接近
+`off`，已内置到二进制）；`off` 用原始采集、不做任何处理（需要保留原始音频时用它）；
+`apple` 用 macOS 原生语音处理（回声消除/降噪/增益），效果好但每次启动建立连接会慢一点。
 
 模板命令不会覆盖已有文件。需要重新生成时，请指定一个空目录。
 
@@ -150,7 +161,8 @@ shuo service status
 2. 再双击一次右 Option（右 Alt）停止并等待转写。
 3. 文本会写入剪贴板，并默认通过 `Cmd+V` 自动粘贴。
 4. 录音过程中按 `Escape` 可取消本次输入。
-5. 在终端运行 `shuo` 可打开状态、历史和配置 TUI。
+5. 取消或识别超时留下文本后，按 `Shift`+双击右 Option 可从上次结果续写。
+6. 在终端运行 `shuo` 可打开状态、历史和配置 TUI。
 
 ## 权限
 

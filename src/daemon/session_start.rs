@@ -36,6 +36,7 @@ pub(super) fn prepare(
     start_app_context: crate::post::AppContext,
     state_store: StateStore,
     overlay: OverlayHandle,
+    start: crate::voice::resume::RecordingStart,
     build_provider: impl Fn(&str, &toml::value::Table) -> Result<crate::asr::providers::ProviderRuntime>,
 ) -> std::result::Result<SessionStart, SessionStartError> {
     let cfg = &runtime_cfg.config;
@@ -49,14 +50,12 @@ pub(super) fn prepare(
         SessionStartError::Profile
     })?;
 
-    let post_dir = crate::config::post::default_dir();
     let post_chain_config = crate::config::post::load_components(
         &profile.post.chain,
-        &crate::config::post::PostDirs {
-            rule: post_dir.join("rule"),
-            llm: post_dir.join("llm"),
+        &crate::config::post::PostDir {
+            dir: crate::config::post::default_dir(),
         },
-        &profile.post.llm,
+        &profile.post.overrides,
     )
     .map_err(|error| {
         tracing::warn!(error = ?error, "post chain load failed");
@@ -69,11 +68,23 @@ pub(super) fn prepare(
     })?;
 
     let runtime =
-        build_provider(&profile.asr.provider, &profile.asr.overrides).map_err(|error| {
+        build_provider(&profile.asr.instance, &profile.asr.overrides).map_err(|error| {
             tracing::error!(error = ?error, "ASR provider init failed");
             SessionStartError::AsrProvider
         })?;
 
+    let profile_name = profile.display_name();
+    let mut vad = cfg.voice.vad.clone();
+    let idle_pause = match runtime.options.local_vad {
+        crate::config::asr::LocalVadMode::Auto => {
+            matches!(vad.backend, crate::config::VoiceVadBackend::Silero)
+        }
+        crate::config::asr::LocalVadMode::On => {
+            vad.backend = crate::config::VoiceVadBackend::Silero;
+            true
+        }
+        crate::config::asr::LocalVadMode::Off => false,
+    };
     Ok(SessionStart {
         provider: runtime.provider,
         params: SessionParams {
@@ -81,16 +92,19 @@ pub(super) fn prepare(
             record_audio: cfg.voice.record_audio,
             preprocess: cfg.voice.preprocess.clone(),
             vad_trace: cfg.dev.vad_trace,
-            idle_pause: runtime.options.idle_pause,
+            apple_backend_trace: cfg.dev.apple_backend_trace,
+            idle_pause,
+            open_timeout_ms: runtime.options.open_timeout_ms,
             finalize_timeout_ms: runtime.options.finalize_timeout_ms,
-            vad: cfg.voice.vad.clone(),
+            vad,
             stop_delay_ms: cfg.voice.stop_delay_ms,
             hotwords: profile.asr.hotwords,
             start_app_context,
-            profile_name: profile.name,
+            profile_name,
             profile_choices: profile_choices(&cfg.profile),
             post_chain,
             post_timeout_ms: cfg.post.timeout_ms,
+            start,
             overlay: Some(overlay),
             state: state_store,
         },
@@ -136,18 +150,21 @@ fn profile_choices(routes: &crate::config::ProfileRouteCfg) -> Vec<ProfileChoice
                     crate::config::profile::parse(&body)
                         .with_context(|| format!("parse profile {}", path.display()))
                 }) {
-                Ok(profile) => ProfileChoice {
-                    id: name,
-                    display_name: profile.name,
-                    asr_provider: profile.asr.provider,
-                    chain_summary: profile.post.chain.join(" → "),
-                },
+                Ok(mut profile) => {
+                    profile.id = name.clone();
+                    ProfileChoice {
+                        display_name: profile.display_name(),
+                        id: name,
+                        asr_instance: profile.asr.instance,
+                        chain_summary: profile.post.chain.join(" → "),
+                    }
+                }
                 Err(error) => {
                     tracing::warn!(error = ?error, profile = name, "profile choice load failed");
                     ProfileChoice {
                         id: name.clone(),
                         display_name: name,
-                        asr_provider: String::new(),
+                        asr_instance: String::new(),
                         chain_summary: String::new(),
                     }
                 }
@@ -200,10 +217,18 @@ default = "default"
     fn fake_runtime(
         provider: Arc<dyn crate::asr::AsrProvider>,
     ) -> crate::asr::providers::ProviderRuntime {
+        fake_runtime_with_local_vad(provider, crate::config::asr::LocalVadMode::On)
+    }
+
+    fn fake_runtime_with_local_vad(
+        provider: Arc<dyn crate::asr::AsrProvider>,
+        local_vad: crate::config::asr::LocalVadMode,
+    ) -> crate::asr::providers::ProviderRuntime {
         crate::asr::providers::ProviderRuntime {
             provider,
             options: crate::asr::providers::ProviderOptions {
-                idle_pause: true,
+                local_vad,
+                open_timeout_ms: 4321,
                 finalize_timeout_ms: 1234,
             },
         }
@@ -253,7 +278,7 @@ default = "default"
 name = "default"
 
 [asr]
-provider = "fake"
+instance = "fake"
 hotwords = ["Rust", "macOS"]
 
 [post]
@@ -276,6 +301,7 @@ chain = []
             },
             StateStore::new(),
             overlay,
+            crate::voice::resume::RecordingStart::Fresh,
             |name, overrides| {
                 assert_eq!(name, "fake");
                 assert!(overrides.is_empty());
@@ -292,11 +318,12 @@ chain = []
             [ProfileChoice {
                 id: "default".to_string(),
                 display_name: "default".to_string(),
-                asr_provider: "fake".to_string(),
+                asr_instance: "fake".to_string(),
                 chain_summary: String::new(),
             }]
         );
         assert!(start.params.idle_pause);
+        assert_eq!(start.params.open_timeout_ms, 4321);
         assert_eq!(start.params.finalize_timeout_ms, 1234);
         assert_eq!(start.params.post_timeout_ms, 30_000);
         assert_eq!(
@@ -309,32 +336,35 @@ chain = []
     }
 
     #[test]
-    fn profile_choices_include_unrouted_profile_files() {
+    fn local_vad_on_overrides_global_vad_backend_off() {
         let _guard = env_lock();
         let config_home = temp_config_home();
         let root = config_home.join("shuohua");
-        write_minimal_config(
-            &root,
+        fs::create_dir_all(root.join("profile")).unwrap();
+        fs::write(
+            root.join("config.toml"),
             r#"
-name = "Default"
+[hotkey]
+trigger = "f16"
+
+[voice.vad]
+backend = "off"
+
+[profile]
+default = "default"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("profile/default.toml"),
+            r#"
+name = "default"
 
 [asr]
-provider = "fake"
+instance = "fake"
 
 [post]
 chain = []
-"#,
-        );
-        fs::write(
-            root.join("profile/coding.toml"),
-            r#"
-name = "Coding"
-
-[asr]
-provider = "apple"
-
-[post]
-chain = ["rule:zh_filter"]
 "#,
         )
         .unwrap();
@@ -351,6 +381,70 @@ chain = ["rule:zh_filter"]
             crate::post::AppContext::default(),
             StateStore::new(),
             overlay,
+            crate::voice::resume::RecordingStart::Fresh,
+            |_name, _overrides| {
+                Ok(fake_runtime_with_local_vad(
+                    Arc::new(crate::asr::fake::FakeProvider::new()),
+                    crate::config::asr::LocalVadMode::On,
+                ))
+            },
+        )
+        .unwrap();
+
+        assert!(start.params.idle_pause);
+        assert!(matches!(
+            start.params.vad.backend,
+            crate::config::VoiceVadBackend::Silero
+        ));
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        let _ = fs::remove_dir_all(config_home);
+    }
+
+    #[test]
+    fn profile_choices_include_unrouted_profile_files() {
+        let _guard = env_lock();
+        let config_home = temp_config_home();
+        let root = config_home.join("shuohua");
+        write_minimal_config(
+            &root,
+            r#"
+name = "Default"
+
+[asr]
+instance = "fake"
+
+[post]
+chain = []
+"#,
+        );
+        fs::write(
+            root.join("profile/coding.toml"),
+            r#"
+name = "Coding"
+
+[asr]
+instance = "apple"
+
+[post]
+chain = ["zh_filter"]
+"#,
+        )
+        .unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+        let cfg = Arc::new(crate::reload::RuntimeConfig {
+            config: crate::config::load_from(&root.join("config.toml")).unwrap(),
+            theme: crate::config::theme::EffectiveTheme::default(),
+            theme_warning: None,
+        });
+        let (overlay, _rx) = OverlayHandle::channel();
+
+        let start = prepare(
+            &cfg,
+            crate::post::AppContext::default(),
+            StateStore::new(),
+            overlay,
+            crate::voice::resume::RecordingStart::Fresh,
             |_name, _overrides| {
                 Ok(fake_runtime(
                     Arc::new(crate::asr::fake::FakeProvider::new()),
@@ -365,8 +459,8 @@ chain = ["rule:zh_filter"]
             .iter()
             .any(|choice| choice.id == "coding"
                 && choice.display_name == "Coding"
-                && choice.asr_provider == "apple"
-                && choice.chain_summary == "rule:zh_filter"));
+                && choice.asr_instance == "apple"
+                && choice.chain_summary == "zh_filter"));
 
         std::env::remove_var("XDG_CONFIG_HOME");
         let _ = fs::remove_dir_all(config_home);
@@ -383,7 +477,7 @@ chain = ["rule:zh_filter"]
 name = "default"
 
 [asr]
-provider = "fake"
+instance = "fake"
 
 [post]
 chain = []
@@ -402,6 +496,7 @@ chain = []
             crate::post::AppContext::default(),
             StateStore::new(),
             overlay,
+            crate::voice::resume::RecordingStart::Fresh,
             |_name, _overrides| anyhow::bail!("provider unavailable"),
         );
         let Err(error) = result else {

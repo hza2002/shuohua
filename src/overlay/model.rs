@@ -35,7 +35,7 @@ pub struct OverlayModel {
     /// 当前 profile id；用于路由写入/选中判断，不用于展示。
     pub profile: String,
     pub profile_display_name: String,
-    pub asr_provider: String,
+    pub asr_instance: String,
     pub profiles: Vec<ProfileChoice>,
     pub chain_summary: String,
     pub segments: Vec<String>,
@@ -70,7 +70,7 @@ impl OverlayModel {
             app_name: None,
             profile: String::new(),
             profile_display_name: String::new(),
-            asr_provider: String::new(),
+            asr_instance: String::new(),
             profiles: Vec::new(),
             chain_summary: String::new(),
             segments: Vec::new(),
@@ -133,10 +133,10 @@ impl OverlayModel {
                     .iter()
                     .find(|choice| choice.id == self.profile)
                     .map_or_else(|| profile.clone(), |choice| choice.display_name.clone());
-                self.asr_provider = profiles
+                self.asr_instance = profiles
                     .iter()
                     .find(|choice| choice.id == self.profile)
-                    .map_or_else(String::new, |choice| choice.asr_provider.clone());
+                    .map_or_else(String::new, |choice| choice.asr_instance.clone());
                 self.profiles = profiles;
                 self.chain_summary = chain_summary;
             }
@@ -291,17 +291,17 @@ mod tests {
                     ProfileChoice {
                         id: "default".into(),
                         display_name: "Default".into(),
-                        asr_provider: "doubao".into(),
-                        chain_summary: "rule:zh_filter".into(),
+                        asr_instance: "doubao".into(),
+                        chain_summary: "zh_filter".into(),
                     },
                     ProfileChoice {
                         id: "coding".into(),
                         display_name: "Coding".into(),
-                        asr_provider: "apple".into(),
-                        chain_summary: "llm:deepseek".into(),
+                        asr_instance: "apple".into(),
+                        chain_summary: "deepseek".into(),
                     },
                 ],
-                chain_summary: "rule:zh_filter".into(),
+                chain_summary: "zh_filter".into(),
             },
             &crate::config::theme::OverlayStateTheme::default(),
         );
@@ -316,7 +316,7 @@ mod tests {
         );
         assert_eq!(model.profile, "coding");
         assert_eq!(model.profile_display_name, "Coding");
-        assert_eq!(model.asr_provider, "apple");
+        assert_eq!(model.asr_instance, "apple");
     }
     use crate::i18n;
     use crate::overlay::command::{OverlayCmd, OverlayHandle, OverlayState, TextKind};

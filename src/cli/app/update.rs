@@ -46,8 +46,7 @@ pub async fn run(args: crate::cli::app::UpdateArgs) -> Result<()> {
     let release = crate::cli::app::release::fetch_latest(&client).await?;
     let selected = crate::cli::app::release::select_assets(&release, target)?;
 
-    let Some(UpdateDecision::Update { from, to }) =
-        ensure_update_allowed(&current, &selected.version, args.allow_major)?
+    let Some(decision) = ensure_update_allowed(&current, &selected.version, args.allow_major)?
     else {
         println!(
             "{}",
@@ -59,6 +58,14 @@ pub async fn run(args: crate::cli::app::UpdateArgs) -> Result<()> {
         return Ok(());
     };
 
+    if args.check {
+        println!("{}", update_check_message(&current, decision));
+        return Ok(());
+    }
+
+    let UpdateDecision::Update { from, to } = decision else {
+        unreachable!("ensure_update_allowed only returns installable update decisions");
+    };
     let outcome = install_update(&client, &platform, target, &selected, from, to).await?;
 
     println!(
@@ -111,6 +118,22 @@ fn update_permission_hint(installed_path: &std::path::Path) -> String {
         "cli.app.update.permission_hint",
         &[("path", installed_path.display().to_string())],
     )
+}
+
+fn update_check_message(current: &Version, decision: UpdateDecision) -> String {
+    match decision {
+        UpdateDecision::Update { to, .. } => crate::i18n::tr(
+            "cli.app.update.available",
+            &[("current", current.to_string()), ("latest", to.to_string())],
+        ),
+        UpdateDecision::Current => crate::i18n::tr(
+            "cli.app.update.current",
+            &[("version", current.to_string())],
+        ),
+        UpdateDecision::RefuseMajor { .. } => {
+            unreachable!("refused updates are returned as errors before rendering")
+        }
+    }
 }
 
 async fn install_update(
@@ -190,6 +213,22 @@ mod tests {
 
         let err = ensure_update_allowed(&current, &latest, false).unwrap_err();
         assert!(err.to_string().contains("--allow-major"), "{err:#}");
+    }
+
+    #[test]
+    fn update_check_message_reports_available_version() {
+        crate::i18n::init("en-US");
+        let current = Version::parse("0.2.0").unwrap();
+        let latest = Version::parse("0.3.0").unwrap();
+        let decision = ensure_update_allowed(&current, &latest, false)
+            .unwrap()
+            .unwrap();
+
+        let message = update_check_message(&current, decision);
+
+        assert!(message.contains("update available"), "{message}");
+        assert!(message.contains("0.2.0"), "{message}");
+        assert!(message.contains("0.3.0"), "{message}");
     }
 
     #[test]

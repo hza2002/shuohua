@@ -1,7 +1,14 @@
+mod asr_wizard;
 mod llm_wizard;
 mod registry;
 mod render;
 
+#[allow(unused_imports)]
+pub use asr_wizard::{
+    asr_apple_from_template, asr_doubao_from_template, asr_templates, asr_tencent_from_template,
+    create_asr_apple, create_asr_doubao, create_asr_tencent, render_asr_apple, render_asr_doubao,
+    render_asr_tencent, AsrAppleDraft, AsrDoubaoDraft, AsrTencentDraft,
+};
 #[allow(unused_imports)]
 pub use llm_wizard::{
     create_llm_component, llm_draft_from_template, llm_templates, render_llm_component,
@@ -29,7 +36,7 @@ mod tests {
 
     #[test]
     fn registry_renders_expected_llm_template() {
-        let body = render_by_id("post/llm/deepseek").unwrap();
+        let body = render_by_id("post/deepseek").unwrap();
 
         assert!(body.contains("type = \"llm\""));
         assert!(body.contains("format = \"openai\""));
@@ -40,11 +47,28 @@ mod tests {
     }
 
     #[test]
-    fn doubao_template_enables_vad_pause() {
+    fn doubao_template_uses_auto_local_vad() {
         let body = render_by_id("asr/doubao").unwrap();
         let value: toml::Value = toml::from_str(&body).unwrap();
 
-        assert_eq!(value["idle_pause"].as_bool(), Some(true));
+        assert_eq!(value["local_vad"].as_str(), Some("auto"));
+    }
+
+    #[test]
+    fn asr_templates_do_not_include_speechmatics() {
+        assert!(render_by_id("asr/speechmatics").is_none());
+        assert!(!asr_templates().any(|template| template.id == "asr/speechmatics"));
+    }
+
+    #[test]
+    fn asr_templates_use_timeout_fields() {
+        for id in ["asr/apple", "asr/doubao", "asr/tencent"] {
+            let body = render_by_id(id).unwrap();
+            assert!(body.contains("open_timeout_ms"));
+            assert!(body.contains("finalize_timeout_ms"));
+            assert!(!body.contains("session_open_timeout_ms"));
+            assert!(!body.contains("session_finalize_timeout_ms"));
+        }
     }
 
     #[test]
@@ -97,8 +121,14 @@ mod tests {
 
         assert!(body.contains("# Hotkey that toggles recording."));
         assert!(body.contains("trigger = \"right_option:double\""));
+        assert!(body.contains("resume = \"shift+right_option:double\""));
         let config = crate::config::main::parse(&body).unwrap();
-        crate::hotkey::Bindings::parse(&config.hotkey.trigger, &config.hotkey.cancel).unwrap();
+        crate::hotkey::Bindings::parse(
+            &config.hotkey.trigger,
+            &config.hotkey.cancel,
+            &config.hotkey.resume,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -108,7 +138,7 @@ mod tests {
 
         assert_eq!(
             config.voice.preprocess.backend,
-            crate::config::VoicePreprocessBackend::Apple
+            crate::config::VoicePreprocessBackend::WebRtc
         );
         assert_eq!(
             config.voice.vad.backend,
@@ -150,9 +180,10 @@ mod tests {
         );
 
         assert!(body.contains("[voice.preprocess]"));
-        assert!(body.contains("backend = \"apple\""));
-        assert!(body.contains("apple 使用 macOS 系统语音处理采集"));
-        assert!(body.contains("off 不做预处理"));
+        assert!(body.contains("backend = \"webrtc\""));
+        assert!(body.contains("apple 用 macOS 原生语音处理"));
+        assert!(body.contains("webrtc 用 WebRTC Audio Processing"));
+        assert!(body.contains("off 用原始采集"));
         assert!(!body.contains("预留"));
         assert!(!body.contains("reserved"));
     }
@@ -189,16 +220,16 @@ mod tests {
             let body = render_by_id(id).unwrap();
             let profile = crate::config::profile::parse(&body).unwrap();
 
-            assert_eq!(profile.name, name);
-            assert_eq!(profile.asr.provider, "doubao");
+            assert_eq!(profile.name.as_deref(), Some(name));
+            assert_eq!(profile.asr.instance, "doubao");
             assert!(profile.asr.hotwords.is_empty());
             assert_eq!(
                 profile.post.chain,
-                vec!["rule:zh_filter".to_string(), "llm:deepseek".to_string()]
+                vec!["zh_filter".to_string(), "deepseek".to_string()]
             );
             let llm = profile
                 .post
-                .llm
+                .overrides
                 .get("deepseek")
                 .and_then(toml::Value::as_table)
                 .unwrap();
@@ -231,9 +262,9 @@ mod tests {
 
         let profile: crate::config::profile::Profile =
             toml::from_str(&render_by_id("profile/default").unwrap()).unwrap();
-        assert_eq!(profile.name, "default");
+        assert_eq!(profile.name.as_deref(), Some("default"));
 
-        let mut llm = render_by_id("post/llm/openai").unwrap();
+        let mut llm = render_by_id("post/openai").unwrap();
         llm = llm.replace("api_key = \"\"", "api_key = \"sk-test\"");
         llm = llm.replace("model = \"gpt-4.1-mini\"", "model = \"test-model\"");
         let value: toml::Value = toml::from_str(&llm).unwrap();
@@ -263,33 +294,36 @@ mod tests {
 
     #[test]
     fn llm_draft_uses_template_defaults_and_renders_overrides() {
-        let mut draft = llm_draft_from_template("post/llm/deepseek").unwrap();
+        let mut draft = llm_draft_from_template("post/deepseek").unwrap();
         draft.file_id = "cleaner".to_string();
         draft.provider_name = "team-deepseek".to_string();
         draft.model = "deepseek-chat-v3".to_string();
+        draft.system_prompt = "system text".to_string();
+        draft.prompt = "{{text}}\nclean it".to_string();
 
         let body = render_llm_component(&draft).unwrap();
 
         assert!(body.contains("format = \"openai\""));
         assert!(body.contains("name = \"team-deepseek\""));
         assert!(body.contains("model = \"deepseek-chat-v3\""));
+        assert!(body.contains("system_prompt = \"system text\""));
+        assert!(body.contains("clean it"));
         assert!(body.contains("[extra_body]"));
         toml::from_str::<toml::Value>(&body).unwrap();
     }
 
     #[test]
-    fn create_llm_component_refuses_duplicate_file_and_provider_name() {
+    fn create_llm_component_refuses_duplicate_file_but_allows_duplicate_name() {
         let dir = temp_dir();
         let post = dir.join("post");
-        let llm = post.join("llm");
-        std::fs::create_dir_all(&llm).unwrap();
+        std::fs::create_dir_all(&post).unwrap();
         std::fs::write(
-            llm.join("existing.toml"),
-            "type = \"llm\"\nname = \"taken\"\napi_key = \"sk-test\"\nmodel = \"m\"\nprompt = \"{{text}}\"\n",
+            post.join("existing.toml"),
+            "type = \"llm\"\nname = \"taken\"\nbase_url = \"https://a\"\napi_key = \"sk-test\"\nmodel = \"m\"\nprompt = \"{{text}}\"\n",
         )
         .unwrap();
 
-        let mut draft = llm_draft_from_template("post/llm/openai").unwrap();
+        let mut draft = llm_draft_from_template("post/openai").unwrap();
         draft.file_id = "existing".to_string();
         draft.provider_name = "fresh".to_string();
         draft.model = "gpt-test".to_string();
@@ -298,13 +332,30 @@ mod tests {
             .to_string()
             .contains("already exists"));
 
+        // Duplicate name with a different file_id is now allowed: name is display-only.
         draft.file_id = "new_component".to_string();
         draft.provider_name = "taken".to_string();
-        assert!(create_llm_component(&post, &draft)
-            .unwrap_err()
-            .to_string()
-            .contains("provider name"));
+        let path = create_llm_component(&post, &draft).unwrap();
+        assert_eq!(path, post.join("new_component.toml"));
 
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn create_llm_component_rejects_invalid_file_id() {
+        let dir = temp_dir();
+        let post = dir.join("post");
+        let mut draft = llm_draft_from_template("post/openai").unwrap();
+        draft.file_id = "BadName".to_string();
+        draft.provider_name = "fresh".to_string();
+        draft.model = "gpt-test".to_string();
+
+        let error = create_llm_component(&post, &draft).unwrap_err();
+        let error = format!("{error:#}");
+
+        assert!(error.contains("invalid file name"), "{error}");
+        assert!(error.contains("lowercase letter first"), "{error}");
+        assert!(!post.join("BadName.toml").exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -312,18 +363,124 @@ mod tests {
     fn create_llm_component_writes_valid_file() {
         let dir = temp_dir();
         let post = dir.join("post");
-        let mut draft = llm_draft_from_template("post/llm/anthropic").unwrap();
+        let mut draft = llm_draft_from_template("post/anthropic").unwrap();
         draft.file_id = "claude_cleanup".to_string();
         draft.provider_name = "anthropic-team".to_string();
         draft.model = "claude-test".to_string();
 
         let path = create_llm_component(&post, &draft).unwrap();
 
-        assert_eq!(path, post.join("llm/claude_cleanup.toml"));
+        assert_eq!(path, post.join("claude_cleanup.toml"));
         let body = std::fs::read_to_string(&path).unwrap();
         assert!(body.contains("format = \"anthropic\""));
         assert!(body.contains("name = \"anthropic-team\""));
         toml::from_str::<toml::Value>(&body).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn asr_doubao_draft_uses_template_defaults_and_renders_overrides() {
+        let mut draft = asr_doubao_from_template("asr/doubao").unwrap();
+        draft.app_key = "app-test".to_string();
+        draft.access_key = "access-test".to_string();
+        draft.language = "zh-CN".to_string();
+        draft.enable_punc = false;
+        draft.stream_mode = 2;
+
+        let body = render_asr_doubao(&draft).unwrap();
+
+        assert!(body.contains("app_key = \"app-test\""));
+        assert!(body.contains("access_key = \"access-test\""));
+        assert!(body.contains("resource_id = \"volc.bigasr.sauc.duration\""));
+        assert!(body.contains("language = \"zh-CN\""));
+        assert!(body.contains("enable_punc = false"));
+        assert!(body.contains("stream_mode = 2"));
+        toml::from_str::<crate::config::asr::doubao::DoubaoConfig>(&body).unwrap();
+    }
+
+    #[test]
+    fn asr_tencent_draft_defaults_to_free_chinese_engine_and_allows_other_engines() {
+        let mut draft = asr_tencent_from_template("asr/tencent").unwrap();
+        assert_eq!(draft.engine_model_type, "16k_zh");
+        assert!(!draft.need_vad);
+        assert_eq!(draft.filter_modal, 1);
+        assert_eq!(draft.convert_num_mode, 1);
+        assert_eq!(draft.sentence_strategy, 0);
+
+        draft.app_id = "1250000000".to_string();
+        draft.secret_id = "sid-test".to_string();
+        draft.secret_key = "key-test".to_string();
+        draft.engine_model_type = "16k_multi_lang".to_string();
+
+        let body = render_asr_tencent(&draft).unwrap();
+
+        assert!(body.contains("type = \"tencent\""));
+        assert!(body.contains("engine_model_type = \"16k_multi_lang\""));
+        assert!(body.contains("need_vad = false"));
+        assert!(body.contains("filter_modal = 1"));
+        assert!(!body.contains("filter_empty_result"));
+        assert!(!body.contains("word_info"));
+        assert!(!body.contains("emotion_recognition"));
+        let parsed: crate::config::asr::tencent::TencentConfig = toml::from_str(&body).unwrap();
+        assert_eq!(parsed.engine_model_type, "16k_multi_lang");
+        assert_eq!(parsed.vad_silence_time, 1000);
+        assert_eq!(parsed.max_speak_time, 60_000);
+    }
+
+    #[test]
+    fn create_asr_tencent_writes_fixed_provider_file() {
+        let dir = temp_dir();
+        let asr = dir.join("asr");
+        let mut draft = asr_tencent_from_template("asr/tencent").unwrap();
+        draft.app_id = "1250000000".to_string();
+        draft.secret_id = "sid-test".to_string();
+        draft.secret_key = "key-test".to_string();
+
+        let path = create_asr_tencent(&asr, &draft).unwrap();
+
+        assert_eq!(path, asr.join("tencent.toml"));
+        toml::from_str::<crate::config::asr::tencent::TencentConfig>(
+            &std::fs::read_to_string(&path).unwrap(),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn create_asr_doubao_writes_fixed_provider_file_and_refuses_duplicate() {
+        let dir = temp_dir();
+        let asr = dir.join("asr");
+        let mut draft = asr_doubao_from_template("asr/doubao").unwrap();
+        draft.app_key = "app-test".to_string();
+        draft.access_key = "access-test".to_string();
+
+        let path = create_asr_doubao(&asr, &draft).unwrap();
+
+        assert_eq!(path, asr.join("doubao.toml"));
+        toml::from_str::<crate::config::asr::doubao::DoubaoConfig>(
+            &std::fs::read_to_string(&path).unwrap(),
+        )
+        .unwrap();
+        assert!(create_asr_doubao(&asr, &draft)
+            .unwrap_err()
+            .to_string()
+            .contains("already exists"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn create_asr_apple_writes_fixed_provider_file() {
+        let dir = temp_dir();
+        let asr = dir.join("asr");
+        let draft = asr_apple_from_template("asr/apple").unwrap();
+
+        let path = create_asr_apple(&asr, &draft).unwrap();
+
+        assert_eq!(path, asr.join("apple.toml"));
+        let body = std::fs::read_to_string(&path).unwrap();
+        let parsed: crate::config::asr::apple::AppleConfig = toml::from_str(&body).unwrap();
+        assert_eq!(parsed.language.as_deref(), Some("zh-CN"));
+        assert!(parsed.install_assets);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -81,7 +81,9 @@ fn remove_stale_socket(path: &Path) -> Result<()> {
             uid
         );
     }
-    fs::remove_file(path).with_context(|| format!("remove stale UDS {}", path.display()))
+    fs::remove_file(path).with_context(|| format!("remove stale UDS {}", path.display()))?;
+    tracing::info!(uds = %path.display(), uid, "removed stale IPC socket");
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -301,6 +303,7 @@ async fn handle_client(
                     }
                 }
                 Err(e) => {
+                    tracing::warn!(command = "reload_config", error = ?e, "IPC command failed");
                     if !send_or_drop(
                         &tx,
                         Event::Error {
@@ -370,7 +373,7 @@ fn spawn_state_forwarder(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(lagged = n, "IPC client lagged");
+                    tracing::debug!(lagged = n, "IPC client lagged");
                     if !send_or_drop(
                         &tx,
                         Event::Error {
@@ -418,7 +421,7 @@ fn spawn_history_forwarder(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(lagged = n, "IPC history client lagged");
+                    tracing::debug!(lagged = n, "IPC history client lagged");
                     if !send_or_drop(
                         &tx,
                         Event::Error {

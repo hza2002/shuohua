@@ -22,3 +22,13 @@ pub fn write_string(text: &str) -> Result<()> {
     }
     Ok(())
 }
+
+pub fn read_string() -> Result<String> {
+    let output = std::process::Command::new("/usr/bin/pbpaste")
+        .output()
+        .map_err(|e| anyhow!("run pbpaste: {e}"))?;
+    if !output.status.success() {
+        return Err(anyhow!("pbpaste exited {}", output.status));
+    }
+    String::from_utf8(output.stdout).map_err(|e| anyhow!("pbpaste returned non-UTF-8 text: {e}"))
+}

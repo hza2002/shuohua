@@ -4,7 +4,7 @@
 //! 官方文档链接在 `apple_helper.swift` 顶部。
 
 use crate::asr::types::*;
-use crate::config::asr::apple::{load_config_with_overrides, AppleConfig};
+use crate::config::asr::apple::AppleConfig;
 use crate::platform::macos::helper::{encode_pcm_frame, ensure_helper_binary_at};
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -17,8 +17,6 @@ use tokio::sync::mpsc;
 const HELPER_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/apple_helper"));
 const DEFAULT_LANGUAGE: &str = "zh-CN";
 
-pub use crate::config::asr::apple::config_path;
-
 #[cfg(test)]
 use crate::config::asr::apple::default_finalize_timeout_ms;
 
@@ -27,11 +25,16 @@ pub struct AppleProvider {
 }
 
 impl AppleProvider {
-    pub fn new_with_overrides(overrides: Option<&toml::value::Table>) -> anyhow::Result<Self> {
+    fn from_config(config: AppleConfig) -> anyhow::Result<Self> {
         ensure_supported_macos_version(current_macos_major_version())?;
-        Ok(Self {
-            config: load_config_with_overrides(overrides)?,
-        })
+        Ok(Self { config })
+    }
+
+    pub(crate) fn new_from_path_with_overrides(
+        path: &std::path::Path,
+        overrides: Option<&toml::value::Table>,
+    ) -> anyhow::Result<Self> {
+        Self::from_config(AppleConfig::from_path_with_overrides(path, overrides)?)
     }
 
     pub fn finalize_timeout_ms(&self) -> u64 {
@@ -40,7 +43,8 @@ impl AppleProvider {
 
     pub fn options(&self) -> crate::asr::providers::ProviderOptions {
         crate::asr::providers::ProviderOptions {
-            idle_pause: self.config.idle_pause,
+            local_vad: self.config.local_vad,
+            open_timeout_ms: self.config.open_timeout_ms,
             finalize_timeout_ms: self.config.finalize_timeout_ms,
         }
     }
@@ -133,7 +137,10 @@ impl AsrProvider for AppleProvider {
         }
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            // drop-safe 兜底：session 被 drop 而没走 close() 时，Child drop 即终止
+            // helper 子进程；读事件任务随 stdout EOF 自然结束，不留孤儿进程。
+            .kill_on_drop(true);
 
         let mut child = cmd
             .spawn()
@@ -149,10 +156,7 @@ impl AsrProvider for AppleProvider {
         if let Some(stderr) = child.stderr.take() {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = line;
-                    tracing::debug!("apple helper emitted stderr line");
-                }
+                while let Ok(Some(_line)) = lines.next_line().await {}
             });
         }
 
@@ -337,19 +341,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_idle_pause_and_finalize_timeout_fields() {
+    fn parses_local_vad_and_session_timeout_fields() {
         let cfg: AppleConfig = toml::from_str(
             r#"
-idle_pause = true
+type = "apple"
+local_vad = "on"
+open_timeout_ms = 4000
 finalize_timeout_ms = 3000
 "#,
         )
         .unwrap();
-        assert!(cfg.idle_pause);
+        assert_eq!(cfg.local_vad, crate::config::asr::LocalVadMode::On);
+        assert_eq!(cfg.open_timeout_ms, 4000);
         assert_eq!(cfg.finalize_timeout_ms, 3000);
 
         let default = AppleConfig::default();
-        assert!(!default.idle_pause);
+        assert_eq!(default.local_vad, crate::config::asr::LocalVadMode::Off);
+        assert_eq!(default.open_timeout_ms, 5000);
         assert_eq!(default.finalize_timeout_ms, 5000);
     }
 
@@ -411,9 +419,11 @@ finalize_timeout_ms = 3000
         assert_eq!(
             choose_language(
                 &AppleConfig {
+                    _name: None,
                     language: Some("en-US".into()),
                     install_assets: true,
-                    idle_pause: false,
+                    local_vad: crate::config::asr::LocalVadMode::Off,
+                    open_timeout_ms: 5000,
                     finalize_timeout_ms: default_finalize_timeout_ms(),
                 },
                 &ctx,
@@ -434,6 +444,43 @@ finalize_timeout_ms = 3000
 
         let notice = provider.runtime_check_notice().unwrap();
         assert!(notice.line.contains("install speech assets"));
+    }
+
+    /// 验证我们依赖的 drop-safe 机制：带 kill_on_drop(true) 的 Command spawn 出的
+    /// 子进程，在 Child 被 drop 后会被终止（不留孤儿）。AppleSession 的 helper
+    /// 进程靠的就是这条；不依赖真实 Apple helper 二进制，CI 稳定。
+    #[tokio::test]
+    async fn kill_on_drop_terminates_child_when_dropped_without_close() {
+        // /bin/cat 无参数会一直读 stdin，不会自行退出——模拟长驻 helper。
+        let child = Command::new("/bin/cat")
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn /bin/cat");
+        let pid = child.id().expect("child pid");
+
+        drop(child);
+
+        // drop 触发 kill；等子进程被 reaper 回收。轮询而非固定 sleep，减少抖动。
+        let mut alive = true;
+        for _ in 0..50 {
+            // kill -0：仅探测进程是否存在，不发实际信号。
+            let exists = std::process::Command::new("/bin/kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !exists {
+                alive = false;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            !alive,
+            "child {pid} still alive after drop; kill_on_drop failed"
+        );
     }
 
     #[test]

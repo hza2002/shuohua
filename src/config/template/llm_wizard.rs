@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -12,7 +11,10 @@ pub struct LlmComponentDraft {
     pub provider_name: String,
     pub format: String,
     pub base_url: String,
+    pub api_key: String,
     pub model: String,
+    pub system_prompt: String,
+    pub prompt: String,
 }
 
 pub fn llm_templates() -> impl Iterator<Item = &'static Template> {
@@ -28,7 +30,7 @@ pub fn llm_draft_from_template(template_id: &str) -> Option<LlmComponentDraft> {
         template_id: template_id.to_string(),
         file_id: template
             .path
-            .strip_prefix("post/llm/")
+            .strip_prefix("post/")
             .and_then(|path| path.strip_suffix(".toml"))
             .unwrap_or("llm")
             .to_string(),
@@ -41,20 +43,33 @@ pub fn llm_draft_from_template(template_id: &str) -> Option<LlmComponentDraft> {
         base_url: string_value(values, "base_url")
             .unwrap_or_default()
             .to_string(),
+        api_key: string_value(values, "api_key")
+            .unwrap_or_default()
+            .to_string(),
         model: string_value(values, "model")
             .unwrap_or_default()
             .to_string(),
+        system_prompt: string_value(values, "system_prompt")
+            .unwrap_or("你是 ASR 文本整理器。保留用户原意，只清理口误、重复、标点和明确的识别错误。只输出整理后的文本。")
+            .to_string(),
+        prompt: string_value(values, "prompt").unwrap_or("{{text}}").to_string(),
     })
 }
 
 pub fn render_llm_component(draft: &LlmComponentDraft) -> Result<String> {
-    validate_component_id(&draft.file_id).context("invalid file id")?;
-    validate_component_id(&draft.provider_name).context("invalid provider name")?;
+    crate::config::inventory::validate_config_file_id(&draft.file_id)
+        .map_err(anyhow::Error::msg)
+        .context("invalid file name")?;
     anyhow::ensure!(
         matches!(draft.format.as_str(), "openai" | "anthropic"),
         "format must be openai or anthropic"
     );
+    anyhow::ensure!(
+        draft.base_url.starts_with("http://") || draft.base_url.starts_with("https://"),
+        "base_url is required and must start with http:// or https://"
+    );
     anyhow::ensure!(!draft.model.trim().is_empty(), "model is required");
+    anyhow::ensure!(!draft.prompt.trim().is_empty(), "prompt is required");
 
     let template = llm_templates()
         .find(|template| template.id == draft.template_id)
@@ -65,60 +80,16 @@ pub fn render_llm_component(draft: &LlmComponentDraft) -> Result<String> {
 }
 
 pub fn create_llm_component(post_dir: &Path, draft: &LlmComponentDraft) -> Result<PathBuf> {
-    let llm_dir = post_dir.join("llm");
-    let path = llm_dir.join(format!("{}.toml", draft.file_id));
+    let path = post_dir.join(format!("{}.toml", draft.file_id));
     anyhow::ensure!(
         !path.exists(),
-        "post/llm/{}.toml already exists",
+        "file name {:?} already exists; pick a different file name",
         draft.file_id
     );
-    ensure_provider_name_available(&llm_dir, &draft.provider_name)?;
     let body = render_llm_component(draft)?;
-    std::fs::create_dir_all(&llm_dir).with_context(|| format!("create {}", llm_dir.display()))?;
+    std::fs::create_dir_all(post_dir).with_context(|| format!("create {}", post_dir.display()))?;
     std::fs::write(&path, body).with_context(|| format!("write {}", path.display()))?;
     Ok(path)
-}
-
-fn ensure_provider_name_available(llm_dir: &Path, provider_name: &str) -> Result<()> {
-    let mut names = BTreeSet::new();
-    for path in toml_files(llm_dir) {
-        let body = std::fs::read_to_string(&path)
-            .with_context(|| format!("read existing LLM component {}", path.display()))?;
-        let value: toml::Value = toml::from_str(&body)
-            .with_context(|| format!("parse existing LLM component {}", path.display()))?;
-        if let Some(name) = value.get("name").and_then(toml::Value::as_str) {
-            names.insert(name.to_string());
-        }
-    }
-    anyhow::ensure!(
-        !names.contains(provider_name),
-        "provider name {provider_name:?} already exists"
-    );
-    Ok(())
-}
-
-fn validate_component_id(value: &str) -> Result<()> {
-    anyhow::ensure!(!value.trim().is_empty(), "value is required");
-    anyhow::ensure!(
-        value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'),
-        "use only ASCII letters, digits, '-' and '_'"
-    );
-    Ok(())
-}
-
-fn toml_files(dir: &Path) -> Vec<PathBuf> {
-    let mut paths = match std::fs::read_dir(dir) {
-        Ok(entries) => entries
-            .filter_map(std::result::Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
-            .collect::<Vec<_>>(),
-        Err(_) => Vec::new(),
-    };
-    paths.sort();
-    paths
 }
 
 fn template_values(template: &Template) -> &[(&'static str, TemplateValue)] {
@@ -128,6 +99,7 @@ fn template_values(template: &Template) -> &[(&'static str, TemplateValue)] {
 fn string_value<'a>(values: &'a [(&str, TemplateValue)], key: &str) -> Option<&'a str> {
     values.iter().find_map(|(name, value)| match (name, value) {
         (name, TemplateValue::String(value)) if *name == key => Some(*value),
+        (name, TemplateValue::MultilineString(value)) if *name == key => Some(*value),
         _ => None,
     })
 }
@@ -138,9 +110,12 @@ fn render_llm_component_body(template: &Template, draft: &LlmComponentDraft) -> 
     body.push_str(&format!("format = {:?}\n", draft.format));
     body.push_str(&format!("name = {:?}\n", draft.provider_name));
     body.push_str(&format!("base_url = {:?}\n", draft.base_url));
-    body.push_str("api_key = \"\"\n");
+    body.push_str(&format!("api_key = {:?}\n", draft.api_key));
     body.push_str(&format!("model = {:?}\n", draft.model));
-    body.push_str("prompt = \"{{text}}\"\n");
+    if !draft.system_prompt.trim().is_empty() {
+        body.push_str(&format!("system_prompt = {:?}\n", draft.system_prompt));
+    }
+    body.push_str(&format!("prompt = {:?}\n", draft.prompt));
 
     if template
         .values

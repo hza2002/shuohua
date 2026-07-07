@@ -16,14 +16,22 @@
 //!   sees a brief modifier flash when the user taps the trigger —
 //!   imperceptible in practice and matches macOS Dictation's behavior.
 //!
-//! Cancel uses the same reserved-key behavior while recording is active.
-//! Outside recording, cancel is not suppressed so normal Escape / Delete /
-//! app shortcuts keep working.
+//! Cancel uses the same reserved-key behavior while the cancel gate is
+//! armed. The gate is the OR of two independent single-writer signals:
+//! `cancel_active` (a recording session is active — set synchronously by
+//! the daemon) and `on_screen` (the overlay panel is on screen — published
+//! by the overlay thread). Either one arms cancel suppression so ESC closes
+//! the overlay instead of leaking to the foreground app; when both are off
+//! (idle) cancel is not suppressed, so normal Escape / Delete / app
+//! shortcuts keep working.
 //!
 //! The held-key set is independent of `trigger.key`: once a code is
 //! suppressed on `KeyDown`, its `KeyUp` is suppressed too, even if the
 //! binding has been re-bound mid-hold (§5 invariant 8). Auto-repeat
 //! `KeyDown`s of a held code are also suppressed.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use super::combo::Combo;
 use super::{EventKind, Key, RawEvent};
@@ -32,7 +40,14 @@ use super::{EventKind, Key, RawEvent};
 pub struct Suppressor {
     trigger: Combo,
     cancel: Option<Combo>,
+    resume: Option<Combo>,
+    /// A recording session is active. Daemon-owned, set synchronously on
+    /// session start/end.
     cancel_active: bool,
+    /// The overlay panel is on screen. Published by the overlay thread; a
+    /// single `AtomicBool` read here on the event-tap OS thread. Together
+    /// with `cancel_active` this OR-gates cancel-key suppression.
+    on_screen: Arc<AtomicBool>,
     /// Physical keycodes we've eaten the down of and not yet seen the up.
     held: Vec<Key>,
 }
@@ -42,7 +57,9 @@ impl Suppressor {
         Self {
             trigger,
             cancel: None,
+            resume: None,
             cancel_active: false,
+            on_screen: Arc::new(AtomicBool::new(false)),
             held: Vec::new(),
         }
     }
@@ -59,8 +76,20 @@ impl Suppressor {
         // Intentionally keep `held`; see `set_trigger`.
     }
 
+    pub fn set_resume(&mut self, resume: Combo) {
+        self.resume = Some(resume);
+        // Intentionally keep `held`; see `set_trigger`.
+    }
+
     pub fn set_cancel_active(&mut self, active: bool) {
         self.cancel_active = active;
+    }
+
+    /// Share the overlay-visibility flag written by the overlay thread. The
+    /// `held` pairing is independent of this, so the flag may flip at any
+    /// time without orphaning a suppressed key's `KeyUp`.
+    pub fn set_on_screen(&mut self, on_screen: Arc<AtomicBool>) {
+        self.on_screen = on_screen;
     }
 
     /// Returns `true` when the OS-level event should be dropped.
@@ -93,18 +122,21 @@ impl Suppressor {
 
     fn should_suppress_fresh_down(&self, ev: RawEvent) -> bool {
         matches_keyed_binding(&self.trigger, ev)
-            || (self.cancel_active
+            || self
+                .resume
+                .as_ref()
+                .is_some_and(|resume| matches_keyed_binding(resume, ev))
+            || (self.cancel_armed()
                 && self
                     .cancel
                     .as_ref()
                     .is_some_and(|cancel| matches_keyed_binding(cancel, ev)))
     }
 
-    /// Whether `key` is the configured trigger or cancel key. Used only to
-    /// gate diagnostic logging to relevant events, so the per-keystroke log
-    /// never records ordinary typed characters.
-    pub fn binds_key(&self, key: Key) -> bool {
-        self.trigger.key == Some(key) || self.cancel.as_ref().and_then(|c| c.key) == Some(key)
+    /// Cancel suppression is armed while a session is active or the overlay
+    /// is on screen (OR of the two single-writer signals).
+    fn cancel_armed(&self) -> bool {
+        self.cancel_active || self.on_screen.load(Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -163,6 +195,16 @@ mod tests {
         Combo {
             mods,
             key: None,
+            double: false,
+        }
+    }
+
+    fn shift_plus_key(key: Key) -> Combo {
+        let mut mods = [ModMatcher::NotPresent; 4];
+        mods[ModType::Shift as usize] = ModMatcher::EitherSide;
+        Combo {
+            mods,
+            key: Some(key),
             double: false,
         }
     }
@@ -250,6 +292,41 @@ mod tests {
         assert!(!s.on_raw(up(Key::Escape, ModMask::empty())));
     }
 
+    #[test]
+    fn on_screen_alone_arms_cancel_suppression() {
+        // No active session, but overlay is on screen (e.g. an error panel):
+        // ESC must be eaten so it closes the overlay instead of leaking.
+        let on_screen = Arc::new(AtomicBool::new(true));
+        let mut s = Suppressor::new(pure_key(F16));
+        s.set_cancel(pure_key_double(Key::Escape));
+        s.set_cancel_active(false);
+        s.set_on_screen(on_screen.clone());
+
+        assert!(s.on_raw(down(Key::Escape, ModMask::empty())));
+        assert!(s.on_raw(up(Key::Escape, ModMask::empty())));
+
+        // Overlay hides mid-idle → ESC passes through again.
+        on_screen.store(false, Ordering::Relaxed);
+        assert!(!s.on_raw(down(Key::Escape, ModMask::empty())));
+        assert!(!s.on_raw(up(Key::Escape, ModMask::empty())));
+    }
+
+    #[test]
+    fn on_screen_flip_off_mid_hold_still_pairs_keyup() {
+        // ESC down eaten because overlay on screen; overlay hides before the
+        // up. The up must still be eaten (held pairing), or the foreground
+        // app sees an orphan KeyUp.
+        let on_screen = Arc::new(AtomicBool::new(true));
+        let mut s = Suppressor::new(pure_key(F16));
+        s.set_cancel(pure_key_double(Key::Escape));
+        s.set_on_screen(on_screen.clone());
+
+        assert!(s.on_raw(down(Key::Escape, ModMask::empty())));
+        on_screen.store(false, Ordering::Relaxed);
+        assert!(s.on_raw(up(Key::Escape, ModMask::empty())));
+        assert!(s.held().is_empty());
+    }
+
     // ---------- combo ----------
 
     #[test]
@@ -282,25 +359,6 @@ mod tests {
         assert!(s.held().is_empty());
     }
 
-    // ---------- diagnostic gate ----------
-
-    #[test]
-    fn binds_key_matches_trigger_and_cancel_only() {
-        let mut s = Suppressor::new(pure_key(F16));
-        s.set_cancel(pure_key_double(Key::Escape));
-        assert!(s.binds_key(F16));
-        assert!(s.binds_key(Key::Escape));
-        assert!(!s.binds_key(A));
-        assert!(!s.binds_key(F17));
-    }
-
-    #[test]
-    fn binds_key_false_for_modifier_only_trigger() {
-        // A modifier-only trigger has no key — nothing to gate on.
-        let s = Suppressor::new(right_shift_only());
-        assert!(!s.binds_key(F16));
-    }
-
     // ---------- modifier-only ----------
 
     #[test]
@@ -312,6 +370,31 @@ mod tests {
         )));
         assert!(!s.on_raw(down(A, ModMask::empty())));
         assert!(!s.on_raw(up(A, ModMask::empty())));
+    }
+
+    #[test]
+    fn keyed_resume_suppresses_full_press_cycle() {
+        let mut s = Suppressor::new(pure_key(F16));
+        s.set_resume(shift_plus_key(F17));
+        let mut shift = ModMask::empty();
+        shift.set(ModType::Shift, Side::Left, true);
+
+        assert!(s.on_raw(down(F17, shift)));
+        assert!(s.on_raw(down(F17, shift)));
+        assert!(s.on_raw(up(F17, shift)));
+        assert!(s.held().is_empty());
+    }
+
+    #[test]
+    fn modifier_only_resume_suppresses_nothing() {
+        let mut s = Suppressor::new(pure_key(F16));
+        s.set_resume(right_shift_only());
+
+        assert!(!s.on_raw(flag(
+            Key::Modifier(ModType::Shift, Side::Right),
+            ModMask::empty()
+        )));
+        assert!(!s.on_raw(down(A, ModMask::empty())));
     }
 
     // ---------- trigger swap ----------

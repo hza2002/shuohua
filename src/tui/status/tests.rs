@@ -24,44 +24,38 @@ fn trim_meters_to_capacity_keeps_large_tail() {
 }
 
 #[test]
-fn meter_capacity_tracks_terminal_width_with_minimum_and_4k_cap() {
-    assert_eq!(StatusPage::meter_capacity_for_terminal_width(200), 189);
-    assert_eq!(StatusPage::meter_capacity_for_terminal_width(20), 16);
-    assert_eq!(
-        StatusPage::meter_capacity_for_terminal_width(3840),
-        MAX_METER_HISTORY
+fn meter_lines_render_braille_rows_plus_legend() {
+    crate::i18n::init("en-US");
+    let mut page = StatusPage::new();
+    page.state = WireState::Recording;
+    page.meters = vec![meter(0.8)];
+    let theme = TuiTheme::default();
+
+    let lines = meter_lines(&page, &theme, 20, 4);
+    assert_eq!(lines.len(), 4, "3 braille rows + 1 legend line");
+
+    let waveform: String = lines[..3]
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(
+        waveform
+            .chars()
+            .any(|c| ('\u{2800}'..='\u{28FF}').contains(&c)),
+        "waveform rows use braille glyphs"
     );
-}
 
-#[test]
-fn waveform_levels_use_low_and_high_blocks() {
-    assert_eq!(upper_level(0.0), '▁');
-    assert_eq!(upper_level(1.0), '█');
-    assert_eq!(lower_level(0.0), '▔');
-    assert_eq!(lower_level(1.0), '▁');
-}
-
-#[test]
-fn audio_lines_render_one_char_per_meter() {
-    let meters = vec![
-        AudioMeter {
-            rms: 0.0,
-            peak: 0.0,
-            clipped: false,
-            vad_probability: Some(0.0),
-            vad_speech: Some(false),
-        },
-        AudioMeter {
-            rms: 1.0,
-            peak: 1.0,
-            clipped: true,
-            vad_probability: Some(1.0),
-            vad_speech: Some(true),
-        },
-    ];
-
-    assert_eq!(audio_upper(&meters).chars().count(), 2);
-    assert_eq!(audio_lower(&meters).chars().count(), 2);
+    let legend: String = lines[3]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(
+        legend.contains("peak"),
+        "legend shows peak readout: {legend}"
+    );
+    assert!(legend.contains("speech"), "legend shows VAD key: {legend}");
 }
 
 #[test]

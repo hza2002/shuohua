@@ -127,6 +127,7 @@ fn localized_command() -> clap::Command {
         })
         .mut_subcommand("update", |cmd| {
             cmd.about(crate::t!("cli.help.update.about"))
+                .mut_arg("check", |arg| arg.help(crate::t!("cli.help.update.check")))
                 .mut_arg("allow_major", |arg| {
                     arg.help(crate::t!("cli.help.update.allow_major"))
                 })
@@ -212,6 +213,16 @@ mod tests {
 
         match cli.command {
             Some(Command::Update(args)) => assert!(args.allow_major),
+            other => panic!("expected update command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_parses_check() {
+        let cli = Cli::try_parse_from(["shuo", "update", "--check"]).unwrap();
+
+        match cli.command {
+            Some(Command::Update(args)) => assert!(args.check),
             other => panic!("expected update command, got {other:?}"),
         }
     }

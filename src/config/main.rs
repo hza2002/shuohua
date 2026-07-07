@@ -36,10 +36,16 @@ pub struct HotkeyCfg {
     pub trigger: String,
     #[serde(default = "default_cancel_hotkey")]
     pub cancel: String,
+    #[serde(default = "default_resume_hotkey")]
+    pub resume: String,
 }
 
 fn default_cancel_hotkey() -> String {
     "escape".to_string()
+}
+
+fn default_resume_hotkey() -> String {
+    "shift+right_option:double".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -99,6 +105,10 @@ fn default_auto_paste() -> bool {
 pub struct DevCfg {
     #[serde(default)]
     pub vad_trace: bool,
+    /// Apple backend 开发诊断总开关（dev feature 下生效）：启动接管音频
+    /// sidecar、多通道 per-channel 探针等 Apple 采集相关的 dev 日志/探针都走这里。
+    #[serde(default)]
+    pub apple_backend_trace: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -160,8 +170,10 @@ fn default_min_start_voiced_frames() -> u32 {
 #[serde(rename_all = "lowercase")]
 pub enum VoicePreprocessBackend {
     Off,
-    #[default]
     Apple,
+    #[default]
+    #[serde(rename = "webrtc")]
+    WebRtc,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -243,6 +255,8 @@ fn default_theme() -> String {
 pub struct OverlayCfg {
     #[serde(default)]
     pub position: OverlayPosition,
+    #[serde(default = "default_overlay_width")]
+    pub width: usize,
     #[serde(default = "default_max_text_lines")]
     pub max_text_lines: usize,
 }
@@ -251,6 +265,7 @@ impl Default for OverlayCfg {
     fn default() -> Self {
         Self {
             position: OverlayPosition::default(),
+            width: default_overlay_width(),
             max_text_lines: default_max_text_lines(),
         }
     }
@@ -267,6 +282,10 @@ pub enum OverlayPosition {
 
 fn default_max_text_lines() -> usize {
     5
+}
+
+fn default_overlay_width() -> usize {
+    crate::overlay::layout::constants::DEFAULT_WIDTH_PX
 }
 
 /// `$XDG_CONFIG_HOME/shuohua/config.toml` or `~/.config/shuohua/config.toml`.
@@ -319,10 +338,11 @@ trigger = "f16"
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.hotkey.trigger, "f16");
         assert_eq!(cfg.hotkey.cancel, "escape");
+        assert_eq!(cfg.hotkey.resume, "shift+right_option:double");
         assert_eq!(cfg.voice.stop_delay_ms, 800);
         assert_eq!(cfg.voice.record_audio, RecordAudioMode::Off);
         assert!(cfg.voice.auto_paste);
-        assert_eq!(cfg.voice.preprocess.backend, VoicePreprocessBackend::Apple);
+        assert_eq!(cfg.voice.preprocess.backend, VoicePreprocessBackend::WebRtc);
         assert_eq!(cfg.ui.language, "auto");
         assert_eq!(cfg.ui.theme, "gruvbox-dark");
         assert_eq!(cfg.ui.theme_tui, "");
@@ -331,6 +351,10 @@ trigger = "f16"
         assert_eq!(cfg.profile.default, "default");
         assert!(cfg.profile.routes.is_empty());
         assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
+        assert_eq!(
+            cfg.overlay.width,
+            crate::overlay::layout::constants::DEFAULT_WIDTH_PX
+        );
         assert_eq!(cfg.overlay.max_text_lines, 5);
     }
 
@@ -343,6 +367,28 @@ cancel = "escape:double"
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.hotkey.cancel, "escape:double");
+    }
+
+    #[test]
+    fn parses_resume_hotkey_default_and_override() {
+        let cfg = parse(
+            r#"
+[hotkey]
+trigger = "right_option:double"
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.hotkey.resume, "shift+right_option:double");
+
+        let cfg = parse(
+            r#"
+[hotkey]
+trigger = "right_option:double"
+resume = "shift+f16"
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.hotkey.resume, "shift+f16");
     }
 
     #[test]
@@ -417,6 +463,29 @@ vad_trace = true
     }
 
     #[test]
+    fn apple_backend_trace_defaults_to_false() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+"#;
+        let cfg = parse(body).unwrap();
+        assert!(!cfg.dev.apple_backend_trace);
+    }
+
+    #[test]
+    fn dev_apple_backend_trace_is_configurable() {
+        let body = r#"
+[hotkey]
+trigger = "f16"
+
+[dev]
+apple_backend_trace = true
+"#;
+        let cfg = parse(body).unwrap();
+        assert!(cfg.dev.apple_backend_trace);
+    }
+
+    #[test]
     fn missing_required_section_errors() {
         let body = r#"
 [voice]
@@ -452,11 +521,30 @@ trigger = "f16"
 
 [overlay]
 position          = "top"
+width             = 640
 max_text_lines    = 6
 "#;
         let cfg = parse(body).unwrap();
         assert_eq!(cfg.overlay.position, OverlayPosition::Top);
+        assert_eq!(cfg.overlay.width, 640);
         assert_eq!(cfg.overlay.max_text_lines, 6);
+    }
+
+    #[test]
+    fn overlay_width_rejects_fractional_pixels() {
+        let error = parse(
+            r#"
+[hotkey]
+trigger = "f16"
+
+[overlay]
+width = 640.5
+"#,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("overlay.width"), "{error}");
     }
 
     #[test]
@@ -520,7 +608,7 @@ min_start_voiced_frames = 3
     }
 
     #[test]
-    fn voice_preprocess_defaults_to_apple() {
+    fn voice_preprocess_defaults_to_webrtc() {
         let cfg: Config = toml::from_str(
             r#"
 [hotkey]
@@ -529,7 +617,7 @@ trigger = "f16"
         )
         .unwrap();
 
-        assert_eq!(cfg.voice.preprocess.backend, VoicePreprocessBackend::Apple);
+        assert_eq!(cfg.voice.preprocess.backend, VoicePreprocessBackend::WebRtc);
     }
 
     #[test]
@@ -546,6 +634,22 @@ backend = "apple"
         .unwrap();
 
         assert_eq!(cfg.voice.preprocess.backend, VoicePreprocessBackend::Apple);
+    }
+
+    #[test]
+    fn voice_preprocess_can_parse_webrtc_backend() {
+        let cfg: Config = toml::from_str(
+            r#"
+[hotkey]
+trigger = "f16"
+
+[voice.preprocess]
+backend = "webrtc"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.voice.preprocess.backend, VoicePreprocessBackend::WebRtc);
     }
 
     #[test]

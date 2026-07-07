@@ -12,12 +12,14 @@ use crate::overlay::{OverlayCmd, OverlayHandle, OverlayState, ProfileChoice, Tex
 use crate::post;
 use crate::state::{SessionMeta, SessionPhase as UiSessionPhase, StateStore};
 use crate::voice::capture::{samples_to_ms, SegmentCapture, SessionCapture};
-use crate::voice::finalize::{finalize_provider_session, FinalizeOutcome};
+use crate::voice::finalize::{
+    emit_stats, finalize_provider_session, FinalizeOutcome, TranscriptDisplay,
+};
 use crate::voice::meter::MeterCollector;
 use crate::voice::observer::{
-    instant_elapsed_ms, observe_asr_error, observe_asr_event, observe_finish, observe_finish_ms,
-    observe_pcm, observe_provider_opened, observe_session, RecordingObserver, SessionPhase,
-    TraceStart,
+    instant_elapsed_ms, observe_asr_error, observe_asr_event, observe_asr_event_at, observe_finish,
+    observe_finish_ms, observe_pcm, observe_provider_opened, observe_session, RecordingObserver,
+    SessionPhase, TraceStart,
 };
 use crate::voice::{audio, recorder, CancelSignal, SessionControl};
 use tokio::sync::mpsc;
@@ -25,7 +27,11 @@ use tokio::time::{sleep_until, Instant as TokioInstant};
 
 const FIRST_AUDIO_TIMEOUT_MS: u64 = 1000;
 const MIN_NONZERO_AMPLITUDE: i16 = 8;
+const STOP_RESIDUAL_DRAIN_TIMEOUT_MS: u64 = 1000;
 const NOTICE_TTL_MS: u32 = 3_000;
+const STARTUP_SIGNAL_LOOKBACK_MS: u32 = 1_200;
+const STARTUP_SIGNAL_MARGIN_MS: u32 = 120;
+const ASR_SEND_SLOW_WARN_MS: u128 = 80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecordingMode {
@@ -44,6 +50,13 @@ impl RecordingMode {
 }
 
 type OpenedSession = (Box<dyn AsrSession>, mpsc::Receiver<AsrEvent>);
+
+struct StartedSession {
+    rec: CaptureStream,
+    session: Box<dyn AsrSession>,
+    events: mpsc::Receiver<AsrEvent>,
+    startup_pcm: Vec<Vec<i16>>,
+}
 
 struct SessionOpener<'a> {
     provider: &'a dyn AsrProvider,
@@ -76,6 +89,97 @@ struct VadPauseState {
     timeline: crate::voice::timeline::PcmTimeline,
     pre_roll_samples: u64,
     max_overlap_samples: u64,
+    first_signal_sample: Option<u64>,
+}
+
+struct CaptureDrain<T> {
+    output: T,
+    drained_pcm: Vec<Vec<i16>>,
+    capture_eof: bool,
+    capture_error: Option<anyhow::Error>,
+    interrupted: Option<CaptureDrainInterrupt>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureDrainInterrupt {
+    Cancel,
+    Stop,
+}
+
+#[derive(Debug, Default)]
+struct CaptureDiagnostics {
+    chunks: u64,
+    samples: u64,
+    first_pcm_ms: Option<u64>,
+    first_signal_ms: Option<u64>,
+    max_peak_abs: u16,
+}
+
+impl CaptureDiagnostics {
+    fn observe(
+        &mut self,
+        samples: &[i16],
+        recording_started_instant: Instant,
+        recording_id: &str,
+        mode: RecordingMode,
+        backend: crate::config::VoicePreprocessBackend,
+    ) {
+        self.chunks += 1;
+        self.samples += samples.len() as u64;
+        let t_ms = instant_elapsed_ms(recording_started_instant);
+        if self.first_pcm_ms.is_none() {
+            self.first_pcm_ms = Some(t_ms);
+            tracing::debug!(
+                recording_id = %recording_id,
+                mode = ?mode,
+                backend = ?backend,
+                chunk_samples = samples.len(),
+                timeline_ms = samples_to_ms(self.samples),
+                t_ms,
+                "capture first PCM observed by engine"
+            );
+        }
+
+        let peak_abs = samples
+            .iter()
+            .map(|sample| sample.unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        self.max_peak_abs = self.max_peak_abs.max(peak_abs);
+        if self.first_signal_ms.is_none() && peak_abs > MIN_NONZERO_AMPLITUDE as u16 {
+            self.first_signal_ms = Some(t_ms);
+            tracing::debug!(
+                recording_id = %recording_id,
+                mode = ?mode,
+                backend = ?backend,
+                chunk_samples = samples.len(),
+                peak_abs,
+                timeline_ms = samples_to_ms(self.samples),
+                t_ms,
+                "capture first non-silent PCM observed by engine"
+            );
+        }
+    }
+
+    fn log_summary(
+        &self,
+        recording_id: &str,
+        mode: RecordingMode,
+        backend: crate::config::VoicePreprocessBackend,
+    ) {
+        tracing::info!(
+            recording_id = %recording_id,
+            mode = ?mode,
+            backend = ?backend,
+            chunks = self.chunks,
+            samples = self.samples,
+            audio_ms = samples_to_ms(self.samples),
+            first_pcm_ms = self.first_pcm_ms,
+            first_signal_ms = self.first_signal_ms,
+            max_peak_abs = self.max_peak_abs,
+            "capture diagnostics summary"
+        );
+    }
 }
 
 enum VadDetector {
@@ -149,14 +253,24 @@ impl VadPauseState {
             pause_silence_ms: config.pause_silence_ms,
             frame_ms: SileroConfig::frame_ms(),
         });
-        let retention_ms = config.pre_roll_ms + config.max_overlap_ms + 100;
+        let retention_ms = startup_timeline_retention_ms(config);
         Ok(Self {
             detector,
             controller,
             timeline: PcmTimeline::new(retention_ms),
             pre_roll_samples: ms_to_samples(config.pre_roll_ms),
             max_overlap_samples: ms_to_samples(config.max_overlap_ms),
+            first_signal_sample: None,
         })
+    }
+
+    fn push_idle_pcm(&mut self, samples: &[i16]) {
+        let chunk = self.timeline.push(samples);
+        if self.first_signal_sample.is_none() {
+            if let Some(offset) = first_signal_offset(samples) {
+                self.first_signal_sample = Some(chunk.start_sample + offset as u64);
+            }
+        }
     }
 }
 
@@ -165,7 +279,20 @@ struct CurrentSessionCapture {
     audio_samples: u64,
     segments: Vec<SegmentCapture>,
     final_text: Option<String>,
+    partial_text: String,
     pending_overlay_segments: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PartialTextPolicy {
+    DiscardTentative,
+    PreserveRecoverableSnapshot,
+}
+
+impl PartialTextPolicy {
+    fn preserves_partial(self) -> bool {
+        matches!(self, Self::PreserveRecoverableSnapshot)
+    }
 }
 
 impl CurrentSessionCapture {
@@ -175,6 +302,7 @@ impl CurrentSessionCapture {
             audio_samples: 0,
             segments: Vec::new(),
             final_text: None,
+            partial_text: String::new(),
             pending_overlay_segments: 0,
         }
     }
@@ -183,10 +311,16 @@ impl CurrentSessionCapture {
         self.audio_samples += samples;
     }
 
-    fn into_session(self, recording_started: Instant) -> Option<SessionCapture> {
+    fn into_session(
+        self,
+        recording_started: Instant,
+        partial_text_policy: PartialTextPolicy,
+    ) -> Option<SessionCapture> {
+        let preserve_partial_text = partial_text_policy.preserves_partial();
         if self.audio_samples == 0
             && self.segments.is_empty()
             && self.final_text.as_deref().unwrap_or("").is_empty()
+            && (!preserve_partial_text || self.partial_text.is_empty())
         {
             return None;
         }
@@ -198,6 +332,8 @@ impl CurrentSessionCapture {
             audio_samples: self.audio_samples,
             segments: self.segments,
             final_text: self.final_text,
+            partial_text: (preserve_partial_text && !self.partial_text.is_empty())
+                .then_some(self.partial_text),
         })
     }
 }
@@ -207,7 +343,9 @@ pub struct SessionParams {
     pub record_audio: crate::config::RecordAudioMode,
     pub preprocess: crate::config::VoicePreprocessCfg,
     pub vad_trace: bool,
+    pub apple_backend_trace: bool,
     pub idle_pause: bool,
+    pub open_timeout_ms: u64,
     pub finalize_timeout_ms: u64,
     pub vad: crate::config::VoiceVadCfg,
     pub stop_delay_ms: u32,
@@ -218,6 +356,7 @@ pub struct SessionParams {
     pub profile_choices: Vec<ProfileChoice>,
     pub post_chain: crate::post::PostChain,
     pub post_timeout_ms: u64,
+    pub start: crate::voice::resume::RecordingStart,
     pub overlay: Option<OverlayHandle>,
     pub state: StateStore,
 }
@@ -239,7 +378,7 @@ pub(crate) struct EngineOutcome {
 enum CaptureStream {
     Cpal(recorder::RecordingStream),
     #[cfg(target_os = "macos")]
-    Apple(crate::voice::apple_source::RunningAppleVpSource),
+    Apple(Box<AppleCapture>),
 }
 
 impl CaptureStream {
@@ -255,7 +394,7 @@ impl CaptureStream {
         match self {
             Self::Cpal(recorder) => Ok(recorder.try_recv()),
             #[cfg(target_os = "macos")]
-            Self::Apple(_) => Ok(None),
+            Self::Apple(source) => source.try_recv(),
         }
     }
 
@@ -263,7 +402,7 @@ impl CaptureStream {
         match self {
             Self::Cpal(recorder) => recorder.stop(),
             #[cfg(target_os = "macos")]
-            Self::Apple(source) => source.request_stop(),
+            Self::Apple(source) => source.stop(),
         }
     }
 
@@ -279,10 +418,7 @@ impl CaptureStream {
         match self {
             Self::Cpal(recorder) => recorder.finish_audio().await,
             #[cfg(target_os = "macos")]
-            Self::Apple(source) => {
-                source.stop().await?;
-                Ok(None)
-            }
+            Self::Apple(source) => source.finish_audio().await,
         }
     }
 
@@ -290,7 +426,185 @@ impl CaptureStream {
         match self {
             Self::Cpal(recorder) => recorder.discard_audio().await,
             #[cfg(target_os = "macos")]
-            Self::Apple(source) => source.stop().await,
+            Self::Apple(source) => source.discard_audio().await,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+enum AppleCaptureState {
+    Apple(crate::voice::apple_source::RunningAppleVpSource),
+    StoppingApple {
+        stop_drain: AppleStopDrainTask,
+        residual: std::collections::VecDeque<Vec<i16>>,
+    },
+    RawFallback(recorder::RecordingStream),
+    Done,
+}
+
+#[cfg(target_os = "macos")]
+struct AppleCapture {
+    recording_id: String,
+    state: AppleCaptureState,
+}
+
+#[cfg(target_os = "macos")]
+struct AppleStopDrainTask {
+    join: Option<tokio::task::JoinHandle<anyhow::Result<Vec<Vec<i16>>>>>,
+}
+
+#[cfg(target_os = "macos")]
+impl AppleCapture {
+    const APPLE_STOP_TIMEOUT: Duration = Duration::from_millis(500);
+
+    fn apple(
+        recording_id: impl Into<String>,
+        apple: crate::voice::apple_source::RunningAppleVpSource,
+    ) -> Self {
+        Self {
+            recording_id: recording_id.into(),
+            state: AppleCaptureState::Apple(apple),
+        }
+    }
+
+    fn raw_fallback(recording_id: impl Into<String>, raw: recorder::RecordingStream) -> Self {
+        Self {
+            recording_id: recording_id.into(),
+            state: AppleCaptureState::RawFallback(raw),
+        }
+    }
+
+    async fn recv(&mut self) -> anyhow::Result<Option<Vec<i16>>> {
+        match &mut self.state {
+            AppleCaptureState::Apple(apple) => apple.recv().await,
+            AppleCaptureState::StoppingApple { .. } => self.recv_stopping_apple().await,
+            AppleCaptureState::RawFallback(raw) => Ok(raw.recv().await),
+            AppleCaptureState::Done => Ok(None),
+        }
+    }
+
+    fn try_recv(&mut self) -> anyhow::Result<Option<Vec<i16>>> {
+        match &mut self.state {
+            AppleCaptureState::RawFallback(raw) => Ok(raw.try_recv()),
+            AppleCaptureState::StoppingApple { residual, .. } => Ok(residual.pop_front()),
+            AppleCaptureState::Apple(_) | AppleCaptureState::Done => Ok(None),
+        }
+    }
+
+    fn stop(&mut self) {
+        let state = std::mem::replace(&mut self.state, AppleCaptureState::Done);
+        self.state = match state {
+            AppleCaptureState::Apple(apple) => AppleCaptureState::StoppingApple {
+                stop_drain: AppleStopDrainTask::start(apple),
+                residual: std::collections::VecDeque::new(),
+            },
+            AppleCaptureState::RawFallback(mut raw) => {
+                raw.stop();
+                AppleCaptureState::RawFallback(raw)
+            }
+            other => other,
+        };
+    }
+
+    async fn recv_stopping_apple(&mut self) -> anyhow::Result<Option<Vec<i16>>> {
+        let AppleCaptureState::StoppingApple {
+            stop_drain,
+            residual,
+        } = &mut self.state
+        else {
+            unreachable!("recv_stopping_apple called outside stopping state");
+        };
+
+        if let Some(samples) = residual.pop_front() {
+            return Ok(Some(samples));
+        }
+
+        let result = stop_drain.take_completed().await;
+        self.state = AppleCaptureState::Done;
+        match result {
+            Ok(frames) => {
+                let mut frames = std::collections::VecDeque::from(frames);
+                Ok(frames.pop_front())
+            }
+            Err(error) => {
+                tracing::warn!(
+                    recording_id = %self.recording_id,
+                    error = ?error,
+                    "Apple voice processing stop drain failed"
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    async fn drain_after_stop(&mut self) -> anyhow::Result<Vec<Vec<i16>>> {
+        self.stop();
+        match &mut self.state {
+            AppleCaptureState::RawFallback(raw) => Ok(raw.drain_after_stop().await),
+            _ => {
+                let mut out = Vec::new();
+                while let Some(samples) = self.recv().await? {
+                    out.push(samples);
+                }
+                Ok(out)
+            }
+        }
+    }
+
+    async fn finish_audio(&mut self) -> anyhow::Result<Option<std::path::PathBuf>> {
+        self.finish_or_discard_cleanup().await;
+        Ok(None)
+    }
+
+    async fn discard_audio(&mut self) -> anyhow::Result<()> {
+        self.finish_or_discard_cleanup().await;
+        Ok(())
+    }
+
+    async fn finish_or_discard_cleanup(&mut self) {
+        match std::mem::replace(&mut self.state, AppleCaptureState::Done) {
+            AppleCaptureState::Apple(mut apple) => {
+                apple.request_stop();
+            }
+            AppleCaptureState::StoppingApple { mut stop_drain, .. } => {
+                if tokio::time::timeout(Self::APPLE_STOP_TIMEOUT, stop_drain.take_completed())
+                    .await
+                    .is_err()
+                {
+                    stop_drain.abort();
+                }
+            }
+            AppleCaptureState::RawFallback(mut raw) => {
+                let _ = raw.discard_audio().await;
+            }
+            AppleCaptureState::Done => {}
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl AppleStopDrainTask {
+    fn start(mut apple: crate::voice::apple_source::RunningAppleVpSource) -> Self {
+        let join = tokio::spawn(async move {
+            tokio::time::timeout(AppleCapture::APPLE_STOP_TIMEOUT, apple.drain_after_stop())
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("apple stop drain timed out")))
+        });
+        Self { join: Some(join) }
+    }
+
+    async fn take_completed(&mut self) -> anyhow::Result<Vec<Vec<i16>>> {
+        let result = match self.join.as_mut() {
+            Some(join) => join.await.unwrap_or_else(|error| Err(error.into())),
+            None => Ok(Vec::new()),
+        };
+        self.join = None;
+        result
+    }
+
+    fn abort(&mut self) {
+        if let Some(join) = self.join.as_ref() {
+            join.abort();
         }
     }
 }
@@ -327,7 +641,7 @@ pub(crate) async fn run(
         begin_recording_ui(&params, provider, &recording_id, recording_started_at, mode);
     let session_ctx = initial_session_ctx(&params);
     let opener = SessionOpener::new(provider, session_ctx);
-    let (rec, initial) = match mode {
+    let (rec, initial, startup_pcm) = match mode {
         RecordingMode::Continuous => {
             match start_capture_and_open_initial(
                 &params,
@@ -338,7 +652,11 @@ pub(crate) async fn run(
             )
             .await
             {
-                Ok((rec, session, events)) => (rec, Some((session, events))),
+                Ok(started) => (
+                    started.rec,
+                    Some((started.session, started.events)),
+                    started.startup_pcm,
+                ),
                 Err(StartSessionError::Capture(error)) => {
                     tracing::error!(recording_id = %recording_id, error = ?error, "recorder start failed");
                     observe_finish_ms(&mut trace, "recorder_start_error", 0);
@@ -347,10 +665,11 @@ pub(crate) async fn run(
                     return None;
                 }
                 Err(StartSessionError::Asr(error)) => {
+                    let message = asr_open_error_message(&error);
                     observe_asr_error(&mut trace, recording_started_instant, error);
                     observe_finish_ms(&mut trace, "asr_open_error", 0);
                     params.state.set_error(Some(recording_id));
-                    send_error_overlay(&params, crate::t!("error.asr_open"));
+                    send_error_overlay(&params, message);
                     return None;
                 }
                 Err(StartSessionError::Canceled) => {
@@ -362,7 +681,7 @@ pub(crate) async fn run(
             }
         }
         RecordingMode::VadPause => match start_capture_stream(&params, &recording_id).await {
-            Ok(rec) => (rec, None),
+            Ok(rec) => (rec, None, Vec::new()),
             Err(error) => {
                 tracing::error!(recording_id = %recording_id, error = ?error, "recorder start failed");
                 observe_finish_ms(&mut trace, "recorder_start_error", 0);
@@ -379,6 +698,7 @@ pub(crate) async fn run(
         control,
         rec,
         initial,
+        startup_pcm,
         app_context,
         recording_id,
         recording_started_at,
@@ -390,6 +710,7 @@ pub(crate) async fn run(
     .await
 }
 
+#[derive(Debug)]
 enum StartSessionError {
     Capture(anyhow::Error),
     Asr(crate::asr::types::AsrError),
@@ -402,9 +723,9 @@ async fn start_capture_and_open_initial(
     opener: &SessionOpener<'_>,
     provider: &dyn AsrProvider,
     control: &SessionControl,
-) -> Result<(CaptureStream, Box<dyn AsrSession>, mpsc::Receiver<AsrEvent>), StartSessionError> {
+) -> Result<StartedSession, StartSessionError> {
     let capture = start_capture_stream(params, recording_id);
-    let asr = open_initial_session(recording_id, opener, provider);
+    let asr = open_initial_session(recording_id, opener, provider, params.open_timeout_ms);
     join_capture_and_asr(capture, asr, recording_id, control).await
 }
 
@@ -413,7 +734,7 @@ async fn join_capture_and_asr<C, A>(
     asr: A,
     recording_id: &str,
     control: &SessionControl,
-) -> Result<(CaptureStream, Box<dyn AsrSession>, mpsc::Receiver<AsrEvent>), StartSessionError>
+) -> Result<StartedSession, StartSessionError>
 where
     C: std::future::Future<Output = anyhow::Result<CaptureStream>>,
     A: std::future::Future<Output = Result<OpenedSession, crate::asr::types::AsrError>>,
@@ -424,13 +745,13 @@ where
     tokio::select! {
         biased;
         _ = control.cancelled() => Err(StartSessionError::Canceled),
-        _ = control.stopped() => Err(StartSessionError::Canceled),
         result = &mut capture => {
             match result {
                 Ok(rec) => finish_startup_after_capture(rec, asr, recording_id, control).await,
                 Err(error) => Err(StartSessionError::Capture(error)),
             }
         }
+        _ = control.stopped() => Err(StartSessionError::Canceled),
         result = &mut asr => {
             match result {
                 Ok(opened) => finish_startup_after_asr(opened, capture, control).await,
@@ -445,26 +766,58 @@ async fn finish_startup_after_capture<A>(
     asr: std::pin::Pin<&mut A>,
     recording_id: &str,
     control: &SessionControl,
-) -> Result<(CaptureStream, Box<dyn AsrSession>, mpsc::Receiver<AsrEvent>), StartSessionError>
+) -> Result<StartedSession, StartSessionError>
 where
     A: std::future::Future<Output = Result<OpenedSession, crate::asr::types::AsrError>>,
 {
-    tokio::select! {
-        biased;
-        _ = control.cancelled() => {
-            discard_retained_audio(recording_id, &mut rec).await;
-            Err(StartSessionError::Canceled)
-        }
-        _ = control.stopped() => {
-            discard_retained_audio(recording_id, &mut rec).await;
-            Err(StartSessionError::Canceled)
-        }
-        result = asr => {
-            match result {
-                Ok((session, events)) => Ok((rec, session, events)),
-                Err(error) => {
-                    discard_retained_audio(recording_id, &mut rec).await;
-                    Err(StartSessionError::Asr(error))
+    let mut startup_pcm = Vec::new();
+    let mut stop_requested = false;
+    tokio::pin!(asr);
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = control.cancelled() => {
+                discard_retained_audio(recording_id, &mut rec).await;
+                return Err(StartSessionError::Canceled);
+            }
+            _ = control.stopped(), if !stop_requested => {
+                stop_requested = true;
+                rec.stop();
+                match rec.drain_after_stop().await {
+                    Ok(drained) => startup_pcm.extend(drained),
+                    Err(error) => {
+                        discard_retained_audio(recording_id, &mut rec).await;
+                        return Err(StartSessionError::Capture(error));
+                    }
+                }
+            }
+            pcm = rec.recv(), if !stop_requested => {
+                match pcm {
+                    Ok(Some(samples)) => startup_pcm.push(samples),
+                    Ok(None) => {
+                        stop_requested = true;
+                    }
+                    Err(error) => {
+                        discard_retained_audio(recording_id, &mut rec).await;
+                        return Err(StartSessionError::Capture(error));
+                    }
+                }
+            }
+            result = &mut asr => {
+                match result {
+                    Ok((session, events)) => {
+                        return Ok(StartedSession {
+                            rec,
+                            session,
+                            events,
+                            startup_pcm,
+                        });
+                    }
+                    Err(error) => {
+                        discard_retained_audio(recording_id, &mut rec).await;
+                        return Err(StartSessionError::Asr(error));
+                    }
                 }
             }
         }
@@ -475,7 +828,7 @@ async fn finish_startup_after_asr<C>(
     opened: OpenedSession,
     capture: std::pin::Pin<&mut C>,
     control: &SessionControl,
-) -> Result<(CaptureStream, Box<dyn AsrSession>, mpsc::Receiver<AsrEvent>), StartSessionError>
+) -> Result<StartedSession, StartSessionError>
 where
     C: std::future::Future<Output = anyhow::Result<CaptureStream>>,
 {
@@ -492,7 +845,12 @@ where
         }
         result = capture => {
             match result {
-                Ok(rec) => Ok((rec, session, events)),
+                Ok(rec) => Ok(StartedSession {
+                    rec,
+                    session,
+                    events,
+                    startup_pcm: Vec::new(),
+                }),
                 Err(error) => {
                     let _ = session.close().await;
                     Err(StartSessionError::Capture(error))
@@ -507,13 +865,22 @@ async fn start_capture_stream(
     recording_id: &str,
 ) -> anyhow::Result<CaptureStream> {
     let backend = params.preprocess.backend;
+    log_recording_input(recording_id, backend);
     let started = Instant::now();
     let result = match backend {
         crate::config::VoicePreprocessBackend::Off => {
             let audio_output = prepare_audio_output(params, recording_id);
-            recorder::start(audio_output).map(CaptureStream::Cpal)
+            recorder::start(audio_output, backend, params.apple_backend_trace)
+                .map(CaptureStream::Cpal)
         }
-        crate::config::VoicePreprocessBackend::Apple => start_apple_capture_stream().await,
+        crate::config::VoicePreprocessBackend::WebRtc => {
+            let audio_output = prepare_audio_output(params, recording_id);
+            recorder::start(audio_output, backend, params.apple_backend_trace)
+                .map(CaptureStream::Cpal)
+        }
+        crate::config::VoicePreprocessBackend::Apple => {
+            start_apple_capture_stream(recording_id, params.apple_backend_trace).await
+        }
     };
     if result.is_ok() {
         tracing::info!(
@@ -522,15 +889,39 @@ async fn start_capture_stream(
             duration_ms = started.elapsed().as_millis() as u64,
             "capture stream started"
         );
-    } else {
+    } else if let Err(error) = &result {
         tracing::warn!(
             recording_id,
             backend = ?backend,
             duration_ms = started.elapsed().as_millis() as u64,
+            error = ?error,
             "capture stream start failed"
         );
     }
     result
+}
+
+/// 每次录音起始锚点日志：cpal 实际探到的 default input（backend=apple 时反映
+/// 打开 voice processing 之前的设备）。channels 异常（如 VP aggregate 残留导致
+/// 的 3ch）在这里第一时间可见，是 failure chain 的起点。非 dev、恒进日志。
+fn log_recording_input(recording_id: &str, backend: crate::config::VoicePreprocessBackend) {
+    match recorder::probe_default_input() {
+        Ok(info) => tracing::info!(
+            recording_id,
+            backend = ?backend,
+            device = info.name.as_deref().unwrap_or("<unknown>"),
+            sample_rate = info.sample_rate,
+            channels = info.channels,
+            sample_format = ?info.sample_format,
+            "recording input device"
+        ),
+        Err(error) => tracing::debug!(
+            recording_id,
+            backend = ?backend,
+            error = ?error,
+            "recording input device probe failed"
+        ),
+    }
 }
 
 fn initial_session_ctx(params: &SessionParams) -> SessionCtx {
@@ -546,28 +937,88 @@ async fn open_initial_session(
     recording_id: &str,
     opener: &SessionOpener<'_>,
     provider: &dyn AsrProvider,
+    timeout_ms: u64,
 ) -> Result<OpenedSession, crate::asr::types::AsrError> {
     let asr_open_started = Instant::now();
-    match opener.open_initial().await {
+    match open_with_timeout(opener.open_initial(), timeout_ms).await {
         Ok(opened) => {
             tracing::info!(
                 recording_id = %recording_id,
                 provider = %provider.name(),
                 duration_ms = asr_open_started.elapsed().as_millis() as u64,
+                timeout_ms,
                 "ASR session opened"
             );
             Ok(opened)
         }
         Err(error) => {
-            tracing::warn!(
+            tracing::error!(
                 recording_id = %recording_id,
                 provider = %provider.name(),
                 duration_ms = asr_open_started.elapsed().as_millis() as u64,
-                "ASR session open failed"
+                timeout_ms,
+                error = %error,
+                "ASR open failed"
             );
-            tracing::error!(recording_id = %recording_id, error = %error, "ASR open failed");
             Err(error)
         }
+    }
+}
+
+async fn open_resume_session(
+    recording_id: &str,
+    opener: &SessionOpener<'_>,
+    mode: RecordingMode,
+    index: u32,
+    timeout_ms: u64,
+) -> Result<Option<OpenedSession>, crate::asr::types::AsrError> {
+    let asr_open_started = Instant::now();
+    match tokio::time::timeout(Duration::from_millis(timeout_ms), opener.open_resume(mode)).await {
+        Ok(Ok(Some(opened))) => {
+            tracing::info!(
+                recording_id = %recording_id,
+                session_index = index,
+                duration_ms = asr_open_started.elapsed().as_millis() as u64,
+                timeout_ms,
+                "ASR resume session opened"
+            );
+            Ok(Some(opened))
+        }
+        Ok(Ok(None)) => Ok(None),
+        Ok(Err(error)) => {
+            tracing::warn!(
+                recording_id = %recording_id,
+                session_index = index,
+                duration_ms = asr_open_started.elapsed().as_millis() as u64,
+                timeout_ms,
+                error = %error,
+                "ASR resume session open failed"
+            );
+            Err(error)
+        }
+        Err(_) => {
+            tracing::warn!(
+                recording_id = %recording_id,
+                session_index = index,
+                duration_ms = asr_open_started.elapsed().as_millis() as u64,
+                timeout_ms,
+                "ASR resume session open timed out"
+            );
+            Err(crate::asr::types::AsrError::OpenTimeout)
+        }
+    }
+}
+
+async fn open_with_timeout<F>(
+    open: F,
+    timeout_ms: u64,
+) -> Result<OpenedSession, crate::asr::types::AsrError>
+where
+    F: std::future::Future<Output = Result<OpenedSession, crate::asr::types::AsrError>>,
+{
+    match tokio::time::timeout(Duration::from_millis(timeout_ms), open).await {
+        Ok(result) => result,
+        Err(_) => Err(crate::asr::types::AsrError::OpenTimeout),
     }
 }
 
@@ -612,14 +1063,123 @@ fn begin_recording_ui(
     app_context
 }
 
+/// 录音起始时按「开始方式」发 overlay 提示。必须在 `SetState(Connecting)` 清屏
+/// 之后调用——在 daemon 侧先发会被随后的 Connecting 清掉。
+///
+/// - resume 续写（`Seed`）：把旧 ASR 文本作为已提交 segment 铺到 overlay / state，
+///   让用户直观看到「接着上次继续说」，并发「继续上一段」notice。seed 只用于展示
+///   —— 不进 capture sessions（finish 另行把 seed 拼进 history/post），也不占
+///   provider audio，因此不碰 `current`。
+/// - resume 但无可恢复（`NewFromResume`）：只发「新录音」notice，告诉用户热键生效、
+///   确实没有可续写内容。
+/// - 普通开始（`Fresh`）：不发提示。
+fn apply_start_notice(
+    params: &SessionParams,
+    recording_id: &str,
+    recording_started_instant: Instant,
+    transcript: &mut TranscriptDisplay,
+) {
+    use crate::voice::resume::RecordingStart;
+    match &params.start {
+        RecordingStart::Fresh => {}
+        RecordingStart::NewFromResume => {
+            overlay_send(
+                params,
+                OverlayCmd::Notice {
+                    text: crate::t!("notice.new_recording"),
+                    ttl_ms: NOTICE_TTL_MS,
+                },
+            );
+        }
+        RecordingStart::Seed(seed) => {
+            let Some(seed_text) = seed.non_empty_text() else {
+                return;
+            };
+            transcript.append_segment(seed_text.to_string());
+            params
+                .state
+                .segment(recording_id.to_string(), seed_text.to_string());
+            overlay_send(
+                params,
+                OverlayCmd::AppendSegment {
+                    text: seed_text.to_string(),
+                },
+            );
+            overlay_send(
+                params,
+                OverlayCmd::Notice {
+                    text: crate::t!("notice.resume_recording"),
+                    ttl_ms: NOTICE_TTL_MS,
+                },
+            );
+            emit_stats(
+                transcript,
+                recording_started_instant,
+                &params.state,
+                recording_id,
+                params.overlay.as_ref(),
+            );
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
-async fn start_apple_capture_stream() -> anyhow::Result<CaptureStream> {
-    let source = crate::voice::apple_source::AppleVpSource::prepare_helper()?;
-    source.start().await.map(CaptureStream::Apple)
+async fn start_apple_capture_stream(
+    recording_id: &str,
+    apple_backend_trace: bool,
+) -> anyhow::Result<CaptureStream> {
+    let source = match crate::voice::apple_source::AppleVpSource::prepare_helper() {
+        Ok(source) => source,
+        Err(error) => {
+            if let Ok(raw) = recorder::start(
+                None,
+                crate::config::VoicePreprocessBackend::Off,
+                apple_backend_trace,
+            ) {
+                tracing::warn!(
+                    recording_id,
+                    error = ?error,
+                    "Apple voice processing helper unavailable; continuing with raw cpal capture"
+                );
+                return Ok(CaptureStream::Apple(Box::new(AppleCapture::raw_fallback(
+                    recording_id,
+                    raw,
+                ))));
+            }
+            return Err(error);
+        }
+    };
+    match source.start().await {
+        Ok(apple) => Ok(CaptureStream::Apple(Box::new(AppleCapture::apple(
+            recording_id,
+            apple,
+        )))),
+        Err(error) => {
+            if let Ok(raw) = recorder::start(
+                None,
+                crate::config::VoicePreprocessBackend::Off,
+                apple_backend_trace,
+            ) {
+                tracing::warn!(
+                    recording_id,
+                    error = ?error,
+                    "Apple voice processing startup failed; continuing with raw cpal capture"
+                );
+                return Ok(CaptureStream::Apple(Box::new(AppleCapture::raw_fallback(
+                    recording_id,
+                    raw,
+                ))));
+            }
+            Err(error)
+        }
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn start_apple_capture_stream() -> anyhow::Result<CaptureStream> {
+async fn start_apple_capture_stream(
+    _recording_id: &str,
+    _apple_backend_trace: bool,
+) -> anyhow::Result<CaptureStream> {
     anyhow::bail!("voice preprocess backend \"apple\" is only implemented on macOS")
 }
 
@@ -705,14 +1265,15 @@ async fn run_with_recorder_inner(
     let session_ctx = initial_session_ctx(&params);
     let opener = SessionOpener::new(provider, session_ctx);
     let initial = if mode == RecordingMode::Continuous {
-        match open_initial_session(&recording_id, &opener, provider).await {
+        match open_initial_session(&recording_id, &opener, provider, params.open_timeout_ms).await {
             Ok(opened) => opened,
             Err(error) => {
+                let message = asr_open_error_message(&error);
                 tracing::error!(recording_id = %recording_id, error = %error, "ASR open failed");
                 observe_asr_error(&mut trace, recording_started_instant, error);
                 observe_finish_ms(&mut trace, "asr_open_error", 0);
                 params.state.set_error(Some(recording_id));
-                send_error_overlay(&params, crate::t!("error.asr_open"));
+                send_error_overlay(&params, message);
                 return None;
             }
         }
@@ -726,6 +1287,7 @@ async fn run_with_recorder_inner(
         control,
         CaptureStream::Cpal(rec),
         initial,
+        Vec::new(),
         app_context,
         recording_id,
         recording_started_at,
@@ -744,6 +1306,7 @@ async fn run_with_capture_stream(
     control: SessionControl,
     mut rec: CaptureStream,
     initial: Option<OpenedSession>,
+    startup_pcm: Vec<Vec<i16>>,
     mut app_context: post::AppContext,
     recording_id: String,
     recording_started_at: time::OffsetDateTime,
@@ -756,6 +1319,7 @@ async fn run_with_capture_stream(
         Some((session, events)) => (Some(session), Some(events), true),
         None => (None, None, false),
     };
+    let mut transcript = TranscriptDisplay::new();
     let mut vad_pause = if mode == RecordingMode::VadPause {
         let state = match vad_detector {
             Some(detector) => VadPauseState::with_detector(&params.vad, detector),
@@ -813,6 +1377,13 @@ async fn run_with_capture_stream(
         }
     }
 
+    apply_start_notice(
+        &params,
+        &recording_id,
+        recording_started_instant,
+        &mut transcript,
+    );
+
     let mut first_audio_deadline =
         TokioInstant::now() + Duration::from_millis(FIRST_AUDIO_TIMEOUT_MS);
     let mut first_audio_seen = false;
@@ -825,8 +1396,53 @@ async fn run_with_capture_stream(
     let mut cancel_requested = false;
     let mut terminal_error = None;
     let mut meter = MeterCollector::new();
+    let mut capture_diag = CaptureDiagnostics::default();
+    let mut queued_idle_pcm = Vec::new();
+
+    if active && !startup_pcm.is_empty() {
+        match session.as_mut() {
+            Some(active_session) => {
+                for samples in startup_pcm {
+                    capture_diag.observe(
+                        &samples,
+                        recording_started_instant,
+                        &recording_id,
+                        mode,
+                        params.preprocess.backend,
+                    );
+                    observe_pcm(&mut trace, &samples);
+                    emit_meters(&params, &recording_id, &mut meter, &samples);
+                    if !first_audio_seen && frame_has_signal(&samples) {
+                        first_audio_seen = true;
+                    }
+                    let end_sample = if let Some(vad) = vad_pause.as_mut() {
+                        vad.timeline.push(&samples).end_sample()
+                    } else {
+                        last_sent_sample + samples.len() as u64
+                    };
+                    if let Err(error) =
+                        send_pcm_chunk(active_session, &samples, &mut total_audio_samples).await
+                    {
+                        terminal_error = Some(error);
+                        break;
+                    }
+                    current.record_sent_samples(samples.len() as u64);
+                    last_sent_sample = end_sample;
+                }
+            }
+            None => {
+                terminal_error = Some(HistoryError {
+                    kind: "asr_session".to_string(),
+                    msg: "active recording state missing ASR session".to_string(),
+                });
+            }
+        }
+    }
 
     'recording: loop {
+        if terminal_error.is_some() {
+            break 'recording;
+        }
         if active {
             if session.is_none() || events.is_none() {
                 terminal_error = Some(HistoryError {
@@ -855,6 +1471,13 @@ async fn run_with_capture_stream(
                                 break 'active;
                             }
                             Ok(Some(samples)) => {
+                                capture_diag.observe(
+                                    &samples,
+                                    recording_started_instant,
+                                    &recording_id,
+                                    mode,
+                                    params.preprocess.backend,
+                                );
                                 observe_pcm(&mut trace, &samples);
                                 emit_meters(&params, &recording_id, &mut meter, &samples);
                                 if !first_audio_seen && frame_has_signal(&samples) {
@@ -902,6 +1525,15 @@ async fn run_with_capture_stream(
                                 }
                             }
                             Err(error) => {
+                                tracing::error!(
+                                    recording_id,
+                                    backend = ?params.preprocess.backend,
+                                    mode = ?mode,
+                                    active,
+                                    total_audio_ms = samples_to_ms(total_audio_samples),
+                                    error = ?error,
+                                    "capture stream failed"
+                                );
                                 terminal_error = Some(capture_error(error));
                                 break 'recording;
                             }
@@ -946,6 +1578,7 @@ async fn run_with_capture_stream(
                                     &recording_id,
                                     recording_started_instant,
                                     &mut trace,
+                                    &mut transcript,
                                 ) {
                                     terminal_error = Some(error);
                                     break 'recording;
@@ -982,8 +1615,11 @@ async fn run_with_capture_stream(
                     &mut meter,
                     &recording_id,
                     &mut trace,
+                    &mut transcript,
                     &params,
                     recording_started_instant,
+                    &mut capture_diag,
+                    mode,
                 )
                 .await
                 {
@@ -997,6 +1633,7 @@ async fn run_with_capture_stream(
                 }
             }
 
+            let mut pending_idle_pcm = Vec::new();
             if !provider_done {
                 observe_session(
                     &mut trace,
@@ -1015,23 +1652,51 @@ async fn run_with_capture_stream(
                     });
                     break 'recording;
                 };
-                match finalize_provider_session(
-                    active_session,
-                    active_events,
-                    &mut current.segments,
-                    &mut current.final_text,
-                    &mut current.pending_overlay_segments,
-                    params.finalize_timeout_ms,
-                    control.cancel_signal(),
-                    &mut terminal_error,
+                let mut finalize_events = Vec::new();
+                let drain = drain_capture_while(
+                    &mut rec,
+                    &mut capture_diag,
                     &mut trace,
-                    recording_started_instant,
-                    &params.state,
+                    &params,
                     &recording_id,
-                    params.overlay.as_ref(),
+                    &mut meter,
+                    recording_started_instant,
+                    mode,
+                    None,
+                    finalize_provider_session(
+                        active_session,
+                        active_events,
+                        &mut current.segments,
+                        &mut current.final_text,
+                        &mut current.partial_text,
+                        &mut current.pending_overlay_segments,
+                        params.finalize_timeout_ms,
+                        control.cancel_signal(),
+                        &mut terminal_error,
+                        recording_started_instant,
+                        &mut finalize_events,
+                        &mut transcript,
+                        &params.state,
+                        &recording_id,
+                        params.overlay.as_ref(),
+                    ),
                 )
-                .await
-                {
+                .await;
+                for (t_ms, event) in &finalize_events {
+                    observe_asr_event_at(&mut trace, *t_ms, event);
+                }
+                debug_assert!(drain.interrupted.is_none());
+                if drain.capture_eof {
+                    stop_requested = true;
+                }
+                if mode == RecordingMode::VadPause {
+                    pending_idle_pcm.extend(drain.drained_pcm);
+                }
+                if let Some(error) = drain.capture_error {
+                    terminal_error = Some(capture_error(error));
+                    break 'recording;
+                }
+                match drain.output {
                     Ok(FinalizeOutcome::Done) => {}
                     Ok(FinalizeOutcome::Canceled) => {
                         cancel_requested = true;
@@ -1044,7 +1709,30 @@ async fn run_with_capture_stream(
                 }
             }
             if let Some(active_session) = session.take() {
-                let _ = active_session.close().await;
+                let drain = drain_capture_while(
+                    &mut rec,
+                    &mut capture_diag,
+                    &mut trace,
+                    &params,
+                    &recording_id,
+                    &mut meter,
+                    recording_started_instant,
+                    mode,
+                    None,
+                    active_session.close(),
+                )
+                .await;
+                debug_assert!(drain.interrupted.is_none());
+                if drain.capture_eof {
+                    stop_requested = true;
+                }
+                if mode == RecordingMode::VadPause {
+                    pending_idle_pcm.extend(drain.drained_pcm);
+                }
+                if let Some(error) = drain.capture_error {
+                    terminal_error = Some(capture_error(error));
+                    break 'recording;
+                }
             }
 
             let session_start_ms = samples_to_ms(current.start_sample);
@@ -1060,7 +1748,10 @@ async fn run_with_capture_stream(
             );
             if let Some(capture) =
                 std::mem::replace(&mut current, CurrentSessionCapture::new(last_sent_sample))
-                    .into_session(recording_started_instant)
+                    .into_session(
+                        recording_started_instant,
+                        PartialTextPolicy::DiscardTentative,
+                    )
             {
                 sessions.push(capture);
             }
@@ -1093,10 +1784,25 @@ async fn run_with_capture_stream(
                 vad.controller.reset();
                 vad.controller.accept(VadFrame::Silence);
             }
+            queued_idle_pcm = pending_idle_pcm;
             active = false;
         } else {
             let mut speech_start = None;
+            if !queued_idle_pcm.is_empty() {
+                let queued = std::mem::take(&mut queued_idle_pcm);
+                let Some(vad) = vad_pause.as_mut() else {
+                    terminal_error = Some(HistoryError {
+                        kind: "vad_state".to_string(),
+                        msg: "VadPause mode missing VAD state".to_string(),
+                    });
+                    break 'recording;
+                };
+                speech_start = consume_pending_idle_pcm(&queued, vad, &mut meter);
+            }
             'idle: loop {
+                if speech_start.is_some() {
+                    break 'idle;
+                }
                 tokio::select! {
                     biased;
                     _ = control.cancelled() => {
@@ -1114,6 +1820,13 @@ async fn run_with_capture_stream(
                                 break 'idle;
                             }
                             Ok(Some(samples)) => {
+                                capture_diag.observe(
+                                    &samples,
+                                    recording_started_instant,
+                                    &recording_id,
+                                    mode,
+                                    params.preprocess.backend,
+                                );
                                 observe_pcm(&mut trace, &samples);
                                 emit_meters(&params, &recording_id, &mut meter, &samples);
                                 let Some(vad) = vad_pause.as_mut() else {
@@ -1123,7 +1836,7 @@ async fn run_with_capture_stream(
                                     });
                                     break 'recording;
                                 };
-                                vad.timeline.push(&samples);
+                                vad.push_idle_pcm(&samples);
                                 use crate::voice::vad::{VadFrame, VadTransition};
                                 for frame in vad.detector.accept(&samples) {
                                     meter.observe_vad(
@@ -1134,6 +1847,18 @@ async fn run_with_capture_stream(
                                         == VadTransition::SpeechStarted
                                     {
                                         speech_start = Some(frame.start_sample);
+                                        log_vad_pause_resume_step(
+                                            &params,
+                                            &recording_id,
+                                            recording_started_instant,
+                                            "speech_started",
+                                            [
+                                                ("speech_start_sample", frame.start_sample),
+                                                ("speech_start_ms", samples_to_ms(frame.start_sample)),
+                                                ("chunk_samples", samples.len() as u64),
+                                                ("timeline_end", vad.timeline.end_sample()),
+                                            ],
+                                        );
                                         break;
                                     }
                                 }
@@ -1142,6 +1867,15 @@ async fn run_with_capture_stream(
                                 }
                             }
                             Err(error) => {
+                                tracing::error!(
+                                    recording_id,
+                                    backend = ?params.preprocess.backend,
+                                    mode = ?mode,
+                                    active,
+                                    total_audio_ms = samples_to_ms(total_audio_samples),
+                                    error = ?error,
+                                    "capture stream failed"
+                                );
                                 terminal_error = Some(capture_error(error));
                                 break 'recording;
                             }
@@ -1165,24 +1899,110 @@ async fn run_with_capture_stream(
                 refresh_stop_context(&params, &recording_id, &mut app_context);
                 break 'recording;
             }
-            let Some(vad) = vad_pause.as_mut() else {
+            let Some(vad) = vad_pause.as_ref() else {
                 break 'recording;
             };
-            let send_start = compute_resume_start_sample(
-                speech_start,
-                vad.pre_roll_samples,
-                last_sent_sample,
-                vad.max_overlap_samples,
-                vad.timeline.oldest_sample(),
-            );
+            let is_first_session = sessions.is_empty() && current.audio_samples == 0;
+            let startup_signal_sample = if is_first_session {
+                vad.first_signal_sample
+            } else {
+                None
+            };
             let next_index = if sessions.is_empty() && current.audio_samples == 0 {
                 0
             } else {
                 session_index + 1
             };
-            let (new_session, new_events) = match opener.open_resume(mode).await {
-                Ok(Some(opened)) => opened,
+            let resume_open_started = Instant::now();
+            log_vad_pause_resume_step(
+                &params,
+                &recording_id,
+                recording_started_instant,
+                "open_start",
+                [
+                    ("session_index", next_index as u64),
+                    ("speech_start_sample", speech_start),
+                    ("speech_start_ms", samples_to_ms(speech_start)),
+                    ("last_sent_sample", last_sent_sample),
+                ],
+            );
+            let drain = drain_capture_while(
+                &mut rec,
+                &mut capture_diag,
+                &mut trace,
+                &params,
+                &recording_id,
+                &mut meter,
+                recording_started_instant,
+                mode,
+                Some(&control),
+                open_resume_session(
+                    &recording_id,
+                    &opener,
+                    mode,
+                    next_index,
+                    params.open_timeout_ms,
+                ),
+            )
+            .await;
+            log_vad_pause_resume_step(
+                &params,
+                &recording_id,
+                recording_started_instant,
+                "open_done",
+                [
+                    ("session_index", next_index as u64),
+                    (
+                        "open_elapsed_ms",
+                        resume_open_started.elapsed().as_millis() as u64,
+                    ),
+                    ("drained_chunks", drain.drained_pcm.len() as u64),
+                    (
+                        "drained_samples",
+                        drain.drained_pcm.iter().map(|pcm| pcm.len() as u64).sum(),
+                    ),
+                ],
+            );
+            if let Some(interrupted) = drain.interrupted {
+                if let Ok(Some((session, _))) = drain.output {
+                    let _ = session.close().await;
+                }
+                match interrupted {
+                    CaptureDrainInterrupt::Cancel => cancel_requested = true,
+                    CaptureDrainInterrupt::Stop => {
+                        refresh_stop_context(&params, &recording_id, &mut app_context);
+                    }
+                }
+                break 'recording;
+            }
+            if drain.capture_eof {
+                stop_requested = true;
+            }
+            if !drain.drained_pcm.is_empty() {
+                let Some(vad) = vad_pause.as_mut() else {
+                    terminal_error = Some(HistoryError {
+                        kind: "vad_state".to_string(),
+                        msg: "VadPause mode missing VAD state".to_string(),
+                    });
+                    break 'recording;
+                };
+                let _ = consume_pending_idle_pcm(&drain.drained_pcm, vad, &mut meter);
+            }
+            let (new_session, new_events) = match drain.output {
+                Ok(Some(opened)) => {
+                    if let Some(error) = drain.capture_error {
+                        let (session, _) = opened;
+                        let _ = session.close().await;
+                        terminal_error = Some(capture_error(error));
+                        break 'recording;
+                    }
+                    opened
+                }
                 Ok(None) => {
+                    if let Some(error) = drain.capture_error {
+                        terminal_error = Some(capture_error(error));
+                        break 'recording;
+                    }
                     terminal_error = Some(HistoryError {
                         kind: "asr_resume_mode".to_string(),
                         msg: "Continuous mode cannot open a resume session".to_string(),
@@ -1190,6 +2010,10 @@ async fn run_with_capture_stream(
                     break 'recording;
                 }
                 Err(error) => {
+                    if let Some(capture_err) = drain.capture_error {
+                        terminal_error = Some(capture_error(capture_err));
+                        break 'recording;
+                    }
                     observe_session(
                         &mut trace,
                         SessionPhase::OpenError {
@@ -1205,6 +2029,18 @@ async fn run_with_capture_stream(
                     break 'recording;
                 }
             };
+            let Some(vad) = vad_pause.as_mut() else {
+                break 'recording;
+            };
+            let oldest_sample = vad.timeline.oldest_sample();
+            let send_start = compute_resume_start_sample(
+                speech_start,
+                vad.pre_roll_samples,
+                last_sent_sample,
+                vad.max_overlap_samples,
+                oldest_sample,
+                startup_signal_sample,
+            );
             session = Some(new_session);
             events = Some(new_events);
             session_index = next_index;
@@ -1218,20 +2054,25 @@ async fn run_with_capture_stream(
             );
 
             let replay = vad.timeline.slice_from(send_start);
+            let replay_clamped = replay.start_sample > send_start;
+            log_vad_pause_replay_window(
+                &recording_id,
+                params.preprocess.backend,
+                next_index,
+                speech_start,
+                send_start,
+                &replay,
+                oldest_sample,
+                vad.timeline.end_sample(),
+                vad.pre_roll_samples,
+                vad.max_overlap_samples,
+                last_sent_sample,
+                startup_signal_sample,
+                is_first_session,
+                replay_clamped,
+                startup_timeline_retention_ms(&params.vad),
+            );
             current = CurrentSessionCapture::new(replay.start_sample);
-            if !replay.samples.is_empty() {
-                let Some(active_session) = session.as_mut() else {
-                    break 'recording;
-                };
-                if let Err(error) =
-                    send_pcm_chunk(active_session, &replay.samples, &mut total_audio_samples).await
-                {
-                    terminal_error = Some(error);
-                    break 'recording;
-                }
-                current.record_sent_samples(replay.samples.len() as u64);
-            }
-            last_sent_sample = replay.end_sample();
             first_audio_seen = true;
             first_audio_deadline =
                 TokioInstant::now() + Duration::from_millis(FIRST_AUDIO_TIMEOUT_MS);
@@ -1247,27 +2088,182 @@ async fn run_with_capture_stream(
             params
                 .state
                 .session_phase(recording_id.clone(), UiSessionPhase::Active);
+            log_vad_pause_resume_step(
+                &params,
+                &recording_id,
+                recording_started_instant,
+                "ui_active",
+                [
+                    ("session_index", session_index as u64),
+                    ("replay_samples", replay.samples.len() as u64),
+                    ("replay_start_sample", replay.start_sample),
+                    ("timeline_end", vad.timeline.end_sample()),
+                ],
+            );
+            if !replay.samples.is_empty() {
+                let Some(active_session) = session.as_mut() else {
+                    break 'recording;
+                };
+                let replay_send_started = Instant::now();
+                log_vad_pause_resume_step(
+                    &params,
+                    &recording_id,
+                    recording_started_instant,
+                    "replay_send_start",
+                    [
+                        ("session_index", session_index as u64),
+                        ("replay_samples", replay.samples.len() as u64),
+                        ("replay_start_sample", replay.start_sample),
+                        ("replay_end_sample", replay.end_sample()),
+                    ],
+                );
+                let drain = drain_capture_while(
+                    &mut rec,
+                    &mut capture_diag,
+                    &mut trace,
+                    &params,
+                    &recording_id,
+                    &mut meter,
+                    recording_started_instant,
+                    mode,
+                    Some(&control),
+                    send_pcm_chunk(active_session, &replay.samples, &mut total_audio_samples),
+                )
+                .await;
+                log_vad_pause_resume_step(
+                    &params,
+                    &recording_id,
+                    recording_started_instant,
+                    "replay_send_done",
+                    [
+                        ("session_index", session_index as u64),
+                        (
+                            "send_elapsed_ms",
+                            replay_send_started.elapsed().as_millis() as u64,
+                        ),
+                        ("drained_chunks", drain.drained_pcm.len() as u64),
+                        (
+                            "drained_samples",
+                            drain.drained_pcm.iter().map(|pcm| pcm.len() as u64).sum(),
+                        ),
+                    ],
+                );
+                if let Some(interrupted) = drain.interrupted {
+                    if let Some(active_session) = session.take() {
+                        let _ = active_session.close().await;
+                    }
+                    match interrupted {
+                        CaptureDrainInterrupt::Cancel => cancel_requested = true,
+                        CaptureDrainInterrupt::Stop => {
+                            refresh_stop_context(&params, &recording_id, &mut app_context);
+                        }
+                    }
+                    break 'recording;
+                }
+                if drain.capture_eof {
+                    stop_requested = true;
+                }
+                if let Some(error) = drain.capture_error {
+                    terminal_error = Some(capture_error(error));
+                    break 'recording;
+                }
+                if let Err(error) = drain.output {
+                    terminal_error = Some(error);
+                    break 'recording;
+                }
+                current.record_sent_samples(replay.samples.len() as u64);
+                if !drain.drained_pcm.is_empty() {
+                    let Some(vad) = vad_pause.as_mut() else {
+                        terminal_error = Some(HistoryError {
+                            kind: "vad_state".to_string(),
+                            msg: "VadPause mode missing VAD state".to_string(),
+                        });
+                        break 'recording;
+                    };
+                    let _ = consume_pending_idle_pcm(&drain.drained_pcm, vad, &mut meter);
+                    let Some(active_session) = session.as_mut() else {
+                        break 'recording;
+                    };
+                    let live_flush_started = Instant::now();
+                    let live_flush_chunks = drain.drained_pcm.len() as u64;
+                    let live_flush_samples: u64 =
+                        drain.drained_pcm.iter().map(|pcm| pcm.len() as u64).sum();
+                    log_vad_pause_resume_step(
+                        &params,
+                        &recording_id,
+                        recording_started_instant,
+                        "live_flush_start",
+                        [
+                            ("session_index", session_index as u64),
+                            ("chunks", live_flush_chunks),
+                            ("samples", live_flush_samples),
+                        ],
+                    );
+                    for samples in drain.drained_pcm {
+                        if let Err(error) =
+                            send_pcm_chunk(active_session, &samples, &mut total_audio_samples).await
+                        {
+                            terminal_error = Some(error);
+                            break 'recording;
+                        }
+                        current.record_sent_samples(samples.len() as u64);
+                    }
+                    log_vad_pause_resume_step(
+                        &params,
+                        &recording_id,
+                        recording_started_instant,
+                        "live_flush_done",
+                        [
+                            ("session_index", session_index as u64),
+                            (
+                                "elapsed_ms",
+                                live_flush_started.elapsed().as_millis() as u64,
+                            ),
+                            ("samples", live_flush_samples),
+                        ],
+                    );
+                }
+            }
+            if let Some(vad) = vad_pause.as_ref() {
+                last_sent_sample = vad.timeline.end_sample();
+            } else {
+                last_sent_sample = replay.end_sample();
+            }
             active = true;
         }
     }
 
+    let partial_text_policy = if cancel_requested
+        || terminal_error
+            .as_ref()
+            .is_some_and(|error| error.kind == "asr_timeout")
+    {
+        PartialTextPolicy::PreserveRecoverableSnapshot
+    } else {
+        PartialTextPolicy::DiscardTentative
+    };
     if current.audio_samples > 0
         || !current.segments.is_empty()
         || current
             .final_text
             .as_deref()
             .is_some_and(|text| !text.is_empty())
+        || (partial_text_policy.preserves_partial() && !current.partial_text.is_empty())
     {
-        if let Some(capture) = current.into_session(recording_started_instant) {
+        if let Some(capture) = current.into_session(recording_started_instant, partial_text_policy)
+        {
             sessions.push(capture);
         }
     }
     if let Some(active_session) = session.take() {
         let _ = active_session.close().await;
     }
+    capture_diag.log_summary(&recording_id, mode, params.preprocess.backend);
     // 取消时音频留存跟随「是否有内容」：有内容（可能误触）保留以便用户从 TUI
     // 找回，无内容则丢弃避免孤儿音频文件。正常完成 / terminal error 照常 finalize。
-    let has_content = crate::voice::capture::has_archivable_content(&sessions);
+    // resume 录音只有音频没新文本时算无内容——与 finish 的 history 判定同源。
+    let has_content =
+        crate::voice::capture::has_archivable_content_for(&sessions, params.start.is_seed());
     if !has_content {
         discard_retained_audio(&recording_id, &mut rec).await;
     } else {
@@ -1293,6 +2289,99 @@ fn should_enter_idle(mode: RecordingMode, stop_requested: bool, pause_requested:
     mode == RecordingMode::VadPause && !stop_requested && pause_requested
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn drain_capture_while<F, T>(
+    rec: &mut CaptureStream,
+    capture_diag: &mut CaptureDiagnostics,
+    trace: &mut RecordingObserver,
+    params: &SessionParams,
+    recording_id: &str,
+    meter: &mut MeterCollector,
+    recording_started_instant: Instant,
+    mode: RecordingMode,
+    control: Option<&SessionControl>,
+    future: F,
+) -> CaptureDrain<T>
+where
+    F: std::future::Future<Output = T>,
+{
+    tokio::pin!(future);
+    let mut drained_pcm = Vec::new();
+    let mut capture_eof = false;
+    let mut capture_error = None;
+    let mut interrupted = None;
+
+    loop {
+        tokio::select! {
+            biased;
+            interrupt = wait_capture_drain_control(control), if control.is_some() && interrupted.is_none() => {
+                interrupted = Some(interrupt);
+            }
+            output = &mut future => {
+                return CaptureDrain {
+                    output,
+                    drained_pcm,
+                    capture_eof,
+                    capture_error,
+                    interrupted,
+                };
+            }
+            pcm = rec.recv(), if !capture_eof && capture_error.is_none() && interrupted.is_none() => {
+                match pcm {
+                    Ok(Some(samples)) => {
+                        capture_diag.observe(
+                            &samples,
+                            recording_started_instant,
+                            recording_id,
+                            mode,
+                            params.preprocess.backend,
+                        );
+                        observe_pcm(trace, &samples);
+                        emit_meters(params, recording_id, meter, &samples);
+                        drained_pcm.push(samples);
+                    }
+                    Ok(None) => {
+                        capture_eof = true;
+                    }
+                    Err(error) => {
+                        capture_error = Some(error);
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn wait_capture_drain_control(control: Option<&SessionControl>) -> CaptureDrainInterrupt {
+    let control = control.expect("capture drain control must exist when branch is enabled");
+    tokio::select! {
+        biased;
+        _ = control.cancelled() => CaptureDrainInterrupt::Cancel,
+        _ = control.stopped() => CaptureDrainInterrupt::Stop,
+    }
+}
+
+fn consume_pending_idle_pcm(
+    chunks: &[Vec<i16>],
+    vad: &mut VadPauseState,
+    meter: &mut MeterCollector,
+) -> Option<u64> {
+    use crate::voice::vad::{VadFrame, VadTransition};
+
+    let mut speech_start = None;
+    for samples in chunks {
+        vad.push_idle_pcm(samples);
+        for frame in vad.detector.accept(samples) {
+            meter.observe_vad(frame.probability, matches!(frame.frame, VadFrame::Speech));
+            let transition = vad.controller.accept(frame.frame);
+            if speech_start.is_none() && transition == VadTransition::SpeechStarted {
+                speech_start = Some(frame.start_sample);
+            }
+        }
+    }
+    speech_start
+}
+
 fn handle_asr_event(
     event: AsrEvent,
     current: &mut CurrentSessionCapture,
@@ -1300,11 +2389,14 @@ fn handle_asr_event(
     recording_id: &str,
     recording_started_instant: Instant,
     trace: &mut RecordingObserver,
+    transcript: &mut TranscriptDisplay,
 ) -> Option<HistoryError> {
     observe_asr_event(trace, recording_started_instant, &event);
     match event {
         AsrEvent::Final { text } => {
             current.final_text = Some(text.clone());
+            current.partial_text.clear();
+            transcript.replace_recent_segments(current.pending_overlay_segments, text.clone());
             overlay_send(
                 params,
                 OverlayCmd::ReplaceRecentSegments {
@@ -1313,22 +2405,18 @@ fn handle_asr_event(
                 },
             );
             current.pending_overlay_segments = 1;
+            emit_stats(
+                transcript,
+                recording_started_instant,
+                &params.state,
+                recording_id,
+                params.overlay.as_ref(),
+            );
         }
         AsrEvent::Partial { text, .. } => {
+            current.partial_text = text.clone();
+            transcript.set_partial(text.clone());
             params.state.partial(recording_id.to_string(), text.clone());
-            let live_text = format!(
-                "{}{}",
-                current
-                    .segments
-                    .iter()
-                    .map(|segment| segment.text.as_str())
-                    .collect::<String>(),
-                text
-            );
-            let words = crate::text_stats::compute(&live_text).words as u32;
-            let dur_ms = recording_started_instant.elapsed().as_millis() as u64;
-            params.state.stats(recording_id.to_string(), dur_ms, words);
-            overlay_send(params, OverlayCmd::SetStats { dur_ms, words });
             overlay_send(
                 params,
                 OverlayCmd::SetText {
@@ -1336,14 +2424,30 @@ fn handle_asr_event(
                     kind: TextKind::Partial,
                 },
             );
+            emit_stats(
+                transcript,
+                recording_started_instant,
+                &params.state,
+                recording_id,
+                params.overlay.as_ref(),
+            );
         }
         AsrEvent::Segment {
             text,
             started_at,
             ended_at,
         } => {
+            current.partial_text.clear();
             params.state.segment(recording_id.to_string(), text.clone());
             overlay_send(params, OverlayCmd::AppendSegment { text: text.clone() });
+            transcript.append_segment(text.clone());
+            emit_stats(
+                transcript,
+                recording_started_instant,
+                &params.state,
+                recording_id,
+                params.overlay.as_ref(),
+            );
             current.pending_overlay_segments += 1;
             current.segments.push(SegmentCapture {
                 text,
@@ -1385,8 +2489,11 @@ async fn drain_stop_audio(
     meter: &mut MeterCollector,
     recording_id: &str,
     trace: &mut RecordingObserver,
+    transcript: &mut TranscriptDisplay,
     params: &SessionParams,
     recording_started_instant: Instant,
+    capture_diag: &mut CaptureDiagnostics,
+    mode: RecordingMode,
 ) -> Result<StopDrainOutcome, HistoryError> {
     let drain_until = Instant::now() + Duration::from_millis(stop_delay_ms as u64);
     while Instant::now() < drain_until {
@@ -1400,6 +2507,13 @@ async fn drain_stop_audio(
             pcm = rec.recv() => {
                 match pcm {
                     Ok(Some(samples)) => {
+                        capture_diag.observe(
+                            &samples,
+                            recording_started_instant,
+                            recording_id,
+                            mode,
+                            params.preprocess.backend,
+                        );
                         observe_pcm(trace, &samples);
                         emit_meters(params, recording_id, meter, &samples);
                         send_pcm_chunk(session, &samples, total_audio_samples).await?;
@@ -1431,6 +2545,7 @@ async fn drain_stop_audio(
                             recording_id,
                             recording_started_instant,
                             trace,
+                            transcript,
                         ) {
                             return Err(error);
                         }
@@ -1440,8 +2555,30 @@ async fn drain_stop_audio(
         }
     }
 
-    let drained = rec.drain_after_stop().await.map_err(capture_error)?;
+    let drained = match tokio::time::timeout(
+        Duration::from_millis(STOP_RESIDUAL_DRAIN_TIMEOUT_MS),
+        rec.drain_after_stop(),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(capture_error)?,
+        Err(_) => {
+            tracing::warn!(
+                recording_id,
+                timeout_ms = STOP_RESIDUAL_DRAIN_TIMEOUT_MS,
+                "stop residual drain timed out; continuing to finalize"
+            );
+            Vec::new()
+        }
+    };
     for samples in drained {
+        capture_diag.observe(
+            &samples,
+            recording_started_instant,
+            recording_id,
+            mode,
+            params.preprocess.backend,
+        );
         observe_pcm(trace, &samples);
         emit_meters(params, recording_id, meter, &samples);
         send_pcm_chunk(session, &samples, total_audio_samples).await?;
@@ -1492,17 +2629,123 @@ fn compute_resume_start_sample(
     last_sent_sample: u64,
     max_overlap_samples: u64,
     oldest_sample: u64,
+    startup_signal_sample: Option<u64>,
 ) -> u64 {
-    speech_start_sample
-        .saturating_sub(pre_roll_samples)
+    let pre_roll_start = speech_start_sample.saturating_sub(pre_roll_samples);
+    let signal_start = startup_signal_sample
+        .map(|sample| sample.saturating_sub(startup_signal_margin_samples()))
+        .unwrap_or(pre_roll_start);
+    pre_roll_start
+        .min(signal_start)
         .max(last_sent_sample.saturating_sub(max_overlap_samples))
         .max(oldest_sample)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn log_vad_pause_replay_window(
+    recording_id: &str,
+    backend: crate::config::VoicePreprocessBackend,
+    session_index: u32,
+    speech_start_sample: u64,
+    send_start_sample: u64,
+    replay: &crate::voice::timeline::PcmChunk,
+    timeline_oldest_sample: u64,
+    timeline_end_sample: u64,
+    pre_roll_samples: u64,
+    max_overlap_samples: u64,
+    last_sent_sample: u64,
+    startup_signal_sample: Option<u64>,
+    is_first_session: bool,
+    replay_clamped: bool,
+    timeline_retention_ms: u32,
+) {
+    if is_first_session || replay_clamped {
+        tracing::info!(
+            recording_id,
+            backend = ?backend,
+            session_index,
+            speech_start_sample,
+            speech_start_ms = samples_to_ms(speech_start_sample),
+            send_start_sample,
+            send_start_ms = samples_to_ms(send_start_sample),
+            replay_start_sample = replay.start_sample,
+            replay_start_ms = samples_to_ms(replay.start_sample),
+            replay_samples = replay.samples.len(),
+            replay_ms = samples_to_ms(replay.samples.len() as u64),
+            timeline_oldest_sample,
+            timeline_oldest_ms = samples_to_ms(timeline_oldest_sample),
+            timeline_end_sample,
+            timeline_end_ms = samples_to_ms(timeline_end_sample),
+            pre_roll_samples,
+            pre_roll_ms = samples_to_ms(pre_roll_samples),
+            startup_signal_sample,
+            startup_signal_ms = startup_signal_sample.map(samples_to_ms),
+            startup_signal_margin_samples = startup_signal_margin_samples(),
+            startup_signal_margin_ms = samples_to_ms(startup_signal_margin_samples()),
+            startup_signal_lookback_ms = STARTUP_SIGNAL_LOOKBACK_MS,
+            timeline_retention_ms,
+            max_overlap_samples,
+            max_overlap_ms = samples_to_ms(max_overlap_samples),
+            last_sent_sample,
+            last_sent_ms = samples_to_ms(last_sent_sample),
+            replay_clamped,
+            "VadPause resume replay window"
+        );
+    } else {
+        tracing::debug!(
+            recording_id,
+            backend = ?backend,
+            session_index,
+            speech_start_sample,
+            speech_start_ms = samples_to_ms(speech_start_sample),
+            send_start_sample,
+            send_start_ms = samples_to_ms(send_start_sample),
+            replay_start_sample = replay.start_sample,
+            replay_start_ms = samples_to_ms(replay.start_sample),
+            replay_samples = replay.samples.len(),
+            replay_ms = samples_to_ms(replay.samples.len() as u64),
+            timeline_oldest_sample,
+            timeline_oldest_ms = samples_to_ms(timeline_oldest_sample),
+            timeline_end_sample,
+            timeline_end_ms = samples_to_ms(timeline_end_sample),
+            pre_roll_samples,
+            pre_roll_ms = samples_to_ms(pre_roll_samples),
+            max_overlap_samples,
+            max_overlap_ms = samples_to_ms(max_overlap_samples),
+            last_sent_sample,
+            last_sent_ms = samples_to_ms(last_sent_sample),
+            replay_clamped,
+            "VadPause resume replay window"
+        );
+    }
+}
+
+fn startup_signal_margin_samples() -> u64 {
+    (STARTUP_SIGNAL_MARGIN_MS as u64) * crate::voice::timeline::SAMPLE_RATE / 1000
+}
+
+fn startup_timeline_retention_ms(config: &crate::config::VoiceVadCfg) -> u32 {
+    let regular_resume_ms = config.pre_roll_ms + config.max_overlap_ms + 100;
+    let startup_evidence_ms = STARTUP_SIGNAL_LOOKBACK_MS + STARTUP_SIGNAL_MARGIN_MS + 100;
+    regular_resume_ms.max(startup_evidence_ms)
+}
+
 fn frame_has_signal(samples: &[i16]) -> bool {
+    pcm_peak_abs(samples) > MIN_NONZERO_AMPLITUDE as u16
+}
+
+fn first_signal_offset(samples: &[i16]) -> Option<usize> {
     samples
         .iter()
-        .any(|sample| sample.unsigned_abs() > MIN_NONZERO_AMPLITUDE as u16)
+        .position(|sample| sample.unsigned_abs() > MIN_NONZERO_AMPLITUDE as u16)
+}
+
+fn pcm_peak_abs(samples: &[i16]) -> u16 {
+    samples
+        .iter()
+        .map(|sample| sample.unsigned_abs())
+        .max()
+        .unwrap_or(0)
 }
 
 fn emit_meters(
@@ -1541,6 +2784,13 @@ fn asr_stream_closed_error() -> HistoryError {
     }
 }
 
+fn asr_open_error_message(error: &crate::asr::types::AsrError) -> String {
+    match error {
+        crate::asr::types::AsrError::OpenTimeout => crate::t!("error.asr_open_timeout"),
+        _ => crate::t!("error.asr_open"),
+    }
+}
+
 fn capture_error(error: anyhow::Error) -> HistoryError {
     HistoryError {
         kind: "capture".to_string(),
@@ -1548,11 +2798,36 @@ fn capture_error(error: anyhow::Error) -> HistoryError {
     }
 }
 
+fn log_vad_pause_resume_step<const N: usize>(
+    params: &SessionParams,
+    recording_id: &str,
+    recording_started_instant: Instant,
+    step: &'static str,
+    fields: [(&'static str, u64); N],
+) {
+    if !params.vad_trace {
+        return;
+    }
+    let details = fields
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    tracing::info!(
+        recording_id,
+        step,
+        t_ms = instant_elapsed_ms(recording_started_instant),
+        details,
+        "VadPause resume diagnostic"
+    );
+}
+
 async fn send_pcm_chunk(
     session: &mut Box<dyn AsrSession>,
     samples: &[i16],
     audio_samples_sent: &mut u64,
 ) -> Result<(), HistoryError> {
+    let started = Instant::now();
     session
         .send_pcm(samples, false)
         .await
@@ -1560,6 +2835,10 @@ async fn send_pcm_chunk(
             kind: "asr_send".to_string(),
             msg: error.to_string(),
         })?;
+    let elapsed_ms = started.elapsed().as_millis();
+    if elapsed_ms >= ASR_SEND_SLOW_WARN_MS {
+        tracing::warn!(elapsed_ms, samples = samples.len(), "ASR send_pcm was slow");
+    }
     *audio_samples_sent += samples.len() as u64;
     Ok(())
 }
@@ -1657,6 +2936,7 @@ mod tests {
 
     use crate::asr::types::AsrError;
     use crate::voice::recorder::RecordingStream;
+    use crate::voice::timeline::ms_to_samples;
 
     struct FailingSendSession;
 
@@ -1713,6 +2993,26 @@ mod tests {
         }
     }
 
+    struct AutoDoneCollectingSession {
+        sent: Arc<Mutex<Vec<Vec<i16>>>>,
+        events: mpsc::Sender<AsrEvent>,
+    }
+
+    #[async_trait]
+    impl AsrSession for AutoDoneCollectingSession {
+        async fn send_pcm(&mut self, pcm: &[i16], is_last: bool) -> Result<(), AsrError> {
+            self.sent.lock().unwrap().push(pcm.to_vec());
+            if is_last {
+                let _ = self.events.send(AsrEvent::Done).await;
+            }
+            Ok(())
+        }
+
+        async fn close(self: Box<Self>) -> Result<(), AsrError> {
+            Ok(())
+        }
+    }
+
     #[derive(Default)]
     struct CloseTrackingSession {
         closes: Arc<AtomicUsize>,
@@ -1743,7 +3043,9 @@ mod tests {
             record_audio: crate::config::RecordAudioMode::Off,
             preprocess: crate::config::VoicePreprocessCfg::default(),
             vad_trace: false,
+            apple_backend_trace: false,
             idle_pause: false,
+            open_timeout_ms: 100,
             finalize_timeout_ms: 100,
             vad: crate::config::VoiceVadCfg::default(),
             stop_delay_ms: 0,
@@ -1756,7 +3058,7 @@ mod tests {
             profile_choices: vec![ProfileChoice {
                 id: "default".to_string(),
                 display_name: "Default".to_string(),
-                asr_provider: "fake".to_string(),
+                asr_instance: "fake".to_string(),
                 chain_summary: "default".to_string(),
             }],
             post_chain: post::PostChain {
@@ -1764,6 +3066,7 @@ mod tests {
                 processors: Vec::new(),
             },
             post_timeout_ms: 100,
+            start: crate::voice::resume::RecordingStart::Fresh,
             overlay,
             state,
         }
@@ -1802,7 +3105,8 @@ mod tests {
 
     #[tokio::test]
     async fn capture_and_initial_asr_open_are_joined_concurrently() {
-        let (_pcm_tx, pcm_rx) = mpsc::unbounded_channel();
+        let (pcm_tx, pcm_rx) = mpsc::unbounded_channel();
+        drop(pcm_tx);
         let (_event_tx, events) = mpsc::channel(1);
         let capture = async move {
             tokio::time::sleep(Duration::from_millis(80)).await;
@@ -1815,11 +3119,10 @@ mod tests {
         let started = Instant::now();
         let control = SessionControl::new();
 
-        let (_rec, _session, _events) =
-            match join_capture_and_asr(capture, asr, "test", &control).await {
-                Ok(started) => started,
-                Err(_) => panic!("expected capture and ASR open to succeed"),
-            };
+        let _started = match join_capture_and_asr(capture, asr, "test", &control).await {
+            Ok(started) => started,
+            Err(_) => panic!("expected capture and ASR open to succeed"),
+        };
 
         assert!(
             started.elapsed() < Duration::from_millis(140),
@@ -1829,8 +3132,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn startup_buffers_capture_pcm_until_asr_open() {
+        let (pcm_tx, pcm_rx) = mpsc::unbounded_channel();
+        let (_event_tx, events) = mpsc::channel(1);
+        let capture = async move { Ok(CaptureStream::Cpal(RecordingStream::for_test(pcm_rx))) };
+        let asr = async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Ok::<OpenedSession, AsrError>((Box::new(CollectingSession::default()), events))
+        };
+        let control = SessionControl::new();
+        let started = join_capture_and_asr(capture, asr, "test", &control);
+        tokio::pin!(started);
+
+        tokio::task::yield_now().await;
+        pcm_tx.send(vec![1, 2, 3]).unwrap();
+        pcm_tx.send(vec![4, 5]).unwrap();
+
+        let started = tokio::time::timeout(Duration::from_millis(100), &mut started)
+            .await
+            .expect("ASR open should complete")
+            .expect("startup should succeed");
+
+        assert_eq!(started.startup_pcm, vec![vec![1, 2, 3], vec![4, 5]]);
+    }
+
+    #[tokio::test]
+    async fn startup_stop_after_capture_preserves_buffer_until_asr_open() {
+        let (pcm_tx, pcm_rx) = mpsc::unbounded_channel();
+        let (_event_tx, events) = mpsc::channel(1);
+        let capture = async move { Ok(CaptureStream::Cpal(RecordingStream::for_test(pcm_rx))) };
+        let asr = async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Ok::<OpenedSession, AsrError>((Box::new(CollectingSession::default()), events))
+        };
+        let control = SessionControl::new();
+        let stop = control.clone();
+        let started = join_capture_and_asr(capture, asr, "test", &control);
+        tokio::pin!(started);
+
+        tokio::task::yield_now().await;
+        pcm_tx.send(vec![1, 2, 3]).unwrap();
+        stop.request_stop();
+        pcm_tx.send(vec![4, 5]).unwrap();
+        drop(pcm_tx);
+
+        let started = tokio::time::timeout(Duration::from_millis(100), &mut started)
+            .await
+            .expect("ASR open should complete after stop")
+            .expect("startup should preserve audio until ASR opens");
+
+        assert_eq!(started.startup_pcm, vec![vec![1, 2, 3], vec![4, 5]]);
+    }
+
+    #[tokio::test]
     async fn initial_asr_open_failure_discards_started_capture() {
-        let (_pcm_tx, pcm_rx) = mpsc::unbounded_channel();
+        let (pcm_tx, pcm_rx) = mpsc::unbounded_channel();
+        drop(pcm_tx);
         let capture = async move { Ok(CaptureStream::Cpal(RecordingStream::for_test(pcm_rx))) };
         let asr = async {
             Err::<OpenedSession, AsrError>(AsrError::Network("scripted open failure".into()))
@@ -1869,6 +3226,27 @@ mod tests {
             }
             _ => panic!("expected capture startup error"),
         }
+    }
+
+    #[tokio::test]
+    async fn initial_asr_open_times_out() {
+        let (_pcm_tx, pcm_rx) = mpsc::unbounded_channel();
+        let capture = async move { Ok(CaptureStream::Cpal(RecordingStream::for_test(pcm_rx))) };
+        let asr = open_with_timeout(
+            async { std::future::pending::<Result<OpenedSession, AsrError>>().await },
+            10,
+        );
+        let control = SessionControl::new();
+
+        let error = match join_capture_and_asr(capture, asr, "test", &control).await {
+            Ok(_) => panic!("expected ASR open timeout"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            StartSessionError::Asr(AsrError::OpenTimeout)
+        ));
     }
 
     #[tokio::test]
@@ -1959,6 +3337,237 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn startup_pcm_is_replayed_and_counted_before_live_pcm() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let (event_tx, events) = mpsc::channel(4);
+        let (pcm_tx, pcm_rx) = mpsc::unbounded_channel();
+        drop(pcm_tx);
+        let rec = CaptureStream::Cpal(RecordingStream::for_test(pcm_rx));
+        let state = StateStore::new();
+        let params = test_session_params(state, None);
+        let provider = CountingProvider {
+            opens: AtomicUsize::new(0),
+        };
+        let outcome = run_with_capture_stream(
+            &provider,
+            params,
+            SessionControl::new(),
+            rec,
+            Some((
+                Box::new(AutoDoneCollectingSession {
+                    sent: sent.clone(),
+                    events: event_tx,
+                }),
+                events,
+            )),
+            vec![vec![10, 11, 12], vec![13, 14]],
+            post::AppContext::default(),
+            "test".to_string(),
+            time::OffsetDateTime::now_utc(),
+            Instant::now(),
+            RecordingMode::Continuous,
+            RecordingObserver::start(TraceStart {
+                enabled: false,
+                recording_id: "test".to_string(),
+                provider: "counting".to_string(),
+                started_at: time::OffsetDateTime::now_utc().to_string(),
+                started_instant: Instant::now(),
+            }),
+            None,
+        )
+        .await
+        .expect("engine should finish after input EOF");
+
+        assert_eq!(
+            sent.lock().unwrap().clone(),
+            vec![vec![10, 11, 12], vec![13, 14], Vec::<i16>::new()]
+        );
+        assert_eq!(outcome.total_audio_samples, 5);
+        assert_eq!(outcome.sessions.len(), 1);
+        assert_eq!(outcome.sessions[0].audio_samples, 5);
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn recv_apple_capture_with_timeout(
+        capture: &mut AppleCapture,
+    ) -> anyhow::Result<Option<Vec<i16>>> {
+        tokio::time::timeout(Duration::from_secs(1), capture.recv())
+            .await
+            .expect("AppleCapture recv timed out")
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn apple_capture_survives_dropped_recv_future() {
+        let (apple_tx, apple_rx) = mpsc::channel(8);
+        let mut capture = AppleCapture::apple(
+            "test",
+            crate::voice::apple_source::RunningAppleVpSource::for_test(apple_rx),
+        );
+
+        let mut pending_recv = Box::pin(capture.recv());
+        tokio::select! {
+            result = &mut pending_recv => panic!("AppleOnly recv returned unexpectedly: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+        }
+        drop(pending_recv);
+
+        apple_tx.send(Ok(vec![42])).await.unwrap();
+        assert_eq!(
+            recv_apple_capture_with_timeout(&mut capture).await.unwrap(),
+            Some(vec![42])
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn apple_capture_raw_fallback_survives_dropped_recv_future() {
+        let (raw_tx, raw_rx) = mpsc::unbounded_channel();
+        let raw = RecordingStream::for_test(raw_rx);
+        let mut capture = AppleCapture::raw_fallback("test", raw);
+
+        let mut pending_recv = Box::pin(capture.recv());
+        tokio::select! {
+            result = &mut pending_recv => panic!("RawFallback recv returned unexpectedly: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+        }
+        drop(pending_recv);
+
+        raw_tx.send(vec![7]).unwrap();
+        assert_eq!(
+            recv_apple_capture_with_timeout(&mut capture).await.unwrap(),
+            Some(vec![7])
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn apple_capture_propagates_apple_error() {
+        let (apple_tx, apple_rx) = mpsc::channel(8);
+        let mut capture = AppleCapture::apple(
+            "test",
+            crate::voice::apple_source::RunningAppleVpSource::for_test(apple_rx),
+        );
+
+        apple_tx.send(Ok(vec![10])).await.unwrap();
+        apple_tx
+            .send(Err(anyhow::anyhow!("scripted apple terminal")))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            recv_apple_capture_with_timeout(&mut capture).await.unwrap(),
+            Some(vec![10])
+        );
+        let error = recv_apple_capture_with_timeout(&mut capture)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("scripted apple terminal"),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn apple_capture_drain_after_stop_outputs_apple_residual() {
+        let (apple_tx, apple_rx) = mpsc::channel(8);
+        apple_tx.send(Ok(vec![11])).await.unwrap();
+        drop(apple_tx);
+        let mut capture = AppleCapture::apple(
+            "test",
+            crate::voice::apple_source::RunningAppleVpSource::for_test(apple_rx),
+        );
+
+        let drained = tokio::time::timeout(Duration::from_secs(1), capture.drain_after_stop())
+            .await
+            .expect("Apple stop drain timed out")
+            .unwrap();
+
+        assert_eq!(drained, vec![vec![11]]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn apple_capture_finish_does_not_publish_retained_audio() {
+        let (_apple_tx, apple_rx) = mpsc::channel(4);
+        let mut capture = AppleCapture::apple(
+            "test",
+            crate::voice::apple_source::RunningAppleVpSource::for_test(apple_rx),
+        );
+
+        assert_eq!(capture.finish_audio().await.unwrap(), None);
+        assert!(matches!(capture.state, AppleCaptureState::Done));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn apple_capture_stop_after_apple_uses_explicit_stopping_state() {
+        let (_apple_tx, apple_rx) = mpsc::channel(4);
+        let mut capture = AppleCapture::apple(
+            "test",
+            crate::voice::apple_source::RunningAppleVpSource::for_test(apple_rx),
+        );
+
+        capture.stop();
+
+        assert!(matches!(
+            capture.state,
+            AppleCaptureState::StoppingApple { .. }
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn apple_capture_raw_fallback_stop_drains_raw() {
+        let (raw_tx, raw_rx) = mpsc::unbounded_channel();
+        let (raw, _finish_rx) = RecordingStream::for_test_observe(raw_rx);
+        let mut capture = AppleCapture::raw_fallback("test", raw);
+
+        raw_tx.send(vec![1, 2, 3]).unwrap();
+        capture.stop();
+        raw_tx.send(vec![4, 5]).unwrap();
+        drop(raw_tx);
+
+        let drained = tokio::time::timeout(Duration::from_millis(50), capture.drain_after_stop())
+            .await
+            .expect("drain should not wait")
+            .unwrap();
+
+        assert_eq!(drained, vec![vec![1, 2, 3], vec![4, 5]]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "touches microphone/TCC; run manually to verify pure Apple VP capture"]
+    async fn apple_capture_smoke_receives_apple_pcm() {
+        let mut rec = start_apple_capture_stream("test", false)
+            .await
+            .expect("Apple capture should start");
+        let deadline = TokioInstant::now() + Duration::from_secs(6);
+        let mut frames = 0usize;
+
+        loop {
+            assert!(
+                TokioInstant::now() < deadline,
+                "Apple bridge did not switch to Apple PCM after {frames} frames"
+            );
+            let pcm = tokio::time::timeout(Duration::from_secs(1), rec.recv())
+                .await
+                .expect("Apple capture recv timed out")
+                .expect("Apple capture recv failed");
+            if pcm.is_some() {
+                frames += 1;
+                break;
+            }
+        }
+
+        rec.stop();
+        let _ = rec.drain_after_stop().await.unwrap();
+        assert!(frames > 0, "expected at least one PCM frame");
+    }
+
+    #[tokio::test]
     async fn cleanup_started_session_closes_asr_session() {
         let closes = Arc::new(AtomicUsize::new(0));
         let session: Box<dyn AsrSession> = Box::new(CloseTrackingSession {
@@ -1997,7 +3606,9 @@ mod tests {
             started_at,
             ended_at: started_at + Duration::from_millis(500),
         });
-        let session = capture.into_session(started_at).unwrap();
+        let session = capture
+            .into_session(started_at, PartialTextPolicy::DiscardTentative)
+            .unwrap();
         assert_eq!(session.audio_samples, 16_000);
         assert_eq!(
             session
@@ -2011,7 +3622,7 @@ mod tests {
     #[test]
     fn empty_continuous_capture_produces_no_session() {
         assert!(CurrentSessionCapture::new(0)
-            .into_session(Instant::now())
+            .into_session(Instant::now(), PartialTextPolicy::DiscardTentative)
             .is_none());
     }
 
@@ -2138,7 +3749,7 @@ mod tests {
     #[test]
     fn resume_start_uses_pre_roll_when_buffer_has_headroom() {
         assert_eq!(
-            compute_resume_start_sample(16_000, 4_800, 0, 3_200, 0),
+            compute_resume_start_sample(16_000, 4_800, 0, 3_200, 0, None),
             11_200
         );
     }
@@ -2146,21 +3757,129 @@ mod tests {
     #[test]
     fn resume_start_bounded_by_last_sent_minus_max_overlap() {
         assert_eq!(
-            compute_resume_start_sample(18_000, 8_000, 20_000, 3_200, 0),
+            compute_resume_start_sample(18_000, 8_000, 20_000, 3_200, 0, None),
             16_800
         );
     }
 
     #[test]
     fn resume_start_clamped_to_oldest_retained_sample() {
-        assert_eq!(compute_resume_start_sample(2_000, 4_000, 0, 200, 800), 800);
+        assert_eq!(
+            compute_resume_start_sample(2_000, 4_000, 0, 200, 800, None),
+            800
+        );
     }
 
     #[test]
     fn resume_overlap_stays_within_cap() {
         let max_overlap = 200 * 16_000 / 1_000;
-        let start = compute_resume_start_sample(10_000, 0, 16_000, max_overlap, 0);
+        let start = compute_resume_start_sample(10_000, 0, 16_000, max_overlap, 0, None);
         assert!(16_000 - start <= max_overlap);
+    }
+
+    #[test]
+    fn first_resume_uses_startup_signal_evidence_before_late_vad_trigger() {
+        let configured_pre_roll = 300 * 16_000 / 1_000;
+        let first_signal = 1_600; // 100ms after recording start.
+
+        let send_start = compute_resume_start_sample(
+            13_824,
+            configured_pre_roll,
+            0,
+            200 * 16_000 / 1_000,
+            0,
+            Some(first_signal),
+        );
+        assert_eq!(send_start, 0);
+    }
+
+    #[test]
+    fn startup_signal_evidence_still_respects_overlap_and_oldest_bounds() {
+        let configured_pre_roll = 300 * 16_000 / 1_000;
+        let first_signal = 1_600;
+
+        assert_eq!(
+            compute_resume_start_sample(
+                13_824,
+                configured_pre_roll,
+                20_000,
+                200 * 16_000 / 1_000,
+                0,
+                Some(first_signal),
+            ),
+            16_800
+        );
+        assert_eq!(
+            compute_resume_start_sample(
+                13_824,
+                configured_pre_roll,
+                0,
+                200 * 16_000 / 1_000,
+                4_000,
+                Some(first_signal),
+            ),
+            4_000
+        );
+    }
+
+    #[test]
+    fn startup_signal_evidence_retention_survives_late_vad_trigger() {
+        let config = crate::config::VoiceVadCfg::default();
+        let mut vad = VadPauseState::with_detector(
+            &config,
+            VadDetector::Scripted {
+                frames: std::collections::VecDeque::new(),
+                buffered_samples: 0,
+                sample_offset: 0,
+            },
+        )
+        .unwrap();
+
+        vad.push_idle_pcm(&vec![0; ms_to_samples(100) as usize]);
+        let mut first_voice = vec![0; ms_to_samples(100) as usize];
+        first_voice[0] = MIN_NONZERO_AMPLITUDE + 1;
+        vad.push_idle_pcm(&first_voice);
+        vad.push_idle_pcm(&vec![0; ms_to_samples(664) as usize]);
+
+        let first_signal = vad.first_signal_sample.unwrap();
+        let speech_start = ms_to_samples(864);
+        let send_start = compute_resume_start_sample(
+            speech_start,
+            vad.pre_roll_samples,
+            0,
+            vad.max_overlap_samples,
+            vad.timeline.oldest_sample(),
+            Some(first_signal),
+        );
+        let replay = vad.timeline.slice_from(send_start);
+
+        assert_eq!(samples_to_ms(first_signal), 100);
+        assert_eq!(send_start, 0);
+        assert_eq!(replay.start_sample, 0);
+        assert!(!replay.samples.is_empty());
+    }
+
+    #[test]
+    fn startup_signal_evidence_records_first_non_silent_sample_once() {
+        let config = crate::config::VoiceVadCfg::default();
+        let mut vad = VadPauseState::with_detector(
+            &config,
+            VadDetector::Scripted {
+                frames: std::collections::VecDeque::new(),
+                buffered_samples: 0,
+                sample_offset: 0,
+            },
+        )
+        .unwrap();
+
+        vad.push_idle_pcm(&[0, 1, MIN_NONZERO_AMPLITUDE]);
+        assert_eq!(vad.first_signal_sample, None);
+
+        vad.push_idle_pcm(&[0, MIN_NONZERO_AMPLITUDE + 1, 40]);
+        assert_eq!(vad.first_signal_sample, Some(4));
+
+        vad.push_idle_pcm(&[100, 100]);
+        assert_eq!(vad.first_signal_sample, Some(4));
     }
 
     #[test]

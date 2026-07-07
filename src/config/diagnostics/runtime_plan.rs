@@ -22,7 +22,7 @@ impl RuntimeCheckPlan {
         let mut targets: BTreeMap<String, AsrRuntimeTarget> = BTreeMap::new();
         for profile in &self.profiles {
             let key = asr_runtime_key(
-                &profile.asr_provider,
+                &profile.asr_instance.id,
                 &profile.hotwords,
                 &profile.asr_overrides,
             );
@@ -31,7 +31,7 @@ impl RuntimeCheckPlan {
                 .and_modify(|target| target.profiles.push(profile.name.clone()))
                 .or_insert_with(|| AsrRuntimeTarget {
                     profiles: vec![profile.name.clone()],
-                    provider: profile.asr_provider.clone(),
+                    instance: profile.asr_instance.clone(),
                     hotwords: profile.hotwords.clone(),
                     overrides: profile.asr_overrides.clone(),
                 });
@@ -57,7 +57,7 @@ impl RuntimeCheckPlan {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeProfileCheck {
     pub name: String,
-    pub asr_provider: String,
+    pub asr_instance: crate::config::asr::instance::AsrInstance,
     pub hotwords: Vec<String>,
     pub asr_overrides: toml::value::Table,
     pub llm_components: Vec<LlmRuntimeTarget>,
@@ -66,7 +66,7 @@ pub struct RuntimeProfileCheck {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AsrRuntimeTarget {
     pub profiles: Vec<String>,
-    pub provider: String,
+    pub instance: crate::config::asr::instance::AsrInstance,
     pub hotwords: Vec<String>,
     pub overrides: toml::value::Table,
 }
@@ -102,7 +102,7 @@ pub fn runtime_check_plan_from_config_home(
                 format!("read: {error}"),
             )
         })?;
-        let profile: Profile = toml::from_str(&body).map_err(|error| {
+        let mut profile: Profile = toml::from_str(&body).map_err(|error| {
             diagnostic_report_error(
                 &root,
                 DiagnosticScope::Profile,
@@ -111,24 +111,43 @@ pub fn runtime_check_plan_from_config_home(
                 format!("parse profile: {error}"),
             )
         })?;
-        let profile_name = profile.name.clone();
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            profile.id = stem.to_string();
+        }
+        let instance =
+            crate::config::asr::instance::resolve_instance_in_root(&root, &profile.asr.instance)
+                .map_err(|error| {
+                    diagnostic_report_error(
+                        &root,
+                        DiagnosticScope::Profile,
+                        &path,
+                        "asr.instance",
+                        error.to_string(),
+                    )
+                })?;
+        let profile_name = profile.display_name();
         profiles.push(RuntimeProfileCheck {
-            name: profile.name,
-            asr_provider: profile.asr.provider,
+            name: profile_name.clone(),
+            asr_instance: instance,
             hotwords: profile.asr.hotwords,
             asr_overrides: profile.asr.overrides,
             llm_components: profile
                 .post
                 .chain
                 .iter()
-                .filter_map(|item| item.strip_prefix("llm:"))
-                .map(|name| LlmRuntimeTarget {
+                .filter(|id| {
+                    matches!(
+                        crate::config::post::resolve_kind_in_root(&root, id),
+                        Some(crate::config::post::PostKind::Llm)
+                    )
+                })
+                .map(|id| LlmRuntimeTarget {
                     profiles: vec![profile_name.clone()],
-                    id: format!("llm:{name}"),
+                    id: id.clone(),
                     overrides: profile
                         .post
-                        .llm
-                        .get(name)
+                        .overrides
+                        .get(id)
                         .and_then(toml::Value::as_table)
                         .cloned()
                         .unwrap_or_default(),
@@ -140,10 +159,14 @@ pub fn runtime_check_plan_from_config_home(
     Ok(RuntimeCheckPlan { root, profiles })
 }
 
-fn asr_runtime_key(provider: &str, hotwords: &[String], overrides: &toml::value::Table) -> String {
+fn asr_runtime_key(
+    instance_id: &str,
+    hotwords: &[String],
+    overrides: &toml::value::Table,
+) -> String {
     format!(
         "{}|hotwords={:?}|overrides={:?}",
-        provider, hotwords, overrides
+        instance_id, hotwords, overrides
     )
 }
 

@@ -64,6 +64,7 @@ pub struct EffectiveOverlayCfg {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoreOverlayCfg {
     pub position: OverlayPosition,
+    pub width: f64,
     pub background_rgb: u32,
     pub background_alpha: f64,
     pub corner_radius: f64,
@@ -279,6 +280,7 @@ impl Default for CoreOverlayCfg {
     fn default() -> Self {
         Self {
             position: OverlayPosition::default(),
+            width: crate::overlay::layout::constants::WIDTH,
             background_rgb: 0x282828,
             background_alpha: 0.70,
             corner_radius: 18.0,
@@ -346,7 +348,7 @@ pub fn load_effective_report(
             warning: None,
         },
         Err(error) => {
-            let message = error.to_string();
+            let message = format!("{error:#}");
             tracing::warn!(error = ?error, "theme load failed; using builtin default theme");
             EffectiveThemeLoad {
                 theme: default_for_config(config),
@@ -388,6 +390,7 @@ pub fn default_for_config(config: &crate::config::Config) -> EffectiveTheme {
     theme.theme_overlay =
         normalized_theme_name(non_empty_or(&config.ui.theme_overlay, &theme.theme)).to_string();
     theme.overlay.core.position = config.overlay.position;
+    theme.overlay.core.width = config.overlay.width as f64;
     theme.overlay.core.max_text_lines = config.overlay.max_text_lines;
     theme
 }
@@ -410,6 +413,9 @@ fn non_empty_or<'a>(value: &'a str, fallback: &'a str) -> &'a str {
 
 fn load_theme_file(root: &Path, name: &str) -> Result<ThemeFile> {
     let name = normalized_theme_name(name);
+    crate::config::inventory::validate_config_file_id(name)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("invalid theme id {name:?}"))?;
     let path = theme_path(root, name);
     if !path.exists() {
         if let Some(body) = crate::config::template::theme_preset_body(name) {
@@ -737,6 +743,31 @@ theme = "missing-theme"
         assert!(report.warning.is_some(), "{report:?}");
         assert_eq!(report.theme.theme, "missing-theme");
         assert_eq!(report.theme.overlay.core.text.primary, palette::FG0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn invalid_theme_file_id_returns_warning_before_reading_file() {
+        let dir = std::env::temp_dir().join(format!("shuohua-theme-test-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = crate::config::main::parse(
+            r#"
+[hotkey]
+trigger = "f16"
+
+[ui]
+theme = "Bad Theme"
+"#,
+        )
+        .unwrap();
+        let config_path = dir.join("config.toml");
+
+        let report = load_effective_report(&cfg, &config_path);
+        let warning = report.warning.unwrap().message;
+
+        assert!(warning.contains("invalid theme id"), "{warning}");
+        assert!(warning.contains("lowercase letter first"), "{warning}");
+        assert!(!warning.contains("read "), "{warning}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

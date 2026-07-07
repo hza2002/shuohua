@@ -21,9 +21,11 @@ pub mod meter;
 pub mod observer;
 pub(crate) mod post_dispatch;
 pub mod recorder;
+pub(crate) mod resume;
 pub mod silero;
 pub mod timeline;
 pub mod vad;
+pub(crate) mod webrtc_apm;
 
 use tokio_util::sync::CancellationToken;
 

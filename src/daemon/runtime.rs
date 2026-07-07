@@ -1,9 +1,13 @@
 use anyhow::{anyhow, Result};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::daemon::active_session::{ActiveSession, ShutdownStopResult};
 use crate::daemon::hotkey_input::HotkeyInput;
+use crate::daemon::resume::ResumeDecision;
 use crate::daemon::session_start;
+use crate::history::HistoryService;
 use crate::hotkey::{Bindings, HotkeyAction, TrackerSet};
 use crate::overlay::{OverlayAction, OverlayActionReceiver, OverlayCmd, OverlayHandle};
 use crate::platform::daemon::{DaemonPlatform, SystemDaemonPlatform};
@@ -18,6 +22,7 @@ pub(super) async fn run_daemon(
     overlay: OverlayHandle,
     overlay_actions: OverlayActionReceiver,
     state_store: StateStore,
+    overlay_on_screen: Arc<AtomicBool>,
 ) -> Result<()> {
     run_daemon_with_platform(
         SystemDaemonPlatform,
@@ -27,10 +32,14 @@ pub(super) async fn run_daemon(
         overlay,
         overlay_actions,
         state_store,
+        overlay_on_screen,
     )
     .await
 }
 
+// Daemon setup seam: wires together config/reload/overlay/state/hotkey plus the
+// ESC-suppression visibility flag. Plain dependency injection, not business logic.
+#[allow(clippy::too_many_arguments)]
 async fn run_daemon_with_platform(
     platform: impl DaemonPlatform,
     cfg_rx: crate::reload::Rx,
@@ -39,6 +48,7 @@ async fn run_daemon_with_platform(
     overlay: OverlayHandle,
     mut overlay_actions: OverlayActionReceiver,
     state_store: StateStore,
+    overlay_on_screen: Arc<AtomicBool>,
 ) -> Result<()> {
     let history = crate::history::HistoryService::new();
     let _history_watcher = match history.watch() {
@@ -73,7 +83,8 @@ async fn run_daemon_with_platform(
     let (hotkey_tx, mut hotkey_rx) = tokio::sync::mpsc::unbounded_channel::<Bindings>();
     crate::reload::spawn_hotkey(cfg_rx.clone(), hotkey_tx);
 
-    let mut hotkey_input = HotkeyInput::spawn(&platform, &initial_hotkeys)?;
+    let mut hotkey_input =
+        HotkeyInput::spawn(&platform, &initial_hotkeys, overlay_on_screen.clone())?;
 
     tracing::info!(
         uds = %socket_path.display(),
@@ -81,7 +92,8 @@ async fn run_daemon_with_platform(
         "daemon ready"
     );
 
-    let mut hotkey_trackers = TrackerSet::new(&initial_hotkeys);
+    let mut current_hotkeys = initial_hotkeys.clone();
+    let mut hotkey_trackers = TrackerSet::new(&current_hotkeys);
     let mut active: Option<ActiveSession> = None;
 
     loop {
@@ -105,6 +117,7 @@ async fn run_daemon_with_platform(
             Some(new_hotkeys) = hotkey_rx.recv() => {
                 hotkey_trackers.set_bindings(&new_hotkeys);
                 hotkey_input.update_bindings(&new_hotkeys)?;
+                current_hotkeys = new_hotkeys;
                 continue;
             }
             maybe_raw = hotkey_input.raw_rx.recv() => {
@@ -112,47 +125,103 @@ async fn run_daemon_with_platform(
                     anyhow::bail!("hotkey bridge channel closed");
                 };
                 match hotkey_trackers.on_event(ev, Instant::now()) {
-                    Some(HotkeyAction::CancelRecord) => {
+                    Some(HotkeyAction::Cancel) => {
                         clear_finished_session(&mut active, &hotkey_input);
-                        if let Some(session) = active.as_ref() {
-                            session.cancel();
+                        // Cancel a live session if any; dismiss the overlay if
+                        // anything is on screen (session OR a lingering error
+                        // panel). Idle (neither) → no-op so ESC passes through.
+                        let cancelled = handle_cancel_hotkey(active.as_ref());
+                        if cancelled || overlay_on_screen.load(Ordering::Relaxed) {
+                            tracing::debug!(
+                                action = "cancel_record",
+                                combo = %hotkey_combo(&current_hotkeys, HotkeyAction::Cancel),
+                                "hotkey action triggered"
+                            );
+                            overlay.send(OverlayCmd::Dismiss);
                         }
-                        overlay.send(OverlayCmd::Dismiss);
                         continue;
                     }
-                    Some(HotkeyAction::ToggleRecord) => {}
+                    Some(HotkeyAction::Toggle) => {
+                        tracing::debug!(
+                            action = "toggle_record",
+                            combo = %hotkey_combo(&current_hotkeys, HotkeyAction::Toggle),
+                            "hotkey action triggered"
+                        );
+                    }
+                    Some(HotkeyAction::Resume) => {
+                        clear_finished_session(&mut active, &hotkey_input);
+                        if active.is_some() {
+                            tracing::debug!(
+                                action = "resume_record",
+                                combo = %hotkey_combo(&current_hotkeys, HotkeyAction::Resume),
+                                "resume_ignored_active_session"
+                            );
+                            continue;
+                        }
+                        let decision = match crate::daemon::resume::latest_decision(history.clone()).await {
+                            Ok(decision) => decision,
+                            Err(error) => {
+                                tracing::warn!(error = ?error, "resume history lookup failed; starting new recording");
+                                ResumeDecision::New
+                            }
+                        };
+                        // resume notice + seed 文本回显由录音引擎在 SetState
+                        // (Connecting) 清屏之后统一发（见 engine::apply_start_notice），
+                        // 这里再发 overlay Notice 会被随后的 Connecting 清掉。
+                        let start = match decision {
+                            ResumeDecision::ResumeSeed { source_id, text } => {
+                                tracing::debug!(
+                                    action = "resume_record",
+                                    combo = %hotkey_combo(&current_hotkeys, HotkeyAction::Resume),
+                                    source_id,
+                                    "hotkey action triggered"
+                                );
+                                crate::voice::resume::RecordingStart::Seed(
+                                    crate::voice::resume::ResumeSeed { text },
+                                )
+                            }
+                            ResumeDecision::New => {
+                                tracing::debug!(
+                                    action = "resume_record",
+                                    combo = %hotkey_combo(&current_hotkeys, HotkeyAction::Resume),
+                                    "resume hotkey starting new recording"
+                                );
+                                crate::voice::resume::RecordingStart::NewFromResume
+                            }
+                        };
+                        match start_session(
+                            &cfg_rx,
+                            &platform,
+                            state_store.clone(),
+                            overlay.clone(),
+                            history.clone(),
+                            &hotkey_input,
+                            start,
+                        ) {
+                            Ok(session) => active = Some(session),
+                            Err(error) => {
+                                tracing::warn!(error = ?error, "session start failed");
+                                state_store.set_error(None);
+                                session_start::send_error_overlay(&overlay, error);
+                            }
+                        }
+                        continue;
+                    }
                     None => continue,
                 }
                 clear_finished_session(&mut active, &hotkey_input);
                 match active.as_ref() {
                     None => {
-                        match session_start::prepare(
-                            &cfg_rx.borrow(),
-                            platform.frontmost_app(),
+                        match start_session(
+                            &cfg_rx,
+                            &platform,
                             state_store.clone(),
                             overlay.clone(),
-                            crate::asr::providers::build,
+                            history.clone(),
+                            &hotkey_input,
+                            crate::voice::resume::RecordingStart::Fresh,
                         ) {
-                            Ok(start) => {
-                                let suppressor_for_task = hotkey_input.suppressor();
-                                let history_for_task = history.clone();
-                                let control = start.control;
-                                let task_control = control.clone();
-                                let join = tokio::spawn(async move {
-                                    crate::voice::finish::run_recording(
-                                        start.provider.as_ref(),
-                                        start.params,
-                                        task_control,
-                                        history_for_task,
-                                    )
-                                    .await;
-                                    if let Ok(mut s) = suppressor_for_task.lock() {
-                                        s.set_cancel_active(false);
-                                    }
-                                });
-                                active = Some(ActiveSession::new(control, join));
-                                hotkey_input.set_cancel_active(true);
-                            }
+                            Ok(session) => active = Some(session),
                             Err(error) => {
                                 tracing::warn!(error = ?error, "session start failed");
                                 state_store.set_error(None);
@@ -168,6 +237,42 @@ async fn run_daemon_with_platform(
             }
         }
     }
+}
+
+fn start_session(
+    cfg_rx: &crate::reload::Rx,
+    platform: &impl DaemonPlatform,
+    state_store: StateStore,
+    overlay: OverlayHandle,
+    history: HistoryService,
+    hotkey_input: &HotkeyInput,
+    start: crate::voice::resume::RecordingStart,
+) -> std::result::Result<ActiveSession, session_start::SessionStartError> {
+    let prepared = session_start::prepare(
+        &cfg_rx.borrow(),
+        platform.frontmost_app(),
+        state_store,
+        overlay,
+        start,
+        crate::asr::providers::build_instance,
+    )?;
+    let suppressor_for_task = hotkey_input.suppressor();
+    let control = prepared.control;
+    let task_control = control.clone();
+    let join = tokio::spawn(async move {
+        crate::voice::finish::run_recording(
+            prepared.provider.as_ref(),
+            prepared.params,
+            task_control,
+            history,
+        )
+        .await;
+        if let Ok(mut s) = suppressor_for_task.lock() {
+            s.set_cancel_active(false);
+        }
+    });
+    hotkey_input.set_cancel_active(true);
+    Ok(ActiveSession::new(control, join))
 }
 
 async fn handle_overlay_action(action: OverlayAction, reload: &crate::reload::Handle) {
@@ -210,6 +315,14 @@ fn clear_finished_session(active: &mut Option<ActiveSession>, hotkey_input: &Hot
     }
 }
 
+fn handle_cancel_hotkey(active: Option<&ActiveSession>) -> bool {
+    let Some(session) = active else {
+        return false;
+    };
+    session.cancel();
+    true
+}
+
 async fn shutdown_active_session(active: &mut Option<ActiveSession>, timeout: Duration) -> bool {
     let Some(session) = active.take() else {
         return true;
@@ -229,6 +342,13 @@ async fn shutdown_active_session(active: &mut Option<ActiveSession>, timeout: Du
             false
         }
     }
+}
+
+fn hotkey_combo(bindings: &Bindings, action: HotkeyAction) -> String {
+    bindings
+        .combo_for(action)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "<missing>".to_string())
 }
 
 #[cfg(test)]
@@ -296,5 +416,19 @@ mod tests {
 
         assert!(stopped);
         assert!(active.is_none());
+    }
+
+    #[test]
+    fn cancel_hotkey_is_ignored_without_active_session() {
+        assert!(!handle_cancel_hotkey(None));
+    }
+
+    #[tokio::test]
+    async fn cancel_hotkey_cancels_active_session() {
+        let control = SessionControl::new();
+        let active = ActiveSession::new(control.clone(), tokio::spawn(std::future::pending()));
+
+        assert!(handle_cancel_hotkey(Some(&active)));
+        assert!(control.is_cancelled());
     }
 }

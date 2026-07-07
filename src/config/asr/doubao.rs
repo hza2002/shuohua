@@ -1,13 +1,15 @@
-use std::path::PathBuf;
-
 use serde::Deserialize;
 use toml::value::Table;
 
+use crate::config::asr::LocalVadMode;
 use crate::config::schema::{self, SchemaId};
 use crate::config::spec::validate_value;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DoubaoConfig {
+    #[serde(default)]
+    #[serde(rename = "name")]
+    pub _name: Option<String>,
     pub app_key: String,
     pub access_key: String,
     #[serde(default = "default_resource_id")]
@@ -33,10 +35,15 @@ pub struct DoubaoConfig {
     /// 直连 WS 不接受会触发 server protocol error，到时换名重试。
     #[serde(default)]
     pub ai_vad: Option<bool>,
-    /// 允许 voice 层用本地 VAD 切分本 provider 的 session。默认关。
-    #[serde(default)]
-    pub idle_pause: bool,
-    /// voice 发出 `is_last=true` 后最多等多久 provider finalize（毫秒）。
+    /// 本 provider 对本地 VAD 的覆盖策略。`auto` 跟随全局 `[voice.vad].backend`。
+    #[serde(default = "default_local_vad")]
+    pub local_vad: LocalVadMode,
+    /// 打开 ASR session（WebSocket 建连/鉴权/初始化）的最长等待时间（毫秒）。
+    /// 这是 voice 层消费的 provider runtime option，不是豆包协议字段。
+    #[serde(default = "default_open_timeout_ms")]
+    pub open_timeout_ms: u64,
+    /// 已打开 session 后，voice 发出 `is_last=true` 后最多等多久 provider 收口（毫秒）。
+    /// 这是 voice 层消费的 provider runtime option，不是豆包协议字段。
     #[serde(default = "default_finalize_timeout_ms")]
     pub finalize_timeout_ms: u64,
 }
@@ -45,8 +52,16 @@ pub(crate) fn default_resource_id() -> String {
     "volc.bigasr.sauc.duration".into()
 }
 
+pub(crate) fn default_local_vad() -> LocalVadMode {
+    LocalVadMode::Auto
+}
+
 fn default_true() -> bool {
     true
+}
+
+pub(crate) fn default_open_timeout_ms() -> u64 {
+    12_000
 }
 
 pub(crate) fn default_finalize_timeout_ms() -> u64 {
@@ -55,15 +70,7 @@ pub(crate) fn default_finalize_timeout_ms() -> u64 {
     12_000
 }
 
-pub fn config_path() -> PathBuf {
-    crate::config::paths::asr_provider("doubao")
-}
-
-pub fn load_config_with_overrides(overrides: Option<&Table>) -> anyhow::Result<DoubaoConfig> {
-    load_config_with_overrides_from_path(&config_path(), overrides)
-}
-
-fn load_config_with_overrides_from_path(
+pub(crate) fn load_config_with_overrides_from_path(
     path: &std::path::Path,
     overrides: Option<&Table>,
 ) -> anyhow::Result<DoubaoConfig> {
@@ -96,6 +103,10 @@ fn load_config_with_overrides_from_path(
     // 控制台复制粘贴常带首尾空格，进协议帧前裁掉，避免 401。
     cfg.app_key = cfg.app_key.trim().to_string();
     cfg.access_key = cfg.access_key.trim().to_string();
+    cfg.language = cfg
+        .language
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "auto");
     if cfg.app_key.is_empty() || cfg.access_key.is_empty() {
         anyhow::bail!(
             "{}: app_key / access_key 为空。从 console.volcengine.com/speech 拿一对填进去",
@@ -103,6 +114,15 @@ fn load_config_with_overrides_from_path(
         );
     }
     Ok(cfg)
+}
+
+impl DoubaoConfig {
+    pub(crate) fn from_path_with_overrides(
+        path: &std::path::Path,
+        overrides: Option<&Table>,
+    ) -> anyhow::Result<Self> {
+        load_config_with_overrides_from_path(path, overrides)
+    }
 }
 
 #[cfg(test)]
@@ -117,6 +137,7 @@ mod tests {
         fs::write(
             &path,
             r#"
+type = "doubao"
 app_key = "app"
 access_key = "access"
 stream_mode = 9

@@ -1,71 +1,120 @@
-use crate::config::inventory::{self, InventoryEntry};
+use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use crate::config::field_view::{self, ControlKind, FieldOrigin, FieldView};
+use crate::config::inventory::InventoryModule;
+use crate::config::{paths, schema};
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SettingsRow {
     pub group: String,
-    pub key: String,
+    pub field_path: String,
     pub display_key: String,
     pub value: String,
+    pub default_value: String,
+    pub origin: FieldOrigin,
+    pub control: ControlKind,
+    pub editable: bool,
+    pub secret: bool,
+    /// 该字段能否「重置为默认」（删键后文件仍合法）。见 FieldView::can_unset。
+    pub can_unset: bool,
     pub source: String,
-    pub status: inventory::InventoryStatus,
     pub description_key: Option<&'static str>,
 }
 
 pub fn load_rows() -> Vec<SettingsRow> {
-    inventory::load().entries().map(row_from_entry).collect()
+    let root = paths::config_home().join("shuohua");
+    let mut rows = Vec::new();
+    rows.extend(rows_for_path(
+        &root,
+        &root.join("config.toml"),
+        InventoryModule::Main,
+    ));
+    for path in toml_files(&root.join("profile")) {
+        rows.extend(rows_for_path(&root, &path, InventoryModule::Profile));
+    }
+    for path in toml_files(&root.join("asr")) {
+        rows.extend(rows_for_path(&root, &path, InventoryModule::AsrProvider));
+    }
+    for path in toml_files(&root.join("post")) {
+        rows.extend(rows_for_path(&root, &path, InventoryModule::PostProcessor));
+    }
+    for path in toml_files(&root.join("theme")) {
+        rows.extend(rows_for_path(&root, &path, InventoryModule::Theme));
+    }
+    rows
 }
 
-fn row_from_entry(entry: &InventoryEntry) -> SettingsRow {
+fn rows_for_path(root: &Path, path: &Path, module: InventoryModule) -> Vec<SettingsRow> {
+    let rel = relative_source_path(path).unwrap_or_default();
+    let spec = match schema::spec_for_config_file(path, &rel) {
+        Some(Ok(spec)) => spec,
+        Some(Err(e)) => {
+            // Broken ASR file (e.g. missing/invalid `type`): surface a non-editable
+            // error row so the file is visible in the TUI rather than silently absent.
+            let display_key = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("type")
+                .to_string();
+            return vec![SettingsRow {
+                group: module.label().to_string(),
+                field_path: display_key.clone(),
+                display_key,
+                value: format!("{e:#}"),
+                default_value: String::new(),
+                origin: crate::config::field_view::FieldOrigin::Default,
+                control: crate::config::field_view::ControlKind::Text,
+                editable: false,
+                secret: false,
+                can_unset: false,
+                source: path.display().to_string(),
+                description_key: None,
+            }];
+        }
+        None => return Vec::new(),
+    };
+    let parsed = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|body| toml::from_str::<toml::Value>(&body).ok())
+        .unwrap_or_else(|| toml::Value::Table(Default::default()));
+    field_view::field_views(&rel, &spec, &parsed, root)
+        .into_iter()
+        .map(|view| row_from_view(module, path, view))
+        .collect()
+}
+
+fn row_from_view(module: InventoryModule, path: &Path, view: FieldView) -> SettingsRow {
     SettingsRow {
-        group: entry.module.label().to_string(),
-        key: entry.key.clone(),
-        display_key: display_key_for_entry(entry),
-        value: match entry.status {
-            inventory::InventoryStatus::Ok => entry.summary.clone(),
-            inventory::InventoryStatus::Warning => crate::i18n::tr(
-                "tui.configure.inventory.warning",
-                &[("summary", entry.summary.clone())],
-            ),
-            inventory::InventoryStatus::Error => crate::i18n::tr(
-                "tui.configure.inventory.error",
-                &[("summary", entry.summary.clone())],
-            ),
-            inventory::InventoryStatus::Missing => crate::i18n::tr(
-                "tui.configure.inventory.missing",
-                &[("summary", entry.summary.clone())],
-            ),
-        },
-        source: entry.source.display().to_string(),
-        status: entry.status,
-        description_key: description_key_for_entry(entry),
+        group: module.label().to_string(),
+        display_key: view.field_path.clone(),
+        field_path: view.field_path,
+        value: view.effective,
+        default_value: view.default_value,
+        origin: view.origin,
+        control: view.control,
+        editable: view.editable,
+        secret: view.secret,
+        can_unset: view.can_unset,
+        source: path.display().to_string(),
+        description_key: view.description_key,
     }
 }
 
-fn display_key_for_entry(entry: &InventoryEntry) -> String {
-    entry.field_path.clone().unwrap_or_else(|| {
-        field_path_from_key(&entry.key)
-            .unwrap_or(&entry.key)
-            .to_string()
-    })
+fn toml_files(dir: &Path) -> Vec<PathBuf> {
+    let mut paths = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "toml"))
+            .collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    paths.sort();
+    paths
 }
 
-fn description_key_for_entry(entry: &InventoryEntry) -> Option<&'static str> {
-    let field_path = entry
-        .field_path
-        .as_deref()
-        .or_else(|| field_path_from_key(&entry.key));
-    let rel_path = relative_source_path(&entry.source)?;
-    let spec = crate::config::schema::spec_for_path(&rel_path)?;
-    spec.field_for_path(field_path?)
-        .and_then(|field| field.description_key_value())
-}
-
-fn field_path_from_key(key: &str) -> Option<&str> {
-    key.split_once('.').map(|(_, field)| field)
-}
-
-fn relative_source_path(path: &std::path::Path) -> Option<String> {
-    let marker = std::path::Path::new("shuohua");
+fn relative_source_path(path: &Path) -> Option<String> {
+    let marker = Path::new("shuohua");
     let mut found = false;
     let mut parts = Vec::new();
     for component in path.components() {
@@ -80,34 +129,18 @@ fn relative_source_path(path: &std::path::Path) -> Option<String> {
         Some(parts.join("/"))
     } else {
         path.file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name.to_string())
+            .and_then(|n| n.to_str())
+            .map(str::to_string)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
 
     #[test]
-    fn row_description_key_comes_from_config_schema() {
-        let entry = InventoryEntry {
-            module: inventory::InventoryModule::AsrProvider,
-            key: "apple.idle_pause".to_string(),
-            field_path: Some("idle_pause".to_string()),
-            summary: "false".to_string(),
-            source: PathBuf::from("/tmp/shuohua/asr/apple.toml"),
-            status: inventory::InventoryStatus::Ok,
-        };
-
-        let row = row_from_entry(&entry);
-
-        assert_eq!(
-            row.description_key,
-            Some("config.field.idle_pause.description")
-        );
-        assert_eq!(row.display_key, "idle_pause");
+    fn relative_path_extracts_after_marker() {
+        let p = Path::new("/home/u/.config/shuohua/asr/doubao.toml");
+        assert_eq!(relative_source_path(p).as_deref(), Some("asr/doubao.toml"));
     }
 }

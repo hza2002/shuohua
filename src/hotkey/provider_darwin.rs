@@ -72,27 +72,12 @@ pub fn run(writer: PipeWriter, suppressor: Arc<Mutex<Suppressor>>) -> Result<()>
                 let _ = w.write_all(&raw.encode());
             }
 
-            let (drop_event, log_it) = match suppressor.lock() {
-                Ok(mut s) => (s.on_raw(raw), s.binds_key(key)),
+            let drop_event = match suppressor.lock() {
+                Ok(mut s) => s.on_raw(raw),
                 // Poisoned mutex: a Suppressor user panicked. Let events
                 // through rather than silently eating them.
-                Err(_) => (false, false),
+                Err(_) => false,
             };
-
-            // Diagnostic trail for the "trigger wedged, recording won't stop"
-            // bug: a stray modifier on the trigger key fails the exact match
-            // silently. Gated to the bound trigger/cancel key so we never log
-            // ordinary typed characters (this runs for every system keystroke).
-            if log_it {
-                tracing::debug!(
-                    ?kind,
-                    ?key,
-                    mods = raw.mods.0,
-                    raw_flags = format_args!("{flags:#018x}"),
-                    drop = drop_event,
-                    "hotkey bound-key event",
-                );
-            }
 
             if drop_event {
                 CallbackResult::Drop

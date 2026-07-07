@@ -9,6 +9,10 @@ use clap::Args;
 
 #[derive(Debug, Args)]
 pub struct UpdateArgs {
+    /// Check for updates without installing.
+    #[arg(long)]
+    pub check: bool,
+
     /// Allow updates across major versions.
     #[arg(long)]
     pub allow_major: bool,

@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -15,6 +16,8 @@ const SERVER_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const SERVER_START_TIMEOUT: Duration = Duration::from_secs(10);
 const SERVER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PCM_FRAME_SAMPLES: usize = 16_000;
+
+static REUSABLE_SERVER: OnceLock<Mutex<Option<Arc<AppleCaptureServer>>>> = OnceLock::new();
 
 pub(crate) struct AppleVpSource {
     helper_path: PathBuf,
@@ -52,9 +55,15 @@ enum ServerRequest {
 enum RunningStop {
     Child(Child),
     Server {
+        server: Arc<AppleCaptureServer>,
         request_tx: mpsc::Sender<ServerRequest>,
+        /// abort server_loop → 其持有的 `Child`(kill_on_drop)被 drop → helper 进程
+        /// 必被杀。正常 stop 会复用进程；异常/drop 路径用它回收 wedged helper。
+        loop_abort: tokio::task::AbortHandle,
         stopped: bool,
     },
+    #[cfg(test)]
+    Test,
 }
 
 impl AppleVpSource {
@@ -75,38 +84,54 @@ impl AppleVpSource {
         start_helper_capture_smoke(self.helper_path(), duration_ms).await
     }
 
+    /// 复用 helper 进程；Swift 端每次 start 新建 AVAudioEngine。异常/drop 路径仍会
+    /// abort server_loop 来杀掉可能 wedged 的 helper。
     pub(crate) async fn start(&self) -> Result<RunningAppleVpSource> {
-        match reusable_server(self.helper_path().to_path_buf()).await {
-            Ok(server) => match server.start_capture().await {
-                Ok(running) => Ok(running),
-                Err(error) => {
-                    clear_reusable_server().await;
-                    Err(error)
-                }
-            },
-            Err(error) => Err(error),
-        }
+        let server = reusable_server(self.helper_path()).await?;
+        server.start_capture().await
     }
 }
 
-#[derive(Clone)]
 struct AppleCaptureServer {
     request_tx: mpsc::Sender<ServerRequest>,
+    loop_abort: tokio::task::AbortHandle,
+    /// recycle 时同步置位，标记这个复用 server 已不可用（helper 已被杀）。
+    poisoned: AtomicBool,
 }
 
 impl AppleCaptureServer {
-    async fn start_capture(&self) -> Result<RunningAppleVpSource> {
+    /// 缓存的 server 是否已不可复用：被 recycle 显式 poison，或 server_loop 任务已
+    /// 结束（自行 break / 被 abort）。reusable_server 据此判活，避免把死 helper 的
+    /// server 再交给下一次录音。
+    fn is_dead(&self) -> bool {
+        self.poisoned.load(Ordering::Relaxed) || self.loop_abort.is_finished()
+    }
+}
+
+impl AppleCaptureServer {
+    async fn start_capture(self: Arc<Self>) -> Result<RunningAppleVpSource> {
         let (pcm_tx, pcm_rx) = mpsc::channel(32);
         let (reply, reply_rx) = oneshot::channel();
-        self.request_tx
+        if let Err(error) = self
+            .request_tx
             .send(ServerRequest::Start { pcm_tx, reply })
             .await
-            .context("apple capture server unavailable")?;
-        await_empty_server_reply(reply_rx, SERVER_START_TIMEOUT, "start").await?;
+            .context("apple capture server unavailable")
+        {
+            self.loop_abort.abort();
+            return Err(error);
+        }
+        if let Err(error) = await_empty_server_reply(reply_rx, SERVER_START_TIMEOUT, "start").await
+        {
+            self.loop_abort.abort();
+            return Err(error);
+        }
         Ok(RunningAppleVpSource {
             pcm_rx,
             stop: RunningStop::Server {
+                server: self.clone(),
                 request_tx: self.request_tx.clone(),
+                loop_abort: self.loop_abort.clone(),
                 stopped: false,
             },
             residual_after_stop: Vec::new(),
@@ -129,6 +154,8 @@ impl RunningAppleVpSource {
                 let _ = child.start_kill();
             }
             RunningStop::Server { .. } => {}
+            #[cfg(test)]
+            RunningStop::Test => {}
         }
     }
 
@@ -143,20 +170,26 @@ impl RunningAppleVpSource {
                 Ok(Vec::new())
             }
             RunningStop::Server {
+                server,
                 request_tx,
+                loop_abort,
                 stopped,
             } => {
+                let server = server.clone();
+                let request_tx = request_tx.clone();
+                let loop_abort = loop_abort.clone();
                 if *stopped {
                     return Ok(std::mem::take(&mut self.residual_after_stop));
                 }
                 *stopped = true;
+                // 正常 stop 后保留 server 进程复用；只有 stop 失败/超时才 recycle。
                 let (reply, rx) = oneshot::channel();
                 if let Err(error) = request_tx
                     .send(ServerRequest::Stop { reply: Some(reply) })
                     .await
                     .context("apple capture server unavailable")
                 {
-                    clear_reusable_server().await;
+                    recycle_reusable_server(&server);
                     return Err(error);
                 }
                 let queued = self.drain_queued_until_stop_reply(rx).await;
@@ -166,10 +199,19 @@ impl RunningAppleVpSource {
                         Ok(std::mem::take(&mut self.residual_after_stop))
                     }
                     Err(error) => {
-                        clear_reusable_server().await;
+                        loop_abort.abort();
+                        recycle_reusable_server(&server);
                         Err(error)
                     }
                 }
+            }
+            #[cfg(test)]
+            RunningStop::Test => {
+                let mut queued = Vec::new();
+                while let Some(frame) = self.pcm_rx.recv().await {
+                    queued.push(frame?);
+                }
+                Ok(queued)
             }
         }
     }
@@ -213,6 +255,36 @@ impl RunningAppleVpSource {
                 queued.extend(residual);
                 return Ok(queued);
             }
+        }
+    }
+}
+
+impl Drop for RunningAppleVpSource {
+    /// 兜底保证：source 未正常 stop 就被 drop（含 drain task 被 abort 等路径）时
+    /// abort server_loop → Child 被杀，防止卡死 helper 残留。
+    fn drop(&mut self) {
+        if let RunningStop::Server {
+            server,
+            loop_abort,
+            stopped,
+            ..
+        } = &self.stop
+        {
+            if !*stopped {
+                loop_abort.abort();
+                recycle_reusable_server(server);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl RunningAppleVpSource {
+    pub(crate) fn for_test(pcm_rx: mpsc::Receiver<Result<Vec<i16>>>) -> Self {
+        Self {
+            pcm_rx,
+            stop: RunningStop::Test,
+            residual_after_stop: Vec::new(),
         }
     }
 }
@@ -299,25 +371,6 @@ async fn run_helper_capture_smoke(
     ))
 }
 
-static REUSABLE_SERVER: OnceLock<Arc<Mutex<Option<AppleCaptureServer>>>> = OnceLock::new();
-
-async fn reusable_server(helper_path: PathBuf) -> Result<AppleCaptureServer> {
-    let slot = REUSABLE_SERVER.get_or_init(|| Arc::new(Mutex::new(None)));
-    let mut guard = slot.lock().await;
-    if let Some(server) = guard.as_ref() {
-        return Ok(server.clone());
-    }
-    let server = spawn_server(&helper_path).await?;
-    *guard = Some(server.clone());
-    Ok(server)
-}
-
-async fn clear_reusable_server() {
-    if let Some(slot) = REUSABLE_SERVER.get() {
-        *slot.lock().await = None;
-    }
-}
-
 async fn spawn_server(helper_path: &Path) -> Result<AppleCaptureServer> {
     let mut child = Command::new(helper_path)
         .arg("--server")
@@ -367,8 +420,47 @@ async fn spawn_server(helper_path: &Path) -> Result<AppleCaptureServer> {
     )?;
 
     let (request_tx, request_rx) = mpsc::channel(4);
-    tokio::spawn(server_loop(child, child_id, stdin, reader, request_rx));
-    Ok(AppleCaptureServer { request_tx })
+    let loop_handle = tokio::spawn(server_loop(child, child_id, stdin, reader, request_rx));
+    Ok(AppleCaptureServer {
+        request_tx,
+        loop_abort: loop_handle.abort_handle(),
+        poisoned: AtomicBool::new(false),
+    })
+}
+
+async fn reusable_server(helper_path: &Path) -> Result<Arc<AppleCaptureServer>> {
+    let slot = REUSABLE_SERVER.get_or_init(|| Mutex::new(None));
+    let mut guard = slot.lock().await;
+    if let Some(server) = guard.as_ref() {
+        if !server.is_dead() {
+            return Ok(server.clone());
+        }
+        // 缓存 server 已死（recycle 未能清 slot，或 server_loop 自行退出）——丢弃重建，
+        // 否则后续每次录音都会复用死 helper 而失败。
+        *guard = None;
+    }
+    let server = Arc::new(spawn_server(helper_path).await?);
+    *guard = Some(server.clone());
+    Ok(server)
+}
+
+fn recycle_reusable_server(server: &Arc<AppleCaptureServer>) {
+    // 先同步 poison 再 abort：即便下面 try_lock 拿不到锁、slot 里的死 Arc 没清掉，
+    // reusable_server 也会因 poisoned 拒绝复用它——覆盖 abort 已发出但 loop_abort
+    // 尚未 is_finished 的竞争窗口。
+    server.poisoned.store(true, Ordering::Relaxed);
+    server.loop_abort.abort();
+    let Some(slot) = REUSABLE_SERVER.get() else {
+        return;
+    };
+    if let Ok(mut guard) = slot.try_lock() {
+        if guard
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, server))
+        {
+            *guard = None;
+        }
+    }
 }
 
 async fn server_loop<R>(
@@ -412,7 +504,7 @@ async fn server_loop<R>(
                         }
                     } else {
                         let mut frame_reader = PcmFrameReader::new(&mut reader);
-                        if stop_server_session(&mut stdin, &mut frame_reader)
+                        if stop_server_session_with_timeout(&mut stdin, &mut frame_reader)
                             .await
                             .is_err()
                         {
@@ -467,7 +559,7 @@ where
             request = request_rx.recv() => {
                 match request {
                     Some(ServerRequest::Stop { reply }) => {
-                        let result = stop_server_session(stdin, &mut frame_reader).await;
+                        let result = stop_server_session_with_timeout(stdin, &mut frame_reader).await;
                         if let Some(reply) = reply {
                             let _ = reply.send(result);
                         }
@@ -483,7 +575,8 @@ where
                             .write_all(&encode_server_command("stop")?)
                             .await
                             .context("send apple capture server stop after request channel closed")?;
-                        let residual = read_until_stopped(&mut frame_reader).await?;
+                        let residual =
+                            read_until_stopped_with_timeout(&mut frame_reader).await?;
                         for samples in residual {
                             let _ = pcm_tx.send(Ok(samples)).await;
                         }
@@ -519,6 +612,39 @@ where
         .await
         .context("send apple capture server stop")?;
     read_until_stopped(reader).await
+}
+
+async fn stop_server_session_with_timeout<R>(
+    stdin: &mut tokio::process::ChildStdin,
+    reader: &mut PcmFrameReader<'_, BufReader<R>>,
+) -> Result<Vec<Vec<i16>>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    timeout(SERVER_STOP_TIMEOUT, stop_server_session(stdin, reader))
+        .await
+        .unwrap_or_else(|_| anyhow::bail!("apple capture server stop timed out"))
+}
+
+async fn read_until_stopped_with_timeout<R>(
+    reader: &mut PcmFrameReader<'_, R>,
+) -> Result<Vec<Vec<i16>>>
+where
+    R: AsyncBufRead + AsyncRead + Unpin,
+{
+    read_until_stopped_with_timeout_duration(reader, SERVER_STOP_TIMEOUT).await
+}
+
+async fn read_until_stopped_with_timeout_duration<R>(
+    reader: &mut PcmFrameReader<'_, R>,
+    timeout_duration: Duration,
+) -> Result<Vec<Vec<i16>>>
+where
+    R: AsyncBufRead + AsyncRead + Unpin,
+{
+    timeout(timeout_duration, read_until_stopped(reader))
+        .await
+        .unwrap_or_else(|_| anyhow::bail!("apple capture server stop timed out"))
 }
 
 async fn read_ready_from_stream<R>(reader: &mut BufReader<R>) -> Result<()>
@@ -949,6 +1075,50 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    fn fake_server(
+        request_tx: mpsc::Sender<ServerRequest>,
+        loop_abort: tokio::task::AbortHandle,
+    ) -> Arc<AppleCaptureServer> {
+        Arc::new(AppleCaptureServer {
+            request_tx,
+            loop_abort,
+            poisoned: AtomicBool::new(false),
+        })
+    }
+
+    #[tokio::test]
+    async fn recycled_server_is_marked_dead_for_reuse_guard() {
+        // 复用判活（poison 路径）：recycle 后缓存 server 必须被判死，reusable_server
+        // 才会丢弃它、重建，而不是把死 helper 交给下一次录音。
+        let loop_handle = tokio::spawn(std::future::pending::<()>());
+        let (request_tx, _request_rx) = mpsc::channel(1);
+        let server = fake_server(request_tx, loop_handle.abort_handle());
+        assert!(!server.is_dead(), "fresh server must be reusable");
+
+        recycle_reusable_server(&server);
+
+        assert!(
+            server.is_dead(),
+            "recycled server must be rejected by the reuse guard"
+        );
+    }
+
+    #[tokio::test]
+    async fn finished_server_loop_is_marked_dead_for_reuse_guard() {
+        // 复用判活（is_finished 路径）：server_loop 自行退出（break，不经 recycle）
+        // 也要被判死。
+        let loop_handle = tokio::spawn(async {});
+        let loop_abort = loop_handle.abort_handle();
+        loop_handle.await.unwrap();
+        let (request_tx, _request_rx) = mpsc::channel(1);
+        let server = fake_server(request_tx, loop_abort);
+
+        assert!(
+            server.is_dead(),
+            "server whose loop already finished must be rejected"
+        );
+    }
+
     #[test]
     fn parse_ready_event() {
         let event =
@@ -1073,13 +1243,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_until_stopped_with_timeout_reports_stop_timeout() {
+        let (_tx, rx) = tokio::io::duplex(64);
+        let mut reader = BufReader::new(rx);
+        let mut frame_reader = PcmFrameReader::new(&mut reader);
+
+        let err =
+            read_until_stopped_with_timeout_duration(&mut frame_reader, Duration::from_millis(1))
+                .await
+                .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("apple capture server stop timed out"),
+            "{err:#}"
+        );
+    }
+
+    #[tokio::test]
     async fn drain_queued_until_stop_reply_preserves_queued_before_residual() {
         let (pcm_tx, pcm_rx) = mpsc::channel(2);
         let (reply_tx, reply_rx) = oneshot::channel();
         let mut source = RunningAppleVpSource {
             pcm_rx,
             stop: RunningStop::Server {
+                server: fake_server(
+                    mpsc::channel(1).0,
+                    tokio::spawn(std::future::pending::<()>()).abort_handle(),
+                ),
                 request_tx: mpsc::channel(1).0,
+                loop_abort: tokio::spawn(std::future::pending::<()>()).abort_handle(),
                 stopped: true,
             },
             residual_after_stop: Vec::new(),
@@ -1159,7 +1352,8 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "touches microphone/TCC; run manually during Apple capture server spike"]
-    async fn apple_vp_source_reuses_server_across_two_recordings() {
+    async fn apple_vp_source_reuses_server_across_recordings() {
+        // helper 进程复用；Swift 端每次 start() 重建 AVAudioEngine。
         let source = AppleVpSource::prepare_helper().unwrap();
 
         let mut first = source.start().await.unwrap();
@@ -1171,6 +1365,69 @@ mod tests {
         let second_samples = second.recv().await.unwrap().unwrap();
         assert!(!second_samples.is_empty(), "expected second PCM samples");
         second.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dropping_running_source_aborts_server_loop() {
+        // 卡死兜底：source 被 drop（含 drain task 被 abort 的路径）必须 abort
+        // server_loop → Child(kill_on_drop) 被 drop → helper 进程被杀。用一个永不
+        // 结束的任务模拟 server_loop，断言 drop 后它被 abort。
+        let loop_handle = tokio::spawn(std::future::pending::<()>());
+        let (request_tx, _request_rx) = mpsc::channel(1);
+        let (_pcm_tx, pcm_rx) = mpsc::channel::<Result<Vec<i16>>>(1);
+        let source = RunningAppleVpSource {
+            pcm_rx,
+            stop: RunningStop::Server {
+                server: fake_server(request_tx.clone(), loop_handle.abort_handle()),
+                request_tx,
+                loop_abort: loop_handle.abort_handle(),
+                stopped: false,
+            },
+            residual_after_stop: Vec::new(),
+        };
+
+        drop(source);
+        // 让 runtime 处理 abort。
+        tokio::task::yield_now().await;
+        assert!(
+            loop_handle.is_finished(),
+            "server_loop must be aborted on drop"
+        );
+        assert!(loop_handle.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn drain_after_stop_keeps_server_loop_after_draining() {
+        // 正常收尾：drain 拿到 residual 后保留 server_loop，供下一次录音复用。
+        let loop_handle = tokio::spawn(std::future::pending::<()>());
+        let (request_tx, mut request_rx) = mpsc::channel::<ServerRequest>(1);
+        let (pcm_tx, pcm_rx) = mpsc::channel::<Result<Vec<i16>>>(4);
+        pcm_tx.send(Ok(vec![1, 2])).await.unwrap();
+        tokio::spawn(async move {
+            if let Some(ServerRequest::Stop { reply: Some(reply) }) = request_rx.recv().await {
+                let _ = reply.send(Ok(vec![vec![3]]));
+            }
+        });
+        let mut source = RunningAppleVpSource {
+            pcm_rx,
+            stop: RunningStop::Server {
+                server: fake_server(request_tx.clone(), loop_handle.abort_handle()),
+                request_tx,
+                loop_abort: loop_handle.abort_handle(),
+                stopped: false,
+            },
+            residual_after_stop: Vec::new(),
+        };
+
+        let drained = source.drain_after_stop().await.unwrap();
+
+        assert_eq!(drained, vec![vec![1, 2], vec![3]]);
+        tokio::task::yield_now().await;
+        assert!(
+            !loop_handle.is_finished(),
+            "server_loop should be kept for reuse after clean drain"
+        );
+        loop_handle.abort();
     }
 
     #[tokio::test]

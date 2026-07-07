@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::io::Read;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -15,9 +16,10 @@ impl HotkeyInput {
     pub(super) fn spawn(
         platform: &impl DaemonPlatform,
         initial_hotkeys: &Bindings,
+        overlay_on_screen: Arc<AtomicBool>,
     ) -> Result<Self> {
         let (pipe_reader, pipe_writer) = os_pipe::pipe().context("create hotkey pipe")?;
-        let suppressor = build_suppressor(initial_hotkeys)?;
+        let suppressor = build_suppressor(initial_hotkeys, overlay_on_screen)?;
         platform.spawn_hotkey_event_tap(pipe_writer, suppressor.clone())?;
 
         let (raw_tx, raw_rx) = tokio::sync::mpsc::unbounded_channel::<RawEvent>();
@@ -31,16 +33,21 @@ impl HotkeyInput {
 
     pub(super) fn update_bindings(&self, hotkeys: &Bindings) -> Result<()> {
         let new_trigger = hotkeys
-            .combo_for(HotkeyAction::ToggleRecord)
+            .combo_for(HotkeyAction::Toggle)
             .context("missing toggle-record hotkey binding")?
             .clone();
         let new_cancel = hotkeys
-            .combo_for(HotkeyAction::CancelRecord)
+            .combo_for(HotkeyAction::Cancel)
             .context("missing cancel-record hotkey binding")?
+            .clone();
+        let new_resume = hotkeys
+            .combo_for(HotkeyAction::Resume)
+            .context("missing resume-record hotkey binding")?
             .clone();
         if let Ok(mut s) = self.suppressor.lock() {
             s.set_trigger(new_trigger);
             s.set_cancel(new_cancel);
+            s.set_resume(new_resume);
         }
         Ok(())
     }
@@ -56,17 +63,26 @@ impl HotkeyInput {
     }
 }
 
-fn build_suppressor(hotkeys: &Bindings) -> Result<Arc<Mutex<Suppressor>>> {
+fn build_suppressor(
+    hotkeys: &Bindings,
+    overlay_on_screen: Arc<AtomicBool>,
+) -> Result<Arc<Mutex<Suppressor>>> {
     let initial_trigger = hotkeys
-        .combo_for(HotkeyAction::ToggleRecord)
+        .combo_for(HotkeyAction::Toggle)
         .context("missing toggle-record hotkey binding")?
         .clone();
     let initial_cancel = hotkeys
-        .combo_for(HotkeyAction::CancelRecord)
+        .combo_for(HotkeyAction::Cancel)
         .context("missing cancel-record hotkey binding")?
+        .clone();
+    let initial_resume = hotkeys
+        .combo_for(HotkeyAction::Resume)
+        .context("missing resume-record hotkey binding")?
         .clone();
     let mut initial_suppressor = Suppressor::new(initial_trigger);
     initial_suppressor.set_cancel(initial_cancel);
+    initial_suppressor.set_resume(initial_resume);
+    initial_suppressor.set_on_screen(overlay_on_screen);
     Ok(Arc::new(Mutex::new(initial_suppressor)))
 }
 

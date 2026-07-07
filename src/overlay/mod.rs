@@ -21,6 +21,7 @@ pub fn run(
     _rx: OverlayReceiver,
     _actions: OverlayActionHandle,
     _cfg: crate::config::theme::EffectiveOverlayCfg,
+    _on_screen: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<()> {
     anyhow::bail!("overlay is not implemented on this platform")
 }

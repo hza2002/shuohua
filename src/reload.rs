@@ -120,7 +120,11 @@ fn run_watcher(
         match load_and_broadcast(&path, &tx, overlay.as_ref()) {
             Ok(()) => {}
             Err(e) => {
-                tracing::warn!(error = ?e, "config reload failed; keeping previous config");
+                tracing::warn!(
+                    path = %path.display(),
+                    error = ?e,
+                    "config reload failed; keeping previous config"
+                );
                 send_reload_failed_notice(overlay.as_ref());
             }
         }
@@ -225,23 +229,30 @@ pub fn spawn_i18n(mut rx: Rx, handle: OverlayHandle) {
 
 /// Hotkey subscriber：`[hotkey]` 变化 → 重新 parse，成功则发新 binding 到 daemon
 /// 主循环（主循环用 tokio::select 在 `RawEvent` 和这个 channel 之间多路复用，swap Tracker
-/// 与 Suppressor）。parse 失败保留旧 trigger，只打日志。
+/// 与 Suppressor）。parse 失败保留旧 bindings，只打日志。
 pub fn spawn_hotkey(mut rx: Rx, combo_tx: mpsc::UnboundedSender<crate::hotkey::Bindings>) {
     tokio::spawn(async move {
         let mut prev = rx.borrow().config.hotkey.clone();
         while rx.changed().await.is_ok() {
             let next = rx.borrow().config.hotkey.clone();
-            if next.trigger == prev.trigger && next.cancel == prev.cancel {
+            if next.trigger == prev.trigger
+                && next.cancel == prev.cancel
+                && next.resume == prev.resume
+            {
                 continue;
             }
-            match crate::hotkey::Bindings::parse(&next.trigger, &next.cancel) {
+            match crate::hotkey::Bindings::parse(&next.trigger, &next.cancel, &next.resume) {
                 Ok(bindings) => {
                     let printed_trigger = bindings
-                        .combo_for(crate::hotkey::HotkeyAction::ToggleRecord)
+                        .combo_for(crate::hotkey::HotkeyAction::Toggle)
                         .map(ToString::to_string)
                         .unwrap_or_else(|| "<missing>".to_string());
                     let printed_cancel = bindings
-                        .combo_for(crate::hotkey::HotkeyAction::CancelRecord)
+                        .combo_for(crate::hotkey::HotkeyAction::Cancel)
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "<missing>".to_string());
+                    let printed_resume = bindings
+                        .combo_for(crate::hotkey::HotkeyAction::Resume)
                         .map(ToString::to_string)
                         .unwrap_or_else(|| "<missing>".to_string());
                     if combo_tx.send(bindings).is_err() {
@@ -250,8 +261,10 @@ pub fn spawn_hotkey(mut rx: Rx, combo_tx: mpsc::UnboundedSender<crate::hotkey::B
                     tracing::debug!(
                         trigger = %next.trigger,
                         cancel = %next.cancel,
+                        resume = %next.resume,
                         parsed_trigger = %printed_trigger,
                         parsed_cancel = %printed_cancel,
+                        parsed_resume = %printed_resume,
                         "hotkey bindings changed"
                     );
                 }
@@ -259,6 +272,7 @@ pub fn spawn_hotkey(mut rx: Rx, combo_tx: mpsc::UnboundedSender<crate::hotkey::B
                     tracing::warn!(
                         trigger = ?next.trigger,
                         cancel = ?next.cancel,
+                        resume = ?next.resume,
                         error = ?e,
                         "invalid hotkey; keeping previous bindings"
                     );
@@ -267,4 +281,50 @@ pub fn spawn_hotkey(mut rx: Rx, combo_tx: mpsc::UnboundedSender<crate::hotkey::B
             prev = next;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_reload_relevant;
+    use std::path::Path;
+
+    #[test]
+    fn config_toml_always_triggers_reload() {
+        let root = Path::new("/cfg/shuohua");
+        assert!(is_reload_relevant(root, &root.join("config.toml")));
+    }
+
+    #[test]
+    fn theme_toml_files_trigger_reload() {
+        let root = Path::new("/cfg/shuohua");
+        assert!(is_reload_relevant(root, &root.join("theme/dark.toml")));
+    }
+
+    #[test]
+    fn non_theme_config_files_do_not_trigger_reload() {
+        // Profile / ASR / post edits are read at next recording, not hot-reloaded.
+        let root = Path::new("/cfg/shuohua");
+        assert!(!is_reload_relevant(
+            root,
+            &root.join("profile/default.toml")
+        ));
+        assert!(!is_reload_relevant(root, &root.join("asr/doubao.toml")));
+        assert!(!is_reload_relevant(root, &root.join("post/zh.toml")));
+    }
+
+    #[test]
+    fn theme_directory_events_without_toml_extension_are_ignored() {
+        let root = Path::new("/cfg/shuohua");
+        assert!(!is_reload_relevant(root, &root.join("theme")));
+        assert!(!is_reload_relevant(root, &root.join("theme/notes.md")));
+    }
+
+    #[test]
+    fn paths_outside_root_are_ignored() {
+        let root = Path::new("/cfg/shuohua");
+        assert!(!is_reload_relevant(
+            root,
+            Path::new("/other/theme/dark.toml")
+        ));
+    }
 }

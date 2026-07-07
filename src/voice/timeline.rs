@@ -70,9 +70,14 @@ impl PcmTimeline {
     }
 
     /// 下一次 push 将分配的起始样本索引；同时等于到目前为止总样本数。
+    pub fn end_sample(&self) -> u64 {
+        self.next_sample
+    }
+
+    /// 下一次 push 将分配的起始样本索引；同时等于到目前为止总样本数。
     #[cfg(test)]
     pub fn next_sample(&self) -> u64 {
-        self.next_sample
+        self.end_sample()
     }
 
     /// ring buffer 里最旧保留样本的索引。

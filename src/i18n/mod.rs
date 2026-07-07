@@ -229,7 +229,8 @@ mod tests {
             &[("path", "/tmp/a".to_string())],
         );
 
-        assert!(tw.contains("編輯器"), "{tw}");
+        // s2twp applies Taiwan vocabulary: 文件 -> 檔案.
+        assert!(tw.contains("檔案"), "{tw}");
         assert!(tw.contains("/tmp/a"), "{tw}");
         assert!(!tw.contains("{path}"), "{tw}");
         assert!(hk.contains("/tmp/a"), "{hk}");

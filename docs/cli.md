@@ -35,12 +35,16 @@ shuo config-template  # 一次性导出全部内置模板 registry + theme prese
                       # （默认 $XDG_CONFIG_HOME/shuohua/templates）；写入前预检全部目标路径，
                       # 任一文件已存在则拒绝覆盖且不写任何文件
                       #   --lang <auto|en-US|zh-CN> 控制生成注释语言
+                      # 写出的 asr/ 模板包含 asr/apple.toml 和 asr/doubao.toml，
+                      # 两者都带显式 type 字段（type = "apple" / type = "doubao"）
 
 shuo completions zsh  # 生成 shell completion 脚本到 stdout
 shuo completions bash # 支持 zsh / bash / fish；安装路径由用户或包管理器决定
 shuo completions fish
 
 shuo update           # 从 GitHub Release 检查并更新当前 shuo binary
+                      #   --check       只查最新版本、报告是否有更新，不下载不安装
+                      #   --allow-major 允许跨 major version 更新（默认拒绝）
 
 shuo service install  # 装 launchd plist（~/Library/LaunchAgents/）+ launchctl bootstrap
                       # plist ProgramArguments = [当前 shuo 绝对路径, "--daemon"]
@@ -94,6 +98,11 @@ shuo completions fish > "$(brew --prefix)/share/fish/vendor_completions.d/shuo.f
   `shuo-vX.Y.Z-<target>.tar.gz` 和 `.sha256`，先校验 SHA-256，再提取归档里的
   `shuo` 并写入 preferred install path。GitHub repo URL 留在 app release 模块，
   artifact target 和替换细节留在平台模块。
+- **`update --check` 只查不装**：走与 `update` 相同的 fetch latest + 版本比较路径，
+  但在决定安装前返回——只打印「已是最新」或「有可用更新 current -> latest」，不下载、
+  不校验 SHA、不写 binary。跨 major 仍按版本边界当错误报出（`--allow-major` 才放行）。
+  它和 `doctor` 正交：`doctor` 查本地环境健康（权限 / 麦克风 / 配置解析），不联网查
+  版本；`update --check` 只联网比对 release 版本，不碰本地环境。
 - **`update` 的版本边界**：默认拒绝跨 major version，提示用户查看 release notes
   后用 `--allow-major`；`0.x` 内 minor / patch 更新不需要额外 flag。
 - **`update` 不重启 daemon**：更新 binary 后只提示运行 `shuo service restart`；
@@ -130,8 +139,9 @@ shuo completions fish > "$(brew --prefix)/share/fish/vendor_completions.d/shuo.f
   [hotkey](modules/hotkey.md)。
 - **macOS 兼容边界**：发布构建使用 macOS 26 SDK、deployment target macOS 15。
   应用在 macOS 15+ 可运行；Apple ASR provider 依赖 SpeechAnalyzer，仅 macOS 26+
-  可用。云 ASR provider（例如 Doubao）在 macOS 15+ 均可使用；macOS 15–25 配置
-  `provider = "apple"` 会在录音开始前 fail-fast，不会静默切到云端。
+  可用。云 ASR provider（例如 Doubao）在 macOS 15+ 均可使用；macOS 15–25 如果
+  profile 引用的 ASR 实例 `type = "apple"`，resolver 会在录音开始前 fail-fast，
+  不会静默切到云端。
 
 ## 4. 用户旅程
 

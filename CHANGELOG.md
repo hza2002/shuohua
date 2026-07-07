@@ -2,6 +2,52 @@
 
 本文件只记录公开发布版本的用户可感知变化，最新版本在最上面。
 
+## v0.5.0 - 2026-07-07
+
+### Breaking
+
+- Config schema: ASR is now selected by **named instance**. A profile references an ASR config by its file-stem id via `[asr] instance = "<id>"` (renamed from `asr.provider`), and each `asr/<id>.toml` must declare `type = "apple" | "doubao" | "tencent"`. Profiles from 0.4.0 using `provider = "..."` must switch to `[asr] instance = "..."` with a matching typed instance file.
+- Config schema: post components are now flat, single files `post/<id>.toml`, each declaring `type = "rule" | "llm"`; `post.chain` and `[post.overrides.<id>]` reference them by that id. Update any post config authored against the previous layout.
+- There is no automatic migration. Re-export defaults with `shuo config-template --out <empty-dir>` or edit configs to the new layout; `shuo doctor` flags instances missing a valid `type`.
+
+### Added
+
+- Tencent Cloud realtime ASR provider (`type = "tencent"`): HMAC-SHA1 URL signing, hotwords, and punctuation / number / modal-word filters, with optional server VAD.
+- TUI: each config (profile / ASR instance / post component / LLM) is created and edited as a named instance through one unified draft form — field-by-field with validate-on-save and `Ctrl-S` to commit — and the "+ New …" slot lives in the Configure source strip. LLM creation can fetch the provider's model list and test connectivity with `t`.
+- TUI: a Profile composer edits a profile as a composition — its ASR instance, per-provider ASR overrides, hotwords, the post chain, and per-LLM-member overrides — with inherited values dimmed, explicit overrides highlighted, and invalid entries (stale overrides, dangling chain members) marked red. `a` adds a chain member, `x` removes the selected one, Shift-J/K reorders, `D` resets an override to inherited, and `X` drops all invalid overrides.
+- Profile-level post overrides: `[post.overrides.<id>]` overrides fields of an LLM component in the chain, validated against that component's schema (unknown fields, dangling ids, and rule-component targets are rejected).
+- Deleting an ASR instance or post component is reference-checked — blocked while any profile still uses it — and both deletes ask for confirmation.
+- Resume hotkey (`hotkey.resume`, default `shift+right_option:double`): after you cancel or an ASR timeout leaves recognized text behind, press it to start a new recording that continues from the previous transcript — the overlay shows the earlier text, and on completion the full post/LLM chain re-runs over the combined text. If there is nothing to resume it starts a normal recording and briefly shows a "new recording" notice so you know the hotkey fired.
+- The default microphone preprocessing backend is now `voice.preprocess.backend = "webrtc"` (WebRTC Audio Processing: noise suppression, high-pass filtering, and conservative digital gain), compiled in by default. `off` keeps raw capture and is the only backend that retains the original audio; `apple` remains a fallback for poor audio environments.
+- TUI: schema-driven config view with defaults, and in-place editing for config.toml (constrained controls, validate-on-save with rollback, reset-to-default).
+- TUI: the footer now lists every shortcut available in the current context (derived from one source), and the mouse works everywhere — click a tab to switch pages, click or scroll the History list, and click config modules/sources/fields. Added `e` to open the selected config file with the default app (`r` still reveals it in Finder).
+- TUI: the Configure page now has a detail pane for the selected field showing its full (untruncated) key, value, default, and description with wrapping; long content scrolls with the wheel, PageUp/PageDown, or Ctrl-U/Ctrl-D. The multiline value editor also scrolls to keep long input in view.
+- TUI: the History detail pane now has a clickable sub-tab bar (Details/ASR/Pipeline/Sessions/Error/JSON) with the active tab highlighted; `h/l` still cycles the same views. When the detail overflows, scroll it with the wheel over the pane, PageUp/PageDown, or Ctrl-U/Ctrl-D (the wheel over the record list still moves the selection).
+- TUI: the Status audio meter is a taller high-resolution braille envelope ("音波"), with a peak/RMS readout and legend below it. Height is the loudness-correlated **RMS** on a fixed dBFS scale (0 dBFS = digital full scale down to a −60 dBFS floor, the conventional level-meter range) — so ambient noise sits low, speech stands tall, and brief transients (high peak, low RMS) don't inflate it. Color independently marks whether the VAD classified each frame as speech. There is no always-on baseline — silence draws nothing (calm) and the meter never auto-ranges, so the display stays honest.
+
+### Changed
+
+- TUI: hotkey fields (`hotkey.trigger`/`cancel`/`resume`) now edit as plain text with the syntax and examples shown in the editor, instead of "press a key to capture". Live capture couldn't express this app's hotkeys (modifier taps, `:double`, left/right sides, F13-F20) and pressing the target key just triggered the running daemon; typing the syntax is validated on save. (This also removes a crash when entering manual mode.)
+- TUI: the "new LLM component" wizard no longer auto-opens an editor; edit created files in the TUI, or open them with `e`/`r`.
+- TUI: rendering is now event-driven and no longer repaints while idle.
+- TUI: the footer status message now auto-clears after a few seconds (errors linger longer) instead of lingering until the next event.
+- TUI: the Configure module list no longer shows a raw field count; a red marker appears only when a module has validation errors or missing required fields.
+- TUI: empty config values render as `—` so unset fields no longer look blank.
+- TUI: the Configure detail pane preserves the value's own line breaks (e.g. a multi-line prompt) instead of collapsing it onto one line.
+- TUI: saving a non-`config.toml` file (profile/asr/post) now says "已保存（下次录音生效）" / "Saved (applies next recording)" to make clear only `config.toml` hot-reloads.
+- TUI: the Configure "配置来源" bar (horizontal) now switches sources with `h`/`l` and moves focus with `j`/`k` — matching its layout and the History detail tabs, instead of the previous inverted `j`/`k`.
+
+### Fixed
+
+- Canceling a recording now preserves the partial transcript (so the resume hotkey can continue from it) and keeps already-completed pipeline steps in the record.
+- TUI: coalesce redraws — a burst of daemon events (e.g. on a VAD speech/silence transition) now repaints the screen once instead of once per event, removing the periodic stutter while recording.
+- TUI: `/` starts History search only on the History page, and the `/` footer hint now shows only there (not on Status/Configure, where it does nothing).
+- TUI: the multi-line / array value editor now supports arrow-key navigation (Up/Down between lines, Left/Right within a line) and draws the real terminal cursor at the edit position, so editing in the middle of a value is visible and no text shifts as the cursor moves.
+- TUI: config select controls (e.g. `openai`/`anthropic`) now cycle with Up/Down as well as Left/Right and `hjkl`.
+- Apple voice-processing capture is now a pure VP fallback path without raw handoff/mixing.
+- Fixed Apple voice-processing capture lifecycle by rebuilding `AVAudioEngine` for each recording while reusing the helper process, with kill-and-recycle fallback for wedged helpers.
+- Fixed microphone downmix to average all input channels instead of only the first, so a multi-channel default input whose first channel is a silent reference no longer produces empty recordings.
+
 ## v0.4.0 - 2026-06-30
 
 ### Added

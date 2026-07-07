@@ -139,8 +139,8 @@ private func runCapture(durationMs: Int?) throws {
 }
 
 private func runServer() throws {
-    let timing = TimingLog()
-    let capture = try VoiceProcessedCapture(timing: timing)
+    try ensureRecordPermission()
+    let capture = try VoiceProcessedCapture(timing: TimingLog())
     emit([
         "event": "server_ready",
         "sample_rate": 16_000,
@@ -178,12 +178,11 @@ private func runLifecycleSmoke(durationMs: Int, gapMs: Int) throws {
     timing.mark("engine_alloc")
     let input = engine.inputNode
     timing.mark("input_node")
-    try input.setVoiceProcessingEnabled(true)
-    timing.mark("voice_processing")
-
-    let format = input.outputFormat(forBus: 0)
 
     for round in 1...2 {
+        try configureVoiceProcessing(input)
+        timing.mark("voice_processing_\(round)")
+        let format = input.outputFormat(forBus: 0)
         var frames = 0
         let frameLock = NSLock()
         input.installTap(onBus: 0, bufferSize: 1_024, format: format) { _, _ in
@@ -209,6 +208,7 @@ private func runLifecycleSmoke(durationMs: Int, gapMs: Int) throws {
         frameLock.unlock()
         input.removeTap(onBus: 0)
         engine.reset()
+        disableVoiceProcessing(input)
         emit([
             "event": "lifecycle",
             "phase": "stopped",
@@ -256,13 +256,13 @@ private func parseCommand(_ line: String) throws -> ServerCommand? {
 
 private final class VoiceProcessedCapture {
     private let timing: TimingLog
-    private let engine: AVAudioEngine
-    private let input: AVAudioInputNode
-    private let format: AVAudioFormat
+    private var engine: AVAudioEngine?
+    private var input: AVAudioInputNode?
+    private var format: AVAudioFormat?
     // 取第一声道转出的 mono float（采集源采样率）作为重采样输入格式。
-    private let inputFormat: AVAudioFormat
-    private let outputFormat: AVAudioFormat
-    private let converter: AVAudioConverter
+    private var inputFormat: AVAudioFormat?
+    private var outputFormat: AVAudioFormat?
+    private var converter: AVAudioConverter?
     private let writerQueue = DispatchQueue(label: "shuohua.apple-capture-writer")
     private var firstFrame = true
     private var readyEmitted = false
@@ -273,48 +273,29 @@ private final class VoiceProcessedCapture {
 
     init(timing: TimingLog) throws {
         self.timing = timing
-        guard requestRecordPermission() else {
-            emitError("microphone permission denied", code: "tcc_denied")
-            throw HelperError.microphoneDenied
-        }
+        try ensureRecordPermission()
         timing.mark("permission")
-
-        engine = AVAudioEngine()
-        timing.mark("engine_alloc")
-        input = engine.inputNode
-        timing.mark("input_node")
-        try input.setVoiceProcessingEnabled(true)
-        timing.mark("voice_processing")
-        format = input.outputFormat(forBus: 0)
-        timing.mark("format")
-        // AVAudioConverter 带抗混叠 SRC，替代手写线性插值降采样。
-        guard let inputFormat = AVAudioFormat(
-                  commonFormat: .pcmFormatFloat32,
-                  sampleRate: format.sampleRate,
-                  channels: 1,
-                  interleaved: false
-              ),
-              let outputFormat = AVAudioFormat(
-                  commonFormat: .pcmFormatInt16,
-                  sampleRate: 16_000,
-                  channels: 1,
-                  interleaved: true
-              ),
-              let converter = AVAudioConverter(from: inputFormat, to: outputFormat)
-        else {
-            throw HelperError.converterUnavailable
-        }
-        self.inputFormat = inputFormat
-        self.outputFormat = outputFormat
-        self.converter = converter
     }
 
     func start() throws {
         guard !running else {
-            return
+            throw HelperError.protocolError("capture already running")
+        }
+        timing.reset()
+        let engine = AVAudioEngine()
+        timing.mark("engine_alloc")
+        let input = engine.inputNode
+        timing.mark("input_node")
+        self.engine = engine
+        self.input = input
+        try configureVoiceProcessing(input)
+        timing.mark("voice_processing")
+        try configureFormats(input: input)
+        guard let format else {
+            throw HelperError.converterUnavailable
         }
         let session = writerQueue.sync {
-            converter.reset()
+            converter?.reset()
             firstFrame = true
             readyEmitted = false
             accepting = true
@@ -343,9 +324,14 @@ private final class VoiceProcessedCapture {
         guard running else {
             return
         }
+        guard let engine, let input else {
+            running = false
+            return
+        }
         engine.stop()
         input.removeTap(onBus: 0)
         engine.reset()
+        disableVoiceProcessing(input)
         running = false
         // writerQueue 是串行队列：sync 块排在所有已入队的 accept 之后，先把 converter
         // 内部 SRC 残留抽干(对齐 cpal rubato finish 的 drain 不变量)，再发 is_last。
@@ -362,6 +348,12 @@ private final class VoiceProcessedCapture {
                 self.converterError = nil
             }
         }
+        self.engine = nil
+        self.input = nil
+        format = nil
+        inputFormat = nil
+        outputFormat = nil
+        converter = nil
     }
 
     private func accept(_ buffer: AVAudioPCMBuffer, session: UInt64) {
@@ -384,7 +376,12 @@ private final class VoiceProcessedCapture {
     }
 
     private func convertToPcm16k(_ samples: [Float]) -> [Int16] {
-        guard !samples.isEmpty, let inputBuffer = makeInputBuffer(samples) else {
+        guard !samples.isEmpty,
+              let converter,
+              let outputFormat,
+              let inputFormat,
+              let inputBuffer = makeInputBuffer(samples)
+        else {
             return []
         }
         let ratio = outputFormat.sampleRate / inputFormat.sampleRate
@@ -421,6 +418,9 @@ private final class VoiceProcessedCapture {
     private func drainConverter() -> [Int16] {
         var drained: [Int16] = []
         while true {
+            guard let converter, let outputFormat else {
+                return drained
+            }
             guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 512) else {
                 return drained
             }
@@ -447,6 +447,9 @@ private final class VoiceProcessedCapture {
     }
 
     private func makeInputBuffer(_ samples: [Float]) -> AVAudioPCMBuffer? {
+        guard let inputFormat else {
+            return nil
+        }
         let frames = AVAudioFrameCount(samples.count)
         guard frames > 0,
               let buffer = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: frames),
@@ -461,10 +464,39 @@ private final class VoiceProcessedCapture {
         }
         return buffer
     }
+
+    private func configureFormats(input: AVAudioInputNode) throws {
+        let format = input.outputFormat(forBus: 0)
+        timing.mark("format")
+        guard let inputFormat = AVAudioFormat(
+                  commonFormat: .pcmFormatFloat32,
+                  sampleRate: format.sampleRate,
+                  channels: 1,
+                  interleaved: false
+              ),
+              let outputFormat = AVAudioFormat(
+                  commonFormat: .pcmFormatInt16,
+                  sampleRate: 16_000,
+                  channels: 1,
+                  interleaved: true
+              ),
+              let converter = AVAudioConverter(from: inputFormat, to: outputFormat)
+        else {
+            throw HelperError.converterUnavailable
+        }
+        self.format = format
+        self.inputFormat = inputFormat
+        self.outputFormat = outputFormat
+        self.converter = converter
+    }
 }
 
 private final class TimingLog {
-    private let started = DispatchTime.now().uptimeNanoseconds
+    private var started = DispatchTime.now().uptimeNanoseconds
+
+    func reset() {
+        started = DispatchTime.now().uptimeNanoseconds
+    }
 
     func mark(_ name: String) {
         let elapsedMs = (DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
@@ -489,6 +521,32 @@ private func requestRecordPermission() -> Bool {
         return granted
     @unknown default:
         return false
+    }
+}
+
+private func ensureRecordPermission() throws {
+    guard requestRecordPermission() else {
+        emitError("microphone permission denied", code: "tcc_denied")
+        throw HelperError.microphoneDenied
+    }
+}
+
+private func configureVoiceProcessing(_ input: AVAudioInputNode) throws {
+    try input.setVoiceProcessingEnabled(true)
+    if #available(macOS 14.0, *) {
+        input.voiceProcessingOtherAudioDuckingConfiguration =
+            AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+                enableAdvancedDucking: false,
+                duckingLevel: .default
+            )
+    }
+}
+
+private func disableVoiceProcessing(_ input: AVAudioInputNode) {
+    do {
+        try input.setVoiceProcessingEnabled(false)
+    } catch {
+        FileHandle.standardError.write(Data("disable_voice_processing_error \(error)\n".utf8))
     }
 }
 

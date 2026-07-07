@@ -1,5 +1,8 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
+/// secret 字段的显示掩码（固定长度，不泄漏真实长度）。
+pub const SECRET_MASK: &str = "••••••";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Error,
@@ -38,6 +41,8 @@ pub struct FieldSpec {
     required: bool,
     default: Option<String>,
     secret: bool,
+    multiline: bool,
+    keycapture: bool,
     allowed_values: Vec<String>,
     numeric_min: Option<f64>,
     numeric_max: Option<f64>,
@@ -87,6 +92,8 @@ impl FieldSpec {
             required: false,
             default: None,
             secret: false,
+            multiline: false,
+            keycapture: false,
             allowed_values: Vec::new(),
             numeric_min: None,
             numeric_max: None,
@@ -115,6 +122,16 @@ impl FieldSpec {
         self
     }
 
+    pub fn multiline(mut self) -> Self {
+        self.multiline = true;
+        self
+    }
+
+    pub fn keycapture(mut self) -> Self {
+        self.keycapture = true;
+        self
+    }
+
     pub fn allowed_values(mut self, values: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.allowed_values = values.into_iter().map(Into::into).collect();
         self.kind = ValueKind::Enum;
@@ -124,6 +141,11 @@ impl FieldSpec {
     pub fn range(mut self, min: f64, max: f64) -> Self {
         self.numeric_min = Some(min);
         self.numeric_max = Some(max);
+        self
+    }
+
+    pub fn min(mut self, min: f64) -> Self {
+        self.numeric_min = Some(min);
         self
     }
 
@@ -141,9 +163,8 @@ impl FieldSpec {
     pub fn display_value(&self, value: &toml::Value) -> String {
         if self.secret {
             return match value.as_str() {
-                Some("") => "<empty>".to_string(),
-                Some(_) => "<set>".to_string(),
-                None => "<set>".to_string(),
+                Some("") | None => "<empty>".to_string(),
+                Some(_) => SECRET_MASK.to_string(),
             };
         }
         match value {
@@ -164,8 +185,35 @@ impl FieldSpec {
         self.secret
     }
 
+    pub fn is_multiline(&self) -> bool {
+        self.multiline
+    }
+
+    pub fn is_keycapture(&self) -> bool {
+        self.keycapture
+    }
+
     pub fn kind(&self) -> ValueKind {
         self.kind
+    }
+
+    pub fn default_value(&self) -> Option<&str> {
+        self.default.as_deref()
+    }
+
+    #[allow(dead_code)]
+    pub fn allowed(&self) -> &[String] {
+        &self.allowed_values
+    }
+
+    #[allow(dead_code)]
+    pub fn numeric_min(&self) -> Option<f64> {
+        self.numeric_min
+    }
+
+    #[allow(dead_code)]
+    pub fn numeric_max(&self) -> Option<f64> {
+        self.numeric_max
     }
 
     pub fn description_key_value(&self) -> Option<&'static str> {
@@ -293,7 +341,11 @@ fn has_descendant_field(spec: &ConfigSpec, path: &str) -> bool {
         .any(|field| field.name().starts_with(&prefix))
 }
 
-fn validate_field(field: &FieldSpec, value: &toml::Value, diagnostics: &mut Vec<Diagnostic>) {
+pub(crate) fn validate_field(
+    field: &FieldSpec,
+    value: &toml::Value,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     match field.kind {
         ValueKind::String => {
             if !value.is_str() {
@@ -621,6 +673,12 @@ mod tests {
                 .display_value(value.get("api_key").unwrap()),
             "<empty>"
         );
+
+        // non-empty secret renders as fixed mask, not the real value
+        let set = toml::Value::String("sk-real-secret".into());
+        let field = sample_spec().field_for_path("api_key").unwrap().clone();
+        assert_eq!(field.display_value(&set), crate::config::spec::SECRET_MASK);
+        assert!(!field.display_value(&set).contains("real"));
     }
 
     #[test]

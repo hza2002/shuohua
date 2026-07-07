@@ -11,6 +11,7 @@ DEBUG_BIN := target/debug/shuo
 RELEASE_BIN := target/release/shuo
 RELEASE_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 RELEASE_TARGET := aarch64-apple-darwin
+SWEEP_DAYS ?= 14
 RELEASE_NAME := shuo-v$(RELEASE_VERSION)-$(RELEASE_TARGET)
 DIST_DIR := dist
 
@@ -30,6 +31,8 @@ help:
 	@echo "  make doctor          Run doctor via PATH shuo"
 	@echo "  make check           fmt check, clippy -D warnings, test"
 	@echo "  make fmt             Format Rust code"
+	@echo "  make sweep           Remove stale target/ artifacts (>$(SWEEP_DAYS) days unused)"
+	@echo "  make clean           Remove the entire target/ directory"
 
 .PHONY: debug
 debug:
@@ -102,6 +105,14 @@ clippy:
 .PHONY: test
 test:
 	$(CARGO) test
+
+.PHONY: sweep
+sweep:
+	$(CARGO) sweep --time $(SWEEP_DAYS) .
+
+.PHONY: clean
+clean:
+	$(CARGO) clean
 
 .PHONY: check
 check: fmt-check clippy test

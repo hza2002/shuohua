@@ -213,7 +213,6 @@ mod tests {
     const R: Key = Key::Char('r');
     const A: Key = Key::Char('a');
     const L_CMD: Key = Key::Modifier(ModType::Cmd, Side::Left);
-    const R_CMD: Key = Key::Modifier(ModType::Cmd, Side::Right);
     const L_SHIFT: Key = Key::Modifier(ModType::Shift, Side::Left);
     const R_SHIFT: Key = Key::Modifier(ModType::Shift, Side::Right);
 
@@ -547,11 +546,5 @@ mod tests {
             t.on_event(key_down(R, right_cmd), now),
             Some(HotkeyEvent::TriggerRecord)
         );
-    }
-
-    #[test]
-    fn unused_constants_ref_silence_warnings() {
-        // Keep constants referenced even if test set narrows later.
-        let _ = (L_CMD, R_CMD, L_SHIFT, A);
     }
 }

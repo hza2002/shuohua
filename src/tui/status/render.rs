@@ -6,7 +6,7 @@ use ratatui::Frame;
 
 use crate::config::theme::TuiTheme;
 use crate::ipc::protocol::WireState;
-use crate::state::{AudioMeter, SessionPhase};
+use crate::state::SessionPhase;
 use crate::tui::status::StatusPage;
 use crate::tui::ui;
 
@@ -15,7 +15,7 @@ pub(super) fn render_status(frame: &mut Frame, page: &StatusPage, area: Rect, th
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(6),
-            Constraint::Length(6),
+            Constraint::Length(8),
             Constraint::Min(5),
         ])
         .split(area);
@@ -53,7 +53,8 @@ pub(super) fn render_status(frame: &mut Frame, page: &StatusPage, area: Rect, th
         Paragraph::new(meter_lines(
             page,
             theme,
-            chunks[1].width.saturating_sub(9) as usize,
+            chunks[1].width.saturating_sub(2) as usize,
+            chunks[1].height.saturating_sub(2) as usize,
         ))
         .block(
             Block::default()
@@ -131,40 +132,47 @@ fn recording_id_label(page: &StatusPage) -> String {
         .unwrap_or_else(|| crate::t!("tui.no_active_recording"))
 }
 
-pub(super) fn meter_lines(page: &StatusPage, theme: &TuiTheme, width: usize) -> Vec<Line<'static>> {
-    if !matches!(page.state, WireState::Recording | WireState::Stopping) && page.meters.is_empty() {
-        return vec![
-            Line::from(vec![
-                Span::styled("Audio  ", Style::default().fg(ui::muted(theme))),
-                Span::styled("idle", Style::default().fg(ui::muted(theme))),
-            ]),
-            Line::from(vec![
-                Span::styled("       ", Style::default().fg(ui::muted(theme))),
-                Span::styled("────", Style::default().fg(ui::muted(theme))),
-            ]),
-            Line::from(vec![
-                Span::styled("VAD    ", Style::default().fg(ui::muted(theme))),
-                Span::styled("idle", Style::default().fg(ui::muted(theme))),
-            ]),
-        ];
+pub(super) fn meter_lines(
+    page: &StatusPage,
+    theme: &TuiTheme,
+    width: usize,
+    height: usize,
+) -> Vec<Line<'static>> {
+    let cells = width.max(16);
+    // Fill the pane: one row is reserved for the legend, the rest is waveform.
+    let rows = height.saturating_sub(1).max(1);
+    let active =
+        matches!(page.state, WireState::Recording | WireState::Stopping) || !page.meters.is_empty();
+    // Mirrored braille peak envelope, VAD-colored; legend/readout below it.
+    let grid = crate::tui::status::waveform::build_wave_grid(&page.meters, cells, rows);
+    let silent = if active {
+        ui::info(theme)
+    } else {
+        ui::muted(theme)
+    };
+    let mut lines = grid.to_lines(ui::success(theme), silent);
+    lines.push(meter_legend_line(page, theme));
+    lines
+}
+
+fn meter_legend_line(page: &StatusPage, theme: &TuiTheme) -> Line<'static> {
+    match page.meters.last() {
+        Some(m) => Line::from(vec![
+            label_span("peak ", theme),
+            value_span(
+                format!("{:.2}  ", m.peak.clamp(0.0, 1.0)),
+                ui::accent(theme),
+            ),
+            label_span("rms ", theme),
+            value_span(format!("{:.2}   ", m.rms.clamp(0.0, 1.0)), ui::info(theme)),
+            Span::styled("▮ ", Style::default().fg(ui::success(theme))),
+            label_span(crate::t!("tui.status.meter_speech"), theme),
+            Span::raw("   "),
+            Span::styled("▮ ", Style::default().fg(ui::info(theme))),
+            label_span(crate::t!("tui.status.meter_silence"), theme),
+        ]),
+        None => Line::from(label_span(crate::t!("tui.status.meter_idle"), theme)),
     }
-    let width = width.max(16);
-    let start = page.meters.len().saturating_sub(width);
-    let meters = &page.meters[start..];
-    vec![
-        Line::from(vec![
-            Span::styled("Peak   ", Style::default().fg(ui::muted(theme))),
-            meter_span(audio_upper(meters), ui::accent(theme)),
-        ]),
-        Line::from(vec![
-            Span::styled("RMS    ", Style::default().fg(ui::muted(theme))),
-            meter_span(audio_lower(meters), ui::info(theme)),
-        ]),
-        Line::from(vec![
-            Span::styled("VAD    ", Style::default().fg(ui::muted(theme))),
-            vad_spans(meters, theme),
-        ]),
-    ]
 }
 
 pub(super) fn live_speech_lines(
@@ -295,56 +303,6 @@ fn char_display_width(ch: char) -> usize {
     } else {
         2
     }
-}
-
-fn meter_span(text: String, color: Color) -> Span<'static> {
-    Span::styled(text, Style::default().fg(color))
-}
-
-pub(super) fn audio_upper(meters: &[AudioMeter]) -> String {
-    meters.iter().map(|meter| upper_level(meter.peak)).collect()
-}
-
-pub(super) fn audio_lower(meters: &[AudioMeter]) -> String {
-    meters.iter().map(|meter| lower_level(meter.rms)).collect()
-}
-
-fn vad_spans(meters: &[AudioMeter], theme: &TuiTheme) -> Span<'static> {
-    let mut text = String::with_capacity(meters.len());
-    let mut active = false;
-    for meter in meters {
-        let probability = meter.vad_probability.unwrap_or_else(|| {
-            if meter.vad_speech.unwrap_or(false) {
-                1.0
-            } else {
-                0.0
-            }
-        });
-        active |= meter.vad_speech.unwrap_or(probability >= 0.5);
-        text.push(upper_level(probability));
-    }
-    let color = if active {
-        ui::success(theme)
-    } else {
-        ui::muted(theme)
-    };
-    Span::styled(text, Style::default().fg(color))
-}
-
-pub(super) fn upper_level(value: f32) -> char {
-    const LEVELS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    level_char(value, LEVELS)
-}
-
-pub(super) fn lower_level(value: f32) -> char {
-    const LEVELS: &[char] = &['▔', '▇', '▆', '▅', '▄', '▃', '▂', '▁'];
-    level_char(value, LEVELS)
-}
-
-fn level_char(value: f32, levels: &[char]) -> char {
-    let value = value.clamp(0.0, 1.0);
-    let idx = (value * (levels.len() - 1) as f32).round() as usize;
-    levels[idx]
 }
 
 fn label_span(text: impl Into<String>, theme: &TuiTheme) -> Span<'static> {

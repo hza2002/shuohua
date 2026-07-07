@@ -9,10 +9,13 @@ pub(crate) use self::main::{
 
 pub(crate) mod asr;
 pub(crate) mod diagnostics;
+pub(crate) mod field_view;
+pub(crate) mod field_write;
 pub(crate) mod inventory;
 pub(crate) mod paths;
 pub(crate) mod post;
 pub(crate) mod profile;
+pub(crate) mod profile_compose_write;
 pub(crate) mod profile_write;
 pub(crate) mod schema;
 pub(crate) mod spec;

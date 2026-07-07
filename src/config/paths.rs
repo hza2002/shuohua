@@ -19,10 +19,6 @@ pub fn profile_dir() -> PathBuf {
     root_dir().join("profile")
 }
 
-pub fn asr_provider(provider: &str) -> PathBuf {
-    root_dir().join("asr").join(format!("{provider}.toml"))
-}
-
 pub fn post_dir() -> PathBuf {
     root_dir().join("post")
 }

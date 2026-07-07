@@ -27,5 +27,5 @@ pre-release-commit-message = "release: v{{version}}"
 pre-release-hook = [
   "sh",
   "-c",
-  "cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test",
+  "cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked",
 ]

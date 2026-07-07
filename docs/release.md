@@ -114,7 +114,7 @@ bump，不要通过绕过 dirty check 把其他修改混入 release commit。
 用户在本机确认：
 
 ```bash
-cargo build --release
+cargo build --release --locked
 ./target/release/shuo doctor
 ./target/release/shuo doctor --apple-capture-smoke
 ./target/release/shuo
@@ -134,7 +134,7 @@ cargo release <patch|minor|0.1.0> --dry-run
 - release commit message：`release: vX.Y.Z`。
 - tag：`vX.Y.Z`。
 - 将 push 到 `origin main` 和 `origin vX.Y.Z`。
-- pre-release hook 通过：`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`。
+- pre-release hook 通过：`cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked`。
 
 ## 8. Execute
 

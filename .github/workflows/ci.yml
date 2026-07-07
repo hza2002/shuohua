@@ -18,9 +18,14 @@ concurrency:
 jobs:
   check:
     runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Select Xcode 26 SDK
         run: |
@@ -28,6 +33,17 @@ jobs:
           xcodebuild -version
           sdk_major="$(xcrun --sdk macosx --show-sdk-version | cut -d. -f1)"
           test "$sdk_major" -ge 26
+
+      - name: Install native build tools
+        run: |
+          missing=()
+          command -v meson >/dev/null || missing+=(meson)
+          command -v ninja >/dev/null || missing+=(ninja)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            brew install "${missing[@]}"
+          fi
+          meson --version
+          ninja --version
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -41,7 +57,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test
+        run: cargo test --locked

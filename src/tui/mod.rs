@@ -113,7 +113,9 @@ impl App {
             | Event::HistoryStats { .. }
             | Event::HistoryAnalytics { .. }
             | Event::AudioDeleted { .. }
-            | Event::HistoryDeleted { .. } => {
+            | Event::HistoryDeleted { .. }
+            | Event::HistoryCleanupPreview { .. }
+            | Event::HistoryCleanupDone { .. } => {
                 self.history.apply_event(&event, self.page == Page::History);
             }
             Event::DaemonStatus { .. } => {}
@@ -136,7 +138,7 @@ impl App {
             } => {
                 if matches!(
                     kind.as_str(),
-                    "history_read" | "history_stats" | "history_analytics"
+                    "history_read" | "history_stats" | "history_analytics" | "history_cleanup"
                 ) {
                     self.history.apply_event(&event, self.page == Page::History);
                 }
@@ -421,6 +423,15 @@ async fn handle_key(app: &mut App, client: &mut IpcClient, key: KeyEvent) -> Res
             }
             return Ok(false);
         }
+        if let Some(outcome) = app.history.feed_cleanup_key(key) {
+            if let Some(cmd) = outcome.command {
+                client.send(&cmd).await?;
+            }
+            if let Some(status) = outcome.status {
+                app.set_status(status, false);
+            }
+            return Ok(false);
+        }
     }
     match keybindings::action_for(key, app.history.searching, app.page) {
         Action::Quit => return Ok(true),
@@ -524,6 +535,19 @@ async fn test_saved_asr_instance(id: String) -> Result<(), String> {
     let instance =
         crate::config::asr::instance::resolve_instance(&id).map_err(|e| format!("{e:#}"))?;
     match instance.kind {
+        AsrKind::Aliyun => {
+            let provider =
+                crate::asr::providers::aliyun::AliyunProvider::new_from_path_with_overrides(
+                    &instance.path,
+                    None,
+                )
+                .map_err(|e| format!("{e:#}"))?;
+            match tokio::time::timeout(Duration::from_secs(15), provider.check_runtime(ctx)).await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => Err(crate::t!("tui.configure.asr_create.test_timeout")),
+            }
+        }
         AsrKind::Doubao => {
             let provider =
                 crate::asr::providers::doubao::DoubaoProvider::new_from_path_with_overrides(
@@ -819,15 +843,15 @@ mod tests {
 
         app.apply_event(error("history_read"));
         app.apply_event(error("history_stats"));
-        app.apply_event(error("history_analytics"));
 
         assert!(!app.history.refresh_in_flight);
-        assert_eq!(app.history.refresh_commands().len(), 3);
+        assert_eq!(app.history.refresh_commands().len(), 2);
     }
 
     #[test]
     fn init_i18n_from_config_uses_configured_language() {
-        let home = std::env::temp_dir().join(format!("shuohua-tui-i18n-{}", ulid::Ulid::new()));
+        let home =
+            std::env::temp_dir().join(format!("shuohua-tui-i18n-{}", ulid::Ulid::generate()));
         let config_home = home.join("config");
         let root = config_home.join("shuohua");
         std::fs::create_dir_all(&root).unwrap();
@@ -857,8 +881,10 @@ language = "zh-CN"
 
     #[test]
     fn config_reloaded_updates_running_tui_language() {
-        let home =
-            std::env::temp_dir().join(format!("shuohua-tui-reload-i18n-{}", ulid::Ulid::new()));
+        let home = std::env::temp_dir().join(format!(
+            "shuohua-tui-reload-i18n-{}",
+            ulid::Ulid::generate()
+        ));
         let config_home = home.join("config");
         let root = config_home.join("shuohua");
         std::fs::create_dir_all(&root).unwrap();

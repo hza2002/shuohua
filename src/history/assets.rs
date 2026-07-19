@@ -4,7 +4,8 @@ use std::time::SystemTime;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::history::AudioDeleteResult;
+use crate::history::{AudioDeleteResult, CleanupIssue};
+use crate::trash::FileDeleter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioAssetState {
@@ -53,7 +54,11 @@ pub(crate) fn audio_info_in_dir(audio_dir: &Path, id: &str) -> Result<AudioAsset
     }
 }
 
-pub(crate) fn delete_audio_in_dir(audio_dir: &Path, id: &str) -> Result<AudioDeleteResult> {
+pub(crate) fn delete_audio_in_dir(
+    audio_dir: &Path,
+    id: &str,
+    deleter: &FileDeleter,
+) -> Result<AudioDeleteResult> {
     let info = audio_info_in_dir(audio_dir, id)?;
     match info.state {
         AudioAssetState::Missing => Ok(AudioDeleteResult {
@@ -63,19 +68,15 @@ pub(crate) fn delete_audio_in_dir(audio_dir: &Path, id: &str) -> Result<AudioDel
         AudioAssetState::Conflict => {
             bail!("audio asset conflict for {id}: both .flac and .m4a exist")
         }
-        AudioAssetState::Present => match fs::remove_file(&info.path) {
-            Ok(()) => Ok(AudioDeleteResult {
+        AudioAssetState::Present => {
+            deleter
+                .delete(&info.path)
+                .with_context(|| format!("delete audio {}", info.path.display()))?;
+            Ok(AudioDeleteResult {
                 id: id.to_string(),
                 deleted: true,
-            }),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(AudioDeleteResult {
-                id: id.to_string(),
-                deleted: false,
-            }),
-            Err(error) => {
-                Err(error).with_context(|| format!("delete audio {}", info.path.display()))
-            }
-        },
+            })
+        }
     }
 }
 
@@ -86,6 +87,88 @@ pub(crate) fn preflight_history_delete_audio_in_dir(audio_dir: &Path, id: &str) 
         AudioAssetState::Conflict => {
             bail!("audio asset conflict for {id}: both .flac and .m4a exist")
         }
+    }
+}
+
+/// 批量清理视角下的单条 audio 分类。与 `audio_info_in_dir` 不同：symlink /
+/// non-regular / conflict 不 bail，而是归类为 `Unsafe`，让 preview/execute 把它当
+/// 一条可跳过的告警而非中断整批。真正的 IO 错误仍以 `Err` 上报。
+pub(crate) enum CleanupAudioClass {
+    Missing,
+    Present {
+        path: PathBuf,
+        size_bytes: u64,
+        identity: CleanupAudioIdentity,
+    },
+    Unsafe(CleanupIssue),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CleanupAudioIdentity {
+    len: u64,
+    modified: Option<SystemTime>,
+    #[cfg(unix)]
+    dev: u64,
+    #[cfg(unix)]
+    ino: u64,
+    #[cfg(unix)]
+    ctime: i64,
+    #[cfg(unix)]
+    ctime_nsec: i64,
+}
+
+fn cleanup_audio_identity(meta: &fs::Metadata) -> CleanupAudioIdentity {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+
+    CleanupAudioIdentity {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+        #[cfg(unix)]
+        dev: meta.dev(),
+        #[cfg(unix)]
+        ino: meta.ino(),
+        #[cfg(unix)]
+        ctime: meta.ctime(),
+        #[cfg(unix)]
+        ctime_nsec: meta.ctime_nsec(),
+    }
+}
+
+pub(crate) fn classify_cleanup_audio(audio_dir: &Path, id: &str) -> Result<CleanupAudioClass> {
+    // 非法 ULID 不可能有按约定命名的音频文件；当作无音频跳过。
+    if validate_recording_id(id).is_err() {
+        return Ok(CleanupAudioClass::Missing);
+    }
+    let flac = audio_dir.join(format!("{id}.flac"));
+    let m4a = audio_dir.join(format!("{id}.m4a"));
+    let flac_c = classify_candidate(&flac)?;
+    let m4a_c = classify_candidate(&m4a)?;
+
+    if let Some(issue) = candidate_issue(&flac_c).or_else(|| candidate_issue(&m4a_c)) {
+        return Ok(CleanupAudioClass::Unsafe(issue));
+    }
+    match (flac_c, m4a_c) {
+        (CandidateClass::Present(meta), CandidateClass::Missing) => {
+            Ok(CleanupAudioClass::Present {
+                path: flac,
+                size_bytes: meta.len(),
+                identity: cleanup_audio_identity(&meta),
+            })
+        }
+        (CandidateClass::Missing, CandidateClass::Present(meta)) => {
+            Ok(CleanupAudioClass::Present {
+                path: m4a,
+                size_bytes: meta.len(),
+                identity: cleanup_audio_identity(&meta),
+            })
+        }
+        (CandidateClass::Present(_), CandidateClass::Present(_)) => {
+            Ok(CleanupAudioClass::Unsafe(CleanupIssue::Conflict))
+        }
+        (CandidateClass::Missing, CandidateClass::Missing) => Ok(CleanupAudioClass::Missing),
+        // Unsafe 组合已在上面短路返回。
+        _ => unreachable!("unsafe candidates handled above"),
     }
 }
 
@@ -110,6 +193,31 @@ fn inspect_candidate(path: &Path) -> Result<Candidate> {
     }
 }
 
+enum CandidateClass {
+    Missing,
+    Present(fs::Metadata),
+    Symlink,
+    NonRegular,
+}
+
+fn classify_candidate(path: &Path) -> Result<CandidateClass> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Ok(CandidateClass::Symlink),
+        Ok(metadata) if metadata.file_type().is_file() => Ok(CandidateClass::Present(metadata)),
+        Ok(_) => Ok(CandidateClass::NonRegular),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(CandidateClass::Missing),
+        Err(error) => Err(error).with_context(|| format!("inspect audio {}", path.display())),
+    }
+}
+
+fn candidate_issue(candidate: &CandidateClass) -> Option<CleanupIssue> {
+    match candidate {
+        CandidateClass::Symlink => Some(CleanupIssue::Symlink),
+        CandidateClass::NonRegular => Some(CleanupIssue::NonRegular),
+        CandidateClass::Missing | CandidateClass::Present(_) => None,
+    }
+}
+
 fn present_info(path: PathBuf, metadata: fs::Metadata) -> AudioAssetInfo {
     AudioAssetInfo {
         path,
@@ -131,8 +239,8 @@ mod tests {
         let history_dir = temp_history_dir("resolve-one");
         let audio_dir = audio_dir_for_history(&history_dir);
         fs::create_dir_all(&audio_dir).unwrap();
-        let flac_id = ulid::Ulid::new().to_string();
-        let m4a_id = ulid::Ulid::new().to_string();
+        let flac_id = ulid::Ulid::generate().to_string();
+        let m4a_id = ulid::Ulid::generate().to_string();
         let flac = audio_dir.join(format!("{flac_id}.flac"));
         let m4a = audio_dir.join(format!("{m4a_id}.m4a"));
         fs::write(&flac, [1, 2, 3]).unwrap();
@@ -157,7 +265,7 @@ mod tests {
         let history_dir = temp_history_dir("conflict");
         let audio_dir = audio_dir_for_history(&history_dir);
         fs::create_dir_all(&audio_dir).unwrap();
-        let id = ulid::Ulid::new().to_string();
+        let id = ulid::Ulid::generate().to_string();
         fs::write(audio_dir.join(format!("{id}.flac")), [1]).unwrap();
         fs::write(audio_dir.join(format!("{id}.m4a")), [2]).unwrap();
         let service = HistoryService::with_dir(history_dir.clone());
@@ -180,7 +288,7 @@ mod tests {
         let history_dir = temp_history_dir("rejects");
         let audio_dir = audio_dir_for_history(&history_dir);
         fs::create_dir_all(&audio_dir).unwrap();
-        let id = ulid::Ulid::new().to_string();
+        let id = ulid::Ulid::generate().to_string();
         let target = audio_dir.join("target.flac");
         let link = audio_dir.join(format!("{id}.flac"));
         fs::write(&target, [1]).unwrap();
@@ -208,7 +316,7 @@ mod tests {
         std::env::temp_dir()
             .join(format!(
                 "shuohua-history-assets-{name}-{}",
-                ulid::Ulid::new()
+                ulid::Ulid::generate()
             ))
             .join("history")
     }

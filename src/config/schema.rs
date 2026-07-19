@@ -9,6 +9,7 @@ use crate::config::asr::options::{
 pub enum SchemaId {
     Main,
     AsrApple,
+    AsrAliyun,
     AsrDoubao,
     AsrTencent,
     Profile,
@@ -21,6 +22,7 @@ pub fn spec_for(id: SchemaId) -> ConfigSpec {
     match id {
         SchemaId::Main => main_spec(),
         SchemaId::AsrApple => asr_apple_spec(),
+        SchemaId::AsrAliyun => asr_aliyun_spec(),
         SchemaId::AsrDoubao => asr_doubao_spec(),
         SchemaId::AsrTencent => asr_tencent_spec(),
         SchemaId::Profile => profile_spec(),
@@ -94,7 +96,7 @@ pub fn spec_for_config_file(
         let value = match std::fs::read_to_string(source)
             .map_err(|e| anyhow::anyhow!("read {}: {e}", source.display()))
             .and_then(|body| {
-                body.parse::<toml::Value>()
+                toml::from_str::<toml::Value>(&body)
                     .map_err(|e| anyhow::anyhow!("parse {}: {e}", source.display()))
             }) {
             Ok(v) => v,
@@ -197,6 +199,15 @@ fn description_key(name: &str) -> &'static str {
         "open_timeout_ms" => "config.field.open_timeout_ms.description",
         "finalize_timeout_ms" => "config.field.finalize_timeout_ms.description",
         "app_key" => "config.field.app_key.description",
+        "workspace_id" => "config.field.workspace_id.description",
+        "region" => "config.field.region.description",
+        "vocabulary_id" => "config.field.vocabulary_id.description",
+        "language_hints" => "config.field.language_hints.description",
+        "semantic_punctuation_enabled" => "config.field.semantic_punctuation_enabled.description",
+        "max_sentence_silence" => "config.field.max_sentence_silence.description",
+        "multi_threshold_mode_enabled" => "config.field.multi_threshold_mode_enabled.description",
+        "heartbeat" => "config.field.heartbeat.description",
+        "speech_noise_threshold" => "config.field.speech_noise_threshold.description",
         "access_key" => "config.field.access_key.description",
         "app_id" => "config.field.app_id.description",
         "secret_id" => "config.field.secret_id.description",
@@ -373,7 +384,7 @@ pub fn main_spec() -> ConfigSpec {
             field(FieldSpec::integer, "overlay.width")
                 .optional()
                 .range(480.0, 900.0)
-                .default(crate::overlay::layout::constants::DEFAULT_WIDTH_PX.to_string()),
+                .default(crate::config::DEFAULT_OVERLAY_WIDTH_PX.to_string()),
         )
         .field(
             field(FieldSpec::integer, "overlay.max_text_lines")
@@ -431,10 +442,12 @@ pub fn asr_doubao_spec() -> ConfigSpec {
         .field(field(FieldSpec::string, "name").optional())
         .field(field(FieldSpec::string, "app_key").required().secret())
         .field(field(FieldSpec::string, "access_key").required().secret())
+        // 保持 String（非闭合 Enum）：curated 两个 .duration id 走 field_view 的
+        // EditableSelect 控件，同时允许并发版等其它合法 id 自由填写，零破坏。
         .field(
             field(FieldSpec::string, "resource_id")
                 .optional()
-                .default("volc.bigasr.sauc.duration"),
+                .default("volc.seedasr.sauc.duration"),
         )
         .field(
             field(FieldSpec::string, "language")
@@ -464,6 +477,91 @@ pub fn asr_doubao_spec() -> ConfigSpec {
                 .default("2"),
         )
         .field(field(FieldSpec::bool, "ai_vad").optional().default("false"))
+        .field(
+            field(FieldSpec::string, "local_vad")
+                .optional()
+                .allowed_values(values(LOCAL_VAD_VALUES))
+                .default("auto"),
+        )
+        .field(
+            field(FieldSpec::integer, "open_timeout_ms")
+                .optional()
+                .range(1000.0, 120_000.0)
+                .default("12000"),
+        )
+        .field(
+            field(FieldSpec::integer, "finalize_timeout_ms")
+                .optional()
+                .range(1000.0, 60_000.0)
+                .default("12000"),
+        )
+}
+
+pub fn asr_aliyun_spec() -> ConfigSpec {
+    ConfigSpec::new("asr.aliyun")
+        // 基础：先让用户完成鉴权和选模。
+        .field(
+            field(FieldSpec::string, "type")
+                .required()
+                .allowed_values(["aliyun"]),
+        )
+        .field(field(FieldSpec::string, "name").optional())
+        .field(
+            FieldSpec::string("api_key")
+                .required()
+                .secret()
+                .description_key("config.field.aliyun.api_key.description"),
+        )
+        .field(field(FieldSpec::string, "workspace_id").required())
+        .field(
+            field(FieldSpec::string, "region")
+                .optional()
+                .allowed_values(["beijing", "singapore"])
+                .default("beijing"),
+        )
+        .field(
+            FieldSpec::string("model")
+                .optional()
+                .default("fun-asr-realtime")
+                .description_key("config.field.aliyun.model.description"),
+        )
+        // 识别效果：语言和领域词。
+        .field(
+            field(FieldSpec::array, "language_hints")
+                .optional()
+                .default("zh"),
+        )
+        .field(field(FieldSpec::string, "vocabulary_id").optional())
+        // 断句：交互场景默认采用低延迟 VAD 分句。
+        .field(
+            field(FieldSpec::bool, "semantic_punctuation_enabled")
+                .optional()
+                .default("false"),
+        )
+        .field(
+            field(FieldSpec::integer, "max_sentence_silence")
+                .optional()
+                .range(200.0, 6000.0)
+                .default("1300"),
+        )
+        .field(
+            field(FieldSpec::bool, "multi_threshold_mode_enabled")
+                .optional()
+                .default("false"),
+        )
+        // 连接稳定性。
+        .field(
+            field(FieldSpec::bool, "heartbeat")
+                .optional()
+                .default("true"),
+        )
+        // 模型专属高级参数（Fun-ASR 噪声阈值；官方无默认，未设则不发送）。
+        .field(
+            field(FieldSpec::float, "speech_noise_threshold")
+                .optional()
+                .range(-1.0, 1.0),
+        )
+        // shuohua runtime 选项，不属于阿里云协议；固定排在末尾。
         .field(
             field(FieldSpec::string, "local_vad")
                 .optional()
@@ -699,6 +797,7 @@ mod tests {
     const ALL_SCHEMA_IDS: &[SchemaId] = &[
         SchemaId::Main,
         SchemaId::AsrApple,
+        SchemaId::AsrAliyun,
         SchemaId::AsrDoubao,
         SchemaId::AsrTencent,
         SchemaId::Profile,
@@ -724,14 +823,17 @@ mod tests {
     #[test]
     fn post_llm_requires_base_url_and_allows_optional_name() {
         let spec = spec_for(SchemaId::PostLlm);
-        let missing_base: toml::Value =
-            "type=\"llm\"\nname=\"x\"\napi_key=\"k\"\nmodel=\"m\"\nprompt=\"{{text}}\"\n"
-                .parse()
-                .unwrap();
+        let missing_base: toml::Value = toml::from_str(
+            "type=\"llm\"\nname=\"x\"\napi_key=\"k\"\nmodel=\"m\"\nprompt=\"{{text}}\"\n",
+        )
+        .unwrap();
         assert!(validate_value(&spec, &missing_base)
             .iter()
             .any(|d| d.path == "base_url"));
-        let no_name: toml::Value = "type=\"llm\"\nbase_url=\"https://a\"\napi_key=\"k\"\nmodel=\"m\"\nprompt=\"{{text}}\"\n".parse().unwrap();
+        let no_name: toml::Value = toml::from_str(
+            "type=\"llm\"\nbase_url=\"https://a\"\napi_key=\"k\"\nmodel=\"m\"\nprompt=\"{{text}}\"\n",
+        )
+        .unwrap();
         assert!(!validate_value(&spec, &no_name)
             .iter()
             .any(|d| d.path == "name"));
@@ -741,6 +843,7 @@ mod tests {
     fn optional_display_name_fields_declared_for_all_instance_types() {
         for id in [
             SchemaId::AsrApple,
+            SchemaId::AsrAliyun,
             SchemaId::AsrDoubao,
             SchemaId::AsrTencent,
             SchemaId::PostRule,
@@ -1002,6 +1105,52 @@ mod tests {
                 "tencent schema default drift at {path}"
             );
         }
+
+        // Aliyun: 用最小合法 TOML 取 serde 默认，逐标量与 schema 默认比对。跳过
+        // language_hints（Array，schema scalar 默认 "zh" 与 serde vec 形状不同）、
+        // speech_noise_threshold / vocabulary_id（无 schema 默认）。
+        use crate::config::asr::aliyun::{AliyunConfig, AliyunRegion};
+        let aliyun_cfg: AliyunConfig =
+            toml::from_str("api_key = \"x\"\nworkspace_id = \"y\"\n").unwrap();
+        let aliyun_region = match aliyun_cfg.region {
+            AliyunRegion::Beijing => "beijing",
+            AliyunRegion::Singapore => "singapore",
+        };
+        let aliyun_expected: &[(&str, String)] = &[
+            ("region", aliyun_region.to_string()),
+            ("model", aliyun_cfg.model.clone()),
+            (
+                "semantic_punctuation_enabled",
+                aliyun_cfg.semantic_punctuation_enabled.to_string(),
+            ),
+            (
+                "max_sentence_silence",
+                aliyun_cfg.max_sentence_silence.to_string(),
+            ),
+            (
+                "multi_threshold_mode_enabled",
+                aliyun_cfg.multi_threshold_mode_enabled.to_string(),
+            ),
+            ("heartbeat", aliyun_cfg.heartbeat.to_string()),
+            ("open_timeout_ms", aliyun_cfg.open_timeout_ms.to_string()),
+            (
+                "finalize_timeout_ms",
+                aliyun_cfg.finalize_timeout_ms.to_string(),
+            ),
+        ];
+        let aliyun_spec = spec_for(SchemaId::AsrAliyun);
+        for (path, value) in aliyun_expected {
+            let declared = aliyun_spec
+                .field_for_path(path)
+                .unwrap_or_else(|| panic!("{path} declared in aliyun schema"))
+                .default_value()
+                .unwrap_or_else(|| panic!("{path} has a schema default"));
+            assert_eq!(
+                declared,
+                value.as_str(),
+                "aliyun schema default drift at {path}"
+            );
+        }
     }
 
     #[test]
@@ -1048,17 +1197,18 @@ mod tests {
         let tencent = asr_tencent_spec();
         // Missing type is an error
         assert!(
-            validate_value(&apple, &"name = \"x\"\n".parse::<toml::Value>().unwrap())
-                .iter()
-                .any(|d| d.path == "type"),
+            validate_value(
+                &apple,
+                &toml::from_str::<toml::Value>("name = \"x\"\n").unwrap()
+            )
+            .iter()
+            .any(|d| d.path == "type"),
             "apple spec should require type"
         );
         assert!(
             validate_value(
                 &doubao,
-                &"app_key=\"a\"\naccess_key=\"b\"\n"
-                    .parse::<toml::Value>()
-                    .unwrap()
+                &toml::from_str::<toml::Value>("app_key=\"a\"\naccess_key=\"b\"\n").unwrap()
             )
             .iter()
             .any(|d| d.path == "type"),
@@ -1067,9 +1217,10 @@ mod tests {
         assert!(
             validate_value(
                 &tencent,
-                &"app_id=\"1\"\nsecret_id=\"sid\"\nsecret_key=\"key\"\n"
-                    .parse::<toml::Value>()
-                    .unwrap()
+                &toml::from_str::<toml::Value>(
+                    "app_id=\"1\"\nsecret_id=\"sid\"\nsecret_key=\"key\"\n",
+                )
+                .unwrap()
             )
             .iter()
             .any(|d| d.path == "type"),
@@ -1079,7 +1230,7 @@ mod tests {
         assert!(
             validate_value(
                 &apple,
-                &"type = \"doubao\"\n".parse::<toml::Value>().unwrap()
+                &toml::from_str::<toml::Value>("type = \"doubao\"\n").unwrap()
             )
             .iter()
             .any(|d| d.path == "type"),
@@ -1089,7 +1240,7 @@ mod tests {
 
     #[test]
     fn spec_for_config_file_selects_asr_spec_by_type() {
-        let root = std::env::temp_dir().join(format!("shuohua-spec-{}", ulid::Ulid::new()));
+        let root = std::env::temp_dir().join(format!("shuohua-spec-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(root.join("asr")).unwrap();
         let path = root.join("asr/team.toml");
         std::fs::write(
@@ -1114,7 +1265,7 @@ mod tests {
 
     #[test]
     fn spec_for_config_file_selects_post_spec_by_type() {
-        let root = std::env::temp_dir().join(format!("shuohua-spec-{}", ulid::Ulid::new()));
+        let root = std::env::temp_dir().join(format!("shuohua-spec-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(root.join("post")).unwrap();
         let path = root.join("post/team.toml");
         std::fs::write(

@@ -61,7 +61,8 @@ mod tests {
 
     #[test]
     fn reveal_launch_handles_file_dir_and_missing_child() {
-        let dir = std::env::temp_dir().join(format!("shuohua-reveal-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-reveal-test-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("config.toml");
         std::fs::write(&file, "").unwrap();

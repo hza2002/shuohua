@@ -19,8 +19,10 @@ impl LayoutFrame {
 }
 
 pub mod constants {
-    pub const DEFAULT_WIDTH_PX: usize = 600;
-    pub const WIDTH: f64 = DEFAULT_WIDTH_PX as f64;
+    #[cfg(test)]
+    pub(crate) use crate::config::DEFAULT_OVERLAY_WIDTH_PX as DEFAULT_WIDTH_PX;
+    #[cfg(test)]
+    pub(crate) const WIDTH: f64 = DEFAULT_WIDTH_PX as f64;
     pub const BASE_HEIGHT: f64 = 64.0;
     pub const WINDOW_MARGIN: f64 = 16.0;
     pub const H_PAD: f64 = 16.0;

@@ -116,8 +116,10 @@ mod tests {
     use super::*;
 
     fn temp_dir() -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("shuohua-template-export-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!(
+            "shuohua-template-export-{}",
+            ulid::Ulid::generate()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

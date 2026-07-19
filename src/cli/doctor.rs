@@ -382,6 +382,57 @@ async fn check_asr_runtime(target: AsrRuntimeTarget) -> CheckStatus {
     };
     match target.instance.kind {
         crate::config::asr::instance::AsrKind::Apple => check_apple_runtime(target, ctx).await,
+        crate::config::asr::instance::AsrKind::Aliyun => {
+            match crate::asr::providers::aliyun::AliyunProvider::new_from_path_with_overrides(
+                &target.instance.path,
+                Some(&target.overrides),
+            ) {
+                Ok(provider) => {
+                    let caps = provider.caps();
+                    println!(
+                        "{}",
+                        asr_runtime_probe_line(target.instance.kind.as_str(), &target.profiles)
+                    );
+                    match provider.check_runtime(ctx).await {
+                        Ok(()) => println!(
+                            "asr.aliyun.runtime: OK profiles=[{}] hotwords={} multilingual={}",
+                            target.profiles.join(", "),
+                            caps.hotwords,
+                            caps.multilingual
+                        ),
+                        Err(e) => {
+                            println!(
+                                "asr.aliyun.runtime: ERROR profiles=[{}] {e}",
+                                target.profiles.join(", ")
+                            );
+                            println!(
+                                "hint: {}",
+                                tr(
+                                    "cli.doctor.hint_edit_path",
+                                    &[("path", target.instance.path.display().to_string())]
+                                )
+                            );
+                            return CheckStatus::Error;
+                        }
+                    }
+                    CheckStatus::Ok
+                }
+                Err(e) => {
+                    println!(
+                        "asr.aliyun.runtime: ERROR profiles=[{}] {e:#}",
+                        target.profiles.join(", ")
+                    );
+                    println!(
+                        "hint: {}",
+                        tr(
+                            "cli.doctor.hint_edit_path",
+                            &[("path", target.instance.path.display().to_string())]
+                        )
+                    );
+                    CheckStatus::Error
+                }
+            }
+        }
         crate::config::asr::instance::AsrKind::Doubao => {
             match crate::asr::providers::doubao::DoubaoProvider::new_from_path_with_overrides(
                 &target.instance.path,

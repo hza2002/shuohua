@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsrKind {
     Apple,
+    Aliyun,
     Doubao,
     Tencent,
 }
@@ -11,6 +12,7 @@ impl AsrKind {
     pub fn as_str(self) -> &'static str {
         match self {
             AsrKind::Apple => "apple",
+            AsrKind::Aliyun => "aliyun",
             AsrKind::Doubao => "doubao",
             AsrKind::Tencent => "tencent",
         }
@@ -19,6 +21,7 @@ impl AsrKind {
     pub fn schema_id(self) -> crate::config::schema::SchemaId {
         match self {
             AsrKind::Apple => crate::config::schema::SchemaId::AsrApple,
+            AsrKind::Aliyun => crate::config::schema::SchemaId::AsrAliyun,
             AsrKind::Doubao => crate::config::schema::SchemaId::AsrDoubao,
             AsrKind::Tencent => crate::config::schema::SchemaId::AsrTencent,
         }
@@ -69,16 +72,17 @@ pub fn resolve_instance_in_root(root: &Path, id: &str) -> anyhow::Result<AsrInst
 pub fn kind_from_value(id: &str, path: &Path, value: &toml::Value) -> anyhow::Result<AsrKind> {
     let type_str = value.get("type").and_then(toml::Value::as_str).ok_or_else(|| {
         anyhow::anyhow!(
-            "ASR instance {id:?} ({}) is missing required `type`; add `type = \"apple\"`, `type = \"doubao\"`, or `type = \"tencent\"`",
+            "ASR instance {id:?} ({}) is missing required `type`; add `type = \"apple\"`, `type = \"aliyun\"`, `type = \"doubao\"`, or `type = \"tencent\"`",
             path.display()
         )
     })?;
     match type_str {
         "apple" => Ok(AsrKind::Apple),
+        "aliyun" => Ok(AsrKind::Aliyun),
         "doubao" => Ok(AsrKind::Doubao),
         "tencent" => Ok(AsrKind::Tencent),
         other => anyhow::bail!(
-            "unknown ASR type {other:?} in {}; expected \"apple\", \"doubao\", or \"tencent\"",
+            "unknown ASR type {other:?} in {}; expected \"apple\", \"aliyun\", \"doubao\", or \"tencent\"",
             path.display()
         ),
     }
@@ -89,7 +93,7 @@ mod tests {
     use super::*;
 
     fn temp_root() -> PathBuf {
-        std::env::temp_dir().join(format!("shuohua-asr-instance-{}", ulid::Ulid::new()))
+        std::env::temp_dir().join(format!("shuohua-asr-instance-{}", ulid::Ulid::generate()))
     }
 
     #[test]

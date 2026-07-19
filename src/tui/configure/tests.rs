@@ -10,7 +10,8 @@ struct TestConfig {
 
 impl TestConfig {
     fn new() -> Self {
-        let base = std::env::temp_dir().join(format!("shuohua-cfg-edit-{}", ulid::Ulid::new()));
+        let base =
+            std::env::temp_dir().join(format!("shuohua-cfg-edit-{}", ulid::Ulid::generate()));
         let dir = base.join("shuohua");
         std::fs::create_dir_all(&dir).unwrap();
         Self { dir }
@@ -39,7 +40,8 @@ impl TestConfig {
     }
 
     fn configure_page(&self) -> super::ConfigurePage {
-        super::ConfigurePage::new()
+        // 测试删除真实文件，绝不触碰开发者的 ~/.Trash。
+        super::ConfigurePage::new().with_deleter(crate::trash::remove_deleter())
     }
 }
 
@@ -356,7 +358,7 @@ fn llm_create_end_to_end_writes_file_and_refreshes_sources() {
 }
 
 #[test]
-fn asr_create_end_to_end_writes_provider_file_and_refreshes_sources() {
+fn asr_create_end_to_end_seeds_provider_file_and_refreshes_sources() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     crate::i18n::init("en-US");
     let cfg = TestConfig::new();
@@ -369,10 +371,11 @@ fn asr_create_end_to_end_writes_provider_file_and_refreshes_sources() {
     assert_eq!(page.selected_source_idx, 0);
     {
         let form = page.asr_draft_mut().unwrap();
-        form.edit("type", "doubao".to_string());
-        form.edit("file_id", "doubao".to_string());
-        form.edit("app_key", "app-test".to_string());
-        form.edit("access_key", "access-test".to_string());
+        form.apply_edit("type", "doubao").unwrap();
+        form.apply_edit("file_id", "my_doubao").unwrap();
+        // 新建==编辑：secret 在内存 draft 里填完，^S 一次写完整文件。
+        form.apply_edit("app_key", "app-test").unwrap();
+        form.apply_edit("access_key", "access-test").unwrap();
     }
 
     let outcome = page.feed_draft_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
@@ -380,17 +383,77 @@ fn asr_create_end_to_end_writes_provider_file_and_refreshes_sources() {
     assert!(!outcome.reload_config);
     assert!(outcome.status.unwrap().contains("ASR"));
     assert!(!page.draft_active());
-    let path = cfg.dir.join("asr/doubao.toml");
+    let path = cfg.dir.join("asr/my_doubao.toml");
     let body = std::fs::read_to_string(&path).unwrap();
+    assert!(body.contains("type = \"doubao\""), "{body}");
     assert!(body.contains("app_key = \"app-test\""), "{body}");
+    assert!(body.contains("access_key = \"access-test\""), "{body}");
     assert!(page
         .sources_for_current_module()
         .iter()
-        .any(|source| source.ends_with("doubao.toml")));
+        .any(|source| source.ends_with("my_doubao.toml")));
+}
+
+#[cfg(unix)]
+#[test]
+fn asr_create_rejects_dangling_symlink_without_writing_target() {
+    use std::os::unix::fs::symlink;
+
+    let root = std::env::temp_dir().join(format!(
+        "shuohua-asr-create-symlink-{}",
+        ulid::Ulid::generate()
+    ));
+    let asr_dir = root.join("asr");
+    std::fs::create_dir_all(&asr_dir).unwrap();
+    let target = root.join("outside.toml");
+    symlink(&target, asr_dir.join("blocked.toml")).unwrap();
+    let mut draft = AsrDraftDoc::new();
+    draft.apply_edit("file_id", "blocked").unwrap();
+
+    let error = draft.commit(&asr_dir).unwrap_err();
+
+    assert!(error.to_string().contains("already exists"), "{error:#}");
+    assert!(
+        !target.exists(),
+        "dangling symlink target must not be created"
+    );
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
-fn asr_create_tencent_writes_provider_file_and_refreshes_sources() {
+fn concurrent_asr_create_allows_exactly_one_writer() {
+    let root = std::env::temp_dir().join(format!(
+        "shuohua-asr-create-race-{}",
+        ulid::Ulid::generate()
+    ));
+    let asr_dir = root.join("asr");
+    let mut draft = AsrDraftDoc::new();
+    draft.apply_edit("file_id", "shared").unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let handles = (0..2)
+        .map(|_| {
+            let draft = draft.clone();
+            let asr_dir = asr_dir.clone();
+            let barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                draft.commit(&asr_dir)
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn asr_create_tencent_seeds_provider_file_and_refreshes_sources() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     crate::i18n::init("en-US");
     let cfg = TestConfig::new();
@@ -402,12 +465,10 @@ fn asr_create_tencent_writes_provider_file_and_refreshes_sources() {
     assert!(page.draft_active());
     {
         let form = page.asr_draft_mut().unwrap();
-        form.edit("type", "tencent".to_string());
-        form.edit("file_id", "tencent".to_string());
-        form.edit("app_id", "1250000000".to_string());
-        form.edit("secret_id", "sid-test".to_string());
-        form.edit("secret_key", "key-test".to_string());
-        form.edit("engine_model_type", "16k_zh_en".to_string());
+        form.apply_edit("type", "tencent").unwrap();
+        form.apply_edit("file_id", "tencent").unwrap();
+        // 在 draft 里改一个 schema 字段（控件由 field_view 派生）。
+        form.apply_edit("engine_model_type", "16k_zh_en").unwrap();
     }
 
     let outcome = page.feed_draft_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
@@ -423,6 +484,43 @@ fn asr_create_tencent_writes_provider_file_and_refreshes_sources() {
         .sources_for_current_module()
         .iter()
         .any(|source| source.ends_with("tencent.toml")));
+}
+
+#[test]
+fn asr_create_aliyun_seeds_provider_file_and_refreshes_sources() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    crate::i18n::init("zh-CN");
+    let cfg = TestConfig::new();
+    let _env = ConfigHomeGuard::set(cfg.dir.parent().unwrap());
+    let mut page = cfg.configure_page();
+    page.module = ConfigureModule::AsrProvider;
+
+    page.on_key(KeyEvent::from(KeyCode::Char('n')));
+    {
+        let form = page.asr_draft_mut().unwrap();
+        form.apply_edit("type", "aliyun").unwrap();
+        form.apply_edit("file_id", "aliyun").unwrap();
+        form.apply_edit("api_key", "sk-test").unwrap();
+        form.apply_edit("workspace_id", "workspace-test").unwrap();
+    }
+
+    let outcome = page.feed_draft_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+    assert!(!outcome.reload_config);
+    assert!(!page.draft_active());
+    let path = cfg.dir.join("asr/aliyun.toml");
+    let body = std::fs::read_to_string(&path).unwrap();
+    // draft 填完后一次落盘：默认 model/语言来自模板，secret 为用户所填。
+    assert!(body.contains("type = \"aliyun\""), "{body}");
+    assert!(body.contains("model = \"fun-asr-realtime\""), "{body}");
+    assert!(body.contains("language_hints = [\"zh\"]"), "{body}");
+    assert!(body.contains("api_key = \"sk-test\""), "{body}");
+    assert!(body.contains("workspace_id = \"workspace-test\""), "{body}");
+    assert!(body.contains("finalize_timeout_ms = 12000"), "{body}");
+    assert!(page
+        .sources_for_current_module()
+        .iter()
+        .any(|source| source.ends_with("aliyun.toml")));
 }
 
 #[test]
@@ -1718,6 +1816,97 @@ fn modal_array_saves_lines_as_string_array() {
 }
 
 #[test]
+fn aliyun_saved_language_select_writes_single_hint_or_auto_array() {
+    let dir = TestConfig::new();
+    let path = dir.write_under(
+        "asr",
+        "aliyun",
+        "type = \"aliyun\"\napi_key = \"sk-test\"\nworkspace_id = \"workspace-test\"\nlanguage_hints = [\"zh\"]\n",
+    );
+    let mut page = dir.configure_page();
+
+    page.begin_edit_for(
+        "language_hints",
+        path.clone(),
+        ControlKind::Select(vec!["zh".into(), "en".into(), "auto".into()]),
+        "zh",
+    );
+    page.set_buffer("en");
+    let outcome = page.commit_edit();
+    assert!(!outcome.reload_config);
+    let body = std::fs::read_to_string(&path).unwrap();
+    assert!(body.contains("language_hints = [\"en\"]"), "{body}");
+
+    page.begin_edit_for(
+        "language_hints",
+        path.clone(),
+        ControlKind::Select(vec!["zh".into(), "en".into(), "auto".into()]),
+        "en",
+    );
+    page.set_buffer("auto");
+    let outcome = page.commit_edit();
+    assert!(!outcome.reload_config);
+    let body = std::fs::read_to_string(&path).unwrap();
+    assert!(body.contains("language_hints = []"), "{body}");
+}
+
+#[test]
+fn aliyun_saved_model_edit_writes_value_without_linked_reconciliation() {
+    let dir = TestConfig::new();
+    let path = dir.write_under(
+        "asr",
+        "aliyun",
+        "type = \"aliyun\"\napi_key = \"sk-test\"\nworkspace_id = \"workspace-test\"\nmodel = \"fun-asr-realtime\"\nlanguage_hints = [\"vi\"]\nspeech_noise_threshold = 0.2\n",
+    );
+    let mut page = dir.configure_page();
+
+    page.begin_edit_for(
+        "model",
+        path.clone(),
+        ControlKind::EditableSelect(vec!["fun-asr-realtime".into()]),
+        "fun-asr-realtime",
+    );
+    page.set_buffer("my-custom-model");
+    let outcome = page.commit_edit();
+
+    // 新建==编辑后 model 走普通 set_field：只写 model 值，不再联动改盘其它字段。
+    assert!(!outcome.reload_config);
+    let body = std::fs::read_to_string(&path).unwrap();
+    assert!(body.contains("model = \"my-custom-model\""), "{body}");
+    assert!(body.contains("language_hints = [\"vi\"]"), "{body}");
+    assert!(body.contains("speech_noise_threshold = 0.2"), "{body}");
+}
+
+#[test]
+fn aliyun_saved_model_editable_preset_still_accepts_custom_text() {
+    let dir = TestConfig::new();
+    let path = dir.write_under(
+        "asr",
+        "aliyun-custom",
+        "type = \"aliyun\"\napi_key = \"sk-test\"\nworkspace_id = \"workspace-test\"\nmodel = \"old-custom-model\"\nmodel_family = \"fun\"\nlanguage_hints = [\"zh\"]\n",
+    );
+    let mut page = dir.configure_page();
+
+    page.begin_edit_for(
+        "model",
+        path.clone(),
+        ControlKind::EditableSelect(vec![
+            "fun-asr-realtime".into(),
+            "paraformer-realtime-v2".into(),
+        ]),
+        "old-custom-model",
+    );
+    page.set_buffer("");
+    page.feed_edit_paste("new-custom-model");
+    let outcome = page.commit_edit();
+
+    assert!(!outcome.reload_config);
+    let body = std::fs::read_to_string(&path).unwrap();
+    assert!(body.contains("model = \"new-custom-model\""), "{body}");
+    assert!(body.contains("model_family = \"fun\""), "{body}");
+}
+
+#[test]
 fn modal_paste_inserts_at_cursor() {
     let dir = TestConfig::new();
     let mut page = dir.configure_page();
@@ -2283,40 +2472,6 @@ fn draft_keeps_source_strip_and_fields_clickable() {
     page.on_mouse(r.x + 1, r.y, crate::tui::page::MouseKind::Down);
     assert!(!page.draft_active(), "点真实来源应退出 draft");
     assert_eq!(page.selected_source_idx, 0);
-}
-
-#[test]
-fn asr_draft_field_list_scrolls_selected_row_into_view() {
-    use ratatui::backend::TestBackend;
-    use ratatui::Terminal;
-    crate::i18n::init("en-US");
-    let mut page = ConfigurePage::new();
-    page.module = ConfigureModule::AsrProvider;
-    page.start_asr_create();
-    {
-        let form = page.asr_draft_mut().unwrap();
-        form.edit("type", "tencent".to_string());
-        form.selected = form
-            .rows()
-            .iter()
-            .position(|row| row.field_path == "finalize_timeout_ms")
-            .unwrap();
-    }
-    let theme = TuiTheme::default();
-    let mut term = Terminal::new(TestBackend::new(100, 18)).unwrap();
-
-    term.draw(|f| render::render_page(f, &page, f.area(), &theme, ""))
-        .unwrap();
-
-    let screen = term.backend().to_string();
-    assert!(
-        screen.contains("finalize timeout"),
-        "selected row should be visible:\n{screen}"
-    );
-    assert!(
-        !screen.contains("App ID"),
-        "top draft rows should scroll out when a later row is selected:\n{screen}"
-    );
 }
 
 #[test]

@@ -746,7 +746,8 @@ mod tests {
         asr: &[(&str, &str)],
         post: &[(&str, &str)],
     ) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("shuohua-composer-{}", ulid::Ulid::new()));
+        let root =
+            std::env::temp_dir().join(format!("shuohua-composer-{}", ulid::Ulid::generate()));
         for (sub, files) in [("profile", profiles), ("asr", asr), ("post", post)] {
             fs::create_dir_all(root.join(sub)).unwrap();
             for (name, body) in files {

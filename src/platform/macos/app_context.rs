@@ -1,6 +1,6 @@
 use objc2_app_kit::NSWorkspace;
 
-use crate::post::AppContext;
+use crate::platform::AppContext;
 
 pub fn frontmost_app() -> AppContext {
     let Some(app) = NSWorkspace::sharedWorkspace().frontmostApplication() else {

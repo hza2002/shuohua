@@ -26,6 +26,7 @@ mod post;
 mod reload;
 mod state;
 mod text_stats;
+mod trash;
 mod tui;
 mod voice;
 

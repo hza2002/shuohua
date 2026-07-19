@@ -1,5 +1,3 @@
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::path::Path;
 
 use anyhow::Context;
@@ -31,16 +29,26 @@ pub fn set_field(
     spec: &ConfigSpec,
 ) -> Result<(), WriteError> {
     let mut doc = read_document(path).map_err(WriteError::Io)?;
+    apply_field(&mut doc, field_path, input, spec)?;
+    atomic_write(path, &doc.to_string()).map_err(WriteError::Io)
+}
+
+/// 在内存 `DocumentMut` 上写入并校验一个字段（结构 + Error 级 schema 校验 +
+/// 语义校验），不碰磁盘。File 写盘路径与内存 draft 编辑共用同一套校验，保证
+/// 新建（未落盘的 draft）与编辑（已落盘文件）行为一致。
+pub fn apply_field(
+    doc: &mut DocumentMut,
+    field_path: &str,
+    input: TypedInput,
+    spec: &ConfigSpec,
+) -> Result<(), WriteError> {
     let item = typed_to_item(&input);
-    set_dotted(&mut doc, field_path, item);
+    set_dotted(doc, field_path, item);
 
     let rendered = doc.to_string();
     let parsed: toml::Value = toml::from_str(&rendered)
         .map_err(|e| WriteError::Io(anyhow::anyhow!("re-parse after edit: {e}")))?;
-    let errors: Vec<Diagnostic> = validate_value(spec, &parsed)
-        .into_iter()
-        .filter(|d| d.severity == Severity::Error)
-        .collect();
+    let errors = blocking_errors(spec, &parsed);
     if !errors.is_empty() {
         return Err(WriteError::Validation(errors));
     }
@@ -50,8 +58,23 @@ pub fn set_field(
             return Err(WriteError::Semantic(reason));
         }
     }
+    Ok(())
+}
 
-    atomic_write(path, &rendered).map_err(WriteError::Io)
+/// 阻断保存的错误：结构性 Error（类型/范围/未知字段/枚举），但**排除 secret 字段的
+/// 「未填」类错误**——填密钥是 readiness，不该挡住逐字段保存半成品。这样新建 draft 与
+/// 编辑已落盘文件用同一套规则，都能渐进填写；加载/运行仍由 `reject_schema_diagnostics`
+/// （连 Warning 一起 bail）拦住空密钥，doctor 也照常按引用关系升级严重度。
+pub fn blocking_errors(spec: &ConfigSpec, parsed: &toml::Value) -> Vec<Diagnostic> {
+    validate_value(spec, parsed)
+        .into_iter()
+        .filter(|d| d.severity == Severity::Error)
+        .filter(|d| {
+            !spec
+                .field_for_path(&d.path)
+                .is_some_and(|field| field.is_secret())
+        })
+        .collect()
 }
 
 pub(crate) fn read_document(path: &Path) -> anyhow::Result<DocumentMut> {
@@ -136,7 +159,7 @@ fn remove_dotted(doc: &mut DocumentMut, field_path: &str) {
 }
 
 pub(crate) fn atomic_write(path: &Path, body: &str) -> anyhow::Result<()> {
-    let tmp = path.with_extension(format!("toml.tmp-{}", ulid::Ulid::new()));
+    let tmp = path.with_extension(format!("toml.tmp-{}", ulid::Ulid::generate()));
     std::fs::write(&tmp, body).with_context(|| format!("write temp {}", tmp.display()))?;
     std::fs::rename(&tmp, path).with_context(|| format!("replace {}", path.display()))?;
     Ok(())
@@ -158,7 +181,8 @@ mod tests {
     use crate::config::schema::{spec_for, SchemaId};
 
     fn temp_file(body: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("shuohua-fieldwrite-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-fieldwrite-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
         std::fs::write(&path, body).unwrap();

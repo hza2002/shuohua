@@ -438,7 +438,7 @@ mod tests {
         let outcome = cancel_outcome(Vec::new(), state.clone(), overlay);
         let control = SessionControl::new();
         let history = HistoryService::with_dir(
-            std::env::temp_dir().join(format!("shuohua-voice-history-{}", ulid::Ulid::new())),
+            std::env::temp_dir().join(format!("shuohua-voice-history-{}", ulid::Ulid::generate())),
         );
         let mut history_rx = history.subscribe();
 
@@ -476,7 +476,7 @@ mod tests {
         let outcome = success_outcome(Vec::new(), state.clone(), overlay);
         let control = SessionControl::new();
         let history = HistoryService::with_dir(
-            std::env::temp_dir().join(format!("shuohua-voice-history-{}", ulid::Ulid::new())),
+            std::env::temp_dir().join(format!("shuohua-voice-history-{}", ulid::Ulid::generate())),
         );
         let mut history_rx = history.subscribe();
 
@@ -509,7 +509,7 @@ mod tests {
         let (overlay, _rx) = OverlayHandle::channel();
         let state = StateStore::new();
         let history = HistoryService::with_dir(
-            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::new())),
+            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::generate())),
         );
         let mut outcome = success_outcome(Vec::new(), state, overlay);
         outcome.params.post_chain.processors = vec![Box::new(PanicProcessor)];
@@ -533,7 +533,7 @@ mod tests {
         let (overlay, _rx) = OverlayHandle::channel();
         let state = StateStore::new();
         let history = HistoryService::with_dir(
-            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::new())),
+            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::generate())),
         );
         let mut outcome = cancel_outcome(Vec::new(), state, overlay);
         outcome.params.start = crate::voice::resume::RecordingStart::Seed(ResumeSeed {
@@ -558,7 +558,7 @@ mod tests {
         let (overlay, _rx) = OverlayHandle::channel();
         let state = StateStore::new();
         let history = HistoryService::with_dir(
-            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::new())),
+            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::generate())),
         );
         let base = Instant::now();
         let sessions = vec![SessionCapture {
@@ -595,7 +595,7 @@ mod tests {
         let (overlay, _rx) = OverlayHandle::channel();
         let state = StateStore::new();
         let history = HistoryService::with_dir(
-            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::new())),
+            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::generate())),
         );
         let base = Instant::now();
         let sessions = vec![SessionCapture {
@@ -645,7 +645,7 @@ mod tests {
         let (overlay, _rx) = OverlayHandle::channel();
         let state = StateStore::new();
         let history = HistoryService::with_dir(
-            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::new())),
+            std::env::temp_dir().join(format!("shuohua-test-{}", ulid::Ulid::generate())),
         );
         let base = Instant::now();
         let sessions = vec![SessionCapture {
@@ -694,7 +694,7 @@ mod tests {
         let outcome = error_outcome(Vec::new(), state.clone(), overlay);
         let control = SessionControl::new();
         let history = HistoryService::with_dir(
-            std::env::temp_dir().join(format!("shuohua-voice-history-{}", ulid::Ulid::new())),
+            std::env::temp_dir().join(format!("shuohua-voice-history-{}", ulid::Ulid::generate())),
         );
         let mut history_rx = history.subscribe();
 

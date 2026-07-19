@@ -150,7 +150,7 @@ mod tests {
     #[tokio::test]
     async fn latest_decision_uses_only_latest_record() {
         let history = HistoryService::with_dir(
-            std::env::temp_dir().join(format!("shuohua-resume-test-{}", ulid::Ulid::new())),
+            std::env::temp_dir().join(format!("shuohua-resume-test-{}", ulid::Ulid::generate())),
         );
         let older = record("older", HistoryStatus::Canceled, "old text");
         let mut newer = record("newer", HistoryStatus::Submitted, "new text");

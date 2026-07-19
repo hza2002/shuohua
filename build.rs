@@ -67,9 +67,7 @@ fn generate_zh_variants(out_dir: &std::path::Path) {
     use ferrous_opencc::config::BuiltinConfig;
 
     let body = std::fs::read_to_string("assets/i18n/zh-CN.toml").expect("read zh-CN i18n asset");
-    let value = body
-        .parse::<toml::Value>()
-        .expect("embedded zh-CN i18n TOML must parse");
+    let value = toml::from_str::<toml::Value>(&body).expect("embedded zh-CN i18n TOML must parse");
     let flattened = flatten_i18n_toml(&value);
     let variants = [
         ("i18n_zh_hant.rs", BuiltinConfig::S2t),

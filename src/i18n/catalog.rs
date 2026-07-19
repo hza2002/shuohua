@@ -62,9 +62,7 @@ fn pseudo_dict(dict: Dict) -> Dict {
 }
 
 fn flatten_toml(body: &str) -> HashMap<String, String> {
-    let value = body
-        .parse::<toml::Value>()
-        .expect("embedded i18n TOML must parse");
+    let value = toml::from_str::<toml::Value>(body).expect("embedded i18n TOML must parse");
     let mut out = HashMap::new();
     flatten_value(None, &value, &mut out)
         .expect("embedded i18n TOML must contain only tables and string leaves");

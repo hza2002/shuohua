@@ -153,7 +153,7 @@ async fn install_update(
     let checksum = String::from_utf8(checksum).context("checksum file is not UTF-8")?;
     crate::cli::app::archive::verify_sha256(&tarball, &checksum)?;
 
-    let temp_dir = std::env::temp_dir().join(format!("shuohua-update-{}", ulid::Ulid::new()));
+    let temp_dir = std::env::temp_dir().join(format!("shuohua-update-{}", ulid::Ulid::generate()));
     let _temp_dir_cleanup = TempDirCleanup::new(temp_dir.clone());
     let expected_binary_path = PathBuf::from(format!("shuo-v{to}-{target}/shuo"));
     let extracted =
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn temp_dir_cleanup_removes_directory_on_drop() {
         let dir =
-            std::env::temp_dir().join(format!("shuohua-update-cleanup-{}", ulid::Ulid::new()));
+            std::env::temp_dir().join(format!("shuohua-update-cleanup-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("shuo"), b"binary").unwrap();
 

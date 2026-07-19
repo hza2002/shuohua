@@ -67,7 +67,7 @@ fn replace_path_with(
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("shuo"),
-        ulid::Ulid::new()
+        ulid::Ulid::generate()
     ));
     let mode = fs::metadata(new_exe)
         .with_context(|| format!("read metadata for {}", new_exe.display()))?
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn replace_path_overwrites_target() {
-        let dir = std::env::temp_dir().join(format!("shuohua-replace-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("shuohua-replace-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         let current = dir.join("shuo");
         let new_exe = dir.join("new-shuo");
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn replace_path_cleans_temp_file_when_replace_fails() {
-        let dir = std::env::temp_dir().join(format!("shuohua-replace-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("shuohua-replace-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         let current = dir.join("shuo");
         let new_exe = dir.join("new-shuo");
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn replace_path_propagates_copy_error_without_sudo() {
-        let dir = std::env::temp_dir().join(format!("shuohua-replace-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("shuohua-replace-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         let target = dir.join("shuo");
         let new_exe = dir.join("new-shuo");

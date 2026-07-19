@@ -9,6 +9,7 @@ use toml::value::Table;
 use crate::config::schema::{self, SchemaId};
 use crate::config::spec::validate_value;
 use crate::config::ProfileRouteCfg;
+use crate::trash::FileDeleter;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Profile {
@@ -148,7 +149,11 @@ fn profiles_matching(config_root: &Path, pred: impl Fn(&Profile) -> bool) -> Vec
     names
 }
 
-pub(crate) fn delete_asr_instance_file(config_root: &Path, id: &str) -> Result<PathBuf> {
+pub(crate) fn delete_asr_instance_file(
+    config_root: &Path,
+    id: &str,
+    deleter: &FileDeleter,
+) -> Result<PathBuf> {
     crate::config::inventory::validate_config_file_id(id).map_err(anyhow::Error::msg)?;
     let refs = profiles_matching(config_root, |p| p.asr.instance == id);
     anyhow::ensure!(
@@ -157,12 +162,17 @@ pub(crate) fn delete_asr_instance_file(config_root: &Path, id: &str) -> Result<P
         refs.join(", ")
     );
     let path = config_root.join("asr").join(format!("{id}.toml"));
-    std::fs::remove_file(&path)
+    deleter
+        .delete(&path)
         .with_context(|| format!("delete ASR instance {}", path.display()))?;
     Ok(path)
 }
 
-pub(crate) fn delete_post_component_file(config_root: &Path, id: &str) -> Result<PathBuf> {
+pub(crate) fn delete_post_component_file(
+    config_root: &Path,
+    id: &str,
+    deleter: &FileDeleter,
+) -> Result<PathBuf> {
     crate::config::inventory::validate_config_file_id(id).map_err(anyhow::Error::msg)?;
     let refs = profiles_matching(config_root, |p| p.post.chain.iter().any(|c| c == id));
     anyhow::ensure!(
@@ -171,18 +181,25 @@ pub(crate) fn delete_post_component_file(config_root: &Path, id: &str) -> Result
         refs.join(", ")
     );
     let path = config_root.join("post").join(format!("{id}.toml"));
-    std::fs::remove_file(&path)
+    deleter
+        .delete(&path)
         .with_context(|| format!("delete post component {}", path.display()))?;
     Ok(path)
 }
 
-pub(crate) fn delete_profile_file(config_root: &Path, profile_id: &str) -> Result<PathBuf> {
+pub(crate) fn delete_profile_file(
+    config_root: &Path,
+    profile_id: &str,
+    deleter: &FileDeleter,
+) -> Result<PathBuf> {
     crate::config::inventory::validate_config_file_id(profile_id).map_err(anyhow::Error::msg)?;
     ensure_profile_not_referenced(config_root, profile_id)?;
     let path = config_root
         .join("profile")
         .join(format!("{profile_id}.toml"));
-    std::fs::remove_file(&path).with_context(|| format!("delete profile {}", path.display()))?;
+    deleter
+        .delete(&path)
+        .with_context(|| format!("delete profile {}", path.display()))?;
     Ok(path)
 }
 
@@ -228,7 +245,8 @@ mod profile_file_tests {
     use super::*;
 
     fn temp_root() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("shuohua-profile-file-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-profile-file-{}", ulid::Ulid::generate()));
         fs::create_dir_all(dir.join("profile")).unwrap();
         dir
     }
@@ -285,9 +303,12 @@ mod profile_file_tests {
         )
         .unwrap();
 
-        delete_profile_file(&root, "meeting").unwrap();
+        let (deleter, log) = crate::trash::recording_deleter();
+        delete_profile_file(&root, "meeting", &deleter).unwrap();
 
         assert!(!path.exists());
+        // 删除走了注入的 deleter（生产=废纸篓），不是硬编码 fs::remove_file。
+        assert_eq!(log.lock().unwrap().as_slice(), &[path]);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -305,8 +326,9 @@ coding = ["com.example.App"]
         )
         .unwrap();
 
-        let default_error = delete_profile_file(&root, "default").unwrap_err();
-        let routed_error = delete_profile_file(&root, "coding").unwrap_err();
+        let deleter = crate::trash::remove_deleter();
+        let default_error = delete_profile_file(&root, "default", &deleter).unwrap_err();
+        let routed_error = delete_profile_file(&root, "coding", &deleter).unwrap_err();
 
         assert!(
             default_error.to_string().contains("default profile"),
@@ -341,10 +363,12 @@ coding = ["com.example.App"]
         let asr_path = root.join("asr/team.toml");
         fs::write(&asr_path, "type = \"doubao\"\n").unwrap();
 
-        let result = delete_asr_instance_file(&root, "team");
+        let (deleter, log) = crate::trash::recording_deleter();
+        let result = delete_asr_instance_file(&root, "team", &deleter);
 
         assert!(result.is_ok(), "{result:#?}");
         assert!(!asr_path.exists(), "file should be removed");
+        assert_eq!(log.lock().unwrap().as_slice(), &[asr_path]);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -357,7 +381,8 @@ coding = ["com.example.App"]
         let asr_path = root.join("asr/team.toml");
         fs::write(&asr_path, "type = \"doubao\"\n").unwrap();
 
-        let err = delete_asr_instance_file(&root, "team").unwrap_err();
+        let err =
+            delete_asr_instance_file(&root, "team", &crate::trash::remove_deleter()).unwrap_err();
         let msg = format!("{err:#}");
 
         assert!(
@@ -388,10 +413,12 @@ coding = ["com.example.App"]
         )
         .unwrap();
 
-        let result = delete_post_component_file(&root, "deepseek");
+        let (deleter, log) = crate::trash::recording_deleter();
+        let result = delete_post_component_file(&root, "deepseek", &deleter);
 
         assert!(result.is_ok(), "{result:#?}");
         assert!(!post_path.exists(), "file should be removed");
+        assert_eq!(log.lock().unwrap().as_slice(), &[post_path]);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -407,7 +434,8 @@ coding = ["com.example.App"]
         )
         .unwrap();
 
-        let err = delete_post_component_file(&root, "deepseek").unwrap_err();
+        let err = delete_post_component_file(&root, "deepseek", &crate::trash::remove_deleter())
+            .unwrap_err();
         let msg = format!("{err:#}");
 
         assert!(
@@ -461,7 +489,8 @@ mod tests {
     use super::*;
 
     fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("shuohua-profile-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-profile-test-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

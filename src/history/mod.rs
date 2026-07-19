@@ -1,14 +1,15 @@
-pub mod assets;
-pub mod model;
-pub mod stats;
+mod assets;
+mod model;
+pub(crate) mod stats;
 pub(crate) mod store;
-pub mod watcher;
+mod watcher;
 
 pub use assets::{AudioAssetInfo, AudioAssetState};
 pub use model::{
-    AsrHistory, AsrSessionHistory, AudioDeleteResult, DeleteResult, HistoryError, HistoryQuery,
-    HistoryRecord, HistoryStatus, PipelineStepHistory, PipelineStepStatus,
-    DEFAULT_HISTORY_PAGE_LIMIT, MAX_HISTORY_PAGE_LIMIT,
+    AsrHistory, AsrSessionHistory, AudioDeleteResult, CleanupError, CleanupFilter, CleanupIssue,
+    CleanupPreview, CleanupResult, CleanupScope, CleanupWarning, CleanupWindow, DeleteResult,
+    HistoryError, HistoryQuery, HistoryRecord, HistoryStatus, PipelineStepHistory,
+    PipelineStepStatus, DEFAULT_HISTORY_PAGE_LIMIT, MAX_HISTORY_PAGE_LIMIT,
 };
 pub use stats::{
     AggregateStats, AnalyticsPeriod, AnalyticsPoint, AnalyticsQuery, AnalyticsSnapshot,
@@ -248,7 +249,7 @@ pub mod tests {
         }
 
         fn temp_dir(name: &str) -> std::path::PathBuf {
-            std::env::temp_dir().join(format!("shuohua-history-{name}-{}", ulid::Ulid::new()))
+            std::env::temp_dir().join(format!("shuohua-history-{name}-{}", ulid::Ulid::generate()))
         }
 
         fn write_line(dir: &std::path::Path, record: crate::history::HistoryRecord) {
@@ -456,7 +457,7 @@ pub mod tests {
         }
 
         fn temp_dir(name: &str) -> std::path::PathBuf {
-            std::env::temp_dir().join(format!("shuohua-history-{name}-{}", ulid::Ulid::new()))
+            std::env::temp_dir().join(format!("shuohua-history-{name}-{}", ulid::Ulid::generate()))
         }
 
         fn write_line(dir: &std::path::Path, record: crate::history::HistoryRecord) {

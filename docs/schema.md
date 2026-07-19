@@ -16,8 +16,11 @@
 {"op":"get_history","limit":50,"before":"2026-06-12T22:00:00Z","before_id":"01HXYZ...","query":"Rust"}
 {"op":"get_history_stats"}
 {"op":"get_history_analytics","period":"month","anchor":"2026-06"}
+{"op":"get_history_analytics","period":"last_30_days","anchor":"2026-07-08"}
 {"op":"delete_audio","id":"01HXYZ..."}
 {"op":"delete_history","id":"01HXYZ..."}
+{"op":"preview_history_cleanup","filter":{"scope":"audio_only","window":{"older_than_days":30}}}  // 批量清理预览；scope 取 audio_only|record_and_audio；window 取 "all"|{"last_hours":h}|{"last_days":d}|{"older_than_days":n}|{"range":{"from":"YYYY-MM-DD","to":"YYYY-MM-DD"}}
+{"op":"execute_history_cleanup","filter":{"scope":"record_and_audio","window":{"older_than_days":30}},"ids":["01HXYZ..."]}  // 删除 preview 快照里这批目标；execute 不重新扫描 filter
 {"op":"daemon_status"}          // 返回 PID / 启动时间 / 在录音否（shuo service status 用）
 {"op":"shutdown"}               // shuo service stop 用；daemon 正常退出 0，避免 launchd KeepAlive 重启
 {"op":"start_recording"}        // 预留：当前 daemon 返回 unsupported
@@ -48,6 +51,8 @@
 {"event":"history_changed"}                                  // history JSONL 可能已变化，client 应 coalesce refresh
 {"event":"audio_deleted","id":"01HXYZ...","deleted":true}
 {"event":"history_deleted","id":"01HXYZ...","record_deleted":true,"audio_deleted":true,"audio_error":null}
+{"event":"history_cleanup_preview","preview":{"filter":{"scope":"record_and_audio","window":{"older_than_days":30}},"ids":["01HXYZ..."],"audio_bytes":333447168,"audio_ms":5300000,"oldest":"2026-04-12T00:00:00Z","newest":"2026-06-01T00:00:00Z","warnings":[{"id":"01HBAD...","issue":"conflict"}]}}
+{"event":"history_cleanup_done","result":{"requested":42,"deleted":41,"missing":1,"errors":[{"id":"01HBAD...","issue":"symlink"}]}}
 {"event":"config_reloaded","path":"/Users/me/.config/shuohua/config.toml"} // reload_config 成功回包
 {"event":"error","recording_id":"01HXYZ...","kind":"asr_timeout","msg":"..."}
 {"event":"history_appended","record":{...}}              // 唯一的"会话完成"事件，含整条 history record
@@ -63,10 +68,11 @@
 - **`session_meta` 事件**：录音开始后推一次本次 session 的静态元数据，供 TUI 在 pipeline 尚未执行时显示完整 ASR provider、post chain、VAD backend 和 hotwords 数量。它不是持久化状态；最终事实仍以 `history_appended.record` 为准。
 - **`session_phase` 事件**：TUI 专用的录音内部阶段，不改变顶层 `state_changed.state` 语义。`active` 表示正在把音频送 ASR，`idle` 表示 VAD pause 后麦克风仍在听但 ASR 暂停，`stopping` 表示用户停止后的收尾阶段。
 - **`get_history` 分页**：默认 `limit=50`，最大 500，返回从新到旧。`before` 用 `started_at` RFC3339 时间戳，语义为分页游标；`before_id` 用来在同一 timestamp 下继续翻页，必须和 `before` 同时出现，单独传 `before_id` 返回 `error(kind="bad_command")`。服务端返回 `(started_at, id)` 严格早于 cursor 的记录。`query` 是可选关键词过滤，由 daemon 对 persisted JSONL records 做大小写不敏感 substring；TUI 不维护 full-history search index/fuzzy matcher。query 存在时，`history` 回包同时带 `matched` 和 `stats`，分别表示该 query 在全量 history 中的命中条数和命中集合聚合统计；分页 records 仍只返回当前页。
-- **summary / analytics**：`get_history_stats` 返回全量、当前月、今天的 additive totals。`get_history_analytics` 的 `period` 为 `year|month|day`，`anchor` 分别为 `YYYY`、`YYYY-MM`、`YYYY-MM-DD`；返回固定零填充 buckets：year=12 months，month=该月每天，day=24 hours。可视化平均值由 client 从 additive stats 派生。
+- **summary / analytics**：`get_history_stats` 返回全量、当前月、今天的 additive totals。`get_history_analytics` 的 `period` 为 `last_7_days|last_30_days|year|month|day`；`last_7_days` / `last_30_days` 的 `anchor` 为窗口结束日 `YYYY-MM-DD`，返回含 anchor 当天在内的最近 7/30 个按天 buckets（key 为 `MM-DD`，可跨月/年）；`year|month|day` 的 `anchor` 分别为 `YYYY`、`YYYY-MM`、`YYYY-MM-DD`，返回固定零填充 buckets：year=12 months，month=该月每天，day=24 hours。可视化平均值由 client 从 additive stats 派生。
 - **stale / unavailable**：stats 和 analytics snapshot 的 `status` 为 `ready|stale|unavailable`。`stale` 表示保留 last valid index 但发现当前 JSONL 无法完全 reconcile；`unavailable` 表示没有可用 index。`error` 是给 TUI/doctor 的简短诊断，不写入 JSONL。
 - **history direct response 与 broadcasts**：同一 UDS 连接上 direct command response 按该连接命令顺序返回；`history_changed` / `history_appended` 是 broadcast，和 direct response 的相对顺序不指定，client 必须 coalesce refresh。
 - **删除命令**：`delete_audio` 只删 retained audio，不改 JSONL；缺失文件仍返回 `deleted=false`。`delete_history` 删除 history record 并尝试删除同 ID audio；`record_deleted=false` 表示 record 已不存在（idempotent），仍可清理 orphan audio。`audio_error` 非空表示 record 删除已完成但 audio 删除在 preflight 后失败；symlink、conflict、non-regular audio 这类危险状态在改 JSONL 前拒绝。
+- **批量清理命令**：`preview_history_cleanup` / `execute_history_cleanup` 是单条 `delete_audio` / `delete_history` 的批量版本。`scope="audio_only"` 只删 retained audio，**不改 JSONL**；preview 扫描「有 retained audio 且命中 window」的 record（recording 中心，不含 orphan audio）。`scope="record_and_audio"` 删除 history record 并删除同 ID linked audio；preview 扫描所有命中 window 的 record，音频不存在仍可入选。两种 scope 都会把危险音频排除到 `warnings`（`issue` = `conflict|symlink|non_regular`）；record_and_audio 在危险音频未解决前不会删除该 record。preview 返回可安全删除的 `ids` 快照、音频总字节、语音总时长、时间范围和 warnings。**execute 只处理 preview 里回传的这批 `ids`，不按 filter 重新求值**，因此 preview 之后新增的匹配不会被删。record_and_audio 先提交 history shard，再重新核对 linked audio 的路径类型与文件 identity；音频在期间被替换时保留新文件并返回 IO error，不用隐藏 staging 文件模拟跨资源事务。`audio_only` 的 `deleted/missing` 分别表示已删/已不存在的 audio 数；`record_and_audio` 的 `deleted/missing` 分别表示已删/已不存在的 history record 数，linked audio 缺失不算 missing。危险/IO 失败进入 `errors` 且不中断整批。audio_only 不广播 `history_changed`；record_and_audio 成功删除任一 record 后广播 `history_changed`。
 - **协议版本**：`snapshot` 回包带 `proto_version: 2`。TUI 收到不认识的版本号时报 warning 但继续尝试解析；daemon 单方升级版本时必须同时升级 TUI（同二进制 → 不会错位）。未来加事件类型不破坏，删/改字段升 `proto_version`。
 
 ### 1.3 不引入 state.json
@@ -248,6 +254,7 @@ compact  → ${XDG_STATE_HOME:-~/.local/state}/shuohua/audio/<recording_id>.m4a
 - **写入/转换失败**：删除所有临时音频，不保留 WAV fallback；写 daemon 诊断日志 + UDS `error(kind=audio_save)` + overlay Notice。daemon 不崩，不回滚文本 dispatch/history，下次继续尝试。
 - **不存 history 字段**：路径由 ULID + 两个合法后缀约定推出，无需 `audio_path`。文件不存在 = 当时关闭、保存失败，或之后被用户删除。
 - **删除语义**：TUI 的 `d` 走 `delete_audio`，只删除对应 `.flac` 或 `.m4a`，不改 history JSONL。TUI 的 `x` 走 `delete_history`，删除 history record 并删除同 ID audio。两者都 idempotent；`.flac` 与 `.m4a` 同时存在、symlink、non-regular file 等冲突/危险状态会拒绝，不跟随 symlink。
+- **删除=移废纸篓（不变量）**：所有「整文件」删除（audio、以及 config 的 profile/asr/post 实例文件）都经 `crate::trash` 的 `FileDeleter` seam 移入系统废纸篓（可恢复），不永久删；**移废纸篓失败 → 记为错误并保留文件，绝不回退永久删除**。history record 是共享月度 shard 里的一行、非每条一文件，不适用，仍走 shard 重写。测试注入本地 deleter，不触碰真实 `~/.Trash`。
 
 ---
 

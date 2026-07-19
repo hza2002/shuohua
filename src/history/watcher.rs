@@ -279,7 +279,7 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("shuohua-history-{name}-{}", ulid::Ulid::new()))
+        std::env::temp_dir().join(format!("shuohua-history-{name}-{}", ulid::Ulid::generate()))
     }
 
     fn write_line(dir: &std::path::Path, record: crate::history::HistoryRecord) {

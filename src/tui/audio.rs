@@ -171,10 +171,11 @@ mod tests {
 
     #[test]
     fn resolves_lossless_audio_by_recording_id() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::generate()));
         let audio_dir = dir.join("audio");
         fs::create_dir_all(&audio_dir).unwrap();
-        let id = ulid::Ulid::new().to_string();
+        let id = ulid::Ulid::generate().to_string();
         let path = audio_dir.join(format!("{id}.flac"));
         fs::write(&path, [0u8; 12]).unwrap();
 
@@ -187,10 +188,11 @@ mod tests {
 
     #[test]
     fn resolves_compact_audio_by_recording_id() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::generate()));
         let audio_dir = dir.join("audio");
         fs::create_dir_all(&audio_dir).unwrap();
-        let id = ulid::Ulid::new().to_string();
+        let id = ulid::Ulid::generate().to_string();
         let path = audio_dir.join(format!("{id}.m4a"));
         fs::write(&path, [0u8; 12]).unwrap();
 
@@ -203,10 +205,11 @@ mod tests {
 
     #[test]
     fn duplicate_formats_are_reported_as_unavailable() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::generate()));
         let audio_dir = dir.join("audio");
         fs::create_dir_all(&audio_dir).unwrap();
-        let id = ulid::Ulid::new().to_string();
+        let id = ulid::Ulid::generate().to_string();
         fs::write(audio_dir.join(format!("{id}.flac")), [0u8; 12]).unwrap();
         fs::write(audio_dir.join(format!("{id}.m4a")), [0u8; 12]).unwrap();
 
@@ -218,7 +221,8 @@ mod tests {
 
     #[test]
     fn audio_info_reports_existing_file_size() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("01HXYZ.wav");
         fs::write(&path, [0u8; 12]).unwrap();
@@ -234,8 +238,10 @@ mod tests {
 
     #[test]
     fn audio_info_reports_missing_file() {
-        let path =
-            std::env::temp_dir().join(format!("shuohua-audio-missing-{}.wav", ulid::Ulid::new()));
+        let path = std::env::temp_dir().join(format!(
+            "shuohua-audio-missing-{}.wav",
+            ulid::Ulid::generate()
+        ));
 
         let info = audio_info_for_path(path.clone());
 
@@ -248,10 +254,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn audio_info_does_not_follow_symlinks() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         let target = dir.join("target.flac");
-        let link = dir.join(format!("{}.flac", ulid::Ulid::new()));
+        let link = dir.join(format!("{}.flac", ulid::Ulid::generate()));
         fs::write(&target, [0u8; 12]).unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
@@ -264,10 +271,11 @@ mod tests {
 
     #[test]
     fn ensure_audio_path_accepts_supported_file_inside_audio_dir() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-delete-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-audio-delete-{}", ulid::Ulid::generate()));
         let audio_dir = dir.join("audio");
         fs::create_dir_all(&audio_dir).unwrap();
-        let id = ulid::Ulid::new().to_string();
+        let id = ulid::Ulid::generate().to_string();
         let audio = audio_dir.join(format!("{id}.flac"));
         fs::write(&audio, [0u8; 4]).unwrap();
 
@@ -278,10 +286,11 @@ mod tests {
 
     #[test]
     fn ensure_audio_path_refuses_paths_outside_audio_dir() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-delete-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-audio-delete-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         let audio_dir = dir.join("audio");
-        let audio = dir.join(format!("{}.flac", ulid::Ulid::new()));
+        let audio = dir.join(format!("{}.flac", ulid::Ulid::generate()));
         fs::write(&audio, [0u8; 4]).unwrap();
 
         let err = ensure_audio_path(&audio, &audio_dir).unwrap_err();
@@ -293,12 +302,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ensure_existing_audio_refuses_symlinks() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-delete-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-audio-delete-{}", ulid::Ulid::generate()));
         let audio_dir = dir.join("audio");
         fs::create_dir_all(&dir).unwrap();
         fs::create_dir_all(&audio_dir).unwrap();
         let target = dir.join("target.flac");
-        let link = audio_dir.join(format!("{}.flac", ulid::Ulid::new()));
+        let link = audio_dir.join(format!("{}.flac", ulid::Ulid::generate()));
         fs::write(&target, [0u8; 12]).unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
@@ -310,7 +320,8 @@ mod tests {
 
     #[test]
     fn invalid_recording_id_has_no_audio_path() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-audio-test-{}", ulid::Ulid::generate()));
         let info = audio_info_for_recording_id_in_state_dir(&dir, "../escape");
 
         assert!(!info.exists());
@@ -319,7 +330,8 @@ mod tests {
 
     #[test]
     fn ensure_existing_audio_refuses_unsupported_extension() {
-        let path = std::env::temp_dir().join(format!("shuohua-audio-{}.wav", ulid::Ulid::new()));
+        let path =
+            std::env::temp_dir().join(format!("shuohua-audio-{}.wav", ulid::Ulid::generate()));
 
         let err = ensure_existing_audio(&path).unwrap_err();
 

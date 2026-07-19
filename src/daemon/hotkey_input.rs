@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
+use parking_lot::Mutex;
 use std::io::Read;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 
 use crate::hotkey::{Bindings, HotkeyAction, RawEvent, Suppressor};
@@ -44,18 +45,15 @@ impl HotkeyInput {
             .combo_for(HotkeyAction::Resume)
             .context("missing resume-record hotkey binding")?
             .clone();
-        if let Ok(mut s) = self.suppressor.lock() {
-            s.set_trigger(new_trigger);
-            s.set_cancel(new_cancel);
-            s.set_resume(new_resume);
-        }
+        let mut s = self.suppressor.lock();
+        s.set_trigger(new_trigger);
+        s.set_cancel(new_cancel);
+        s.set_resume(new_resume);
         Ok(())
     }
 
     pub(super) fn set_cancel_active(&self, active: bool) {
-        if let Ok(mut s) = self.suppressor.lock() {
-            s.set_cancel_active(active);
-        }
+        self.suppressor.lock().set_cancel_active(active);
     }
 
     pub(super) fn suppressor(&self) -> Arc<Mutex<Suppressor>> {

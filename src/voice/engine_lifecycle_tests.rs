@@ -304,7 +304,7 @@ struct RunHandles {
 }
 
 fn fresh_handles() -> RunHandles {
-    let recording_id = format!("test-{}", ulid::Ulid::new());
+    let recording_id = format!("test-{}", ulid::Ulid::generate());
     let recording_started_at = time::OffsetDateTime::now_utc();
     let recording_started_instant = Instant::now();
     let trace = RecordingObserver::start(TraceStart {

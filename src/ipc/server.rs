@@ -18,8 +18,9 @@ use tokio_util::sync::CancellationToken;
 #[cfg(test)]
 use crate::history::HistoryRecord;
 use crate::history::{
-    AnalyticsQuery, AudioDeleteResult, DeleteResult, HistoryEvent, HistoryPageResult, HistoryQuery,
-    HistoryService, PipelineStepHistory, PipelineStepStatus,
+    AnalyticsQuery, AudioDeleteResult, CleanupFilter, CleanupPreview, CleanupResult, DeleteResult,
+    HistoryEvent, HistoryPageResult, HistoryQuery, HistoryService, PipelineStepHistory,
+    PipelineStepStatus,
 };
 use crate::ipc::protocol::{Command, Event, WireState, PROTO_VERSION};
 use crate::state::{DaemonState, StateEvent, StateSnapshot, StateStore};
@@ -248,6 +249,22 @@ async fn handle_client(
             }
             Command::DeleteHistory { id } => {
                 let event = history_deleted_event(delete_history(history.clone(), id).await);
+                if !send_or_drop(&tx, event) {
+                    client_cancel.cancel();
+                    forwarder_cancel.cancel();
+                    break;
+                }
+            }
+            Command::PreviewHistoryCleanup { filter } => {
+                let event = cleanup_preview_event(preview_cleanup(history.clone(), filter).await);
+                if !send_or_drop(&tx, event) {
+                    client_cancel.cancel();
+                    forwarder_cancel.cancel();
+                    break;
+                }
+            }
+            Command::ExecuteHistoryCleanup { filter, ids } => {
+                let event = cleanup_done_event(execute_cleanup(history.clone(), filter, ids).await);
                 if !send_or_drop(&tx, event) {
                     client_cancel.cancel();
                     forwarder_cancel.cancel();
@@ -529,6 +546,20 @@ fn history_deleted_event(result: Result<DeleteResult>) -> Event {
     }
 }
 
+fn cleanup_preview_event(result: Result<CleanupPreview>) -> Event {
+    match result {
+        Ok(preview) => Event::HistoryCleanupPreview { preview },
+        Err(e) => history_error_event("history_cleanup", e),
+    }
+}
+
+fn cleanup_done_event(result: Result<CleanupResult>) -> Event {
+    match result {
+        Ok(result) => Event::HistoryCleanupDone { result },
+        Err(e) => history_error_event("history_cleanup", e),
+    }
+}
+
 fn history_error_event(kind: &str, error: anyhow::Error) -> Event {
     tracing::warn!(error = ?error, kind, "history command failed");
     Event::Error {
@@ -694,6 +725,22 @@ async fn delete_history(history: HistoryService, id: String) -> Result<DeleteRes
         .context("join history delete task")?
 }
 
+async fn preview_cleanup(history: HistoryService, filter: CleanupFilter) -> Result<CleanupPreview> {
+    tokio::task::spawn_blocking(move || history.preview_cleanup(filter))
+        .await
+        .context("join cleanup preview task")?
+}
+
+async fn execute_cleanup(
+    history: HistoryService,
+    filter: CleanupFilter,
+    ids: Vec<String>,
+) -> Result<CleanupResult> {
+    tokio::task::spawn_blocking(move || history.execute_cleanup(filter, ids))
+        .await
+        .context("join cleanup execute task")?
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -707,13 +754,14 @@ mod tests {
 
     use super::*;
     use crate::history::{
-        stats::tests_support::TestHooks, AsrHistory, HistoryService, HistoryStatus,
-        PipelineStepStatus,
+        stats::tests_support::TestHooks, AsrHistory, CleanupFilter, CleanupScope, CleanupWindow,
+        HistoryService, HistoryStatus, PipelineStepStatus,
     };
     use crate::ipc::protocol::{decode_event, encode_command};
 
     fn test_reload_handle() -> crate::reload::Handle {
-        let dir = std::env::temp_dir().join(format!("shuohua-reload-handle-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-reload-handle-{}", ulid::Ulid::generate()));
         let root = dir.join("shuohua");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
@@ -737,15 +785,15 @@ trigger = "f16"
     #[tokio::test]
     async fn subscribe_fans_out_snapshot_and_live_events() {
         let path =
-            std::env::temp_dir().join(format!("shuohua-ipc-test-{}.sock", ulid::Ulid::new()));
+            std::env::temp_dir().join(format!("shuohua-ipc-test-{}.sock", ulid::Ulid::generate()));
         let listener = bind(&path).await.unwrap();
         let state = StateStore::new();
         let cfg_path =
-            std::env::temp_dir().join(format!("shuohua-ipc-test-{}.toml", ulid::Ulid::new()));
+            std::env::temp_dir().join(format!("shuohua-ipc-test-{}.toml", ulid::Ulid::generate()));
         std::fs::write(&cfg_path, "[hotkey]\ntrigger=\"f16\"\n").unwrap();
         let (_rx, reload) = crate::reload::watch_with_handle(cfg_path, None).unwrap();
         let history = HistoryService::with_dir(
-            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new())),
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate())),
         );
         let server = tokio::spawn(run(
             listener,
@@ -875,7 +923,7 @@ trigger = "f16"
 
     #[tokio::test]
     async fn shutdown_command_acknowledges_and_requests_shutdown() {
-        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-{}.sock", ulid::Ulid::new()));
+        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-{}.sock", ulid::Ulid::generate()));
         let _ = fs::remove_file(&sock);
         let listener = bind(&sock).await.unwrap();
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
@@ -885,7 +933,7 @@ trigger = "f16"
             shutdown: shutdown_tx,
         };
         let history = HistoryService::with_dir(
-            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new())),
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate())),
         );
         let server = tokio::spawn(run(listener, StateStore::new(), history, control));
         let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
@@ -904,7 +952,7 @@ trigger = "f16"
     async fn shutdown_after_subscribe_closes_client_handler() {
         let sock = PathBuf::from(format!(
             "/tmp/shuohua-ipc-sub-shutdown-{}.sock",
-            ulid::Ulid::new()
+            ulid::Ulid::generate()
         ));
         let _ = fs::remove_file(&sock);
         let listener = bind(&sock).await.unwrap();
@@ -915,7 +963,7 @@ trigger = "f16"
             shutdown: shutdown_tx,
         };
         let history = HistoryService::with_dir(
-            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new())),
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate())),
         );
         let server = tokio::spawn(run(listener, StateStore::new(), history, control));
         let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
@@ -941,7 +989,10 @@ trigger = "f16"
 
     #[tokio::test]
     async fn bind_rejects_live_socket_without_unlinking_it() {
-        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-live-{}.sock", ulid::Ulid::new()));
+        let sock = PathBuf::from(format!(
+            "/tmp/shuohua-ipc-live-{}.sock",
+            ulid::Ulid::generate()
+        ));
         let _ = fs::remove_file(&sock);
         let _listener = bind(&sock).await.unwrap();
 
@@ -956,7 +1007,10 @@ trigger = "f16"
 
     #[tokio::test]
     async fn bind_recovers_stale_user_socket() {
-        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-stale-{}.sock", ulid::Ulid::new()));
+        let sock = PathBuf::from(format!(
+            "/tmp/shuohua-ipc-stale-{}.sock",
+            ulid::Ulid::generate()
+        ));
         let _ = fs::remove_file(&sock);
         {
             let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
@@ -972,7 +1026,10 @@ trigger = "f16"
 
     #[tokio::test]
     async fn bind_rejects_regular_file_without_unlinking_it() {
-        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-file-{}.sock", ulid::Ulid::new()));
+        let sock = PathBuf::from(format!(
+            "/tmp/shuohua-ipc-file-{}.sock",
+            ulid::Ulid::generate()
+        ));
         let _ = fs::remove_file(&sock);
         fs::write(&sock, "not a socket").unwrap();
 
@@ -1003,7 +1060,8 @@ trigger = "f16"
 
     #[test]
     fn history_service_page_reads_monthly_files_newest_first() {
-        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
 
         write_history_record(
@@ -1045,7 +1103,8 @@ trigger = "f16"
 
     #[test]
     fn history_service_page_clamps_large_limits() {
-        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         for n in 0..600 {
             write_history_record(
@@ -1072,7 +1131,8 @@ trigger = "f16"
 
     #[test]
     fn read_history_ignores_only_truncated_final_line() {
-        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("2026-06.jsonl");
         write_history_record(
@@ -1101,7 +1161,8 @@ trigger = "f16"
 
     #[test]
     fn read_history_rejects_corrupt_complete_line() {
-        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("2026-06.jsonl");
         fs::write(&path, "not-json\n").unwrap();
@@ -1144,12 +1205,12 @@ trigger = "f16"
     async fn before_id_without_before_maps_to_bad_command() {
         let sock = PathBuf::from(format!(
             "/tmp/shuohua-ipc-before-id-{}.sock",
-            ulid::Ulid::new()
+            ulid::Ulid::generate()
         ));
         let _ = fs::remove_file(&sock);
         let listener = bind(&sock).await.unwrap();
         let history = HistoryService::with_dir(
-            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new())),
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate())),
         );
         let server = tokio::spawn(run(
             listener,
@@ -1186,9 +1247,13 @@ trigger = "f16"
 
     #[tokio::test]
     async fn first_stats_request_initializes_history() {
-        let sock = PathBuf::from(format!("/tmp/shuohua-ipc-stats-{}.sock", ulid::Ulid::new()));
+        let sock = PathBuf::from(format!(
+            "/tmp/shuohua-ipc-stats-{}.sock",
+            ulid::Ulid::generate()
+        ));
         let _ = fs::remove_file(&sock);
-        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         write_history_record(
             &dir.join("2026-06.jsonl"),
@@ -1242,10 +1307,11 @@ trigger = "f16"
 
     #[tokio::test]
     async fn subscribed_clients_receive_external_history_changed() {
-        let path = PathBuf::from(format!("/tmp/sh-ipc-chg-{}.sock", ulid::Ulid::new()));
+        let path = PathBuf::from(format!("/tmp/sh-ipc-chg-{}.sock", ulid::Ulid::generate()));
         let listener = bind(&path).await.unwrap();
         let state = StateStore::new();
-        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         let history = HistoryService::with_dir(dir.clone());
         assert_eq!(history.stats().total.records, 0);
@@ -1282,9 +1348,10 @@ trigger = "f16"
 
     #[tokio::test]
     async fn subscribed_clients_receive_history_appended_record() {
-        let path = PathBuf::from(format!("/tmp/sh-ipc-app-{}.sock", ulid::Ulid::new()));
+        let path = PathBuf::from(format!("/tmp/sh-ipc-app-{}.sock", ulid::Ulid::generate()));
         let listener = bind(&path).await.unwrap();
-        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate()));
         let history = HistoryService::with_dir(dir.clone());
         let server = tokio::spawn(run(
             listener,
@@ -1322,10 +1389,11 @@ trigger = "f16"
     async fn delete_response_includes_record_deleted() {
         let sock = PathBuf::from(format!(
             "/tmp/shuohua-ipc-delete-{}.sock",
-            ulid::Ulid::new()
+            ulid::Ulid::generate()
         ));
         let _ = fs::remove_file(&sock);
-        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         write_history_record(
             &dir.join("2026-06.jsonl"),
@@ -1372,8 +1440,9 @@ trigger = "f16"
 
     #[tokio::test]
     async fn history_changed_and_delete_response_work_in_either_order() {
-        let path = PathBuf::from(format!("/tmp/sh-ipc-del-{}.sock", ulid::Ulid::new()));
-        let dir = std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::new()));
+        let path = PathBuf::from(format!("/tmp/sh-ipc-del-{}.sock", ulid::Ulid::generate()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         write_history_record(
             &dir.join("2026-06.jsonl"),
@@ -1422,6 +1491,120 @@ trigger = "f16"
         server.abort();
         let _ = fs::remove_file(path);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn preview_history_cleanup_returns_preview_event() {
+        let sock = PathBuf::from(format!(
+            "/tmp/sh-ipc-clprev-{}.sock",
+            ulid::Ulid::generate()
+        ));
+        let root =
+            std::env::temp_dir().join(format!("shuohua-ipc-cleanup-{}", ulid::Ulid::generate()));
+        let dir = root.join("history");
+        let audio_dir = root.join("audio");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&audio_dir).unwrap();
+        let id = ulid::Ulid::generate().to_string();
+        write_history_record(
+            &dir.join("2026-06.jsonl"),
+            history_record(&id, datetime!(2026-06-20 12:00:00 UTC), "clip"),
+        );
+        fs::write(audio_dir.join(format!("{id}.flac")), [0u8; 16]).unwrap();
+        let history = HistoryService::with_dir(dir.clone());
+        let listener = bind(&sock).await.unwrap();
+        let server = tokio::spawn(run(
+            listener,
+            StateStore::new(),
+            history,
+            ServerControl {
+                reload: test_reload_handle(),
+                started_at: Instant::now(),
+                shutdown: test_shutdown_sender(),
+            },
+        ));
+        let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
+
+        client
+            .send(&Command::PreviewHistoryCleanup {
+                filter: CleanupFilter {
+                    scope: CleanupScope::AudioOnly,
+                    window: CleanupWindow::All,
+                },
+            })
+            .await
+            .unwrap();
+
+        match client.recv().await.unwrap().unwrap() {
+            Event::HistoryCleanupPreview { preview } => {
+                assert_eq!(preview.ids, vec![id]);
+                assert_eq!(preview.audio_bytes, 16);
+            }
+            event => panic!("expected cleanup preview, got {event:?}"),
+        }
+        server.abort();
+        let _ = fs::remove_file(sock);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn execute_history_cleanup_returns_done_event() {
+        let sock = PathBuf::from(format!(
+            "/tmp/sh-ipc-clexec-{}.sock",
+            ulid::Ulid::generate()
+        ));
+        let root =
+            std::env::temp_dir().join(format!("shuohua-ipc-cleanup-{}", ulid::Ulid::generate()));
+        let dir = root.join("history");
+        let audio_dir = root.join("audio");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&audio_dir).unwrap();
+        let id = ulid::Ulid::generate().to_string();
+        write_history_record(
+            &dir.join("2026-06.jsonl"),
+            history_record(&id, datetime!(2026-06-20 12:00:00 UTC), "clip"),
+        );
+        let audio_path = audio_dir.join(format!("{id}.flac"));
+        fs::write(&audio_path, [0u8; 16]).unwrap();
+        // 测试删除真实文件，绝不触碰开发者的 ~/.Trash。
+        let history =
+            HistoryService::with_dir(dir.clone()).with_deleter(crate::trash::remove_deleter());
+        let listener = bind(&sock).await.unwrap();
+        let server = tokio::spawn(run(
+            listener,
+            StateStore::new(),
+            history,
+            ServerControl {
+                reload: test_reload_handle(),
+                started_at: Instant::now(),
+                shutdown: test_shutdown_sender(),
+            },
+        ));
+        let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
+
+        client
+            .send(&Command::ExecuteHistoryCleanup {
+                filter: CleanupFilter {
+                    scope: CleanupScope::AudioOnly,
+                    window: CleanupWindow::All,
+                },
+                ids: vec![id.clone()],
+            })
+            .await
+            .unwrap();
+
+        match client.recv().await.unwrap().unwrap() {
+            Event::HistoryCleanupDone { result } => {
+                assert_eq!(result.requested, 1);
+                assert_eq!(result.deleted, 1);
+                assert!(result.errors.is_empty());
+            }
+            event => panic!("expected cleanup done, got {event:?}"),
+        }
+        assert!(!audio_path.exists());
+        server.abort();
+        let _ = fs::remove_file(sock);
+        let _ = fs::remove_dir_all(root);
     }
 
     struct TestClient {

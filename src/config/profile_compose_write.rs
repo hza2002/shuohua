@@ -187,7 +187,8 @@ mod tests {
     use std::fs;
 
     fn temp_profile(body: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!("shuohua-compose-{}.toml", ulid::Ulid::new()));
+        let path =
+            std::env::temp_dir().join(format!("shuohua-compose-{}.toml", ulid::Ulid::generate()));
         fs::write(&path, body).unwrap();
         path
     }

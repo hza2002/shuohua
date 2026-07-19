@@ -74,13 +74,14 @@ fi
 ```markdown
 ## vX.Y.Z - YYYY-MM-DD
 
-### Breaking
-- ...
-
 ### Added
 - ...
 
 ### Changed
+- **Breaking:** ...
+- ...
+
+### Removed
 - ...
 
 ### Fixed
@@ -90,9 +91,15 @@ fi
 - ...
 ```
 
-只保留非空 section。`Breaking` 仅在有迁移成本时出现，并放在最前面；`Security` 仅用于安全相关修复。避免 `Notes` 这类宽泛 section，平台要求、安装限制、签名状态等长期说明应写在 README 或 `.github/release-body.md`，不要每版复制进 changelog。
+只保留非空 section，顺序固定 `Added / Changed / Removed / Fixed / Security`。
 
-条目用用户视角写，避免内部过程描述，不逐条镜像 commit。GitHub Release 页面会额外生成 "What's Changed" 提交 / PR / contributor 列表。
+破坏性变更不单开 section：留在它本来的分类里（多为 `Changed` 或 `Removed`），加行内
+`**Breaking:**` 前缀、排在该分类最前，并写明用户需要做的迁移动作。仅在真有迁移成本时
+才加前缀。`Security` 仅用于安全相关修复。避免 `Notes` 这类宽泛 section，平台要求、安装
+限制、签名状态等长期说明写在 README 或 `.github/release-body.md`，不要每版复制进 changelog。
+
+条目用用户视角写，避免内部过程描述，不逐条镜像 commit，也不必行内链 commit——GitHub
+Release 页面会自动生成 "What's Changed" 提交 / PR / contributor 列表。
 
 确认后创建并推送 signed changelog commit，等待 `main` CI 通过：
 

@@ -1,9 +1,10 @@
 use anyhow::Result;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::thread;
 
+use super::AppContext;
 use crate::hotkey::Suppressor;
-use crate::post::AppContext;
 
 pub(crate) trait DaemonPlatform {
     fn frontmost_app(&self) -> AppContext;
@@ -18,8 +19,14 @@ pub(crate) trait DaemonPlatform {
 pub(crate) struct SystemDaemonPlatform;
 
 impl DaemonPlatform for SystemDaemonPlatform {
+    #[cfg(target_os = "macos")]
     fn frontmost_app(&self) -> AppContext {
-        crate::post::app_context::frontmost_app()
+        crate::platform::macos::app_context::frontmost_app()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn frontmost_app(&self) -> AppContext {
+        AppContext::default()
     }
 
     #[cfg(target_os = "macos")]

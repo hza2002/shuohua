@@ -223,6 +223,20 @@ mod tests {
     }
 
     #[test]
+    fn analytics_footer_hides_search_and_internal_anchor_wording() {
+        crate::i18n::init("en-US");
+        let mut app = App::new();
+        app.page = Page::History;
+        app.history.view = crate::tui::history::HistoryView::Analytics;
+
+        let (hints, _) = footer_parts(&app);
+
+        assert!(!hints.contains("/ search"), "{hints}");
+        assert!(!hints.contains("anchor"), "{hints}");
+        assert!(hints.contains("[ ] range"), "{hints}");
+    }
+
+    #[test]
     fn no_footer_hint_key_is_left_unresolved() {
         crate::i18n::init("en-US");
         let mut app = App::new();

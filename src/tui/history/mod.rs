@@ -7,7 +7,8 @@ use std::path::Path;
 
 use crate::config::theme::TuiTheme;
 use crate::history::{
-    AggregateStats, AnalyticsPeriod, AnalyticsSnapshot, HistoryRecord, HistoryStatsSnapshot,
+    AggregateStats, AnalyticsPeriod, AnalyticsSnapshot, CleanupFilter, CleanupPreview,
+    CleanupResult, CleanupScope, CleanupWindow, HistoryRecord, HistoryStatsSnapshot,
     HistoryStatsStatus,
 };
 use crate::ipc::protocol::{Command, Event};
@@ -78,6 +79,348 @@ pub enum Confirm {
     DeleteHistory { record_id: String },
 }
 
+/// Retained-audio cleanup modal. Independent from `confirm`/search: while `Some`,
+/// keys are intercepted by `feed_cleanup_key` before global keybindings, and the
+/// UI draws a centered popup over the History page.
+///
+/// The window is chosen in `Selecting` (inline, incl. editable "older than N days"
+/// and a custom date range) **before** any scan runs — no switching mid-scan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CleanupMode {
+    Selecting(CleanupSelect),
+    Scanning {
+        filter: CleanupFilter,
+    },
+    Preview {
+        preview: CleanupPreview,
+        confirm: CleanupConfirm,
+    },
+    Executing {
+        preview: CleanupPreview,
+    },
+    Done {
+        result: CleanupResult,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+/// Time-window options on the selection screen. `OlderThan` carries an editable
+/// day count; `Custom` carries an editable `[from, to]` date range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowChoice {
+    LastHours,
+    LastDays,
+    OlderThan,
+    Custom,
+}
+
+pub const WINDOW_CHOICES: [WindowChoice; 4] = [
+    WindowChoice::LastHours,
+    WindowChoice::LastDays,
+    WindowChoice::OlderThan,
+    WindowChoice::Custom,
+];
+const CLEANUP_HOUR_CHOICES: [u32; 6] = [1, 3, 6, 12, 18, 24];
+const CLEANUP_DAY_CHOICES: [u32; 4] = [1, 3, 5, 7];
+const CLEANUP_OLDER_DAY_CHOICES: [u32; 5] = [14, 30, 60, 90, 180];
+
+/// Live selection state: the highlighted choice plus the editable parameters for
+/// the `OlderThan` (days) and `Custom` (from/to + active field) rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CleanupSelect {
+    pub scope: CleanupScope,
+    pub scope_active: bool,
+    pub choice: WindowChoice,
+    pub hour_index: usize,
+    pub day_index: usize,
+    pub older_index: usize,
+    pub from: time::Date,
+    pub to: time::Date,
+    pub field: RangeField,
+    pub custom_editing: bool,
+}
+
+impl CleanupSelect {
+    fn new(records: &[HistoryRecord]) -> Self {
+        let today = today_local();
+        let (from, to) = cleanup_default_range(records, today);
+        Self {
+            scope: CleanupScope::AudioOnly,
+            scope_active: false,
+            choice: WindowChoice::OlderThan,
+            hour_index: 0,
+            day_index: 3,
+            older_index: 1,
+            from,
+            to,
+            field: RangeField::FromDay,
+            custom_editing: false,
+        }
+    }
+
+    fn toggle_scope(&mut self) {
+        self.scope = match self.scope {
+            CleanupScope::AudioOnly => CleanupScope::RecordAndAudio,
+            CleanupScope::RecordAndAudio => CleanupScope::AudioOnly,
+        };
+    }
+
+    fn window(&self) -> CleanupWindow {
+        match self.choice {
+            WindowChoice::LastHours => CleanupWindow::LastHours(self.hours()),
+            WindowChoice::LastDays => CleanupWindow::LastDays(self.days()),
+            WindowChoice::OlderThan => CleanupWindow::OlderThanDays(self.older_days()),
+            WindowChoice::Custom => CleanupWindow::Range {
+                from: self.from,
+                to: self.to,
+            },
+        }
+    }
+
+    pub fn hours(&self) -> u32 {
+        CLEANUP_HOUR_CHOICES[self.hour_index.min(CLEANUP_HOUR_CHOICES.len() - 1)]
+    }
+
+    pub fn days(&self) -> u32 {
+        CLEANUP_DAY_CHOICES[self.day_index.min(CLEANUP_DAY_CHOICES.len() - 1)]
+    }
+
+    pub fn older_days(&self) -> u32 {
+        CLEANUP_OLDER_DAY_CHOICES[self.older_index.min(CLEANUP_OLDER_DAY_CHOICES.len() - 1)]
+    }
+
+    fn move_choice(&mut self, forward: bool) {
+        if self.scope_active {
+            self.scope_active = false;
+            self.choice = if forward {
+                WINDOW_CHOICES[0]
+            } else {
+                WINDOW_CHOICES[WINDOW_CHOICES.len() - 1]
+            };
+            return;
+        }
+        let index = WINDOW_CHOICES
+            .iter()
+            .position(|c| *c == self.choice)
+            .unwrap_or(0);
+        if forward && index + 1 == WINDOW_CHOICES.len() {
+            self.scope_active = true;
+            return;
+        }
+        if !forward && index == 0 {
+            self.scope_active = true;
+            return;
+        }
+        let len = WINDOW_CHOICES.len();
+        let next = if forward {
+            (index + 1) % len
+        } else {
+            (index + len - 1) % len
+        };
+        self.choice = WINDOW_CHOICES[next];
+    }
+
+    /// `←/→` or `h/l` on an editable row: preset rows cycle allowed values;
+    /// `Custom` moves the active date field. Returns whether the key was consumed.
+    fn edit_horizontal(&mut self, forward: bool) -> bool {
+        if self.scope_active {
+            self.toggle_scope();
+            return true;
+        }
+        match self.choice {
+            WindowChoice::LastHours => {
+                self.hour_index = step_index(self.hour_index, CLEANUP_HOUR_CHOICES.len(), forward);
+                true
+            }
+            WindowChoice::LastDays => {
+                self.day_index = step_index(self.day_index, CLEANUP_DAY_CHOICES.len(), forward);
+                true
+            }
+            WindowChoice::OlderThan => {
+                self.older_index =
+                    step_index(self.older_index, CLEANUP_OLDER_DAY_CHOICES.len(), forward);
+                true
+            }
+            WindowChoice::Custom => {
+                if !self.custom_editing {
+                    self.custom_editing = true;
+                }
+                self.field = if forward {
+                    self.field.next()
+                } else {
+                    self.field.prev()
+                };
+                true
+            }
+        }
+    }
+
+    /// `↑/↓` on the `Custom` row adjusts the active date field. Returns whether
+    /// the key was consumed (only on `Custom`; elsewhere it stays row navigation).
+    fn edit_vertical(&mut self, forward: bool) -> bool {
+        if self.choice != WindowChoice::Custom || !self.custom_editing {
+            return false;
+        }
+        let (date, part) = (self.field.is_from(), self.field.part());
+        if date {
+            self.from = adjust_date(self.from, part, forward);
+        } else {
+            self.to = adjust_date(self.to, part, forward);
+        }
+        true
+    }
+}
+
+fn step_index(current: usize, len: usize, forward: bool) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    if forward {
+        (current + 1) % len
+    } else {
+        (current + len - 1) % len
+    }
+}
+
+fn cleanup_default_range(
+    records: &[HistoryRecord],
+    fallback: time::Date,
+) -> (time::Date, time::Date) {
+    let mut dates = records.iter().map(|record| record.started_at.date());
+    let Some(first) = dates.next() else {
+        return (
+            fallback
+                .checked_sub(time::Duration::days(30))
+                .unwrap_or(fallback),
+            fallback,
+        );
+    };
+    dates.fold((first, first), |(min, max), date| {
+        (min.min(date), max.max(date))
+    })
+}
+
+/// One of the six editable fields of the custom date range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeField {
+    FromYear,
+    FromMonth,
+    FromDay,
+    ToYear,
+    ToMonth,
+    ToDay,
+}
+
+impl RangeField {
+    const ORDER: [RangeField; 6] = [
+        RangeField::FromYear,
+        RangeField::FromMonth,
+        RangeField::FromDay,
+        RangeField::ToYear,
+        RangeField::ToMonth,
+        RangeField::ToDay,
+    ];
+
+    fn is_from(self) -> bool {
+        matches!(self, Self::FromYear | Self::FromMonth | Self::FromDay)
+    }
+
+    fn part(self) -> DateField {
+        match self {
+            Self::FromYear | Self::ToYear => DateField::Year,
+            Self::FromMonth | Self::ToMonth => DateField::Month,
+            Self::FromDay | Self::ToDay => DateField::Day,
+        }
+    }
+
+    fn prev(self) -> Self {
+        let i = Self::ORDER.iter().position(|f| *f == self).unwrap_or(0);
+        Self::ORDER[(i + Self::ORDER.len() - 1) % Self::ORDER.len()]
+    }
+
+    fn next(self) -> Self {
+        let i = Self::ORDER.iter().position(|f| *f == self).unwrap_or(0);
+        Self::ORDER[(i + 1) % Self::ORDER.len()]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateField {
+    Year,
+    Month,
+    Day,
+}
+
+fn today_local() -> time::Date {
+    time::OffsetDateTime::now_local()
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+        .date()
+}
+
+/// Adjust one field of `date` by ±1, always yielding a valid date (day is
+/// clamped to the target month's length; `time` guards year/month arithmetic).
+fn adjust_date(date: time::Date, field: DateField, forward: bool) -> time::Date {
+    match field {
+        DateField::Day => {
+            let delta = if forward { 1 } else { -1 };
+            date.checked_add(time::Duration::days(delta))
+                .unwrap_or(date)
+        }
+        DateField::Month => {
+            let (year, month) = if forward {
+                let m = date.month().next();
+                let y = if date.month() == time::Month::December {
+                    date.year() + 1
+                } else {
+                    date.year()
+                };
+                (y, m)
+            } else {
+                let m = date.month().previous();
+                let y = if date.month() == time::Month::January {
+                    date.year() - 1
+                } else {
+                    date.year()
+                };
+                (y, m)
+            };
+            with_ymd_clamped(year, month, date.day())
+        }
+        DateField::Year => {
+            let year = if forward {
+                date.year() + 1
+            } else {
+                date.year() - 1
+            };
+            with_ymd_clamped(year, date.month(), date.day())
+        }
+    }
+}
+
+fn with_ymd_clamped(year: i32, month: time::Month, day: u8) -> time::Date {
+    let max = month.length(year);
+    time::Date::from_calendar_date(year, month, day.min(max)).unwrap_or_else(|_| today_local())
+}
+
+/// Which button is focused on the preview screen. Defaults to `Cancel` so an
+/// accidental Enter never deletes — the user must move to `Delete` first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanupConfirm {
+    Cancel,
+    Delete,
+}
+
+impl CleanupConfirm {
+    fn toggled(self) -> Self {
+        match self {
+            CleanupConfirm::Cancel => CleanupConfirm::Delete,
+            CleanupConfirm::Delete => CleanupConfirm::Cancel,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum HistoryRequestKind {
     RefreshPage { query: Option<String> },
@@ -98,6 +441,29 @@ pub struct SearchStats {
 enum AnalyticsRequestKind {
     Refresh,
     Standalone,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct AnalyticsCacheKey {
+    period: AnalyticsPeriod,
+    anchor: String,
+}
+
+impl AnalyticsCacheKey {
+    fn new(period: AnalyticsPeriod, anchor: impl Into<String>) -> Self {
+        Self {
+            period,
+            anchor: anchor.into(),
+        }
+    }
+
+    fn from_selection(selection: &AnalyticsSelection) -> Self {
+        Self::new(selection.period, selection.anchor.clone())
+    }
+
+    fn from_snapshot(snapshot: &AnalyticsSnapshot) -> Self {
+        Self::new(snapshot.period, snapshot.anchor.clone())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,17 +491,15 @@ impl AnalyticsMetric {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnalyticsChart {
-    Bar,
-    Line,
-}
+impl AnalyticsMetric {
+    pub const ALL: [Self; 4] = [Self::Records, Self::Words, Self::Duration, Self::AsrAudio];
 
-impl AnalyticsChart {
-    fn toggle(self) -> Self {
+    fn index(self) -> usize {
         match self {
-            Self::Bar => Self::Line,
-            Self::Line => Self::Bar,
+            Self::Records => 0,
+            Self::Words => 1,
+            Self::Duration => 2,
+            Self::AsrAudio => 3,
         }
     }
 }
@@ -145,16 +509,16 @@ pub struct AnalyticsSelection {
     pub period: AnalyticsPeriod,
     pub anchor: String,
     pub metric: AnalyticsMetric,
-    pub chart: AnalyticsChart,
+    pub visible_metrics: [bool; 4],
 }
 
 impl Default for AnalyticsSelection {
     fn default() -> Self {
         Self {
-            period: AnalyticsPeriod::Month,
-            anchor: current_anchor(AnalyticsPeriod::Month),
+            period: AnalyticsPeriod::Last30Days,
+            anchor: current_anchor(AnalyticsPeriod::Last30Days),
             metric: AnalyticsMetric::Records,
-            chart: AnalyticsChart::Bar,
+            visible_metrics: [true; 4],
         }
     }
 }
@@ -164,6 +528,7 @@ pub struct HistoryAnalyticsState {
     pub selection: AnalyticsSelection,
     pub snapshot: Option<AnalyticsSnapshot>,
     pub warning: Option<String>,
+    cache: HashMap<AnalyticsCacheKey, AnalyticsSnapshot>,
 }
 
 /// Geometry of the currently rendered record list, captured each frame so a
@@ -186,6 +551,7 @@ pub struct HistoryPage {
     pub searching: bool,
     pub audio_cache: HashMap<String, AudioInfo>,
     pub confirm: Option<Confirm>,
+    pub cleanup: Option<CleanupMode>,
     pub loading_more: bool,
     pub has_more: bool,
     pub stats: Option<HistoryStatsSnapshot>,
@@ -223,6 +589,7 @@ impl HistoryPage {
             searching: false,
             audio_cache: HashMap::new(),
             confirm: None,
+            cleanup: None,
             loading_more: false,
             has_more: true,
             stats: None,
@@ -369,6 +736,9 @@ impl HistoryPage {
     }
 
     pub fn start_search(&mut self) {
+        if self.view == HistoryView::Analytics {
+            return;
+        }
         self.searching = true;
     }
 
@@ -422,15 +792,13 @@ impl HistoryPage {
             return Vec::new();
         }
         self.refresh_in_flight = true;
-        self.refresh_responses_pending = 3;
+        self.refresh_responses_pending = self.refresh_response_count();
         self.refresh_needed = false;
         self.initial_loaded = true;
         self.pending_history_requests
             .push_back(HistoryRequestKind::RefreshPage {
                 query: self.query(),
             });
-        self.pending_analytics_requests
-            .push_back(AnalyticsRequestKind::Refresh);
         self.refresh_batch_commands()
     }
 
@@ -439,23 +807,31 @@ impl HistoryPage {
             return Vec::new();
         }
         self.refresh_in_flight = true;
-        self.refresh_responses_pending = 3;
+        self.refresh_responses_pending = self.refresh_response_count();
         self.refresh_needed = false;
         self.pending_history_requests
             .push_back(HistoryRequestKind::RefreshPage {
                 query: self.query(),
             });
-        self.pending_analytics_requests
-            .push_back(AnalyticsRequestKind::Refresh);
         self.refresh_batch_commands()
     }
 
     fn refresh_batch_commands(&self) -> Vec<Command> {
-        vec![
-            self.first_page_command(),
-            Command::GetHistoryStats,
-            self.analytics_command(),
-        ]
+        let mut commands = vec![self.first_page_command(), Command::GetHistoryStats];
+        if self.view == HistoryView::Analytics {
+            commands.push(self.analytics_command());
+        }
+        commands
+    }
+
+    fn refresh_response_count(&mut self) -> u8 {
+        if self.view == HistoryView::Analytics {
+            self.pending_analytics_requests
+                .push_back(AnalyticsRequestKind::Refresh);
+            3
+        } else {
+            2
+        }
     }
 
     fn first_page_command(&self) -> Command {
@@ -477,6 +853,28 @@ impl HistoryPage {
             period: self.analytics.selection.period,
             anchor: self.analytics.selection.anchor.clone(),
         }
+    }
+
+    fn restore_cached_analytics(&mut self) -> bool {
+        let key = AnalyticsCacheKey::from_selection(&self.analytics.selection);
+        let Some(snapshot) = self.analytics.cache.get(&key).cloned() else {
+            return false;
+        };
+        self.analytics.snapshot = Some(snapshot);
+        self.analytics.warning = None;
+        true
+    }
+
+    fn analytics_selection_outcome(&mut self) -> KeyOutcome {
+        if self.restore_cached_analytics() {
+            return KeyOutcome::none();
+        }
+        self.pending_analytics_requests
+            .push_back(AnalyticsRequestKind::Standalone);
+        KeyOutcome::command_and_status(
+            self.analytics_command(),
+            crate::t!("tui.history.analytics.loading"),
+        )
     }
 
     fn search_command(&self) -> Command {
@@ -566,6 +964,175 @@ impl HistoryPage {
                 Command::DeleteHistory { id: record_id },
                 crate::t!("tui.history.delete_requested"),
             ),
+        }
+    }
+
+    /// Open the cleanup modal at the age-selection step. No scan is issued yet.
+    fn open_cleanup(&mut self) -> KeyOutcome {
+        self.cleanup = Some(CleanupMode::Selecting(CleanupSelect::new(&self.records)));
+        KeyOutcome::status(crate::t!("tui.history.cleanup.select"))
+    }
+
+    /// Modal key handling while the cleanup popup is open. Returns `None` when the
+    /// popup is closed so the caller falls through to normal key routing.
+    pub fn feed_cleanup_key(&mut self, key: KeyEvent) -> Option<KeyOutcome> {
+        if key.kind != KeyEventKind::Press {
+            return None;
+        }
+        let outcome = match self.cleanup.as_ref()? {
+            CleanupMode::Done { .. } | CleanupMode::Failed { .. } => {
+                // Terminal states: any key dismisses the popup.
+                self.cleanup = None;
+                KeyOutcome::none()
+            }
+            CleanupMode::Selecting { .. } => self.selecting_key(key),
+            CleanupMode::Preview { .. } => self.preview_key(key),
+            CleanupMode::Scanning { .. } | CleanupMode::Executing { .. } => {
+                if matches!(key.code, KeyCode::Esc | KeyCode::Char('n')) {
+                    self.cleanup = None;
+                    KeyOutcome::status(crate::t!("tui.history.cleanup.cancelled"))
+                } else {
+                    KeyOutcome::none()
+                }
+            }
+        };
+        Some(outcome)
+    }
+
+    fn selecting_key(&mut self, key: KeyEvent) -> KeyOutcome {
+        let Some(CleanupMode::Selecting(select)) = self.cleanup.as_ref() else {
+            return KeyOutcome::none();
+        };
+        // `CleanupSelect` is `Copy`; edit the copy, then write it back. This frees
+        // the borrow so Esc/Enter can touch `self`.
+        let mut select = *select;
+        // Editing keys are contextual to the highlighted row. Preset rows use h/l
+        // for discrete values. Custom range has a lightweight edit mode: Enter or
+        // h/l enters it, h/l moves fields, and j/k adjusts the active field.
+        match key.code {
+            KeyCode::Esc if select.custom_editing => {
+                select.custom_editing = false;
+            }
+            KeyCode::Esc | KeyCode::Char('n') => {
+                self.cleanup = None;
+                return KeyOutcome::status(crate::t!("tui.history.cleanup.cancelled"));
+            }
+            KeyCode::Enter => {
+                if !select.scope_active
+                    && select.choice == WindowChoice::Custom
+                    && !select.custom_editing
+                {
+                    select.custom_editing = true;
+                } else {
+                    return self.start_scan(select.window());
+                }
+            }
+            KeyCode::Char('j') if select.custom_editing => {
+                select.edit_vertical(false);
+            }
+            KeyCode::Char('k') if select.custom_editing => {
+                select.edit_vertical(true);
+            }
+            KeyCode::Char('j') => select.move_choice(true),
+            KeyCode::Char('k') => select.move_choice(false),
+            KeyCode::Left | KeyCode::Char('h') => {
+                select.edit_horizontal(false);
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                select.edit_horizontal(true);
+            }
+            KeyCode::Up => {
+                if !select.edit_vertical(true) {
+                    select.move_choice(false);
+                }
+            }
+            KeyCode::Down => {
+                if !select.edit_vertical(false) {
+                    select.move_choice(true);
+                }
+            }
+            _ => return KeyOutcome::none(),
+        }
+        self.cleanup = Some(CleanupMode::Selecting(select));
+        KeyOutcome::none()
+    }
+
+    fn preview_key(&mut self, key: KeyEvent) -> KeyOutcome {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('n') => {
+                self.cleanup = None;
+                KeyOutcome::status(crate::t!("tui.history.cleanup.cancelled"))
+            }
+            KeyCode::Left
+            | KeyCode::Right
+            | KeyCode::Char('h')
+            | KeyCode::Char('l')
+            | KeyCode::Tab => {
+                if let Some(CleanupMode::Preview { confirm, .. }) = &mut self.cleanup {
+                    *confirm = confirm.toggled();
+                }
+                KeyOutcome::none()
+            }
+            KeyCode::Enter => self.confirm_cleanup_preview(),
+            _ => KeyOutcome::none(),
+        }
+    }
+
+    fn start_scan(&mut self, window: CleanupWindow) -> KeyOutcome {
+        let scope = self
+            .cleanup
+            .as_ref()
+            .and_then(|mode| match mode {
+                CleanupMode::Selecting(select) => Some(select.scope),
+                _ => None,
+            })
+            .unwrap_or(CleanupScope::AudioOnly);
+        let filter = CleanupFilter { scope, window };
+        self.cleanup = Some(CleanupMode::Scanning { filter });
+        KeyOutcome::command_and_status(
+            Command::PreviewHistoryCleanup { filter },
+            crate::t!("tui.history.cleanup.loading"),
+        )
+    }
+
+    /// Act on the focused preview button: Delete executes, Cancel closes.
+    fn confirm_cleanup_preview(&mut self) -> KeyOutcome {
+        let Some(CleanupMode::Preview { preview, confirm }) = &self.cleanup else {
+            return KeyOutcome::none();
+        };
+        if *confirm == CleanupConfirm::Cancel {
+            self.cleanup = None;
+            return KeyOutcome::status(crate::t!("tui.history.cleanup.cancelled"));
+        }
+        if preview.ids.is_empty() {
+            self.cleanup = None;
+            return KeyOutcome::status(crate::t!("tui.history.cleanup.empty"));
+        }
+        let preview = preview.clone();
+        let command = Command::ExecuteHistoryCleanup {
+            filter: preview.filter,
+            ids: preview.ids.clone(),
+        };
+        self.cleanup = Some(CleanupMode::Executing { preview });
+        KeyOutcome::command_and_status(command, crate::t!("tui.history.cleanup.executing"))
+    }
+
+    fn mark_cleanup_audio_missing(&mut self, ids: &[String]) {
+        for id in ids {
+            if let Some(record) = self.records.iter().find(|record| &record.id == id).cloned() {
+                self.audio_cache
+                    .insert(record.id.clone(), missing_audio_info_for_record(&record));
+            }
+        }
+    }
+
+    fn remove_cleanup_records(&mut self, ids: &[String]) {
+        let ids: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
+        self.records
+            .retain(|record| !ids.contains(record.id.as_str()));
+        self.audio_cache.retain(|id, _| !ids.contains(id.as_str()));
+        if self.selected >= self.records.len() {
+            self.selected = self.records.len().saturating_sub(1);
         }
     }
 
@@ -691,24 +1258,27 @@ impl HistoryPage {
         }
     }
 
-    fn toggle_view(&mut self) {
+    fn toggle_view(&mut self) -> KeyOutcome {
         self.view = match self.view {
             HistoryView::Records => HistoryView::Analytics,
             HistoryView::Analytics => HistoryView::Records,
         };
+        if self.view == HistoryView::Analytics {
+            return self.analytics_selection_outcome();
+        }
+        KeyOutcome::none()
     }
 
     fn next_period_outcome(&mut self) -> KeyOutcome {
         self.analytics.selection.period = match self.analytics.selection.period {
-            AnalyticsPeriod::Month => AnalyticsPeriod::Day,
-            AnalyticsPeriod::Day => AnalyticsPeriod::Year,
-            AnalyticsPeriod::Year => AnalyticsPeriod::Month,
+            AnalyticsPeriod::Last30Days => AnalyticsPeriod::Last7Days,
+            AnalyticsPeriod::Last7Days => AnalyticsPeriod::Month,
+            AnalyticsPeriod::Month => AnalyticsPeriod::Year,
+            AnalyticsPeriod::Year => AnalyticsPeriod::Day,
+            AnalyticsPeriod::Day => AnalyticsPeriod::Last30Days,
         };
         self.analytics.selection.anchor = current_anchor(self.analytics.selection.period);
-        KeyOutcome::command_and_status(
-            self.analytics_command(),
-            crate::t!("tui.history.analytics.loading"),
-        )
+        self.analytics_selection_outcome()
     }
 
     fn shift_anchor_outcome(&mut self, delta: i32) -> KeyOutcome {
@@ -717,18 +1287,26 @@ impl HistoryPage {
             &self.analytics.selection.anchor,
             delta,
         );
-        KeyOutcome::command_and_status(
-            self.analytics_command(),
-            crate::t!("tui.history.analytics.loading"),
-        )
+        self.analytics_selection_outcome()
     }
 
     fn next_metric(&mut self) {
         self.analytics.selection.metric = self.analytics.selection.metric.next();
     }
 
-    fn toggle_chart(&mut self) {
-        self.analytics.selection.chart = self.analytics.selection.chart.toggle();
+    fn toggle_analytics_metric(&mut self, metric: AnalyticsMetric) {
+        let index = metric.index();
+        let visible = &mut self.analytics.selection.visible_metrics;
+        if visible[index] && visible.iter().filter(|shown| **shown).count() == 1 {
+            return;
+        }
+        visible[index] = !visible[index];
+        if !visible[self.analytics.selection.metric.index()] {
+            self.analytics.selection.metric = AnalyticsMetric::ALL
+                .into_iter()
+                .find(|metric| visible[metric.index()])
+                .unwrap_or(AnalyticsMetric::Records);
+        }
     }
 
     fn mark_refresh_response(&mut self) {
@@ -804,6 +1382,11 @@ impl HistoryPage {
     }
 
     fn finish_analytics_response(&mut self, snapshot: &AnalyticsSnapshot) {
+        if snapshot.status == HistoryStatsStatus::Ready {
+            self.analytics
+                .cache
+                .insert(AnalyticsCacheKey::from_snapshot(snapshot), snapshot.clone());
+        }
         let refresh_response = matches!(
             self.pending_analytics_requests.pop_front(),
             Some(AnalyticsRequestKind::Refresh)
@@ -851,6 +1434,7 @@ impl Page for HistoryPage {
     fn apply_event(&mut self, event: &Event, _active: bool) {
         match event {
             Event::HistoryAppended { record } => {
+                self.analytics.cache.clear();
                 let selected_id = self.selected_record().map(|record| record.id.clone());
                 let was_empty = self.records.is_empty();
                 let inserted = !self.records.iter().any(|existing| existing.id == record.id);
@@ -882,15 +1466,57 @@ impl Page for HistoryPage {
             Event::HistoryAnalytics { snapshot } => {
                 self.finish_analytics_response(snapshot);
             }
-            Event::Error { kind, .. } => self.finish_history_error(kind),
+            Event::HistoryCleanupPreview { preview } => {
+                // Only apply if it echoes the filter we are currently scanning,
+                // so a stale preview from a superseded request is dropped.
+                if let Some(CleanupMode::Scanning { filter }) = &self.cleanup {
+                    if *filter == preview.filter {
+                        self.cleanup = Some(CleanupMode::Preview {
+                            preview: preview.clone(),
+                            confirm: CleanupConfirm::Cancel,
+                        });
+                    }
+                }
+            }
+            Event::HistoryCleanupDone { result } => {
+                let executed = match &self.cleanup {
+                    Some(CleanupMode::Executing { preview }) => {
+                        Some((preview.filter.scope, preview.ids.clone()))
+                    }
+                    _ => None,
+                };
+                if let Some((scope, ids)) = executed {
+                    match scope {
+                        CleanupScope::AudioOnly => self.mark_cleanup_audio_missing(&ids),
+                        CleanupScope::RecordAndAudio => self.remove_cleanup_records(&ids),
+                    }
+                    self.cleanup = Some(CleanupMode::Done {
+                        result: result.clone(),
+                    });
+                }
+            }
+            Event::Error { kind, msg, .. } => {
+                if kind == "history_cleanup" {
+                    if self.cleanup.is_some() {
+                        self.cleanup = Some(CleanupMode::Failed {
+                            message: msg.clone(),
+                        });
+                    }
+                } else {
+                    self.finish_history_error(kind);
+                }
+            }
             Event::AudioDeleted { id, .. } => {
                 if let Some(record) = self.records.iter().find(|record| &record.id == id) {
                     self.audio_cache
                         .insert(record.id.clone(), missing_audio_info_for_record(record));
                 }
             }
-            Event::HistoryDeleted { .. } => {}
+            Event::HistoryDeleted { .. } => {
+                self.analytics.cache.clear();
+            }
             Event::HistoryChanged if !self.refresh_needed => {
+                self.analytics.cache.clear();
                 self.refresh_needed = true;
             }
             _ => {}
@@ -925,27 +1551,33 @@ impl Page for HistoryPage {
             return KeyOutcome::none();
         }
         match key.code {
-            KeyCode::Char('s') => self.toggle_view(),
+            KeyCode::Char('s') => return self.toggle_view(),
             KeyCode::Char('m') if self.view == HistoryView::Records => {
                 return self.load_more_outcome()
             }
             KeyCode::Char('p') if self.view == HistoryView::Analytics => {
-                self.pending_analytics_requests
-                    .push_back(AnalyticsRequestKind::Standalone);
                 return self.next_period_outcome();
             }
             KeyCode::Char('[') if self.view == HistoryView::Analytics => {
-                self.pending_analytics_requests
-                    .push_back(AnalyticsRequestKind::Standalone);
                 return self.shift_anchor_outcome(-1);
             }
             KeyCode::Char(']') if self.view == HistoryView::Analytics => {
-                self.pending_analytics_requests
-                    .push_back(AnalyticsRequestKind::Standalone);
                 return self.shift_anchor_outcome(1);
             }
             KeyCode::Char('v') if self.view == HistoryView::Analytics => self.next_metric(),
-            KeyCode::Char('c') if self.view == HistoryView::Analytics => self.toggle_chart(),
+            KeyCode::Char('R' | 'r') if self.view == HistoryView::Analytics => {
+                self.toggle_analytics_metric(AnalyticsMetric::Records)
+            }
+            KeyCode::Char('W' | 'w') if self.view == HistoryView::Analytics => {
+                self.toggle_analytics_metric(AnalyticsMetric::Words)
+            }
+            KeyCode::Char('D' | 'd') if self.view == HistoryView::Analytics => {
+                self.toggle_analytics_metric(AnalyticsMetric::Duration)
+            }
+            KeyCode::Char('A' | 'a') if self.view == HistoryView::Analytics => {
+                self.toggle_analytics_metric(AnalyticsMetric::AsrAudio)
+            }
+            KeyCode::Char('C') if self.view == HistoryView::Records => return self.open_cleanup(),
             KeyCode::Char('j') | KeyCode::Down => {
                 self.move_down();
                 return self.auto_load_more_outcome();
@@ -990,6 +1622,53 @@ impl Page for HistoryPage {
         if self.confirm.is_some() {
             return vec![KeyHint::new("y/n", "tui.hint.confirm")];
         }
+        if let Some(mode) = &self.cleanup {
+            return match mode {
+                CleanupMode::Selecting(select) => {
+                    let mut hints = vec![KeyHint::new("j/k", "tui.hint.cleanup_age")];
+                    if select.custom_editing {
+                        hints = vec![
+                            KeyHint::new("h/l", "tui.hint.cleanup_field"),
+                            KeyHint::new("j/k", "tui.hint.cleanup_adjust"),
+                            KeyHint::new("Enter", "tui.hint.cleanup_scan"),
+                            KeyHint::new("Esc", "tui.hint.cleanup_close"),
+                        ];
+                    } else if select.scope_active {
+                        hints.push(KeyHint::new("h/l", "tui.hint.cleanup_adjust"));
+                    } else {
+                        match select.choice {
+                            WindowChoice::LastHours
+                            | WindowChoice::LastDays
+                            | WindowChoice::OlderThan => {
+                                hints.push(KeyHint::new("h/l", "tui.hint.cleanup_adjust"))
+                            }
+                            WindowChoice::Custom => {
+                                hints.push(KeyHint::new("h/l", "tui.hint.cleanup_field"));
+                                hints.push(KeyHint::new("Enter", "tui.hint.cleanup_edit"));
+                            }
+                        }
+                    }
+                    if !select.custom_editing && select.choice != WindowChoice::Custom {
+                        hints.push(KeyHint::new("Enter", "tui.hint.cleanup_scan"));
+                        hints.push(KeyHint::new("Esc/n", "tui.hint.cleanup_cancel"));
+                    } else if !select.custom_editing && select.choice == WindowChoice::Custom {
+                        hints.push(KeyHint::new("Esc/n", "tui.hint.cleanup_cancel"));
+                    }
+                    hints
+                }
+                CleanupMode::Preview { .. } => vec![
+                    KeyHint::new("h/l", "tui.hint.cleanup_choose"),
+                    KeyHint::new("Enter", "tui.hint.cleanup_confirm"),
+                    KeyHint::new("Esc", "tui.hint.cleanup_cancel"),
+                ],
+                CleanupMode::Scanning { .. } | CleanupMode::Executing { .. } => {
+                    vec![KeyHint::new("Esc/n", "tui.hint.cleanup_cancel")]
+                }
+                CleanupMode::Done { .. } | CleanupMode::Failed { .. } => {
+                    vec![KeyHint::new("Enter/Esc", "tui.hint.cleanup_close")]
+                }
+            };
+        }
         if self.searching {
             return vec![
                 KeyHint::new("Enter", "tui.hint.search_done"),
@@ -1014,6 +1693,7 @@ impl Page for HistoryPage {
                     KeyHint::new("r", "tui.hint.reveal"),
                     KeyHint::new("d", "tui.hint.del_audio"),
                     KeyHint::new("x", "tui.hint.del_history"),
+                    KeyHint::new("C", "tui.hint.cleanup"),
                     KeyHint::new("m", "tui.hint.more"),
                     KeyHint::new("s", "tui.hint.analytics"),
                 ]);
@@ -1022,9 +1702,9 @@ impl Page for HistoryPage {
             HistoryView::Analytics => vec![
                 KeyHint::new("s", "tui.hint.records"),
                 KeyHint::new("p", "tui.hint.period"),
-                KeyHint::new("[/]", "tui.hint.anchor"),
+                KeyHint::new("[ ]", "tui.hint.anchor"),
                 KeyHint::new("v", "tui.hint.metric"),
-                KeyHint::new("c", "tui.hint.chart"),
+                KeyHint::new("R/W/D/A", "tui.hint.metrics"),
             ],
         }
     }
@@ -1043,15 +1723,35 @@ fn format_rfc3339(value: time::OffsetDateTime) -> String {
 fn current_anchor(period: AnalyticsPeriod) -> String {
     let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
     match period {
+        AnalyticsPeriod::Last7Days | AnalyticsPeriod::Last30Days => now
+            .format(
+                &time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")
+                    .expect("valid day format"),
+            )
+            .unwrap_or_else(|_| {
+                format!(
+                    "{:04}-{:02}-{:02}",
+                    now.year(),
+                    u8::from(now.month()),
+                    now.day()
+                )
+            }),
         AnalyticsPeriod::Year => now
-            .format(&time::format_description::parse("[year]").expect("valid year format"))
+            .format(
+                &time::format_description::parse_borrowed::<2>("[year]")
+                    .expect("valid year format"),
+            )
             .unwrap_or_else(|_| now.year().to_string()),
         AnalyticsPeriod::Month => now
-            .format(&time::format_description::parse("[year]-[month]").expect("valid month format"))
+            .format(
+                &time::format_description::parse_borrowed::<2>("[year]-[month]")
+                    .expect("valid month format"),
+            )
             .unwrap_or_else(|_| format!("{:04}-{:02}", now.year(), u8::from(now.month()))),
         AnalyticsPeriod::Day => now
             .format(
-                &time::format_description::parse("[year]-[month]-[day]").expect("valid day format"),
+                &time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")
+                    .expect("valid day format"),
             )
             .unwrap_or_else(|_| {
                 format!(
@@ -1066,6 +1766,12 @@ fn current_anchor(period: AnalyticsPeriod) -> String {
 
 fn shift_anchor(period: AnalyticsPeriod, anchor: &str, delta: i32) -> String {
     match period {
+        AnalyticsPeriod::Last7Days => {
+            shift_day_anchor(anchor, delta * 7).unwrap_or_else(|| current_anchor(period))
+        }
+        AnalyticsPeriod::Last30Days => {
+            shift_day_anchor(anchor, delta * 30).unwrap_or_else(|| current_anchor(period))
+        }
         AnalyticsPeriod::Year => anchor
             .parse::<i32>()
             .map(|year| format!("{:04}", year + delta))
@@ -1092,7 +1798,7 @@ fn shift_month_anchor(anchor: &str, delta: i32) -> Option<String> {
 fn shift_day_anchor(anchor: &str, delta: i32) -> Option<String> {
     let date = time::Date::parse(
         anchor,
-        &time::format_description::parse("[year]-[month]-[day]").ok()?,
+        &time::format_description::parse_borrowed::<2>("[year]-[month]-[day]").ok()?,
     )
     .ok()?;
     let shifted = date.checked_add(time::Duration::days(delta as i64))?;

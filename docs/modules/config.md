@@ -51,7 +51,7 @@
 
 - **实例 ID = 文件 stem**（例如 `asr/work.toml` → ID 为 `work`）；引用方只认 ID，与实现无关。
 - **`type` = 选实现**（闭合枚举，仅多实现家族有此字段）；缺失或值不合法时 resolver 报错。
-  - `asr`：`type = "apple" | "doubao" | "tencent"`（必填，无默认）
+  - `asr`：`type = "apple" | "aliyun" | "doubao" | "tencent"`（必填，无默认）
   - `post`：`type = "rule" | "llm"`（必填，无默认）
 - **`name` = 人类可读备注/显示标签**（可选，任意 UTF-8）；从不用作引用键、不参与任何功能判断；可重复，缺失时展示层用 stem 派生名兜底。
 - **其余键私有**：由各实现自己 deserialize，上层不依赖实现私有字段。
@@ -64,7 +64,7 @@
 | `name` | 人类可读备注/显示标签 | 任意实例，可选 | ❌ |
 | `format` | llm 协议方言（`openai`\|`anthropic`） | 仅 post `type = "llm"` | ❌ |
 
-post `type = "llm"` 的 `base_url` 必填：不再按 `name` 推断已知 provider 的 URL，实例文件必须显式写出 base_url。
+post `type = "llm"` 的 `base_url` 必填：实例文件必须显式写出 base_url，不从 `name` 或已知 provider 推断。
 
 **Profile → ASR 引用链**：`profile.asr.instance` 的值是 ASR 实例 ID；resolver (`config::asr::instance::resolve_instance`) 以此查找 `asr/<id>.toml`，读取 `type` 字段得到 `AsrKind`，再构造对应 provider。引用键永远是实例 ID，不是实现名（`apple`/`doubao`）。
 
@@ -86,11 +86,13 @@ CGEventTap 在 OS 层捕获所有键盘事件、不过滤——trigger/cancel/re
 
 - **控件派生**：`FieldSpec` 的 `kind`/`values`/`min`/`max` 决定控件类型（Toggle / Select / Number / Text）；ReadOnly 不允许写入。多行字段（`multiline`）、hotkey 字段（`keycapture`）和 secret 字段通过弹窗模态编辑。hotkey 字段是**纯文本输入**（弹窗预填当前值、`Enter` 保存），不做「按键捕获」：daemon 的全局 CGEventTap 会抢走目标键、终端也收不到本程序的热键词汇（修饰键单击 / 双击 `:double` / 左右侧 / F13-F20），捕获既不可靠又会误触录音。弹窗 hint 直接展示语法和示例；保存时按语法校验（见下）。`keycapture` 这个 `FieldSpec` flag 仅用来把 hotkey 字段路由到这个带语法说明的弹窗。
 - **默认值**：`FieldSpec.default` 提供初始值；专门的 drift test 在 `cargo test` 时确认 schema 声明的默认与代码不脱节。
-- **写入合约**（`field_write::set_field` / `unset_field`）：
-  - 保存前对整个文件跑 `validate_value`；**只有 Error 级别** 会阻止写盘，Warning 直接放行。
+- **写入合约**（`field_write::set_field` / `apply_field` / `unset_field`）：
+  - 保存前对整份文档跑 `validate_value`，按 `blocking_errors` 决定是否放行：结构性 Error（类型 / 范围 / 未知字段 / 枚举）阻止写盘；**未填 secret 这类 readiness Error 放行**——好让含多个空密钥的半成品逐字段填；Warning 一律放行。真正拦空密钥的是加载/运行时的 `reject_schema_diagnostics`（连 Warning 一起 bail），以及 provider 自己的非空校验。
+  - `set_field` = `apply_field`（在内存 `DocumentMut` 上写入 + 校验）再原子写盘；新建草稿复用同一 `apply_field`，故新建与编辑同一套校验（见下「新建 = 编辑」）。
   - 写盘前先写临时文件，然后 `rename` 原子替换，避免写一半的配置文件。
   - `unset_field` 删除键，让字段回到 schema 默认；字段若原本不存在则静默成功。
-- **打开配置文件**：以 TUI 内编辑为主。`e` 用系统默认应用打开当前选中的配置文件（不走 `$EDITOR`，避免在 TUI 里 spawn 终端编辑器抢屏），`r` 在 Finder 中定位文件 / 打开所在目录。新建 LLM 组件（wizard）后不自动打开编辑器。
+- **新建 = 编辑**：新建实例不是独立表单，而是一份**未落盘的内存草稿文档**（ASR 用 `AsrDraftDoc`）。字段控件/校验完全复用 `field_view` + `field_write`——草稿只是「还没写盘的文件」：全字段（含 secret）就地填，`Ctrl-S` 一次落盘完整文件，`Esc` 干净丢弃、不留半成品。ASR 的 `type` 是首行可切 `Select`，切换即按 registry 模板重铺草稿（同 LLM 的 `preset`）；`file_id` 是实例文件名、不是 schema 字段。LLM/Profile 目前仍用各自的 `LlmComponentDraft`/`ProfileDraftForm`（字段单独定义，尚未并入 schema 驱动草稿）。
+- **打开配置文件**：以 TUI 内编辑为主。`e` 用系统默认应用打开当前选中的配置文件（不走 `$EDITOR`，避免在 TUI 里 spawn 终端编辑器抢屏），`r` 在 Finder 中定位文件 / 打开所在目录。新建组件后不自动打开编辑器。
 - **热重载**：写入 `config.toml` 后立即通过 `Command::ReloadConfig` 触发 daemon 重载（`reload_config`）；其他文件（profile/asr/post）的变更在下次录音会话开始时生效。
 - **语义校验**：`hotkey.trigger` / `hotkey.cancel` / `hotkey.resume` 在保存前额外调用 hotkey bindings parser，解析失败或三者冲突会阻止写盘并回显错误。
 - **Profile composer**：Profile 模块的字段区不是普通逐字段列表，而是专用的 composer——把 name / asr.instance / 按已解析 provider 展开的 asr 覆盖 / hotwords / post 链成员及每个 llm 成员按 PostLlm schema 展开的覆盖，合成一层可编辑视图。继承值灰、显式覆盖蓝、无效项（stale 覆盖 / 悬空链成员）红。新建 Profile 只创建容器并绑定一个已有 ASR 实例；没有 `asr/*.toml` 时不进入新建表单，post chain 创建后用 composer 的 `a` 添加。`a` 弹出成员选择器往链尾追加、`x` 移出选中链成员、Shift-J/K 重排、`D` 把选中覆盖/标量还原为继承、`X` 一次清掉全部无效覆盖；`Enter` 复用共享编辑器/弹窗改选中行。所有写入只落 profile 文件；覆盖在写盘前按**已解析的 provider/component schema** 校验（profile 自身的 `[asr]`/`[post.overrides]` 自由表拦不住类型错误），失败走同一套内联错误弹窗。

@@ -35,8 +35,8 @@ shuo config-template  # 一次性导出全部内置模板 registry + theme prese
                       # （默认 $XDG_CONFIG_HOME/shuohua/templates）；写入前预检全部目标路径，
                       # 任一文件已存在则拒绝覆盖且不写任何文件
                       #   --lang <auto|en-US|zh-CN> 控制生成注释语言
-                      # 写出的 asr/ 模板包含 asr/apple.toml 和 asr/doubao.toml，
-                      # 两者都带显式 type 字段（type = "apple" / type = "doubao"）
+                      # 写出的 asr/ 模板包含 apple/aliyun/doubao/tencent 四份 .toml，
+                      # 均带显式 type 字段（type = "apple" / "aliyun" / "doubao" / "tencent"）
 
 shuo completions zsh  # 生成 shell completion 脚本到 stdout
 shuo completions bash # 支持 zsh / bash / fish；安装路径由用户或包管理器决定

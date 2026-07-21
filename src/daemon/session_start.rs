@@ -185,12 +185,6 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::{Mutex as StdMutex, OnceLock};
-
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| StdMutex::new(())).lock().unwrap()
-    }
 
     fn temp_config_home() -> PathBuf {
         let dir =
@@ -270,8 +264,8 @@ default = "default"
 
     #[test]
     fn prepare_session_start_builds_params_from_profile_and_runtime_options() {
-        let _guard = env_lock();
         let config_home = temp_config_home();
+        let _env = crate::config::TestConfigHome::set(&config_home);
         let root = config_home.join("shuohua");
         write_minimal_config(
             &root,
@@ -286,7 +280,6 @@ hotwords = ["Rust", "macOS"]
 chain = []
 "#,
         );
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
         let cfg = Arc::new(crate::reload::RuntimeConfig {
             config: crate::config::load_from(&root.join("config.toml")).unwrap(),
             theme: crate::config::theme::EffectiveTheme::default(),
@@ -332,14 +325,13 @@ chain = []
             Some("Example")
         );
 
-        std::env::remove_var("XDG_CONFIG_HOME");
         let _ = fs::remove_dir_all(config_home);
     }
 
     #[test]
     fn local_vad_on_overrides_global_vad_backend_off() {
-        let _guard = env_lock();
         let config_home = temp_config_home();
+        let _env = crate::config::TestConfigHome::set(&config_home);
         let root = config_home.join("shuohua");
         fs::create_dir_all(root.join("profile")).unwrap();
         fs::write(
@@ -369,7 +361,6 @@ chain = []
 "#,
         )
         .unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
         let cfg = Arc::new(crate::reload::RuntimeConfig {
             config: crate::config::load_from(&root.join("config.toml")).unwrap(),
             theme: crate::config::theme::EffectiveTheme::default(),
@@ -398,14 +389,13 @@ chain = []
             crate::config::VoiceVadBackend::Silero
         ));
 
-        std::env::remove_var("XDG_CONFIG_HOME");
         let _ = fs::remove_dir_all(config_home);
     }
 
     #[test]
     fn profile_choices_include_unrouted_profile_files() {
-        let _guard = env_lock();
         let config_home = temp_config_home();
+        let _env = crate::config::TestConfigHome::set(&config_home);
         let root = config_home.join("shuohua");
         write_minimal_config(
             &root,
@@ -432,7 +422,6 @@ chain = ["zh_filter"]
 "#,
         )
         .unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
         let cfg = Arc::new(crate::reload::RuntimeConfig {
             config: crate::config::load_from(&root.join("config.toml")).unwrap(),
             theme: crate::config::theme::EffectiveTheme::default(),
@@ -463,14 +452,13 @@ chain = ["zh_filter"]
                 && choice.asr_instance == "apple"
                 && choice.chain_summary == "zh_filter"));
 
-        std::env::remove_var("XDG_CONFIG_HOME");
         let _ = fs::remove_dir_all(config_home);
     }
 
     #[test]
     fn prepare_session_start_classifies_provider_build_failure() {
-        let _guard = env_lock();
         let config_home = temp_config_home();
+        let _env = crate::config::TestConfigHome::set(&config_home);
         let root = config_home.join("shuohua");
         write_minimal_config(
             &root,
@@ -484,7 +472,6 @@ instance = "fake"
 chain = []
 "#,
         );
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
         let cfg = Arc::new(crate::reload::RuntimeConfig {
             config: crate::config::load_from(&root.join("config.toml")).unwrap(),
             theme: crate::config::theme::EffectiveTheme::default(),
@@ -506,7 +493,6 @@ chain = []
 
         assert_eq!(error, SessionStartError::AsrProvider);
 
-        std::env::remove_var("XDG_CONFIG_HOME");
         let _ = fs::remove_dir_all(config_home);
     }
 }

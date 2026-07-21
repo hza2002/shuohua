@@ -122,7 +122,7 @@ fn top_level_modules_are_documented() {
 }
 
 #[test]
-fn rust_stable_strategy_matches_local_ci_and_release() {
+fn rust_stable_and_release_strategy_match_local_ci_and_release() {
     let root = repo_root();
     for workflow in ["ci.yml", "release.yml"] {
         let body = fs::read_to_string(root.join(".github/workflows").join(workflow)).unwrap();
@@ -154,4 +154,14 @@ fn rust_stable_strategy_matches_local_ci_and_release() {
         release.contains("rustup update stable"),
         "cargo-release hook 必须先更新 Rust stable"
     );
+    for setting in [
+        "allow-branch = [\"release/*\"]",
+        "tag = false",
+        "push = false",
+    ] {
+        assert!(
+            release.contains(setting),
+            "cargo-release 必须通过 PR-safe 配置约束 release：缺少 {setting}"
+        );
+    }
 }

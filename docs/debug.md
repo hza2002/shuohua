@@ -12,7 +12,7 @@
 4. **看 daemon 日志**：`~/.local/state/shuohua/logs/shuo-YYYY-MM-DD.log`（低频诊断锚点，见 [architecture](architecture.md) 日志节）。前台 `shuo --daemon` 会同时 mirror 到 stderr。**日志不记识别正文/高频事件**，正文事实以 history 为准。
 5. **必要时听音频**：`~/.local/state/shuohua/audio/<id>.flac|.m4a`（需 `voice.record_audio ≠ off` 且使用支持 retained audio 的 capture backend；Apple backend 当前不发布 retained audio；`<id>` = history ULID，见 [schema §3](schema.md)）。判断是录音问题还是识别问题。
 6. **深入 VAD/ASR 时序**：`--features dev` 构建 + `config.toml` 设 `dev.vad_trace = true` → 每次录音写 `~/.local/state/shuohua/traces/<id>.jsonl`（VAD frame/transition、ASR event 时间、session 切分，见 [schema §4](schema.md)）。用于离线评估 pause/resume 切分质量。Apple backend 诊断同样要求 dev build，并设 `dev.apple_backend_trace = true`：它会在 cpal 输入 `channels > 1` 时打 per-channel RMS/peak 探针；不进正式日志/history/report。
-7. **改完验证**：先跑受影响的最小测试，提交前跑 `make check`；macOS 权限/录音/上屏由用户手测。
+7. **改完验证**：先跑受影响的最小测试；提交前跑 `make fmt-check` 和相关测试，push / 创建 PR 前跑 `make check`；macOS 权限/录音/上屏由用户手测。
 
 ## 常见定位捷径
 

@@ -6,7 +6,9 @@ shuohua 的发版操作手册。发版会创建并推送 `v*` tag，触发 GitHu
 
 ## 1. 发版模型
 
-- 本地使用 `cargo-release` bump 版本、创建 release commit、打 tag、push。
+- 本地使用 `cargo-release` 在 `release/vX.Y.Z` 分支 bump 版本并创建 release commit。
+- release PR 通过 `CI / check` 后 squash merge 到 `main`；不要求其他人 approve。
+- 从合并后的 `main` 创建并推送 signed `vX.Y.Z` tag。
 - GitHub Actions 在 `v*` tag push 后构建 `aarch64-apple-darwin` binary。
 - Release 页面上传：
   - `shuo-vX.Y.Z-aarch64-apple-darwin.tar.gz`
@@ -38,7 +40,7 @@ git status -sb
 git describe --tags --abbrev=0 2>/dev/null || echo "<no previous tag>"
 rustup update stable
 rustc --version
-grep -E 'sign-commit|sign-tag' release.toml
+grep -E 'allow-branch|sign-commit|tag =|push =' release.toml
 ```
 
 必须满足：
@@ -47,14 +49,16 @@ grep -E 'sign-commit|sign-tag' release.toml
 - working tree 干净，且与 `origin/main` 同步。
 - 最新 commit 是 GPG signed / verified。
 - 本机 `stable` 已更新；CI 与 release workflow 同样跟随最新 `stable`。
-- `release.toml` 中 `sign-commit = true` 且 `sign-tag = true`。
-- GitHub main ruleset 仍要求 signed commits，并禁止删除和 force push。
+- `release.toml` 只允许 `release/*`，且 `sign-commit = true`、`tag = false`、
+  `push = false`。
+- GitHub main ruleset 要求 PR、`CI / check` 和 signed commits，并禁止删除和 force push。
 - GitHub `v*` tag ruleset 如已启用，不会阻止本次创建 release tag。
 
 异常时停下，不自动 stash、pull、rebase、push 或改 ruleset。
 
-项目刻意滚动跟随最新 Rust stable。每次提交前跑 `make check`，它会先更新 stable，
-再执行完整门禁；新版本引入 lint 或兼容问题时在任务分支修复，不绕过检查。
+项目刻意滚动跟随最新 Rust stable。开发中跑最小测试，提交前跑 `make fmt-check` 和
+相关测试，push / 创建 PR 前跑 `make check`；新版本引入 lint 或兼容问题时在任务分支
+修复，不绕过检查。
 
 ## 4. 确定版本
 
@@ -70,6 +74,12 @@ fi
 ```
 
 按版本规则推荐 `patch`、`minor` 或具体版本号，并向用户确认。首个公开版本通常是 `0.1.0`。
+
+确认版本后从同步且干净的 `main` 创建 release 分支：
+
+```bash
+git switch -c release/vX.Y.Z
+```
 
 ## 5. 起草 CHANGELOG
 
@@ -107,17 +117,15 @@ fi
 条目用用户视角写，避免内部过程描述，不逐条镜像 commit，也不必行内链 commit——GitHub
 Release 页面会自动生成 "What's Changed" 提交 / PR / contributor 列表。
 
-确认后创建并推送 signed changelog commit，等待 `main` CI 通过：
+确认后在 release 分支创建 changelog commit：
 
 ```bash
 git add CHANGELOG.md
-git commit -S -m "docs: add vX.Y.Z changelog"
-git push origin main
+git -c commit.gpgsign=false commit -m "docs: add vX.Y.Z changelog"
 ```
 
-如果由 agent 执行到需要 GPG 签名的步骤，agent 只负责准备文件和 `git add`；
-`git commit -S`、`git commit --amend -S`、`git tag -s` 这类签名命令必须停下来
-交给用户在本机手动执行。用户完成后，agent 再继续验证签名、push、监控 CI。
+agent 在任务分支提交时使用 `commit.gpgsign=false`，不修改用户 GPG 配置。需要
+`git commit -S` 或 `git tag -s` 时必须停下来交给用户在本机手动执行。
 
 `cargo-release` 要求工作区干净。后续生成的 `release: vX.Y.Z` commit 只包含版本
 bump，不要通过绕过 dirty check 把其他修改混入 release commit。
@@ -145,39 +153,45 @@ cargo release <patch|minor|0.1.0> --dry-run
 
 - 旧版本和新版本。
 - release commit message：`release: vX.Y.Z`。
-- tag：`vX.Y.Z`。
-- 将 push 到 `origin main` 和 `origin vX.Y.Z`。
-- pre-release hook 通过：`cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked`。
+- 不创建 tag，不 push。
+- pre-release hook 更新到最新 stable，并通过 locked fmt / clippy / test。
 
 ## 8. Execute
 
-再次向用户确认后执行：
+再次向用户确认后，由用户执行需要 GPG 交互的版本 commit：
 
 ```bash
 cargo release <patch|minor|0.1.0> --execute
 ```
 
-这会修改 `Cargo.toml`、创建 signed release commit、创建 signed tag，并 push 到 origin。
-如果执行环境无法完成 GPG 交互，agent 必须在版本 bump 后停下，由用户手动执行：
+这只修改 `Cargo.toml` / `Cargo.lock` 并创建 signed `release: vX.Y.Z` commit，不创建
+tag，也不 push。完成后验证签名并推送 release 分支：
 
 ```bash
-git add Cargo.toml Cargo.lock
-git commit -S -m "release: vX.Y.Z"
-git tag -s vX.Y.Z -m "shuo vX.Y.Z"
-git push origin main vX.Y.Z
+git log -1 --show-signature
+git push -u origin release/vX.Y.Z
 ```
 
-如果需要把发版文档或其他只属于 release commit 的小修订补进已创建的 release commit，
-agent 可以准备并 `git add` 文件，但 amend 和重新签 tag 由用户手动执行：
+创建指向 `main` 的 PR，等待 `CI / check` 通过后使用 squash merge。更新本地 `main`，
+确认 merge commit 由 GitHub verified signing key 签名，且版本和 changelog 正确：
 
 ```bash
-git commit --amend -S --no-edit
-git tag -d vX.Y.Z
-git tag -s vX.Y.Z -m "shuo vX.Y.Z"
-git push origin main vX.Y.Z
+git switch main
+git pull --ff-only
+git log -1 --show-signature
+grep '^version' Cargo.toml
+grep '^## vX.Y.Z ' CHANGELOG.md
 ```
 
-失败时停下报告状态，不使用 `--no-verify`、不自动重试。
+最后由用户从该 `main` commit 创建并推送 signed tag：
+
+```bash
+git tag -s vX.Y.Z -m "shuo vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+如果 PR、签名、版本或 tag 任一项不一致，停下报告状态；不使用 `--no-verify`、不自动
+重试，也不绕过 main ruleset。
 
 ## 9. 监控 Release Workflow
 

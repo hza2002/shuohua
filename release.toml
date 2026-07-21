@@ -1,23 +1,20 @@
 # cargo-release 配置：纪律 > 灵活
 # 文档：https://github.com/crate-ci/cargo-release/blob/master/docs/reference.md
 
-# 只允许从 main 发版
-allow-branch = ["main"]
+# release commit 先通过 PR 进入 main
+allow-branch = ["release/*"]
 
-# 与仓库 commit.gpgsign=true 一致
+# release 分支上的版本 commit 仍由用户签名
 sign-commit = true
-sign-tag = true
 
-# tag 直接 vX.Y.Z，不带 crate 前缀
-tag-prefix = ""
-tag-name = "v{{version}}"
-tag-message = "shuo v{{version}}"
+# tag 在 release PR 合并后从 main 单独签名创建
+tag = false
 
 # 不发到 crates.io（项目 Cargo.toml 已 publish = false，这里再保险）
 publish = false
 
-# cargo release 自动 push commit + tag 到 origin
-push = true
+# release 分支由用户显式 push，cargo-release 不接触远端
+push = false
 
 # commit message
 pre-release-commit-message = "release: v{{version}}"

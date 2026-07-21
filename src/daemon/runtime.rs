@@ -267,9 +267,7 @@ fn start_session(
             history,
         )
         .await;
-        if let Ok(mut s) = suppressor_for_task.lock() {
-            s.set_cancel_active(false);
-        }
+        suppressor_for_task.lock().set_cancel_active(false);
     });
     hotkey_input.set_cancel_active(true);
     Ok(ActiveSession::new(control, join))

@@ -284,8 +284,11 @@ fn default_max_text_lines() -> usize {
     5
 }
 
+/// overlay 默认宽度（px）。overlay 侧的测试常量从这里重导出，保持单一事实源。
+pub const DEFAULT_OVERLAY_WIDTH_PX: usize = 600;
+
 fn default_overlay_width() -> usize {
-    crate::overlay::layout::constants::DEFAULT_WIDTH_PX
+    DEFAULT_OVERLAY_WIDTH_PX
 }
 
 /// `$XDG_CONFIG_HOME/shuohua/config.toml` or `~/.config/shuohua/config.toml`.
@@ -351,10 +354,7 @@ trigger = "f16"
         assert_eq!(cfg.profile.default, "default");
         assert!(cfg.profile.routes.is_empty());
         assert_eq!(cfg.overlay.position, OverlayPosition::Bottom);
-        assert_eq!(
-            cfg.overlay.width,
-            crate::overlay::layout::constants::DEFAULT_WIDTH_PX
-        );
+        assert_eq!(cfg.overlay.width, DEFAULT_OVERLAY_WIDTH_PX);
         assert_eq!(cfg.overlay.max_text_lines, 5);
     }
 

@@ -1,3 +1,4 @@
+use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -115,6 +116,68 @@ pub(crate) struct RecordDeleteOutcome {
     pub deleted: bool,
 }
 
+pub(crate) fn delete_records_in_dir(
+    dir: &Path,
+    ids: &[String],
+    local_offset: UtcOffset,
+    mut before_rename: impl FnMut(),
+) -> Result<RecordBatchDeleteOutcome> {
+    let requested: HashSet<&str> = ids
+        .iter()
+        .map(|id| {
+            crate::history::assets::validate_recording_id(id)?;
+            Ok(id.as_str())
+        })
+        .collect::<Result<_>>()?;
+    if requested.is_empty() {
+        return Ok(RecordBatchDeleteOutcome {
+            deleted_ids: BTreeSet::new(),
+        });
+    }
+
+    let mut deleted_ids = BTreeSet::new();
+    for path in monthly_history_files_in_dir(dir)? {
+        let before = fingerprint_delete_source(&path)?;
+        let read = read_records_for_delete(&path, local_offset)?;
+        let original_len = read.records.len();
+        let mut retained = Vec::with_capacity(original_len);
+        for record in read.records {
+            if requested.contains(record.id.as_str()) {
+                deleted_ids.insert(record.id);
+            } else {
+                retained.push(record);
+            }
+        }
+        if retained.len() == original_len {
+            continue;
+        }
+
+        let tmp = unique_delete_temp_path(&path);
+        let rewrite_result = rewrite_records_to_temp(&tmp, &retained).and_then(|()| {
+            before_rename();
+            let after = fingerprint_delete_source(&path)?;
+            if before != after {
+                bail!(
+                    "history source changed before delete rename: {}",
+                    path.display()
+                );
+            }
+            fs::rename(&tmp, &path).with_context(|| format!("replace history {}", path.display()))
+        });
+        if let Err(error) = rewrite_result {
+            let _ = fs::remove_file(&tmp);
+            return Err(error);
+        }
+    }
+
+    Ok(RecordBatchDeleteOutcome { deleted_ids })
+}
+
+#[derive(Debug)]
+pub(crate) struct RecordBatchDeleteOutcome {
+    pub deleted_ids: BTreeSet<String>,
+}
+
 fn local_offset() -> UtcOffset {
     UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC)
 }
@@ -187,7 +250,7 @@ fn unique_delete_temp_path(source: &Path) -> PathBuf {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("history.jsonl");
-    source.with_file_name(format!("{name}.tmp-delete-{}", ulid::Ulid::new()))
+    source.with_file_name(format!("{name}.tmp-delete-{}", ulid::Ulid::generate()))
 }
 
 fn parse_month_file_name(name: &str) -> Result<(i32, u8)> {
@@ -366,7 +429,7 @@ mod tests {
         #[test]
         fn audio_only_delete_preserves_history() {
             let history_dir = temp_history_dir("audio-only");
-            let id = ulid::Ulid::new().to_string();
+            let id = ulid::Ulid::generate().to_string();
             write_line(
                 &history_dir,
                 record(&id, datetime!(2026-06-01 00:00:00 UTC), "one"),
@@ -395,8 +458,8 @@ mod tests {
         #[test]
         fn history_delete_removes_record_and_audio() {
             let history_dir = temp_history_dir("history-delete");
-            let delete_id = ulid::Ulid::new().to_string();
-            let keep_id = ulid::Ulid::new().to_string();
+            let delete_id = ulid::Ulid::generate().to_string();
+            let keep_id = ulid::Ulid::generate().to_string();
             write_line(
                 &history_dir,
                 record(&delete_id, datetime!(2026-06-01 00:00:00 UTC), "delete"),
@@ -431,7 +494,7 @@ mod tests {
         #[test]
         fn missing_history_still_deletes_orphan_audio() {
             let history_dir = temp_history_dir("orphan-audio");
-            let id = ulid::Ulid::new().to_string();
+            let id = ulid::Ulid::generate().to_string();
             let audio = write_audio(&history_dir, &id, "flac");
             let service = HistoryService::with_test_hooks(
                 history_dir.clone(),
@@ -452,7 +515,7 @@ mod tests {
         #[test]
         fn source_change_before_rename_aborts() {
             let history_dir = temp_history_dir("source-change");
-            let id = ulid::Ulid::new().to_string();
+            let id = ulid::Ulid::generate().to_string();
             write_line(
                 &history_dir,
                 record(&id, datetime!(2026-06-01 00:00:00 UTC), "one"),
@@ -489,7 +552,7 @@ mod tests {
         #[test]
         fn audio_failure_after_record_delete_reports_partial_success() {
             let history_dir = temp_history_dir("partial");
-            let id = ulid::Ulid::new().to_string();
+            let id = ulid::Ulid::generate().to_string();
             write_line(
                 &history_dir,
                 record(&id, datetime!(2026-06-01 00:00:00 UTC), "one"),
@@ -528,7 +591,7 @@ mod tests {
         #[test]
         fn history_delete_rejects_audio_conflict_without_deleting_record() {
             let history_dir = temp_history_dir("audio-conflict-reject");
-            let id = ulid::Ulid::new().to_string();
+            let id = ulid::Ulid::generate().to_string();
             write_line(
                 &history_dir,
                 record(&id, datetime!(2026-06-01 00:00:00 UTC), "one"),
@@ -556,7 +619,7 @@ mod tests {
             use std::os::unix::fs::symlink;
 
             let history_dir = temp_history_dir("audio-symlink-reject");
-            let id = ulid::Ulid::new().to_string();
+            let id = ulid::Ulid::generate().to_string();
             write_line(
                 &history_dir,
                 record(&id, datetime!(2026-06-01 00:00:00 UTC), "one"),
@@ -584,7 +647,7 @@ mod tests {
         #[test]
         fn history_delete_rejects_non_regular_audio_without_deleting_record() {
             let history_dir = temp_history_dir("audio-directory-reject");
-            let id = ulid::Ulid::new().to_string();
+            let id = ulid::Ulid::generate().to_string();
             write_line(
                 &history_dir,
                 record(&id, datetime!(2026-06-01 00:00:00 UTC), "one"),
@@ -610,7 +673,7 @@ mod tests {
         #[test]
         fn repeated_delete_is_idempotent() {
             let history_dir = temp_history_dir("idempotent");
-            let id = ulid::Ulid::new().to_string();
+            let id = ulid::Ulid::generate().to_string();
             write_line(
                 &history_dir,
                 record(&id, datetime!(2026-06-01 00:00:00 UTC), "one"),
@@ -642,7 +705,7 @@ mod tests {
             std::env::temp_dir()
                 .join(format!(
                     "shuohua-history-delete-{name}-{}",
-                    ulid::Ulid::new()
+                    ulid::Ulid::generate()
                 ))
                 .join("history")
         }
@@ -695,7 +758,8 @@ mod tests {
 
     #[test]
     fn append_writes_one_json_line_with_v1_schema() {
-        let dir = std::env::temp_dir().join(format!("shuohua-history-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-history-test-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("2026-06.jsonl");
 
@@ -738,7 +802,8 @@ mod tests {
 
     #[test]
     fn monthly_history_files_returns_newest_files_first() {
-        let dir = std::env::temp_dir().join(format!("shuohua-history-list-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-history-list-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("2026-05.jsonl"), "").unwrap();
         fs::write(dir.join("2026-07.jsonl"), "").unwrap();
@@ -756,7 +821,8 @@ mod tests {
 
     #[test]
     fn monthly_history_files_ignores_non_monthly_jsonl_files() {
-        let dir = std::env::temp_dir().join(format!("shuohua-history-list-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-history-list-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("2026-05.jsonl"), "").unwrap();
         fs::write(dir.join("backup.jsonl"), "").unwrap();

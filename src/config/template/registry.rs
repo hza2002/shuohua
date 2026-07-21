@@ -115,7 +115,7 @@ const CONFIG_VALUES: &[(&str, TemplateValue)] = &[
             ("position", TemplateValue::String("bottom")),
             (
                 "width",
-                TemplateValue::Integer(crate::overlay::layout::constants::DEFAULT_WIDTH_PX as i64),
+                TemplateValue::Integer(crate::config::DEFAULT_OVERLAY_WIDTH_PX as i64),
             ),
             ("max_text_lines", TemplateValue::Integer(5)),
         ]),
@@ -204,7 +204,7 @@ const ASR_DOUBAO_VALUES: &[(&str, TemplateValue)] = &[
     ("access_key", TemplateValue::String("")),
     (
         "resource_id",
-        TemplateValue::String("volc.bigasr.sauc.duration"),
+        TemplateValue::String("volc.seedasr.sauc.duration"),
     ),
     ("language", TemplateValue::String("auto")),
     ("enable_itn", TemplateValue::Bool(true)),
@@ -212,6 +212,24 @@ const ASR_DOUBAO_VALUES: &[(&str, TemplateValue)] = &[
     ("enable_ddc", TemplateValue::Bool(true)),
     ("stream_mode", TemplateValue::Integer(2)),
     ("ai_vad", TemplateValue::Bool(false)),
+    ("local_vad", TemplateValue::String("auto")),
+    ("open_timeout_ms", TemplateValue::Integer(12_000)),
+    ("finalize_timeout_ms", TemplateValue::Integer(12_000)),
+];
+
+const ASR_ALIYUN_VALUES: &[(&str, TemplateValue)] = &[
+    ("type", TemplateValue::String("aliyun")),
+    ("name", TemplateValue::String("阿里云百炼 ASR")),
+    ("api_key", TemplateValue::String("")),
+    ("workspace_id", TemplateValue::String("")),
+    ("region", TemplateValue::String("beijing")),
+    ("model", TemplateValue::String("fun-asr-realtime")),
+    ("language_hints", TemplateValue::StringArray(&["zh"])),
+    ("vocabulary_id", TemplateValue::String("")),
+    ("semantic_punctuation_enabled", TemplateValue::Bool(false)),
+    ("max_sentence_silence", TemplateValue::Integer(1300)),
+    ("multi_threshold_mode_enabled", TemplateValue::Bool(false)),
+    ("heartbeat", TemplateValue::Bool(true)),
     ("local_vad", TemplateValue::String("auto")),
     ("open_timeout_ms", TemplateValue::Integer(12_000)),
     ("finalize_timeout_ms", TemplateValue::Integer(12_000)),
@@ -536,6 +554,15 @@ const TEMPLATES: &[Template] = &[
         description: "Starter config for the Doubao provider.",
         schema: SchemaId::AsrDoubao,
         values: ASR_DOUBAO_VALUES,
+    },
+    Template {
+        id: "asr/aliyun",
+        kind: TemplateKind::Asr,
+        path: "asr/aliyun.toml",
+        title: "阿里云百炼 ASR",
+        description: "阿里云百炼 Fun-ASR / Paraformer 实时语音识别。",
+        schema: SchemaId::AsrAliyun,
+        values: ASR_ALIYUN_VALUES,
     },
     Template {
         id: "asr/tencent",

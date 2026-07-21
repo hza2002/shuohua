@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn helper_publish_skips_rewrite_when_existing_bytes_match() {
-        let dir = std::env::temp_dir().join(format!("shuohua-helper-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("shuohua-helper-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(&dir).unwrap();
         let helper = dir.join("apple_helper");
         let lock = dir.join("apple_helper.lock");

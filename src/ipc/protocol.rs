@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::history::{
-    AggregateStats, AnalyticsPeriod, AnalyticsSnapshot, HistoryRecord, HistoryStatsSnapshot,
+    AggregateStats, AnalyticsPeriod, AnalyticsSnapshot, CleanupFilter, CleanupPreview,
+    CleanupResult, HistoryRecord, HistoryStatsSnapshot,
 };
 use crate::state::{AudioMeter, SessionMeta, SessionPhase};
 
@@ -44,6 +45,13 @@ pub enum Command {
     },
     DeleteHistory {
         id: String,
+    },
+    PreviewHistoryCleanup {
+        filter: CleanupFilter,
+    },
+    ExecuteHistoryCleanup {
+        filter: CleanupFilter,
+        ids: Vec<String>,
     },
     DaemonStatus,
     Shutdown,
@@ -135,6 +143,12 @@ pub enum Event {
         record_deleted: bool,
         audio_deleted: bool,
         audio_error: Option<String>,
+    },
+    HistoryCleanupPreview {
+        preview: CleanupPreview,
+    },
+    HistoryCleanupDone {
+        result: CleanupResult,
     },
     DaemonStatus {
         pid: u32,
@@ -298,6 +312,64 @@ mod tests {
         ];
 
         for event in events {
+            let line = encode_event(&event).unwrap();
+            assert_eq!(decode_event(&line).unwrap(), event);
+        }
+    }
+
+    #[test]
+    fn history_cleanup_commands_round_trip() {
+        let filter = crate::history::CleanupFilter {
+            scope: crate::history::CleanupScope::AudioOnly,
+            window: crate::history::CleanupWindow::OlderThanDays(30),
+        };
+        let record_filter = crate::history::CleanupFilter {
+            scope: crate::history::CleanupScope::RecordAndAudio,
+            window: crate::history::CleanupWindow::All,
+        };
+        let commands = vec![
+            Command::PreviewHistoryCleanup { filter },
+            Command::ExecuteHistoryCleanup {
+                filter,
+                ids: vec!["01HAUDIO".to_string()],
+            },
+            Command::ExecuteHistoryCleanup {
+                filter: record_filter,
+                ids: vec!["01HHISTORY".to_string()],
+            },
+        ];
+        for command in commands {
+            let line = encode_command(&command).unwrap();
+            assert_eq!(decode_command(&line).unwrap(), command);
+        }
+    }
+
+    #[test]
+    fn history_cleanup_events_round_trip() {
+        let filter = crate::history::CleanupFilter {
+            scope: crate::history::CleanupScope::AudioOnly,
+            window: crate::history::CleanupWindow::All,
+        };
+        let preview_event = Event::HistoryCleanupPreview {
+            preview: crate::history::CleanupPreview {
+                filter,
+                ids: vec!["01HAUDIO".to_string()],
+                audio_bytes: 333_447_168,
+                audio_ms: 5_300_000,
+                oldest: None,
+                newest: None,
+                warnings: Vec::new(),
+            },
+        };
+        let done_event = Event::HistoryCleanupDone {
+            result: crate::history::CleanupResult {
+                requested: 42,
+                deleted: 41,
+                missing: 1,
+                errors: Vec::new(),
+            },
+        };
+        for event in [preview_event, done_event] {
             let line = encode_event(&event).unwrap();
             assert_eq!(decode_event(&line).unwrap(), event);
         }

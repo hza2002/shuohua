@@ -30,7 +30,8 @@ pub fn run(args: ReportArgs) -> Result<()> {
     if target.exists() {
         anyhow::bail!("report output already exists: {}", target.display());
     }
-    let staging = std::env::temp_dir().join(format!("shuo-report-staging-{}", ulid::Ulid::new()));
+    let staging =
+        std::env::temp_dir().join(format!("shuo-report-staging-{}", ulid::Ulid::generate()));
     let bundle_name = target
         .file_stem()
         .and_then(|name| name.to_str())
@@ -517,7 +518,7 @@ mod tests {
 
     #[test]
     fn read_tail_tolerates_utf8_boundary_split() {
-        let dir = std::env::temp_dir().join(format!("shuohua-report-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("shuohua-report-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("launchd.stderr.log");
         std::fs::write(&path, "prefix 中").unwrap();

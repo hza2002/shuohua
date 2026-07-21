@@ -9,7 +9,7 @@ use ratatui::Frame;
 use crate::config::field_view::{ControlKind, FieldOrigin};
 use crate::config::field_write::{self, TypedInput, WriteError};
 use crate::config::profile_compose_write;
-use crate::config::template::{AsrAppleDraft, AsrDoubaoDraft, AsrTencentDraft, LlmComponentDraft};
+use crate::config::template::LlmComponentDraft;
 use crate::config::theme::TuiTheme;
 use crate::ipc::protocol::{Command, Event};
 use crate::tui::config_actions;
@@ -136,61 +136,6 @@ const LLM_DRAFT_KEYS: [&str; 8] = [
 
 const PROFILE_DRAFT_KEYS: [&str; 3] = ["file_id", "name", "asr_instance"];
 
-const ASR_APPLE_DRAFT_KEYS: [&str; 8] = [
-    "type",
-    "file_id",
-    "name",
-    "language",
-    "install_assets",
-    "local_vad",
-    "open_timeout_ms",
-    "finalize_timeout_ms",
-];
-
-const ASR_DOUBAO_DRAFT_KEYS: [&str; 15] = [
-    "type",
-    "file_id",
-    "name",
-    "app_key",
-    "access_key",
-    "resource_id",
-    "language",
-    "enable_itn",
-    "enable_punc",
-    "enable_ddc",
-    "stream_mode",
-    "ai_vad",
-    "local_vad",
-    "open_timeout_ms",
-    "finalize_timeout_ms",
-];
-
-const ASR_TENCENT_DRAFT_KEYS: [&str; 23] = [
-    "type",
-    "file_id",
-    "name",
-    "app_id",
-    "secret_id",
-    "secret_key",
-    "engine_model_type",
-    "convert_num_mode",
-    "filter_modal",
-    "filter_punc",
-    "filter_dirty",
-    "need_vad",
-    "vad_silence_time",
-    "max_speak_time",
-    "sentence_strategy",
-    "noise_threshold",
-    "hotword_weight",
-    "hotword_id",
-    "customization_id",
-    "replace_text_id",
-    "local_vad",
-    "open_timeout_ms",
-    "finalize_timeout_ms",
-];
-
 /// 可选的 provider 预设（= registry 里的 llm 模板 stem，如 openai/anthropic/deepseek）。
 /// 新增一家 provider 只需在 registry 加模板，这里自动多一个选项。
 fn llm_preset_ids() -> Vec<String> {
@@ -213,6 +158,15 @@ fn asr_kind_ids() -> Vec<String> {
                 .map(|stem| stem.to_string())
         })
         .collect()
+}
+
+/// 新建 seed 文件的注释语言：跟随用户配置的 `ui.language`（与 `shuo config-template`
+/// 同源），无法读取配置时回退到自动检测。
+fn seed_lang() -> crate::i18n::Lang {
+    let configured = crate::config::load_from(&crate::config::default_path())
+        .map(|cfg| cfg.ui.language)
+        .unwrap_or_else(|_| "auto".to_string());
+    crate::i18n::resolve_lang(&configured)
 }
 
 /// 连通性测试状态（`t` 键触发，后台跑一次 check_runtime）。
@@ -424,446 +378,220 @@ impl Default for LlmDraftForm {
     }
 }
 
+/// 新建 ASR 的内存草稿：一份未落盘的 TOML 文档。字段控件/校验完全复用 File 编辑器
+/// 的 `field_view` + `field_write`（同一套事实源，不重复定义字段），因此「新建==编辑」
+/// ——填完整份（含 secret）后 `^S` 一次写盘，`Esc` 干净丢弃，不留半成品文件。
+/// `type` 像 LLM 的 `preset` 一样是首行可切 Select，切换即按 registry 模板重铺文档。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AsrProviderDraft {
-    Apple(AsrAppleDraft),
-    Doubao(AsrDoubaoDraft),
-    Tencent(AsrTencentDraft),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AsrDraftForm {
-    pub draft: AsrProviderDraft,
+pub struct AsrDraftDoc {
+    /// 选中的实现（registry 里的 asr 模板 stem：apple/aliyun/doubao/tencent）。
+    kind: String,
+    /// 新实例的文件名 stem（= 实例 ID），不是 schema 字段，单独一行。
+    file_id: String,
+    /// 内存中的 TOML 正文（含模板注释），编辑经 toml_edit round-trip 保留注释。
+    body: String,
     pub selected: usize,
-    defaults: BTreeMap<String, String>,
 }
 
-impl AsrDraftForm {
+impl AsrDraftDoc {
     pub fn new() -> Self {
-        let draft = crate::config::template::asr_apple_from_template("asr/apple")
-            .map(AsrProviderDraft::Apple)
-            .unwrap_or_else(|| {
-                AsrProviderDraft::Apple(AsrAppleDraft {
-                    file_id: "apple".to_string(),
-                    name: "Apple Local ASR".to_string(),
-                    language: "zh-CN".to_string(),
-                    install_assets: true,
-                    local_vad: "off".to_string(),
-                    open_timeout_ms: 5000,
-                    finalize_timeout_ms: 5000,
-                })
-            });
+        let kind = asr_kind_ids()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "apple".to_string());
+        let file_id = kind.clone();
         let mut form = Self {
-            draft,
+            kind,
+            file_id,
+            body: String::new(),
             selected: 0,
-            defaults: BTreeMap::new(),
         };
-        form.reset_defaults();
+        form.reseed(&form.kind.clone());
         form
     }
 
-    pub fn kind(&self) -> &'static str {
-        match self.draft {
-            AsrProviderDraft::Apple(_) => "apple",
-            AsrProviderDraft::Doubao(_) => "doubao",
-            AsrProviderDraft::Tencent(_) => "tencent",
-        }
-    }
-
     pub fn get(&self, key: &str) -> String {
-        match (&self.draft, key) {
-            (_, "type") => self.kind().to_string(),
-            (AsrProviderDraft::Apple(draft), "file_id") => draft.file_id.clone(),
-            (AsrProviderDraft::Apple(draft), "name") => draft.name.clone(),
-            (AsrProviderDraft::Apple(draft), "language") => draft.language.clone(),
-            (AsrProviderDraft::Apple(draft), "install_assets") => draft.install_assets.to_string(),
-            (AsrProviderDraft::Apple(draft), "local_vad") => draft.local_vad.to_string(),
-            (AsrProviderDraft::Apple(draft), "open_timeout_ms") => {
-                draft.open_timeout_ms.to_string()
-            }
-            (AsrProviderDraft::Apple(draft), "finalize_timeout_ms") => {
-                draft.finalize_timeout_ms.to_string()
-            }
-            (AsrProviderDraft::Doubao(draft), "file_id") => draft.file_id.clone(),
-            (AsrProviderDraft::Doubao(draft), "name") => draft.name.clone(),
-            (AsrProviderDraft::Doubao(draft), "app_key") => draft.app_key.clone(),
-            (AsrProviderDraft::Doubao(draft), "access_key") => draft.access_key.clone(),
-            (AsrProviderDraft::Doubao(draft), "resource_id") => draft.resource_id.clone(),
-            (AsrProviderDraft::Doubao(draft), "language") => draft.language.clone(),
-            (AsrProviderDraft::Doubao(draft), "enable_itn") => draft.enable_itn.to_string(),
-            (AsrProviderDraft::Doubao(draft), "enable_punc") => draft.enable_punc.to_string(),
-            (AsrProviderDraft::Doubao(draft), "enable_ddc") => draft.enable_ddc.to_string(),
-            (AsrProviderDraft::Doubao(draft), "stream_mode") => draft.stream_mode.to_string(),
-            (AsrProviderDraft::Doubao(draft), "ai_vad") => draft.ai_vad.to_string(),
-            (AsrProviderDraft::Doubao(draft), "local_vad") => draft.local_vad.to_string(),
-            (AsrProviderDraft::Doubao(draft), "open_timeout_ms") => {
-                draft.open_timeout_ms.to_string()
-            }
-            (AsrProviderDraft::Doubao(draft), "finalize_timeout_ms") => {
-                draft.finalize_timeout_ms.to_string()
-            }
-            (AsrProviderDraft::Tencent(draft), "file_id") => draft.file_id.clone(),
-            (AsrProviderDraft::Tencent(draft), "name") => draft.name.clone(),
-            (AsrProviderDraft::Tencent(draft), "app_id") => draft.app_id.clone(),
-            (AsrProviderDraft::Tencent(draft), "secret_id") => draft.secret_id.clone(),
-            (AsrProviderDraft::Tencent(draft), "secret_key") => draft.secret_key.clone(),
-            (AsrProviderDraft::Tencent(draft), "engine_model_type") => {
-                draft.engine_model_type.clone()
-            }
-            (AsrProviderDraft::Tencent(draft), "need_vad") => draft.need_vad.to_string(),
-            (AsrProviderDraft::Tencent(draft), "filter_dirty") => draft.filter_dirty.to_string(),
-            (AsrProviderDraft::Tencent(draft), "filter_modal") => draft.filter_modal.to_string(),
-            (AsrProviderDraft::Tencent(draft), "filter_punc") => draft.filter_punc.to_string(),
-            (AsrProviderDraft::Tencent(draft), "convert_num_mode") => {
-                draft.convert_num_mode.to_string()
-            }
-            (AsrProviderDraft::Tencent(draft), "vad_silence_time") => {
-                draft.vad_silence_time.to_string()
-            }
-            (AsrProviderDraft::Tencent(draft), "max_speak_time") => {
-                draft.max_speak_time.to_string()
-            }
-            (AsrProviderDraft::Tencent(draft), "noise_threshold") => draft.noise_threshold.clone(),
-            (AsrProviderDraft::Tencent(draft), "hotword_weight") => {
-                draft.hotword_weight.to_string()
-            }
-            (AsrProviderDraft::Tencent(draft), "hotword_id") => draft.hotword_id.clone(),
-            (AsrProviderDraft::Tencent(draft), "customization_id") => {
-                draft.customization_id.clone()
-            }
-            (AsrProviderDraft::Tencent(draft), "replace_text_id") => draft.replace_text_id.clone(),
-            (AsrProviderDraft::Tencent(draft), "sentence_strategy") => {
-                draft.sentence_strategy.to_string()
-            }
-            (AsrProviderDraft::Tencent(draft), "local_vad") => draft.local_vad.to_string(),
-            (AsrProviderDraft::Tencent(draft), "open_timeout_ms") => {
-                draft.open_timeout_ms.to_string()
-            }
-            (AsrProviderDraft::Tencent(draft), "finalize_timeout_ms") => {
-                draft.finalize_timeout_ms.to_string()
-            }
+        match key {
+            "type" => self.kind.clone(),
+            "file_id" => self.file_id.clone(),
             _ => String::new(),
         }
     }
 
-    pub fn edit(&mut self, key: &str, value: String) {
-        if key == "type" {
-            self.reseed_kind(&value);
-            return;
-        }
-        match (&mut self.draft, key) {
-            (AsrProviderDraft::Apple(draft), "file_id") => draft.file_id = value,
-            (AsrProviderDraft::Apple(draft), "name") => draft.name = value,
-            (AsrProviderDraft::Apple(draft), "language") => draft.language = value,
-            (AsrProviderDraft::Apple(draft), "install_assets") => {
-                draft.install_assets = value == "true"
-            }
-            (AsrProviderDraft::Apple(draft), "local_vad") => draft.local_vad = value,
-            (AsrProviderDraft::Apple(draft), "open_timeout_ms") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.open_timeout_ms = parsed;
-                }
-            }
-            (AsrProviderDraft::Apple(draft), "finalize_timeout_ms") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.finalize_timeout_ms = parsed;
-                }
-            }
-            (AsrProviderDraft::Doubao(draft), "file_id") => draft.file_id = value,
-            (AsrProviderDraft::Doubao(draft), "name") => draft.name = value,
-            (AsrProviderDraft::Doubao(draft), "app_key") => draft.app_key = value,
-            (AsrProviderDraft::Doubao(draft), "access_key") => draft.access_key = value,
-            (AsrProviderDraft::Doubao(draft), "resource_id") => draft.resource_id = value,
-            (AsrProviderDraft::Doubao(draft), "language") => draft.language = value,
-            (AsrProviderDraft::Doubao(draft), "enable_itn") => draft.enable_itn = value == "true",
-            (AsrProviderDraft::Doubao(draft), "enable_punc") => draft.enable_punc = value == "true",
-            (AsrProviderDraft::Doubao(draft), "enable_ddc") => draft.enable_ddc = value == "true",
-            (AsrProviderDraft::Doubao(draft), "stream_mode") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.stream_mode = parsed;
-                }
-            }
-            (AsrProviderDraft::Doubao(draft), "ai_vad") => draft.ai_vad = value == "true",
-            (AsrProviderDraft::Doubao(draft), "local_vad") => draft.local_vad = value,
-            (AsrProviderDraft::Doubao(draft), "open_timeout_ms") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.open_timeout_ms = parsed;
-                }
-            }
-            (AsrProviderDraft::Doubao(draft), "finalize_timeout_ms") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.finalize_timeout_ms = parsed;
-                }
-            }
-            (AsrProviderDraft::Tencent(draft), "file_id") => draft.file_id = value,
-            (AsrProviderDraft::Tencent(draft), "name") => draft.name = value,
-            (AsrProviderDraft::Tencent(draft), "app_id") => draft.app_id = value,
-            (AsrProviderDraft::Tencent(draft), "secret_id") => draft.secret_id = value,
-            (AsrProviderDraft::Tencent(draft), "secret_key") => draft.secret_key = value,
-            (AsrProviderDraft::Tencent(draft), "engine_model_type") => {
-                draft.engine_model_type = value
-            }
-            (AsrProviderDraft::Tencent(draft), "need_vad") => draft.need_vad = value == "true",
-            (AsrProviderDraft::Tencent(draft), "filter_dirty") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.filter_dirty = parsed;
-                }
-            }
-            (AsrProviderDraft::Tencent(draft), "filter_modal") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.filter_modal = parsed;
-                }
-            }
-            (AsrProviderDraft::Tencent(draft), "filter_punc") => {
-                draft.filter_punc = value == "true"
-            }
-            (AsrProviderDraft::Tencent(draft), "convert_num_mode") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.convert_num_mode = parsed;
-                }
-            }
-            (AsrProviderDraft::Tencent(draft), "vad_silence_time") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.vad_silence_time = parsed;
-                }
-            }
-            (AsrProviderDraft::Tencent(draft), "max_speak_time") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.max_speak_time = parsed;
-                }
-            }
-            (AsrProviderDraft::Tencent(draft), "noise_threshold") => {
-                draft.noise_threshold = value;
-            }
-            (AsrProviderDraft::Tencent(draft), "hotword_weight") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.hotword_weight = parsed;
-                }
-            }
-            (AsrProviderDraft::Tencent(draft), "hotword_id") => draft.hotword_id = value,
-            (AsrProviderDraft::Tencent(draft), "customization_id") => {
-                draft.customization_id = value
-            }
-            (AsrProviderDraft::Tencent(draft), "replace_text_id") => draft.replace_text_id = value,
-            (AsrProviderDraft::Tencent(draft), "sentence_strategy") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.sentence_strategy = parsed;
-                }
-            }
-            (AsrProviderDraft::Tencent(draft), "local_vad") => draft.local_vad = value,
-            (AsrProviderDraft::Tencent(draft), "open_timeout_ms") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.open_timeout_ms = parsed;
-                }
-            }
-            (AsrProviderDraft::Tencent(draft), "finalize_timeout_ms") => {
-                if let Ok(parsed) = value.parse() {
-                    draft.finalize_timeout_ms = parsed;
-                }
-            }
-            _ => {}
+    fn schema_id(&self) -> crate::config::schema::SchemaId {
+        use crate::config::schema::SchemaId;
+        match self.kind.as_str() {
+            "aliyun" => SchemaId::AsrAliyun,
+            "doubao" => SchemaId::AsrDoubao,
+            "tencent" => SchemaId::AsrTencent,
+            _ => SchemaId::AsrApple,
         }
     }
 
+    fn value(&self) -> toml::Value {
+        toml::from_str(&self.body).unwrap_or_else(|_| toml::Value::Table(Default::default()))
+    }
+
+    fn rel_path(&self) -> String {
+        let stem = if self.file_id.is_empty() {
+            "draft"
+        } else {
+            &self.file_id
+        };
+        format!("asr/{stem}.toml")
+    }
+
+    /// 按所选实现的 registry 平铺模板重铺内存文档（切换 type 时调用）。
+    fn reseed(&mut self, kind: &str) {
+        let template_id = format!("asr/{kind}");
+        if let Some(template) =
+            crate::config::template::asr_templates().find(|template| template.id == template_id)
+        {
+            self.kind = kind.to_string();
+            self.body = crate::config::template::render_with_lang(template, seed_lang());
+        }
+    }
+
+    /// 写入一个 draft 字段：type→重铺、file_id→改名、其余→按 schema coerce 后写内存
+    /// 文档并做 Error 级校验（与 File 写盘同一套 `field_write::apply_field`）。
+    pub fn apply_edit(&mut self, key: &str, buffer: &str) -> Result<(), String> {
+        match key {
+            "type" => {
+                // 未自定义 file_id 时跟随默认名，与所选 provider 一致。
+                if self.file_id == self.kind {
+                    self.file_id = buffer.to_string();
+                }
+                self.reseed(buffer);
+                Ok(())
+            }
+            "file_id" => {
+                self.file_id = buffer.trim().to_string();
+                Ok(())
+            }
+            _ => self.apply_schema_field(key, buffer),
+        }
+    }
+
+    fn apply_schema_field(&mut self, key: &str, buffer: &str) -> Result<(), String> {
+        let spec = crate::config::schema::spec_for(self.schema_id());
+        let field = spec
+            .field_for_path(key)
+            .ok_or_else(|| format!("unknown field {key:?}"))?;
+        // 与 File 编辑器一致：aliyun language_hints 单选映射为数组（auto=空数组）。
+        let input = if key == "language_hints" {
+            if buffer == "auto" {
+                TypedInput::StrArray(Vec::new())
+            } else {
+                TypedInput::StrArray(vec![buffer.to_string()])
+            }
+        } else {
+            coerce_input(field.kind(), buffer)?
+        };
+        let mut doc: toml_edit::DocumentMut =
+            self.body.parse().map_err(|e| format!("draft parse: {e}"))?;
+        field_write::apply_field(&mut doc, key, input, &spec)
+            .map_err(|e| write_error_message(&e))?;
+        self.body = doc.to_string();
+        Ok(())
+    }
+
+    /// 渲染用行表：type（可切 Select）+ file_id（Text）+ 该实现的全部 schema 字段
+    /// （控件由 `field_view` 派生，与编辑已落盘文件完全一致）。
     pub fn rows(&self) -> Vec<SettingsRow> {
-        self.keys()
-            .iter()
-            .map(|key| {
-                let value = self.get(key);
-                let changed = self.defaults.get(*key) != Some(&value);
-                let secret = matches!(
-                    *key,
-                    "app_key" | "access_key" | "api_key" | "secret_id" | "secret_key"
-                );
-                let display = if secret && !value.is_empty() {
-                    crate::config::spec::SECRET_MASK.to_string()
-                } else {
-                    value
-                };
-                SettingsRow {
-                    group: String::new(),
-                    field_path: (*key).to_string(),
-                    display_key: Self::label_for(key),
-                    value: display,
-                    default_value: self.defaults.get(*key).cloned().unwrap_or_default(),
-                    origin: if changed {
-                        FieldOrigin::Set
-                    } else {
-                        FieldOrigin::Default
-                    },
-                    control: self.control_for(key),
-                    editable: true,
-                    secret,
-                    can_unset: true,
-                    source: DRAFT_SOURCE.to_string(),
-                    description_key: Some(Self::desc_key_for(key)),
-                }
-            })
-            .collect()
+        let mut rows = vec![
+            SettingsRow {
+                group: String::new(),
+                field_path: "type".to_string(),
+                display_key: "type".to_string(),
+                value: self.kind.clone(),
+                default_value: self.kind.clone(),
+                origin: FieldOrigin::Default,
+                control: ControlKind::Select(asr_kind_ids()),
+                editable: true,
+                secret: false,
+                can_unset: false,
+                source: DRAFT_SOURCE.to_string(),
+                description_key: None,
+            },
+            SettingsRow {
+                group: String::new(),
+                field_path: "file_id".to_string(),
+                display_key: "file_id".to_string(),
+                value: self.file_id.clone(),
+                default_value: String::new(),
+                origin: FieldOrigin::Default,
+                control: ControlKind::Text,
+                editable: true,
+                secret: false,
+                can_unset: false,
+                source: DRAFT_SOURCE.to_string(),
+                description_key: None,
+            },
+        ];
+        let value = self.value();
+        let root = crate::config::paths::root_dir();
+        let spec = crate::config::schema::spec_for(self.schema_id());
+        for view in crate::config::field_view::field_views(&self.rel_path(), &spec, &value, &root) {
+            if view.field_path == "type" {
+                continue; // 上面已用可切换的 type 行表达
+            }
+            rows.push(SettingsRow {
+                group: String::new(),
+                display_key: view.field_path.clone(),
+                field_path: view.field_path,
+                value: view.effective,
+                default_value: view.default_value,
+                origin: view.origin,
+                control: view.control,
+                editable: view.editable,
+                secret: view.secret,
+                can_unset: view.can_unset,
+                source: DRAFT_SOURCE.to_string(),
+                description_key: view.description_key,
+            });
+        }
+        rows
     }
 
+    /// 一次落盘：校验文件名、整份文档做与 File 写盘同一套放行校验（结构性 Error 阻止，
+    /// 未填 secret 允许——半成品可存，运行/doctor 再拦），拒重名后写盘。
     pub fn commit(&self, asr_dir: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
-        match &self.draft {
-            AsrProviderDraft::Apple(draft) => {
-                crate::config::template::create_asr_apple(asr_dir, draft)
-            }
-            AsrProviderDraft::Doubao(draft) => {
-                crate::config::template::create_asr_doubao(asr_dir, draft)
-            }
-            AsrProviderDraft::Tencent(draft) => {
-                crate::config::template::create_asr_tencent(asr_dir, draft)
-            }
-        }
-    }
-
-    fn reseed_kind(&mut self, kind: &str) {
-        let draft = match kind {
-            "doubao" => crate::config::template::asr_doubao_from_template("asr/doubao")
-                .map(AsrProviderDraft::Doubao),
-            "tencent" => crate::config::template::asr_tencent_from_template("asr/tencent")
-                .map(AsrProviderDraft::Tencent),
-            _ => crate::config::template::asr_apple_from_template("asr/apple")
-                .map(AsrProviderDraft::Apple),
-        };
-        if let Some(draft) = draft {
-            self.draft = draft;
-            self.selected = self.selected.min(self.keys().len().saturating_sub(1));
-            self.reset_defaults();
-        }
-    }
-
-    fn reset_defaults(&mut self) {
-        self.defaults.clear();
-        for key in self.keys() {
-            self.defaults.insert(key.to_string(), self.get(key));
-        }
-    }
-
-    fn keys(&self) -> &'static [&'static str] {
-        match self.draft {
-            AsrProviderDraft::Apple(_) => &ASR_APPLE_DRAFT_KEYS,
-            AsrProviderDraft::Doubao(_) => &ASR_DOUBAO_DRAFT_KEYS,
-            AsrProviderDraft::Tencent(_) => &ASR_TENCENT_DRAFT_KEYS,
-        }
-    }
-
-    fn control_for(&self, key: &str) -> ControlKind {
-        use crate::config::asr::options::{
-            values, APPLE_LANGUAGE_VALUES, DOUBAO_LANGUAGE_VALUES, LOCAL_VAD_VALUES,
-            TENCENT_ENGINE_MODEL_TYPE_VALUES,
-        };
-
-        match key {
-            "type" => ControlKind::Select(asr_kind_ids()),
-            "install_assets" | "enable_itn" | "enable_punc" | "enable_ddc" | "ai_vad"
-            | "need_vad" | "filter_punc" => ControlKind::Toggle,
-            "local_vad" => ControlKind::Select(values(LOCAL_VAD_VALUES)),
-            "language" => ControlKind::Select(values(match self.draft {
-                AsrProviderDraft::Apple(_) => APPLE_LANGUAGE_VALUES,
-                AsrProviderDraft::Doubao(_) => DOUBAO_LANGUAGE_VALUES,
-                AsrProviderDraft::Tencent(_) => &[],
-            })),
-            "engine_model_type" => ControlKind::Select(values(TENCENT_ENGINE_MODEL_TYPE_VALUES)),
-            "filter_dirty" | "filter_modal" => ControlKind::Number {
-                min: Some(0.0),
-                max: Some(2.0),
-                float: false,
-            },
-            "sentence_strategy" => ControlKind::Number {
-                min: Some(0.0),
-                max: Some(1.0),
-                float: false,
-            },
-            "stream_mode" => ControlKind::Number {
-                min: Some(0.0),
-                max: Some(2.0),
-                float: false,
-            },
-            "convert_num_mode" => ControlKind::Number {
-                min: Some(0.0),
-                max: Some(3.0),
-                float: false,
-            },
-            "vad_silence_time" => ControlKind::Number {
-                min: Some(500.0),
-                max: Some(2000.0),
-                float: false,
-            },
-            "max_speak_time" => ControlKind::Number {
-                min: Some(5000.0),
-                max: Some(90_000.0),
-                float: false,
-            },
-            "noise_threshold" => ControlKind::Number {
-                min: Some(-2.0),
-                max: Some(2.0),
-                float: true,
-            },
-            "hotword_weight" => ControlKind::Number {
-                min: Some(1.0),
-                max: Some(100.0),
-                float: false,
-            },
-            "open_timeout_ms" => ControlKind::Number {
-                min: Some(1000.0),
-                max: Some(120_000.0),
-                float: false,
-            },
-            "finalize_timeout_ms" => ControlKind::Number {
-                min: Some(1000.0),
-                max: Some(60_000.0),
-                float: false,
-            },
-            _ => ControlKind::Text,
-        }
-    }
-
-    fn label_for(key: &str) -> String {
-        crate::i18n::tr(&format!("tui.configure.asr_create.field_{key}"), &[])
-    }
-
-    fn desc_key_for(key: &str) -> &'static str {
-        match key {
-            "type" => "tui.configure.asr_create.desc_type",
-            "file_id" => "tui.configure.asr_create.desc_file_id",
-            "name" => "tui.configure.asr_create.desc_name",
-            "app_key" => "tui.configure.asr_create.desc_app_key",
-            "access_key" => "tui.configure.asr_create.desc_access_key",
-            "api_key" => "tui.configure.asr_create.desc_api_key",
-            "app_id" => "tui.configure.asr_create.desc_app_id",
-            "secret_id" => "tui.configure.asr_create.desc_secret_id",
-            "secret_key" => "tui.configure.asr_create.desc_secret_key",
-            "engine_model_type" => "tui.configure.asr_create.desc_engine_model_type",
-            "need_vad" => "tui.configure.asr_create.desc_need_vad",
-            "filter_dirty" => "tui.configure.asr_create.desc_filter_dirty",
-            "filter_modal" => "tui.configure.asr_create.desc_filter_modal",
-            "filter_punc" => "tui.configure.asr_create.desc_filter_punc",
-            "convert_num_mode" => "tui.configure.asr_create.desc_convert_num_mode",
-            "vad_silence_time" => "tui.configure.asr_create.desc_vad_silence_time",
-            "max_speak_time" => "tui.configure.asr_create.desc_max_speak_time",
-            "noise_threshold" => "tui.configure.asr_create.desc_noise_threshold",
-            "hotword_weight" => "tui.configure.asr_create.desc_hotword_weight",
-            "hotword_id" => "tui.configure.asr_create.desc_hotword_id",
-            "customization_id" => "tui.configure.asr_create.desc_customization_id",
-            "replace_text_id" => "tui.configure.asr_create.desc_replace_text_id",
-            "sentence_strategy" => "tui.configure.asr_create.desc_sentence_strategy",
-            "resource_id" => "tui.configure.asr_create.desc_resource_id",
-            "language" => "tui.configure.asr_create.desc_language",
-            "install_assets" => "tui.configure.asr_create.desc_install_assets",
-            "enable_itn" => "tui.configure.asr_create.desc_enable_itn",
-            "enable_punc" => "tui.configure.asr_create.desc_enable_punc",
-            "enable_ddc" => "tui.configure.asr_create.desc_enable_ddc",
-            "stream_mode" => "tui.configure.asr_create.desc_stream_mode",
-            "ai_vad" => "tui.configure.asr_create.desc_ai_vad",
-            "local_vad" => "tui.configure.asr_create.desc_local_vad",
-            "open_timeout_ms" => "tui.configure.asr_create.desc_open_timeout_ms",
-            "finalize_timeout_ms" => "tui.configure.asr_create.desc_finalize_timeout_ms",
-            _ => "tui.configure.asr_create.desc_name",
-        }
+        crate::config::inventory::validate_config_file_id(&self.file_id)
+            .map_err(|e| anyhow::anyhow!("invalid file name: {e}"))?;
+        let value: toml::Value =
+            toml::from_str(&self.body).map_err(|e| anyhow::anyhow!("draft parse: {e}"))?;
+        let errors: Vec<String> = field_write::blocking_errors(
+            &crate::config::schema::spec_for(self.schema_id()),
+            &value,
+        )
+        .into_iter()
+        .map(|d| format!("{}: {}", d.path, d.message))
+        .collect();
+        anyhow::ensure!(errors.is_empty(), "{}", errors.join("; "));
+        std::fs::create_dir_all(asr_dir)
+            .map_err(|e| anyhow::anyhow!("create {}: {e}", asr_dir.display()))?;
+        let path = asr_dir.join(format!("{}.toml", self.file_id));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    anyhow::anyhow!(
+                        "ASR instance {:?} already exists; pick a different file name",
+                        self.file_id
+                    )
+                } else {
+                    anyhow::anyhow!("create {}: {e}", path.display())
+                }
+            })?;
+        std::io::Write::write_all(&mut file, self.body.as_bytes())
+            .map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))?;
+        Ok(path)
     }
 }
 
-impl Default for AsrDraftForm {
+impl Default for AsrDraftDoc {
     fn default() -> Self {
         Self::new()
     }
@@ -1030,7 +758,7 @@ impl Default for ProfileDraftForm {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Draft {
     Llm(Box<LlmDraftForm>),
-    Asr(Box<AsrDraftForm>),
+    Asr(Box<AsrDraftDoc>),
     Profile(Box<ProfileDraftForm>),
 }
 
@@ -1111,6 +839,8 @@ pub struct ConfigurePage {
     /// Max scroll the detail pane allows (content lines beyond the viewport),
     /// recomputed each render so scroll handlers can clamp without over-scrolling.
     pub detail_max_scroll: std::cell::Cell<u16>,
+    /// 删除配置文件（profile/asr/post）的策略：生产=移到系统废纸篓；测试=直接删。
+    deleter: crate::trash::FileDeleter,
 }
 
 impl ConfigurePage {
@@ -1140,7 +870,15 @@ impl ConfigurePage {
             member_picker: None,
             detail_scroll: 0,
             detail_max_scroll: std::cell::Cell::new(0),
+            deleter: crate::trash::system_trash(),
         }
+    }
+
+    /// 注入删除策略（测试用：直接删，避免触碰真实 `~/.Trash`）。
+    #[cfg(test)]
+    fn with_deleter(mut self, deleter: crate::trash::FileDeleter) -> Self {
+        self.deleter = deleter;
+        self
     }
 
     pub fn refresh(&mut self) {
@@ -1194,7 +932,7 @@ impl ConfigurePage {
     }
 
     #[cfg(test)]
-    pub fn asr_draft_mut(&mut self) -> Option<&mut AsrDraftForm> {
+    pub fn asr_draft_mut(&mut self) -> Option<&mut AsrDraftDoc> {
         match self.draft.as_mut() {
             Some(Draft::Asr(form)) => Some(form.as_mut()),
             _ => None,
@@ -1843,7 +1581,10 @@ impl ConfigurePage {
 
     pub fn insert_text(&mut self, text: &str) {
         if let Some(edit) = &mut self.editing {
-            if matches!(edit.control, ControlKind::Text | ControlKind::Number { .. }) {
+            if matches!(
+                edit.control,
+                ControlKind::Text | ControlKind::EditableSelect(_) | ControlKind::Number { .. }
+            ) {
                 edit.buffer.insert_str(edit.cursor, text);
                 edit.cursor += text.len();
             }
@@ -1933,7 +1674,7 @@ impl ConfigurePage {
                     "true".into()
                 };
             }
-            ControlKind::Select(opts) if !opts.is_empty() => {
+            ControlKind::Select(opts) | ControlKind::EditableSelect(opts) if !opts.is_empty() => {
                 match opts.iter().position(|o| o == &edit.buffer) {
                     Some(cur) => {
                         let next = (cur as isize + delta).rem_euclid(opts.len() as isize) as usize;
@@ -2168,14 +1909,27 @@ impl ConfigurePage {
                 .commit_composer_edit(&edit, typed_input_for_control(&edit.control, &edit.buffer));
         }
         if let Some(key) = edit.target.draft_key() {
+            // ASR draft 编辑内存文档，校验错误（越界等）走同一套内联错误弹窗。
+            if let Some(Draft::Asr(form)) = self.draft.as_mut() {
+                return match form.apply_edit(key, &edit.buffer) {
+                    Ok(()) => {
+                        self.editing = None;
+                        self.edit_error = None;
+                        EditOutcome::default()
+                    }
+                    Err(message) => {
+                        self.set_edit_error(&edit, message);
+                        EditOutcome::default()
+                    }
+                };
+            }
             match self.draft.as_mut() {
                 Some(Draft::Llm(form)) => {
                     form.edit(key, edit.buffer.clone());
                     form.on_changed(key);
                 }
-                Some(Draft::Asr(form)) => form.edit(key, edit.buffer.clone()),
                 Some(Draft::Profile(form)) => form.edit(key, edit.buffer.clone()),
-                None => {}
+                _ => {}
             }
             self.editing = None;
             self.edit_error = None;
@@ -2198,7 +1952,16 @@ impl ConfigurePage {
         let Some(field) = spec.field_for_path(&edit.field_path) else {
             return EditOutcome::default();
         };
-        let input = match coerce_input(field.kind(), &edit.buffer) {
+        let input = if rel.starts_with("asr/") && edit.field_path == "language_hints" {
+            if edit.buffer == "auto" {
+                Ok(TypedInput::StrArray(Vec::new()))
+            } else {
+                Ok(TypedInput::StrArray(vec![edit.buffer.clone()]))
+            }
+        } else {
+            coerce_input(field.kind(), &edit.buffer)
+        };
+        let input = match input {
             Ok(input) => input,
             Err(message) => {
                 self.set_edit_error(&edit, message);
@@ -2288,6 +2051,15 @@ impl ConfigurePage {
             .is_some_and(|e| matches!(e.control, ControlKind::Toggle | ControlKind::Select(_)))
     }
 
+    fn editing_has_presets(&self) -> bool {
+        self.editing.as_ref().is_some_and(|edit| {
+            matches!(
+                edit.control,
+                ControlKind::Select(_) | ControlKind::EditableSelect(_)
+            )
+        })
+    }
+
     pub fn feed_edit_key(&mut self, key: crossterm::event::KeyEvent) -> EditOutcome {
         use crossterm::event::{KeyCode, KeyEventKind};
         if key.kind != KeyEventKind::Press {
@@ -2339,11 +2111,11 @@ impl ConfigurePage {
                 EditOutcome::default()
             }
             // Up/Down cycle a choice too, so both arrow axes work like hjkl.
-            KeyCode::Up if self.editing_is_choice() => {
+            KeyCode::Up if self.editing_has_presets() => {
                 self.toggle_or_cycle(-1);
                 EditOutcome::default()
             }
-            KeyCode::Down if self.editing_is_choice() => {
+            KeyCode::Down if self.editing_has_presets() => {
                 self.toggle_or_cycle(1);
                 EditOutcome::default()
             }
@@ -2411,14 +2183,33 @@ impl ConfigurePage {
             return outcome;
         }
         if let Some(key) = m.target.draft_key() {
+            // ASR draft 的 secret/文本经内存文档写入；空白 secret（value_to_save=None）保持不变。
+            if let Some(Draft::Asr(form)) = self.draft.as_mut() {
+                if let Some(value) = m.value_to_save().map(str::to_string) {
+                    if let Err(message) = form.apply_edit(key, &value) {
+                        self.edit_error = Some(EditError {
+                            field_path: m.field_path.clone(),
+                            value: match m.kind {
+                                ModalKind::Secret => crate::config::spec::SECRET_MASK.to_string(),
+                                _ => m.buffer.clone(),
+                            },
+                            message,
+                        });
+                        self.modal = None;
+                        return EditOutcome::default();
+                    }
+                }
+                self.modal = None;
+                self.edit_error = None;
+                return EditOutcome::default();
+            }
             match self.draft.as_mut() {
                 Some(Draft::Llm(form)) => {
                     form.edit(key, m.buffer.clone());
                     form.on_changed(key);
                 }
-                Some(Draft::Asr(form)) => form.edit(key, m.buffer.clone()),
                 Some(Draft::Profile(form)) => form.edit(key, m.buffer.clone()),
-                None => {}
+                _ => {}
             }
             self.modal = None;
             self.edit_error = None;
@@ -2507,6 +2298,7 @@ impl ConfigurePage {
         match crate::config::profile::delete_profile_file(
             &crate::config::paths::root_dir(),
             profile_id,
+            &self.deleter,
         ) {
             Ok(path) => {
                 self.edit_error = None;
@@ -2591,6 +2383,7 @@ impl ConfigurePage {
         match crate::config::profile::delete_asr_instance_file(
             &crate::config::paths::root_dir(),
             &stem,
+            &self.deleter,
         ) {
             Ok(path) => {
                 self.edit_error = None;
@@ -2640,6 +2433,7 @@ impl ConfigurePage {
         match crate::config::profile::delete_post_component_file(
             &crate::config::paths::root_dir(),
             &stem,
+            &self.deleter,
         ) {
             Ok(_) => {
                 self.edit_error = None;
@@ -3307,7 +3101,8 @@ mod draft_tests {
 
     #[test]
     fn profile_rows_are_in_spec_order_and_asr_is_select() {
-        let dir = std::env::temp_dir().join(format!("shuohua-profile-draft-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-profile-draft-{}", ulid::Ulid::generate()));
         let root = dir.join("shuohua");
         std::fs::create_dir_all(root.join("asr")).unwrap();
         std::fs::write(root.join("asr/apple.toml"), "type = \"apple\"\n").unwrap();
@@ -3332,7 +3127,8 @@ mod draft_tests {
     #[test]
     fn profile_start_is_blocked_without_asr_instances() {
         crate::i18n::init("en-US");
-        let dir = std::env::temp_dir().join(format!("shuohua-profile-draft-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-profile-draft-{}", ulid::Ulid::generate()));
         let root = dir.join("shuohua");
         std::fs::create_dir_all(&root).unwrap();
 
@@ -3522,17 +3318,28 @@ mod draft_tests {
     }
 
     #[test]
-    fn switching_asr_type_reseeds_file_id_and_name() {
-        let mut form = AsrDraftForm::new();
-        assert_eq!(form.get("file_id"), "apple");
-        assert_eq!(form.get("name"), "Apple Local ASR");
+    fn switching_asr_type_reseeds_doc_and_follows_default_file_id() {
+        crate::i18n::init("en-US");
+        let mut form = AsrDraftDoc::new();
+        let first_kind = asr_kind_ids()[0].clone();
+        assert_eq!(form.get("type"), first_kind);
+        assert_eq!(form.get("file_id"), first_kind);
 
-        form.edit("type", "tencent".to_string());
+        // 切换 type 重铺内存文档，并（未自定义 file_id 时）让默认文件名跟随实现。
+        form.apply_edit("type", "doubao").unwrap();
+        assert_eq!(form.get("type"), "doubao");
+        assert_eq!(form.get("file_id"), "doubao");
+        assert!(form.rows().iter().any(|r| r.field_path == "resource_id"));
 
+        // 一旦自定义 file_id，再切 type 不覆盖用户输入。
+        form.apply_edit("file_id", "work").unwrap();
+        form.apply_edit("type", "tencent").unwrap();
         assert_eq!(form.get("type"), "tencent");
-        assert_eq!(form.get("file_id"), "tencent");
-        assert_eq!(form.get("name"), "Tencent ASR");
-        assert_eq!(form.get("engine_model_type"), "16k_zh");
+        assert_eq!(form.get("file_id"), "work");
+        assert!(form
+            .rows()
+            .iter()
+            .any(|r| r.field_path == "engine_model_type"));
     }
 
     #[test]
@@ -3681,7 +3488,7 @@ mod draft_tests {
 
     #[test]
     fn commit_writes_valid_component_file() {
-        let dir = std::env::temp_dir().join(format!("shuohua-draft-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("shuohua-draft-{}", ulid::Ulid::generate()));
         let post = dir.join("post");
         let mut form = LlmDraftForm::new();
         form.edit("file_id", "my_openai".to_string());
@@ -3699,7 +3506,7 @@ mod draft_tests {
 
     #[test]
     fn commit_rejects_empty_model() {
-        let dir = std::env::temp_dir().join(format!("shuohua-draft-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("shuohua-draft-{}", ulid::Ulid::generate()));
         let post = dir.join("post");
         let mut form = LlmDraftForm::new();
         form.edit("model", String::new());
@@ -3709,209 +3516,81 @@ mod draft_tests {
     }
 
     #[test]
-    fn asr_rows_start_with_type_select_and_reseed_doubao_fields() {
-        let mut form = AsrDraftForm::new();
-
-        let type_row = &form.rows()[0];
-        assert_eq!(type_row.field_path, "type");
-        assert_eq!(type_row.value, "apple");
-        match &type_row.control {
+    fn asr_draft_rows_are_type_file_id_then_schema_fields() {
+        crate::i18n::init("en-US");
+        let mut form = AsrDraftDoc::new();
+        form.apply_edit("type", "doubao").unwrap();
+        let rows = form.rows();
+        assert_eq!(rows[0].field_path, "type");
+        assert_eq!(rows[1].field_path, "file_id");
+        match &rows[0].control {
             ControlKind::Select(opts) => {
-                assert!(opts.contains(&"apple".to_string()), "{opts:?}");
-                assert!(opts.contains(&"doubao".to_string()), "{opts:?}");
+                for kind in ["apple", "doubao", "aliyun", "tencent"] {
+                    assert!(opts.contains(&kind.to_string()), "{opts:?} missing {kind}");
+                }
             }
             other => panic!("type control should be Select, got {other:?}"),
         }
-
-        form.edit("type", "doubao".to_string());
-        let rows = form.rows();
-        let keys: Vec<String> = rows.iter().map(|row| row.field_path.clone()).collect();
-        assert_eq!(
-            keys,
-            vec![
-                "type",
-                "file_id",
-                "name",
-                "app_key",
-                "access_key",
-                "resource_id",
-                "language",
-                "enable_itn",
-                "enable_punc",
-                "enable_ddc",
-                "stream_mode",
-                "ai_vad",
-                "local_vad",
-                "open_timeout_ms",
-                "finalize_timeout_ms"
-            ]
-        );
-        assert_eq!(form.get("resource_id"), "volc.bigasr.sauc.duration");
-        assert_eq!(form.get("stream_mode"), "2");
-        assert!(rows
-            .iter()
-            .filter(|row| row.field_path != "type")
-            .all(|row| row.origin == FieldOrigin::Default));
+        assert_eq!(rows[1].control, ControlKind::Text);
+        // schema 字段跟在后面，控件由 field_view 派生（与编辑已落盘文件一致）。
+        let resource = rows.iter().find(|r| r.field_path == "resource_id").unwrap();
+        assert!(matches!(resource.control, ControlKind::EditableSelect(_)));
+        let app_key = rows.iter().find(|r| r.field_path == "app_key").unwrap();
+        assert!(app_key.secret);
     }
 
     #[test]
-    fn asr_apple_rows_use_template_defaults() {
-        let form = AsrDraftForm::new();
-        let keys: Vec<String> = form
-            .rows()
-            .iter()
-            .map(|row| row.field_path.clone())
-            .collect();
-        assert_eq!(
-            keys,
-            vec![
-                "type",
-                "file_id",
-                "name",
-                "language",
-                "install_assets",
-                "local_vad",
-                "open_timeout_ms",
-                "finalize_timeout_ms"
-            ]
-        );
-        assert_eq!(form.get("type"), "apple");
-        assert_eq!(form.get("language"), "zh-CN");
-        assert_eq!(form.get("install_assets"), "true");
-        assert!(form
-            .rows()
-            .iter()
-            .all(|row| row.origin == FieldOrigin::Default));
-    }
-
-    #[test]
-    fn asr_draft_choice_fields_use_shared_select_options() {
-        let mut form = AsrDraftForm::new();
-        let apple_language = form
-            .rows()
-            .into_iter()
-            .find(|row| row.field_path == "language")
-            .unwrap();
-        match apple_language.control {
-            ControlKind::Select(opts) => assert!(opts.contains(&"zh-CN".to_string())),
-            other => panic!("expected Apple language select, got {other:?}"),
-        }
-
-        form.edit("type", "doubao".to_string());
-        let doubao_language = form
-            .rows()
-            .into_iter()
-            .find(|row| row.field_path == "language")
-            .unwrap();
-        match doubao_language.control {
-            ControlKind::Select(opts) => assert!(opts.contains(&"auto".to_string())),
-            other => panic!("expected Doubao language select, got {other:?}"),
-        }
-
-        form.edit("type", "tencent".to_string());
-        let tencent_engine = form
-            .rows()
-            .into_iter()
-            .find(|row| row.field_path == "engine_model_type")
-            .unwrap();
-        match tencent_engine.control {
-            ControlKind::Select(opts) => assert!(opts.contains(&"16k_multi_lang".to_string())),
-            other => panic!("expected Tencent engine select, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn asr_secret_rows_are_masked_and_marked_secret() {
-        let mut form = AsrDraftForm::new();
-        form.edit("type", "doubao".to_string());
-        form.edit("app_key", "app-test".to_string());
-
-        let row = form
-            .rows()
-            .into_iter()
-            .find(|row| row.field_path == "app_key")
-            .unwrap();
-        assert!(row.secret);
-        assert_eq!(row.value, crate::config::spec::SECRET_MASK);
-        assert_eq!(row.origin, FieldOrigin::Set);
-    }
-
-    #[test]
-    fn asr_commit_writes_named_instance_file() {
-        let dir = std::env::temp_dir().join(format!("shuohua-asr-draft-{}", ulid::Ulid::new()));
+    fn asr_draft_fill_then_commit_writes_complete_file() {
+        crate::i18n::init("en-US");
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-asr-draft-{}", ulid::Ulid::generate()));
         let asr = dir.join("asr");
-        let mut form = AsrDraftForm::new();
-        form.edit("type", "doubao".to_string());
-        form.edit("file_id", "my_doubao".to_string());
-        form.edit("app_key", "app-test".to_string());
-        form.edit("access_key", "access-test".to_string());
+        let mut form = AsrDraftDoc::new();
+        form.apply_edit("type", "doubao").unwrap();
+        form.apply_edit("file_id", "my_doubao").unwrap();
+        // 新建==编辑：secret 等字段在 draft 里填完，^S 一次落盘完整文件。
+        form.apply_edit("app_key", "app-test").unwrap();
+        form.apply_edit("access_key", "access-test").unwrap();
 
         let path = form.commit(&asr).unwrap();
 
         assert_eq!(path, asr.join("my_doubao.toml"));
-        toml::from_str::<crate::config::asr::doubao::DoubaoConfig>(
-            &std::fs::read_to_string(&path).unwrap(),
-        )
-        .unwrap();
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn asr_draft_rows_start_with_type_and_file_id() {
-        let form = AsrDraftForm::new();
-        let rows = form.rows();
-        assert_eq!(rows[0].field_path, "type");
-        assert_eq!(rows[1].field_path, "file_id");
-        assert_eq!(rows[2].field_path, "name");
-    }
-
-    #[test]
-    fn tencent_asr_draft_orders_related_fields_together() {
-        let mut form = AsrDraftForm::new();
-        form.edit("type", "tencent".to_string());
-        let fields: Vec<_> = form.rows().into_iter().map(|row| row.field_path).collect();
-
-        assert_eq!(
-            &fields[6..14],
-            &[
-                "engine_model_type",
-                "convert_num_mode",
-                "filter_modal",
-                "filter_punc",
-                "filter_dirty",
-                "need_vad",
-                "vad_silence_time",
-                "max_speak_time",
-            ]
-        );
-        assert_eq!(fields[14], "sentence_strategy");
-    }
-
-    #[test]
-    fn asr_draft_commit_writes_typed_instance_file() {
-        let dir = std::env::temp_dir().join(format!("shuohua-asr-draft-{}", ulid::Ulid::new()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut form = AsrDraftForm::new();
-        form.edit("type", "doubao".to_string());
-        form.edit("file_id", "my_doubao".to_string());
-        form.edit("name", "Mine".to_string());
-        form.edit("app_key", "a".to_string());
-        form.edit("access_key", "b".to_string());
-        let path = form.commit(&dir).unwrap();
-        assert!(path.ends_with("my_doubao.toml"));
         let body = std::fs::read_to_string(&path).unwrap();
         assert!(body.contains("type = \"doubao\""), "{body}");
-        assert!(body.contains("name = \"Mine\""), "{body}");
+        assert!(body.contains("app_key = \"app-test\""), "{body}");
+        assert!(body.contains("access_key = \"access-test\""), "{body}");
+        assert!(
+            body.contains("resource_id = \"volc.seedasr.sauc.duration\""),
+            "{body}"
+        );
+        toml::from_str::<crate::config::asr::doubao::DoubaoConfig>(&body).unwrap();
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn asr_draft_switch_type_reseeds_file_id_and_name() {
-        let mut form = AsrDraftForm::new();
-        form.edit("file_id", "keep_me".to_string());
-        form.edit("name", "Keep".to_string());
-        form.edit("type", "doubao".to_string());
-        assert_eq!(form.get("file_id"), "doubao");
-        assert_eq!(form.get("name"), "Doubao ASR");
+    fn asr_draft_field_edit_validates_like_file_write() {
+        crate::i18n::init("en-US");
+        let mut form = AsrDraftDoc::new();
+        form.apply_edit("type", "doubao").unwrap();
+        // stream_mode 范围 0..=2：越界应被 apply_field 的 Error 级校验拒绝，不写内存。
+        let err = form.apply_edit("stream_mode", "9").unwrap_err();
+        assert!(err.contains("stream_mode"), "{err}");
+        assert!(form
+            .rows()
+            .iter()
+            .any(|r| r.field_path == "stream_mode" && r.value == "2"));
+    }
+
+    #[test]
+    fn asr_draft_commit_refuses_duplicate_file() {
+        crate::i18n::init("en-US");
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-asr-draft-{}", ulid::Ulid::generate()));
+        let asr = dir.join("asr");
+        let form = AsrDraftDoc::new();
+        form.commit(&asr).unwrap();
+        let err = form.commit(&asr).unwrap_err().to_string();
+        assert!(err.contains("already exists"), "{err}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

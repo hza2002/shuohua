@@ -13,7 +13,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use audioadapter_buffers::direct::InterleavedSlice;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SizedSample, SupportedStreamConfig};
-use rubato::{Fft, FixedSync, Indexing, Resampler};
+use rubato::{Fft, FixedSync, Indexing, Resampler, WindowFunction};
 use std::path::{Path, PathBuf};
 use tokio::sync::{mpsc, oneshot};
 
@@ -727,12 +727,13 @@ struct ResamplerF32 {
 
 impl ResamplerF32 {
     fn new(src_rate: u32, dst_rate: u32) -> Self {
-        let inner = Fft::<f32>::new(
+        let inner = Fft::<f32>::new_custom(
             src_rate as usize,
             dst_rate as usize,
             1024,
             2,
             1,
+            WindowFunction::BlackmanHarris2,
             FixedSync::Input,
         )
         .expect("valid recorder sample rates");
@@ -976,7 +977,7 @@ mod tests {
 
     #[test]
     fn discard_finish_mode_removes_retained_audio_without_conversion() {
-        let dir = std::env::temp_dir().join(format!("shuohua-recorder-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("shuohua-recorder-{}", ulid::Ulid::generate()));
         let output =
             crate::voice::audio::prepare_in_dir(&dir, "discard", RecordAudioMode::Lossless)
                 .unwrap()

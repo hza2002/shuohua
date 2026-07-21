@@ -1172,7 +1172,7 @@ mod tests {
 
         assert_eq!(
             command,
-            br#"{"cmd":"start"}"#.iter().copied().chain([b'\n']).collect::<Vec<_>>()
+            br#"{"cmd":"start"}"#.iter().copied().chain(*b"\n").collect::<Vec<_>>()
         );
     }
 

@@ -939,7 +939,7 @@ mod tests {
 
     #[test]
     fn plist_program_argument_reads_first_program_argument() {
-        let dir = std::env::temp_dir().join(format!("shuohua-plist-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("shuohua-plist-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(&dir).unwrap();
         let plist = dir.join("com.hza2002.shuohua.plist");
         std::fs::write(

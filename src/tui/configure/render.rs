@@ -1269,7 +1269,9 @@ fn edit_value_cell(edit: &crate::tui::configure::EditState) -> String {
     match &edit.control {
         ControlKind::Toggle => format!("[{}]", edit.buffer),
         ControlKind::Select(_) => format!("◀ {} ▶", edit.buffer),
-        ControlKind::Number { .. } | ControlKind::Text => compact_value(&edit.buffer),
+        ControlKind::EditableSelect(_) | ControlKind::Number { .. } | ControlKind::Text => {
+            compact_value(&edit.buffer)
+        }
         ControlKind::MultilineText | ControlKind::Array | ControlKind::KeyCapture => {
             edit.buffer.clone()
         }
@@ -1289,6 +1291,7 @@ fn set_inline_edit_cursor(
     if !matches!(
         edit.control,
         crate::config::field_view::ControlKind::Text
+            | crate::config::field_view::ControlKind::EditableSelect(_)
             | crate::config::field_view::ControlKind::Number { .. }
     ) {
         return;
@@ -1384,6 +1387,7 @@ fn set_draft_inline_edit_cursor(
         || !matches!(
             edit.control,
             crate::config::field_view::ControlKind::Text
+                | crate::config::field_view::ControlKind::EditableSelect(_)
                 | crate::config::field_view::ControlKind::Number { .. }
         )
     {
@@ -1421,6 +1425,11 @@ fn edit_hint(edit: &crate::tui::configure::EditState) -> String {
     match &edit.control {
         ControlKind::Toggle => crate::t!("tui.configure.edit.hint_toggle"),
         ControlKind::Select(_) => crate::t!("tui.configure.edit.hint_select"),
+        ControlKind::EditableSelect(_) => format!(
+            "{} · {}",
+            crate::t!("tui.configure.edit.hint_select"),
+            crate::t!("tui.configure.edit.hint_text")
+        ),
         ControlKind::Number { min, max, .. } => crate::i18n::tr(
             "tui.configure.edit.hint_number",
             &[("min", fmt_opt(*min)), ("max", fmt_opt(*max))],

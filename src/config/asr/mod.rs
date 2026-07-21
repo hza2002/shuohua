@@ -1,3 +1,4 @@
+pub mod aliyun;
 pub mod apple;
 pub mod doubao;
 pub mod instance;

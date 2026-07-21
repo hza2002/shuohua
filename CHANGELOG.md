@@ -2,6 +2,25 @@
 
 本文件只记录公开发布版本的用户可感知变化，最新版本在最上面。
 
+## v0.6.0 - 2026-07-19
+
+### Added
+
+- 新增阿里云百炼（DashScope）实时语音识别 provider（`type = "aliyun"`）：使用 Fun-ASR 实时模型（预设 `fun-asr-realtime`，也可自定义模型），默认中文识别。需自备百炼 API Key。
+- History 批量清理：按 [from, to) 时间区间清理记录与音频，支持自定义日期与 180 天预设；清理前预览含语音时长，并需显式 [取消] / [删除] 确认。可只清理音频保留记录，或记录 + 音频一并清理。
+- History 分析面板改版：滚动时间窗口、按日期分组的柱状图、可开关的指标。
+- 豆包新增可编辑的 `resource_id` 选择（预设 + 自由文本），默认 `2.0 volc.seedasr.sauc.duration`。
+
+### Changed
+
+- 删除文件改为移入系统废纸篓，可恢复：涵盖 History 音频、record + audio、批量清理，以及 Config 的 profile / asr / post 实例文件。移废纸篓失败时记为错误并保留文件，绝不永久删除。
+- TUI 新建 ASR 实例与其他配置统一为内存草稿 fill-then-commit（`Ctrl-S` 落盘 / `Esc` 丢弃）。
+
+### Fixed
+
+- 收紧会话 I/O 边界，加固文件删除 / 创建路径。
+- History 分析数据惰性加载并缓存范围切换，隐藏分析页无效搜索提示，压缩对齐分析图布局。
+
 ## v0.5.0 - 2026-07-07
 
 ### Breaking

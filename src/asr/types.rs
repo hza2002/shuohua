@@ -106,6 +106,8 @@ pub enum AsrError {
     #[error("timeout waiting final")]
     #[allow(dead_code)]
     Timeout,
+    #[error("timeout writing to ASR transport")]
+    TransportTimeout,
     #[error("server: {0}")]
     Server(String),
     #[error("canceled")]

@@ -10,9 +10,11 @@ use time::{Date, Month, OffsetDateTime, UtcOffset};
 use tokio::sync::broadcast;
 
 use crate::history::{
-    assets, store, AudioAssetInfo, AudioDeleteResult, DeleteResult, HistoryQuery, HistoryRecord,
-    DEFAULT_HISTORY_PAGE_LIMIT, MAX_HISTORY_PAGE_LIMIT,
+    assets, store, AudioAssetInfo, AudioDeleteResult, CleanupError, CleanupFilter, CleanupIssue,
+    CleanupPreview, CleanupResult, CleanupScope, CleanupWarning, DeleteResult, HistoryQuery,
+    HistoryRecord, DEFAULT_HISTORY_PAGE_LIMIT, MAX_HISTORY_PAGE_LIMIT,
 };
+use crate::trash::{system_trash, FileDeleter};
 
 const REVERSE_READ_CHUNK_SIZE: usize = 1024;
 
@@ -62,9 +64,13 @@ pub struct HistoryStatsSnapshot {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnalyticsPeriod {
+    #[serde(rename = "last_7_days")]
+    Last7Days,
+    #[serde(rename = "last_30_days")]
+    Last30Days,
     Year,
     Month,
     Day,
@@ -135,6 +141,8 @@ struct ServiceInner {
     failed: Option<FailedScan>,
     observed: FileSetFingerprint,
     hooks: Hooks,
+    /// 删除音频文件的策略：生产=移到系统废纸篓；测试=移到临时目录/直接删。
+    deleter: FileDeleter,
 }
 
 enum IndexState {
@@ -269,10 +277,20 @@ impl HistoryService {
     }
 
     pub fn with_dir(dir: PathBuf) -> Self {
-        Self::from_parts(dir, current_local_offset(), Hooks::default())
+        Self::from_parts(
+            dir,
+            current_local_offset(),
+            Hooks::default(),
+            system_trash(),
+        )
     }
 
-    fn from_parts(dir: PathBuf, local_offset: UtcOffset, hooks: Hooks) -> Self {
+    fn from_parts(
+        dir: PathBuf,
+        local_offset: UtcOffset,
+        hooks: Hooks,
+        deleter: FileDeleter,
+    ) -> Self {
         let (events, _rx) = broadcast::channel(128);
         Self {
             inner: Arc::new(Mutex::new(ServiceInner {
@@ -283,6 +301,7 @@ impl HistoryService {
                 failed: None,
                 observed: FileSetFingerprint(Vec::new()),
                 hooks,
+                deleter,
             })),
             events,
         }
@@ -294,7 +313,23 @@ impl HistoryService {
         local_offset: UtcOffset,
         hooks: tests_support::TestHooks,
     ) -> Self {
-        Self::from_parts(dir, local_offset, hooks.into_hooks())
+        // 测试构造器默认不碰真实废纸篓。
+        Self::from_parts(
+            dir,
+            local_offset,
+            hooks.into_hooks(),
+            crate::trash::remove_deleter(),
+        )
+    }
+
+    /// 注入删除策略（测试用：记录/临时目录，避免触碰真实 `~/.Trash`）。
+    #[cfg(test)]
+    pub(crate) fn with_deleter(self, deleter: FileDeleter) -> Self {
+        self.inner
+            .lock()
+            .expect("history service lock poisoned")
+            .deleter = deleter;
+        self
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<HistoryEvent> {
@@ -383,16 +418,19 @@ impl HistoryService {
     }
 
     pub fn delete_audio(&self, id: &str) -> Result<AudioDeleteResult> {
-        let audio_dir = {
+        let (audio_dir, deleter) = {
             let inner = self.inner.lock().expect("history service lock poisoned");
-            assets::audio_dir_for_history_dir(&inner.dir)
+            (
+                assets::audio_dir_for_history_dir(&inner.dir),
+                inner.deleter.clone(),
+            )
         };
-        assets::delete_audio_in_dir(&audio_dir, id)
+        assets::delete_audio_in_dir(&audio_dir, id, &deleter)
     }
 
     pub fn delete(&self, id: &str) -> Result<DeleteResult> {
         let mut events = Vec::new();
-        let (record_deleted, audio_dir) = {
+        let (record_deleted, audio_dir, deleter) = {
             let mut inner = self.inner.lock().expect("history service lock poisoned");
             reconcile_if_initialized(&mut inner, &mut events)?;
             let audio_dir = assets::audio_dir_for_history_dir(&inner.dir);
@@ -407,10 +445,10 @@ impl HistoryService {
                 apply_scan_outcome(&mut inner, scan);
                 events.push(HistoryEvent::Changed);
             }
-            (outcome.deleted, audio_dir)
+            (outcome.deleted, audio_dir, inner.deleter.clone())
         };
 
-        let audio_result = assets::delete_audio_in_dir(&audio_dir, id);
+        let audio_result = assets::delete_audio_in_dir(&audio_dir, id, &deleter);
         let (audio_deleted, audio_error) = match audio_result {
             Ok(result) => (result.deleted, None),
             Err(error) => (false, Some(error.to_string())),
@@ -422,6 +460,200 @@ impl HistoryService {
             audio_deleted,
             audio_error,
         })
+    }
+
+    /// 计算 retained audio 批量清理预览：命中过滤条件、且音频可安全删除的 record ID
+    /// 快照 + 总字节 + 时间范围 + 危险音频告警。不改 JSONL、不删任何文件。
+    pub fn preview_cleanup(&self, filter: CleanupFilter) -> Result<CleanupPreview> {
+        self.preview_cleanup_at(OffsetDateTime::now_utc(), filter)
+    }
+
+    fn preview_cleanup_at(
+        &self,
+        now: OffsetDateTime,
+        filter: CleanupFilter,
+    ) -> Result<CleanupPreview> {
+        let (lower, upper) = filter.window.bounds(now);
+        let mut events = Vec::new();
+        let candidates = {
+            let mut inner = self.inner.lock().expect("history service lock poisoned");
+            reconcile_if_initialized(&mut inner, &mut events)?;
+            let audio_dir = assets::audio_dir_for_history_dir(&inner.dir);
+            cleanup_preview_stable(
+                &inner.dir,
+                &audio_dir,
+                lower,
+                upper,
+                filter.scope,
+                &inner.hooks,
+            )?
+        };
+        self.publish(events);
+        Ok(CleanupPreview {
+            filter,
+            ids: candidates.ids,
+            audio_bytes: candidates.audio_bytes,
+            audio_ms: candidates.audio_ms,
+            oldest: candidates.oldest,
+            newest: candidates.newest,
+            warnings: candidates.warnings,
+        })
+    }
+
+    /// 删除 preview 快照中的这批 ID。`AudioOnly` 只删音频，不改 JSONL；
+    /// `RecordAndAudio` 批量重写 shards 删除记录，并删除成功删除记录的 linked audio。
+    pub fn execute_cleanup(
+        &self,
+        filter: CleanupFilter,
+        ids: Vec<String>,
+    ) -> Result<CleanupResult> {
+        match filter.scope {
+            CleanupScope::AudioOnly => self.execute_audio_cleanup(ids),
+            CleanupScope::RecordAndAudio => self.execute_record_cleanup(ids),
+        }
+    }
+
+    fn execute_audio_cleanup(&self, ids: Vec<String>) -> Result<CleanupResult> {
+        let (audio_dir, deleter) = {
+            let inner = self.inner.lock().expect("history service lock poisoned");
+            (
+                assets::audio_dir_for_history_dir(&inner.dir),
+                inner.deleter.clone(),
+            )
+        };
+        let mut result = CleanupResult {
+            requested: ids.len() as u64,
+            deleted: 0,
+            missing: 0,
+            errors: Vec::new(),
+        };
+        for id in &ids {
+            match assets::classify_cleanup_audio(&audio_dir, id) {
+                Ok(assets::CleanupAudioClass::Missing) => result.missing += 1,
+                Ok(assets::CleanupAudioClass::Unsafe(issue)) => result.errors.push(CleanupError {
+                    id: id.clone(),
+                    issue,
+                }),
+                Ok(assets::CleanupAudioClass::Present { path, .. }) => {
+                    match deleter.delete(&path) {
+                        Ok(()) => result.deleted += 1,
+                        Err(error) => {
+                            tracing::warn!(error = %error, "cleanup audio trash failed");
+                            result.errors.push(CleanupError {
+                                id: id.clone(),
+                                issue: CleanupIssue::Io,
+                            });
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "cleanup audio classify failed");
+                    result.errors.push(CleanupError {
+                        id: id.clone(),
+                        issue: CleanupIssue::Io,
+                    });
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    fn execute_record_cleanup(&self, ids: Vec<String>) -> Result<CleanupResult> {
+        let mut result = CleanupResult {
+            requested: ids.len() as u64,
+            deleted: 0,
+            missing: 0,
+            errors: Vec::new(),
+        };
+        let mut safe_ids = Vec::new();
+        let mut audio_paths = BTreeMap::new();
+        let mut events = Vec::new();
+        let deleter;
+        let audio_dir;
+        {
+            let mut inner = self.inner.lock().expect("history service lock poisoned");
+            reconcile_if_initialized(&mut inner, &mut events)?;
+            deleter = inner.deleter.clone();
+            audio_dir = assets::audio_dir_for_history_dir(&inner.dir);
+            for id in &ids {
+                match assets::classify_cleanup_audio(&audio_dir, id) {
+                    Ok(assets::CleanupAudioClass::Unsafe(issue)) => {
+                        result.errors.push(CleanupError {
+                            id: id.clone(),
+                            issue,
+                        });
+                    }
+                    Ok(assets::CleanupAudioClass::Missing) => {
+                        safe_ids.push(id.clone());
+                    }
+                    Ok(assets::CleanupAudioClass::Present { path, identity, .. }) => {
+                        safe_ids.push(id.clone());
+                        audio_paths.insert(id.clone(), (path, identity));
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "cleanup audio classify failed");
+                        result.errors.push(CleanupError {
+                            id: id.clone(),
+                            issue: CleanupIssue::Io,
+                        });
+                    }
+                }
+            }
+            let hooks = inner.hooks.clone();
+            let outcome = store::delete_records_in_dir(
+                &inner.dir,
+                &safe_ids,
+                inner.local_offset,
+                move || hooks.before_history_delete_rename(),
+            );
+            let outcome = outcome?;
+            let deleted_ids = outcome.deleted_ids;
+            result.deleted = deleted_ids.len() as u64;
+            result.missing = (safe_ids.len().saturating_sub(deleted_ids.len())) as u64;
+            if !deleted_ids.is_empty() {
+                let scan = scan_stable(&inner.dir, inner.local_offset, &inner.hooks)?;
+                apply_scan_outcome(&mut inner, scan);
+                events.push(HistoryEvent::Changed);
+            }
+        }
+
+        for (id, (path, expected_identity)) in audio_paths {
+            match assets::classify_cleanup_audio(&audio_dir, &id) {
+                Ok(assets::CleanupAudioClass::Missing) => {}
+                Ok(assets::CleanupAudioClass::Present {
+                    path: current_path,
+                    identity,
+                    ..
+                }) if current_path == path && identity == expected_identity => {
+                    if let Err(error) = deleter.delete(&path) {
+                        tracing::warn!(error = %error, "cleanup audio trash failed");
+                        result.errors.push(CleanupError {
+                            id,
+                            issue: CleanupIssue::Io,
+                        });
+                    }
+                }
+                Ok(assets::CleanupAudioClass::Unsafe(issue)) => {
+                    result.errors.push(CleanupError { id, issue });
+                }
+                Ok(assets::CleanupAudioClass::Present { .. }) => {
+                    tracing::warn!(%id, "cleanup audio changed after preflight; keeping file");
+                    result.errors.push(CleanupError {
+                        id,
+                        issue: CleanupIssue::Io,
+                    });
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "cleanup audio revalidation failed");
+                    result.errors.push(CleanupError {
+                        id,
+                        issue: CleanupIssue::Io,
+                    });
+                }
+            }
+        }
+        self.publish(events);
+        Ok(result)
     }
 
     pub fn append(&self, record: HistoryRecord) -> Result<()> {
@@ -771,6 +1003,126 @@ fn scan_once(
         }
     }
     Ok(index)
+}
+
+#[derive(Default)]
+struct CleanupCandidates {
+    ids: Vec<String>,
+    audio_bytes: u64,
+    audio_ms: u64,
+    oldest: Option<OffsetDateTime>,
+    newest: Option<OffsetDateTime>,
+    warnings: Vec<CleanupWarning>,
+}
+
+/// 与 page/stats 相同的双 fingerprint 稳定读取：读前后 file-set fingerprint 一致才接受，
+/// 否则 retry once。扫描期间不持有额外锁，只读文件。
+fn cleanup_preview_stable(
+    dir: &Path,
+    audio_dir: &Path,
+    lower: Option<OffsetDateTime>,
+    upper: Option<OffsetDateTime>,
+    scope: CleanupScope,
+    hooks: &Hooks,
+) -> Result<CleanupCandidates> {
+    let mut last_error = None;
+    for attempt in 0..2 {
+        hooks.before_scan_attempt();
+        let before = fingerprint_file_set(dir, hooks)?;
+        match cleanup_preview_once(dir, audio_dir, lower, upper, scope, &before, hooks) {
+            Ok(candidates) => {
+                if fingerprint_file_set(dir, hooks)? == before {
+                    return Ok(candidates);
+                }
+                last_error = Some("unstable history source during cleanup preview".to_string());
+            }
+            Err(error) => {
+                last_error = Some(error.to_string());
+                if attempt == 1 {
+                    break;
+                }
+            }
+        }
+    }
+    bail!(
+        "{}",
+        last_error.unwrap_or_else(|| "unstable history source during cleanup preview".to_string())
+    )
+}
+
+fn cleanup_preview_once(
+    dir: &Path,
+    audio_dir: &Path,
+    lower: Option<OffsetDateTime>,
+    upper: Option<OffsetDateTime>,
+    scope: CleanupScope,
+    fingerprint: &FileSetFingerprint,
+    hooks: &Hooks,
+) -> Result<CleanupCandidates> {
+    let mut candidates = CleanupCandidates::default();
+    for entry in &fingerprint.0 {
+        let path = dir.join(&entry.name);
+        let body = fs::read_to_string(&path)
+            .with_context(|| format!("read history {}", path.display()))?;
+        hooks.after_read_file();
+        let has_complete_final_line = body.ends_with('\n');
+        let mut lines = body.split('\n').peekable();
+        while let Some(line) = lines.next() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record: HistoryRecord = match serde_json::from_str(line) {
+                Ok(record) => record,
+                Err(_) if lines.peek().is_none() && !has_complete_final_line => break,
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("parse history line in {}", path.display()));
+                }
+            };
+            let in_window = lower.is_none_or(|l| record.started_at >= l)
+                && upper.is_none_or(|u| record.started_at < u);
+            if !in_window {
+                continue;
+            }
+            match assets::classify_cleanup_audio(audio_dir, &record.id)? {
+                assets::CleanupAudioClass::Missing => {
+                    if scope == CleanupScope::RecordAndAudio {
+                        candidates.audio_ms =
+                            candidates.audio_ms.saturating_add(record.asr.audio_ms);
+                        candidates.oldest = Some(match candidates.oldest {
+                            Some(current) => current.min(record.started_at),
+                            None => record.started_at,
+                        });
+                        candidates.newest = Some(match candidates.newest {
+                            Some(current) => current.max(record.started_at),
+                            None => record.started_at,
+                        });
+                        candidates.ids.push(record.id);
+                    }
+                }
+                assets::CleanupAudioClass::Present { size_bytes, .. } => {
+                    candidates.audio_bytes = candidates.audio_bytes.saturating_add(size_bytes);
+                    candidates.audio_ms = candidates.audio_ms.saturating_add(record.asr.audio_ms);
+                    candidates.oldest = Some(match candidates.oldest {
+                        Some(current) => current.min(record.started_at),
+                        None => record.started_at,
+                    });
+                    candidates.newest = Some(match candidates.newest {
+                        Some(current) => current.max(record.started_at),
+                        None => record.started_at,
+                    });
+                    candidates.ids.push(record.id);
+                }
+                assets::CleanupAudioClass::Unsafe(issue) => {
+                    candidates.warnings.push(CleanupWarning {
+                        id: record.id,
+                        issue,
+                    })
+                }
+            }
+        }
+    }
+    Ok(candidates)
 }
 
 fn validate_record(record: &HistoryRecord, path: &Path, line_no: usize) -> Result<()> {
@@ -1194,6 +1546,8 @@ fn analytics_points(
     _offset: UtcOffset,
 ) -> Result<Vec<AnalyticsPoint>> {
     match query.period {
+        AnalyticsPeriod::Last7Days => rolling_day_points(index, &query.anchor, 7),
+        AnalyticsPeriod::Last30Days => rolling_day_points(index, &query.anchor, 30),
         AnalyticsPeriod::Day => {
             let date = parse_anchor_date(&query.anchor)?;
             let mut points = Vec::with_capacity(24);
@@ -1259,6 +1613,34 @@ fn analytics_points(
             Ok(points)
         }
     }
+}
+
+fn rolling_day_points(index: &Index, anchor: &str, days: u16) -> Result<Vec<AnalyticsPoint>> {
+    let end = parse_anchor_date(anchor)?;
+    let start = end
+        .checked_sub(time::Duration::days(i64::from(days.saturating_sub(1))))
+        .ok_or_else(|| anyhow!("invalid rolling analytics anchor: {anchor}"))?;
+    let mut points = Vec::with_capacity(usize::from(days));
+    for offset in 0..days {
+        let date = start
+            .checked_add(time::Duration::days(i64::from(offset)))
+            .ok_or_else(|| anyhow!("invalid rolling analytics anchor: {anchor}"))?;
+        let mut stats = AggregateStats::default();
+        for hour in 0..24 {
+            let key = LocalHour {
+                year: date.year(),
+                month: u8::from(date.month()),
+                day: date.day(),
+                hour,
+            };
+            stats.add_stats(index.hourly.get(&key).copied().unwrap_or_default());
+        }
+        points.push(AnalyticsPoint {
+            key: format!("{:02}-{:02}", u8::from(date.month()), date.day()),
+            stats,
+        });
+    }
+    Ok(points)
 }
 
 fn empty_points(query: AnalyticsQuery) -> Result<Vec<AnalyticsPoint>> {
@@ -1671,6 +2053,45 @@ mod tests {
         assert_eq!(day.points[12].stats.records, 1);
         assert_eq!(month.points[14].stats.records, 1);
         assert_eq!(year.points[5].stats.records, 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rolling_day_analytics_returns_fixed_windows_across_months() {
+        let dir = temp_dir("rolling-buckets");
+        write_line(
+            &dir,
+            record("a", datetime!(2026-06-30 12:00:00 UTC), "hello"),
+        );
+        write_line(
+            &dir,
+            record("b", datetime!(2026-07-02 12:00:00 UTC), "world"),
+        );
+        let service =
+            HistoryService::with_test_hooks(dir.clone(), offset!(+0), TestHooks::default());
+
+        let seven = service
+            .analytics(AnalyticsQuery::new(
+                AnalyticsPeriod::Last7Days,
+                "2026-07-03",
+            ))
+            .unwrap();
+        let thirty = service
+            .analytics(AnalyticsQuery::new(
+                AnalyticsPeriod::Last30Days,
+                "2026-07-03",
+            ))
+            .unwrap();
+
+        assert_eq!(seven.points.len(), 7);
+        assert_eq!(seven.points[0].key, "06-27");
+        assert_eq!(seven.points[6].key, "07-03");
+        assert_eq!(seven.points.iter().map(|p| p.stats.records).sum::<u64>(), 2);
+        assert_eq!(thirty.points.len(), 30);
+        assert_eq!(
+            thirty.points.iter().map(|p| p.stats.records).sum::<u64>(),
+            2
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -2334,7 +2755,7 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("shuohua-history-{name}-{}", ulid::Ulid::new()))
+        std::env::temp_dir().join(format!("shuohua-history-{name}-{}", ulid::Ulid::generate()))
     }
 
     fn write_line(dir: &std::path::Path, record: crate::history::HistoryRecord) {
@@ -2399,4 +2820,488 @@ mod tests {
 
     #[cfg(not(unix))]
     fn set_mtime(_path: &std::path::Path, _seconds: i64, _nanoseconds: i64) {}
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use std::fs;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    };
+
+    use time::macros::{datetime, offset};
+    use time::{Duration, OffsetDateTime};
+
+    use crate::history::{
+        stats::tests_support::TestHooks, AsrHistory, AsrSessionHistory, CleanupFilter,
+        CleanupIssue, CleanupScope, CleanupWindow, HistoryRecord, HistoryService, HistoryStatus,
+        PipelineStepHistory, PipelineStepStatus,
+    };
+
+    const NOW: OffsetDateTime = datetime!(2026-07-07 12:00:00 UTC);
+
+    fn audio_only(window: CleanupWindow) -> CleanupFilter {
+        CleanupFilter {
+            scope: CleanupScope::AudioOnly,
+            window,
+        }
+    }
+
+    fn record_and_audio(window: CleanupWindow) -> CleanupFilter {
+        CleanupFilter {
+            scope: CleanupScope::RecordAndAudio,
+            window,
+        }
+    }
+
+    struct Fixture {
+        service: HistoryService,
+        root: PathBuf,
+        history_dir: PathBuf,
+        audio_dir: PathBuf,
+        deleted: Arc<Mutex<Vec<PathBuf>>>,
+    }
+
+    impl Fixture {
+        fn new(name: &str) -> Self {
+            Self::new_with_hooks(name, TestHooks::default())
+        }
+
+        fn new_with_hooks(name: &str, hooks: TestHooks) -> Self {
+            let root = std::env::temp_dir()
+                .join(format!("shuohua-cleanup-{name}-{}", ulid::Ulid::generate()));
+            let history_dir = root.join("history");
+            let audio_dir = root.join("audio");
+            fs::create_dir_all(&history_dir).unwrap();
+            fs::create_dir_all(&audio_dir).unwrap();
+            // 记录型 deleter：真实删文件（不碰废纸篓）并记录被删路径，供断言删除确实
+            // 走了注入的 seam。
+            let (deleter, deleted) = crate::trash::recording_deleter();
+            Self {
+                service: HistoryService::with_test_hooks(history_dir.clone(), offset!(+0), hooks)
+                    .with_deleter(deleter),
+                root,
+                history_dir,
+                audio_dir,
+                deleted,
+            }
+        }
+
+        fn deleted_paths(&self) -> Vec<PathBuf> {
+            self.deleted.lock().unwrap().clone()
+        }
+
+        fn write_record(&self, id: &str, started_at: OffsetDateTime) {
+            let record = record(id, started_at);
+            let path = crate::history::store::path_for_month_in_dir(&self.history_dir, started_at);
+            crate::history::store::append_record(&path, &record).unwrap();
+        }
+
+        fn write_audio(&self, id: &str, ext: &str, bytes: &[u8]) {
+            fs::write(self.audio_dir.join(format!("{id}.{ext}")), bytes).unwrap();
+        }
+
+        fn audio_exists(&self, id: &str) -> bool {
+            self.audio_dir.join(format!("{id}.flac")).exists()
+                || self.audio_dir.join(format!("{id}.m4a")).exists()
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn ulid_id() -> String {
+        ulid::Ulid::generate().to_string()
+    }
+
+    fn record(id: &str, started_at: OffsetDateTime) -> HistoryRecord {
+        HistoryRecord {
+            version: 1,
+            id: id.to_string(),
+            started_at,
+            ended_at: started_at + Duration::seconds(1),
+            duration_ms: 1000,
+            status: HistoryStatus::Submitted,
+            app: None,
+            text: "hello".to_string(),
+            text_stats: crate::text_stats::compute("hello"),
+            asr: AsrHistory {
+                provider: "test".to_string(),
+                text: "hello".to_string(),
+                duration_ms: 1000,
+                audio_ms: 1000,
+                sessions: vec![AsrSessionHistory {
+                    text: "hello".to_string(),
+                    started_at,
+                    ended_at: started_at + Duration::seconds(1),
+                    audio_ms: 1000,
+                }],
+            },
+            pipeline: vec![PipelineStepHistory {
+                name: "test".to_string(),
+                status: PipelineStepStatus::Ok,
+                duration_ms: 1.0,
+                text: Some("hello".to_string()),
+                error: None,
+            }],
+            error: None,
+        }
+    }
+
+    #[test]
+    fn delete_audio_routes_through_injected_deleter() {
+        let fx = Fixture::new("delete-audio-seam");
+        let id = ulid_id();
+        fx.write_record(&id, NOW - Duration::days(1));
+        fx.write_audio(&id, "flac", &[0u8; 8]);
+        let audio_path = fx.audio_dir.join(format!("{id}.flac"));
+
+        let result = fx.service.delete_audio(&id).unwrap();
+
+        assert!(result.deleted);
+        assert!(
+            !audio_path.exists(),
+            "audio must leave its original location"
+        );
+        assert_eq!(fx.deleted_paths(), vec![audio_path]);
+    }
+
+    #[test]
+    fn preview_includes_only_records_with_present_audio() {
+        let fx = Fixture::new("present-audio");
+        let a = ulid_id();
+        let b = ulid_id();
+        let c = ulid_id();
+        // Written monotonically by started_at within the month shard.
+        fx.write_record(&a, NOW - Duration::days(40));
+        fx.write_record(&b, NOW - Duration::days(39));
+        fx.write_record(&c, NOW - Duration::days(38));
+        fx.write_audio(&a, "flac", &[0u8; 10]);
+        // b has no audio.
+        fx.write_audio(&c, "m4a", &[0u8; 25]);
+
+        let preview = fx
+            .service
+            .preview_cleanup_at(NOW, audio_only(CleanupWindow::All))
+            .unwrap();
+
+        assert_eq!(preview.ids, vec![a, c]);
+        assert_eq!(preview.audio_bytes, 35);
+        // Each test record carries asr.audio_ms = 1000; two matched records.
+        assert_eq!(preview.audio_ms, 2000);
+        assert!(preview.warnings.is_empty());
+        assert_eq!(preview.oldest, Some(NOW - Duration::days(40)));
+        assert_eq!(preview.newest, Some(NOW - Duration::days(38)));
+    }
+
+    #[test]
+    fn preview_age_cutoff_excludes_recent_records() {
+        let fx = Fixture::new("age-cutoff");
+        let old = ulid_id();
+        let recent = ulid_id();
+        fx.write_record(&old, NOW - Duration::days(40));
+        fx.write_record(&recent, NOW - Duration::days(10));
+        fx.write_audio(&old, "flac", &[0u8; 8]);
+        fx.write_audio(&recent, "flac", &[0u8; 8]);
+
+        let preview = fx
+            .service
+            .preview_cleanup_at(NOW, audio_only(CleanupWindow::OlderThanDays(30)))
+            .unwrap();
+
+        assert_eq!(preview.ids, vec![old]);
+    }
+
+    #[test]
+    fn preview_reports_conflict_audio_as_warning_not_candidate() {
+        let fx = Fixture::new("conflict");
+        let id = ulid_id();
+        fx.write_record(&id, NOW - Duration::days(40));
+        fx.write_audio(&id, "flac", &[1]);
+        fx.write_audio(&id, "m4a", &[2]);
+
+        let preview = fx
+            .service
+            .preview_cleanup_at(NOW, audio_only(CleanupWindow::All))
+            .unwrap();
+
+        assert!(preview.ids.is_empty());
+        assert_eq!(preview.warnings.len(), 1);
+        assert_eq!(preview.warnings[0].id, id);
+        assert_eq!(preview.warnings[0].issue, CleanupIssue::Conflict);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_reports_symlink_audio_as_warning() {
+        use std::os::unix::fs::symlink;
+
+        let fx = Fixture::new("symlink");
+        let id = ulid_id();
+        fx.write_record(&id, NOW - Duration::days(40));
+        let target = fx.audio_dir.join("target.flac");
+        fs::write(&target, [1]).unwrap();
+        symlink(&target, fx.audio_dir.join(format!("{id}.flac"))).unwrap();
+
+        let preview = fx
+            .service
+            .preview_cleanup_at(NOW, audio_only(CleanupWindow::All))
+            .unwrap();
+
+        assert!(preview.ids.is_empty());
+        assert_eq!(preview.warnings.len(), 1);
+        assert_eq!(preview.warnings[0].issue, CleanupIssue::Symlink);
+    }
+
+    #[test]
+    fn execute_deletes_present_audio_and_keeps_records() {
+        let fx = Fixture::new("execute");
+        let a = ulid_id();
+        let c = ulid_id();
+        fx.write_record(&a, NOW - Duration::days(40));
+        fx.write_record(&c, NOW - Duration::days(38));
+        fx.write_audio(&a, "flac", &[0u8; 10]);
+        fx.write_audio(&c, "m4a", &[0u8; 10]);
+
+        let result = fx
+            .service
+            .execute_cleanup(audio_only(CleanupWindow::All), vec![a.clone(), c.clone()])
+            .unwrap();
+
+        assert_eq!(result.requested, 2);
+        assert_eq!(result.deleted, 2);
+        assert_eq!(result.missing, 0);
+        assert!(result.errors.is_empty());
+        assert!(!fx.audio_exists(&a));
+        assert!(!fx.audio_exists(&c));
+        // 删除走了注入的 deleter（生产=废纸篓），不是硬编码 fs::remove_file。
+        let deleted = fx.deleted_paths();
+        assert!(deleted.contains(&fx.audio_dir.join(format!("{a}.flac"))));
+        assert!(deleted.contains(&fx.audio_dir.join(format!("{c}.m4a"))));
+        // JSONL records untouched.
+        let records = fx
+            .service
+            .page(crate::history::HistoryQuery::default())
+            .unwrap();
+        assert_eq!(records.records.len(), 2);
+    }
+
+    #[test]
+    fn execute_reports_missing_when_audio_absent() {
+        let fx = Fixture::new("missing");
+        let id = ulid_id();
+        fx.write_record(&id, NOW - Duration::days(40));
+        // no audio file written
+
+        let result = fx
+            .service
+            .execute_cleanup(audio_only(CleanupWindow::All), vec![id])
+            .unwrap();
+
+        assert_eq!(result.requested, 1);
+        assert_eq!(result.deleted, 0);
+        assert_eq!(result.missing, 1);
+        assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn execute_reports_conflict_as_error_without_deleting() {
+        let fx = Fixture::new("execute-conflict");
+        let id = ulid_id();
+        fx.write_record(&id, NOW - Duration::days(40));
+        fx.write_audio(&id, "flac", &[1]);
+        fx.write_audio(&id, "m4a", &[2]);
+
+        let result = fx
+            .service
+            .execute_cleanup(audio_only(CleanupWindow::All), vec![id.clone()])
+            .unwrap();
+
+        assert_eq!(result.deleted, 0);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].id, id);
+        assert_eq!(result.errors[0].issue, CleanupIssue::Conflict);
+        assert!(fx.audio_dir.join(format!("{id}.flac")).exists());
+        assert!(fx.audio_dir.join(format!("{id}.m4a")).exists());
+    }
+
+    #[test]
+    fn record_and_audio_preview_includes_records_without_audio() {
+        let fx = Fixture::new("record-preview");
+        let with_audio = ulid_id();
+        let without_audio = ulid_id();
+        fx.write_record(&with_audio, NOW - Duration::days(40));
+        fx.write_record(&without_audio, NOW - Duration::days(39));
+        fx.write_audio(&with_audio, "flac", &[0u8; 10]);
+
+        let preview = fx
+            .service
+            .preview_cleanup_at(NOW, record_and_audio(CleanupWindow::All))
+            .unwrap();
+
+        assert_eq!(preview.ids, vec![with_audio, without_audio]);
+        assert_eq!(preview.audio_bytes, 10);
+        assert_eq!(preview.audio_ms, 2000);
+        assert!(preview.warnings.is_empty());
+    }
+
+    #[test]
+    fn record_and_audio_execute_rewrites_shards_and_deletes_linked_audio() {
+        let fx = Fixture::new("record-execute");
+        let keep = ulid_id();
+        let delete_with_audio = ulid_id();
+        let delete_without_audio = ulid_id();
+        fx.write_record(&keep, NOW - Duration::days(40));
+        fx.write_record(&delete_with_audio, NOW - Duration::days(39));
+        fx.write_record(&delete_without_audio, NOW - Duration::days(38));
+        fx.write_audio(&delete_with_audio, "m4a", &[0u8; 10]);
+
+        let result = fx
+            .service
+            .execute_cleanup(
+                record_and_audio(CleanupWindow::All),
+                vec![delete_with_audio.clone(), delete_without_audio.clone()],
+            )
+            .unwrap();
+
+        assert_eq!(result.requested, 2);
+        assert_eq!(result.deleted, 2);
+        assert_eq!(result.missing, 0);
+        assert!(result.errors.is_empty());
+        assert!(!fx.audio_exists(&delete_with_audio));
+        // 原音频路径直接交给注入的 deleter（生产=trash crate）。
+        assert_eq!(
+            fx.deleted_paths(),
+            vec![fx.audio_dir.join(format!("{delete_with_audio}.m4a"))]
+        );
+
+        let page = fx
+            .service
+            .page(crate::history::HistoryQuery::default())
+            .unwrap();
+        let ids: Vec<_> = page.records.into_iter().map(|record| record.id).collect();
+        assert_eq!(ids, vec![keep]);
+    }
+
+    #[test]
+    fn record_and_audio_execute_skips_unsafe_audio_before_record_delete() {
+        let fx = Fixture::new("record-execute-conflict");
+        let id = ulid_id();
+        fx.write_record(&id, NOW - Duration::days(40));
+        fx.write_audio(&id, "flac", &[1]);
+        fx.write_audio(&id, "m4a", &[2]);
+
+        let result = fx
+            .service
+            .execute_cleanup(record_and_audio(CleanupWindow::All), vec![id.clone()])
+            .unwrap();
+
+        assert_eq!(result.deleted, 0);
+        assert_eq!(result.missing, 0);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].id, id);
+        assert_eq!(result.errors[0].issue, CleanupIssue::Conflict);
+        let page = fx
+            .service
+            .page(crate::history::HistoryQuery::default())
+            .unwrap();
+        assert_eq!(page.records.len(), 1);
+    }
+
+    #[test]
+    fn record_and_audio_keeps_audio_when_shard_rewrite_fails() {
+        let changed = Arc::new(AtomicBool::new(false));
+        let path_slot = Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+        let hooks = TestHooks::default().with_before_history_delete_rename({
+            let changed = Arc::clone(&changed);
+            let path_slot = Arc::clone(&path_slot);
+            move || {
+                if !changed.swap(true, Ordering::SeqCst) {
+                    let path = path_slot.lock().unwrap().clone().unwrap();
+                    fs::OpenOptions::new()
+                        .append(true)
+                        .open(&path)
+                        .unwrap()
+                        .write_all(b"\n")
+                        .unwrap();
+                }
+            }
+        });
+        let fx = Fixture::new_with_hooks("record-rollback", hooks);
+        let id = ulid_id();
+        fx.write_record(&id, NOW - Duration::days(40));
+        fx.write_audio(&id, "flac", &[1, 2, 3]);
+        *path_slot.lock().unwrap() = Some(crate::history::store::path_for_month_in_dir(
+            &fx.history_dir,
+            NOW - Duration::days(40),
+        ));
+
+        let error = fx
+            .service
+            .execute_cleanup(record_and_audio(CleanupWindow::All), vec![id.clone()])
+            .unwrap_err();
+
+        assert!(error.to_string().contains("changed"), "{error:#}");
+        assert!(fx.audio_dir.join(format!("{id}.flac")).exists());
+        let page = fx
+            .service
+            .page(crate::history::HistoryQuery::default())
+            .unwrap();
+        assert_eq!(page.records.len(), 1);
+    }
+
+    #[test]
+    fn record_and_audio_keeps_replaced_audio_after_preflight() {
+        let audio_slot = Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+        let hooks = TestHooks::default().with_before_history_delete_rename({
+            let audio_slot = Arc::clone(&audio_slot);
+            move || {
+                let path = audio_slot.lock().unwrap().clone().unwrap();
+                fs::remove_file(&path).unwrap();
+                fs::write(&path, b"new recording").unwrap();
+            }
+        });
+        let fx = Fixture::new_with_hooks("record-audio-replaced", hooks);
+        let id = ulid_id();
+        fx.write_record(&id, NOW - Duration::days(40));
+        fx.write_audio(&id, "flac", b"old recording");
+        let audio_path = fx.audio_dir.join(format!("{id}.flac"));
+        *audio_slot.lock().unwrap() = Some(audio_path.clone());
+
+        let result = fx
+            .service
+            .execute_cleanup(record_and_audio(CleanupWindow::All), vec![id.clone()])
+            .unwrap();
+
+        assert_eq!(result.deleted, 1);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].id, id);
+        assert_eq!(result.errors[0].issue, CleanupIssue::Io);
+        assert_eq!(fs::read(&audio_path).unwrap(), b"new recording");
+        assert!(fx.deleted_paths().is_empty());
+    }
+
+    #[test]
+    fn record_and_audio_deletes_audio_when_previewed_record_is_already_missing() {
+        let fx = Fixture::new("record-missing-audio-present");
+        let id = ulid_id();
+        fx.write_audio(&id, "flac", &[1, 2, 3]);
+
+        let result = fx
+            .service
+            .execute_cleanup(record_and_audio(CleanupWindow::All), vec![id.clone()])
+            .unwrap();
+
+        assert_eq!(result.requested, 1);
+        assert_eq!(result.deleted, 0);
+        assert_eq!(result.missing, 1);
+        assert!(result.errors.is_empty());
+        assert!(!fx.audio_exists(&id));
+    }
 }

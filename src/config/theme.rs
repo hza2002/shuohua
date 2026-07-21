@@ -280,7 +280,7 @@ impl Default for CoreOverlayCfg {
     fn default() -> Self {
         Self {
             position: OverlayPosition::default(),
-            width: crate::overlay::layout::constants::WIDTH,
+            width: crate::config::DEFAULT_OVERLAY_WIDTH_PX as f64,
             background_rgb: 0x282828,
             background_alpha: 0.70,
             corner_radius: 18.0,
@@ -712,7 +712,8 @@ error = 0x445566
 
     #[test]
     fn missing_default_file_falls_back_to_builtin_default() {
-        let dir = std::env::temp_dir().join(format!("shuohua-theme-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-theme-test-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let effective = load_effective_from_root(&minimal_config(), &dir).unwrap();
@@ -724,7 +725,8 @@ error = 0x445566
 
     #[test]
     fn load_effective_report_returns_warning_when_theme_falls_back() {
-        let dir = std::env::temp_dir().join(format!("shuohua-theme-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-theme-test-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = crate::config::main::parse(
             r#"
@@ -748,7 +750,8 @@ theme = "missing-theme"
 
     #[test]
     fn invalid_theme_file_id_returns_warning_before_reading_file() {
-        let dir = std::env::temp_dir().join(format!("shuohua-theme-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-theme-test-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = crate::config::main::parse(
             r#"

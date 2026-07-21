@@ -13,7 +13,7 @@ use crate::config::asr::tencent::TencentConfig;
 use async_trait::async_trait;
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -188,10 +188,12 @@ impl AsrSession for TencentSession {
         for &s in pcm {
             bytes.extend_from_slice(&s.to_le_bytes());
         }
-        self.cmd_tx
-            .send(PcmCmd::Audio { bytes, is_last })
-            .await
-            .map_err(|_| AsrError::Network("session task ended".into()))
+        super::send_session_command(
+            &self.cmd_tx,
+            PcmCmd::Audio { bytes, is_last },
+            "tencent session task ended",
+        )
+        .await
     }
 
     async fn close(self: Box<Self>) -> Result<(), AsrError> {
@@ -224,20 +226,24 @@ async fn session_task(
         tokio::select! {
             biased;
             _ = cancel.cancelled() => {
-                let _ = sink.close().await;
                 return;
             }
             cmd = cmd_rx.recv(), if !end_sent => {
                 match cmd {
                     None => {
-                        let _ = sink.close().await;
                         return;
                     }
                     Some(PcmCmd::Audio { bytes, is_last }) => {
                         let messages = build_outbound_messages(&mut audio_buf, &bytes, is_last);
                         for message in messages {
-                            if let Err(e) = sink.send(message).await {
-                                let _ = evt_tx.send(AsrEvent::Error { err: AsrError::Network(format!("ws send: {e}")) }).await;
+                            if let Err(error) = super::bounded_session_io(
+                                &cancel,
+                                "tencent websocket send",
+                                sink.send(message),
+                            ).await {
+                                if !matches!(error, AsrError::Canceled) {
+                                    let _ = evt_tx.send(AsrEvent::Error { err: error }).await;
+                                }
                                 return;
                             }
                         }
@@ -313,7 +319,7 @@ fn signed_url(
     timestamp: u64,
 ) -> Result<String, AsrError> {
     let expired = timestamp + 24 * 60 * 60;
-    let nonce = (timestamp ^ (ulid::Ulid::new().random() as u64)) % 1_000_000_000;
+    let nonce = (timestamp ^ (ulid::Ulid::generate().random() as u64)) % 1_000_000_000;
     let mut params = BTreeMap::new();
     params.insert("convert_num_mode", cfg.convert_num_mode.to_string());
     params.insert("engine_model_type", cfg.engine_model_type.clone());
@@ -686,6 +692,14 @@ mod tests {
         assert!(!query.contains("filter_empty_result="));
         assert!(!query.contains("word_info="));
         assert!(!query.contains("emotion_recognition="));
+    }
+
+    #[test]
+    fn hmac_sha1_matches_rfc_2202_test_vector() {
+        let key = "\x0b".repeat(20);
+        let signature = sign_hmac_sha1_base64(&key, "Hi There").unwrap();
+
+        assert_eq!(signature, "thcxhlUFcmTii8C2+zeMjvFGvgA=");
     }
 
     #[test]

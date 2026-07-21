@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn failed_conversion_removes_temporary_files() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("shuohua-audio-{}", ulid::Ulid::generate()));
         let output = prepare_in_dir(&dir, "01HXYZ", RecordAudioMode::Lossless)
             .unwrap()
             .unwrap();
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn afconvert_creates_flac_and_removes_temporary_wav() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("shuohua-audio-{}", ulid::Ulid::generate()));
         let output = prepare_in_dir(&dir, "01HXYZ", RecordAudioMode::Lossless)
             .unwrap()
             .unwrap();
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn afconvert_creates_compact_m4a_and_removes_temporary_wav() {
-        let dir = std::env::temp_dir().join(format!("shuohua-audio-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!("shuohua-audio-{}", ulid::Ulid::generate()));
         let output = prepare_in_dir(&dir, "01HXYZ", RecordAudioMode::Compact)
             .unwrap()
             .unwrap();

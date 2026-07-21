@@ -587,7 +587,8 @@ mod tests {
 
     #[test]
     fn writes_jsonl_trace_events_and_summary() {
-        let dir = std::env::temp_dir().join(format!("shuohua-trace-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-trace-test-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
 
         let mut trace = RecordingObserver::start_in_dir(
@@ -633,7 +634,8 @@ mod tests {
 
     #[test]
     fn summarizes_capture_audio_levels_in_trace_end() {
-        let dir = std::env::temp_dir().join(format!("shuohua-trace-level-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-trace-level-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
 
         let mut trace = RecordingObserver::start_in_dir(
@@ -661,7 +663,8 @@ mod tests {
 
     #[test]
     fn writes_session_boundary_events() {
-        let dir = std::env::temp_dir().join(format!("shuohua-trace-sess-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-trace-sess-{}", ulid::Ulid::generate()));
         fs::create_dir_all(&dir).unwrap();
 
         let mut trace = RecordingObserver::start_in_dir(

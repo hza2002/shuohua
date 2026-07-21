@@ -206,7 +206,8 @@ engine_model_type = "16k_multi_lang"
 
     #[test]
     fn rejects_provider_values_outside_safe_ranges() {
-        let path = std::env::temp_dir().join(format!("shuohua-tencent-{}.toml", ulid::Ulid::new()));
+        let path =
+            std::env::temp_dir().join(format!("shuohua-tencent-{}.toml", ulid::Ulid::generate()));
         fs::write(
             &path,
             r#"

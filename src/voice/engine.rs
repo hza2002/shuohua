@@ -32,6 +32,7 @@ const NOTICE_TTL_MS: u32 = 3_000;
 const STARTUP_SIGNAL_LOOKBACK_MS: u32 = 1_200;
 const STARTUP_SIGNAL_MARGIN_MS: u32 = 120;
 const ASR_SEND_SLOW_WARN_MS: u128 = 80;
+const ASR_SEND_TIMEOUT: Duration = crate::asr::providers::SESSION_IO_TIMEOUT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecordingMode {
@@ -615,7 +616,7 @@ pub(crate) async fn run(
     control: SessionControl,
 ) -> Option<EngineOutcome> {
     let mode = RecordingMode::select(params.idle_pause, &params.vad);
-    let recording_id = ulid::Ulid::new().to_string();
+    let recording_id = ulid::Ulid::generate().to_string();
     let recording_started_at = time::OffsetDateTime::now_utc();
     let recording_started_instant = Instant::now();
     tracing::info!(
@@ -2828,13 +2829,21 @@ async fn send_pcm_chunk(
     audio_samples_sent: &mut u64,
 ) -> Result<(), HistoryError> {
     let started = Instant::now();
-    session
-        .send_pcm(samples, false)
-        .await
-        .map_err(|error| HistoryError {
-            kind: "asr_send".to_string(),
-            msg: error.to_string(),
-        })?;
+    match tokio::time::timeout(ASR_SEND_TIMEOUT, session.send_pcm(samples, false)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            return Err(HistoryError {
+                kind: "asr_send".to_string(),
+                msg: error.to_string(),
+            })
+        }
+        Err(_) => {
+            return Err(HistoryError {
+                kind: "asr_send".to_string(),
+                msg: "timeout sending PCM to ASR provider".to_string(),
+            })
+        }
+    }
     let elapsed_ms = started.elapsed().as_millis();
     if elapsed_ms >= ASR_SEND_SLOW_WARN_MS {
         tracing::warn!(elapsed_ms, samples = samples.len(), "ASR send_pcm was slow");
@@ -2944,6 +2953,19 @@ mod tests {
     impl AsrSession for FailingSendSession {
         async fn send_pcm(&mut self, _pcm: &[i16], _is_last: bool) -> Result<(), AsrError> {
             Err(AsrError::Network("send failed".to_string()))
+        }
+
+        async fn close(self: Box<Self>) -> Result<(), AsrError> {
+            Ok(())
+        }
+    }
+
+    struct PendingSendSession;
+
+    #[async_trait]
+    impl AsrSession for PendingSendSession {
+        async fn send_pcm(&mut self, _pcm: &[i16], _is_last: bool) -> Result<(), AsrError> {
+            std::future::pending().await
         }
 
         async fn close(self: Box<Self>) -> Result<(), AsrError> {
@@ -3716,6 +3738,18 @@ mod tests {
             .await
             .expect_err("failed PCM delivery must stop normal completion");
         assert_eq!(error.kind, "asr_send");
+        assert_eq!(audio_samples_sent, 7);
+    }
+
+    #[tokio::test]
+    async fn pending_pcm_send_times_out_without_counting_audio() {
+        let mut session: Box<dyn AsrSession> = Box::new(PendingSendSession);
+        let mut audio_samples_sent = 7;
+        let error = send_pcm_chunk(&mut session, &[1, 2, 3], &mut audio_samples_sent)
+            .await
+            .expect_err("pending PCM delivery must time out");
+        assert_eq!(error.kind, "asr_send");
+        assert!(error.msg.contains("timeout"), "{}", error.msg);
         assert_eq!(audio_samples_sent, 7);
     }
 

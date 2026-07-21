@@ -21,8 +21,10 @@ mod tests {
     use crate::config::spec::Severity;
 
     fn temp_config_home() -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("shuohua-diagnostics-test-{}", ulid::Ulid::new()));
+        let dir = std::env::temp_dir().join(format!(
+            "shuohua-diagnostics-test-{}",
+            ulid::Ulid::generate()
+        ));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

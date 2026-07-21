@@ -1,5 +1,3 @@
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::path::Path;
 
 use crate::config::spec::{ConfigSpec, FieldSpec, ValueKind};
@@ -8,6 +6,8 @@ use crate::config::spec::{ConfigSpec, FieldSpec, ValueKind};
 pub enum ControlKind {
     Toggle,
     Select(Vec<String>),
+    /// Offers curated values while still accepting arbitrary text.
+    EditableSelect(Vec<String>),
     Number {
         min: Option<f64>,
         max: Option<f64>,
@@ -157,13 +157,24 @@ pub fn field_views(
             continue;
         }
         let dynamic = dynamic_domain(rel_path, field.name(), config_root);
-        let control = control_for(field, dynamic);
+        let control = aliyun_model_control(rel_path, field.name(), parsed)
+            .or_else(|| aliyun_language_control(rel_path, field.name(), parsed))
+            .or_else(|| doubao_resource_control(rel_path, field.name(), parsed))
+            .unwrap_or_else(|| control_for(field, dynamic));
         let present = value_at(parsed, field.name());
         let derived_name = (field.name() == "name").then(|| display_name_from_rel_path(rel_path));
         let (effective, origin) = match present {
             Some(value) => {
                 let displayed = if field.kind() == ValueKind::Array {
-                    display_array_value(value)
+                    let displayed = display_array_value(value);
+                    if field.name() == "language_hints"
+                        && rel_path.starts_with("asr/")
+                        && displayed.is_empty()
+                    {
+                        "auto".to_string()
+                    } else {
+                        displayed
+                    }
                 } else {
                     field.display_value(value)
                 };
@@ -209,6 +220,66 @@ pub fn field_views(
         });
     }
     views
+}
+
+fn aliyun_model_control(
+    rel_path: &str,
+    field_path: &str,
+    parsed: &toml::Value,
+) -> Option<ControlKind> {
+    if !rel_path.starts_with("asr/")
+        || field_path != "model"
+        || parsed.get("type").and_then(toml::Value::as_str) != Some("aliyun")
+    {
+        return None;
+    }
+    // Fun-only：只暴露受控预设，custom model 走同一 EditableSelect 的自由文本。
+    Some(ControlKind::EditableSelect(vec![
+        "fun-asr-realtime".to_string()
+    ]))
+}
+
+/// 豆包 `resource_id`：curated 两个 `.duration` 资源 id + 自由文本（并发版等其它
+/// 合法 id）。EditableSelect 避免闭合 Enum 对手写非法值的已发布用户造成破坏。
+fn doubao_resource_control(
+    rel_path: &str,
+    field_path: &str,
+    parsed: &toml::Value,
+) -> Option<ControlKind> {
+    if !rel_path.starts_with("asr/")
+        || field_path != "resource_id"
+        || parsed.get("type").and_then(toml::Value::as_str) != Some("doubao")
+    {
+        return None;
+    }
+    Some(ControlKind::EditableSelect(vec![
+        "volc.seedasr.sauc.duration".to_string(),
+        "volc.bigasr.sauc.duration".to_string(),
+    ]))
+}
+
+fn aliyun_language_control(
+    rel_path: &str,
+    field_path: &str,
+    parsed: &toml::Value,
+) -> Option<ControlKind> {
+    if !rel_path.starts_with("asr/")
+        || field_path != "language_hints"
+        || parsed.get("type").and_then(toml::Value::as_str) != Some("aliyun")
+    {
+        return None;
+    }
+    let model = parsed
+        .get("model")
+        .and_then(toml::Value::as_str)
+        .unwrap_or("fun-asr-realtime");
+    // 受控预设给合法语言 Select（末尾 auto）；custom model 交服务端，改为自由文本。
+    let Some(allowed) = crate::config::asr::aliyun::supported_language_hints(model) else {
+        return Some(ControlKind::Text);
+    };
+    let mut choices: Vec<String> = allowed.iter().map(|value| (*value).to_string()).collect();
+    choices.push("auto".to_string());
+    Some(ControlKind::Select(choices))
 }
 
 fn value_at<'a>(value: &'a toml::Value, path: &str) -> Option<&'a toml::Value> {
@@ -357,6 +428,77 @@ mod tests {
             ControlKind::Select(opts) => assert!(opts.contains(&"auto".to_string())),
             other => panic!("expected Doubao language select, got {other:?}"),
         }
+        // resource_id 是 curated + 自由文本 EditableSelect（默认 seed=2.0），零破坏。
+        let doubao_resource = doubao
+            .iter()
+            .find(|v| v.field_path == "resource_id")
+            .unwrap();
+        assert_eq!(doubao_resource.effective, "volc.seedasr.sauc.duration");
+        match &doubao_resource.control {
+            ControlKind::EditableSelect(opts) => assert_eq!(
+                opts,
+                &["volc.seedasr.sauc.duration", "volc.bigasr.sauc.duration"]
+            ),
+            other => panic!("expected Doubao resource editable-select, got {other:?}"),
+        }
+
+        let aliyun_value: toml::Value = toml::toml! {
+            type = "aliyun"
+            api_key = "sk-test"
+            workspace_id = "workspace-test"
+            model = "fun-asr-realtime"
+            language_hints = ["zh"]
+        }
+        .into();
+        let aliyun = field_views(
+            "asr/aliyun.toml",
+            &spec_for(SchemaId::AsrAliyun),
+            &aliyun_value,
+            Path::new("/tmp/shuohua"),
+        );
+        let aliyun_language = aliyun
+            .iter()
+            .find(|v| v.field_path == "language_hints")
+            .unwrap();
+        let aliyun_model = aliyun.iter().find(|v| v.field_path == "model").unwrap();
+        match &aliyun_model.control {
+            ControlKind::EditableSelect(options) => assert_eq!(options, &["fun-asr-realtime"]),
+            other => panic!("existing Aliyun model must expose the fun preset, got {other:?}"),
+        }
+        // Fun-ASR 预设：语言 Select = FUN 语言集 + 末尾 auto。
+        assert_eq!(aliyun_language.effective, "zh");
+        match &aliyun_language.control {
+            ControlKind::Select(opts) => {
+                assert_eq!(opts.first().map(String::as_str), Some("zh"));
+                assert_eq!(opts.get(1).map(String::as_str), Some("en"));
+                assert_eq!(opts.last().map(String::as_str), Some("auto"));
+            }
+            other => panic!("expected Aliyun language select, got {other:?}"),
+        }
+
+        // custom model：语言改为自由文本，交服务端判定。
+        let custom_aliyun_value: toml::Value = toml::toml! {
+            type = "aliyun"
+            api_key = "sk-test"
+            workspace_id = "workspace-test"
+            model = "future-asr-model"
+            language_hints = ["zh"]
+        }
+        .into();
+        let custom_aliyun = field_views(
+            "asr/custom-aliyun.toml",
+            &spec_for(SchemaId::AsrAliyun),
+            &custom_aliyun_value,
+            Path::new("/tmp/shuohua"),
+        );
+        assert!(matches!(
+            custom_aliyun
+                .iter()
+                .find(|view| view.field_path == "language_hints")
+                .unwrap()
+                .control,
+            ControlKind::Text
+        ));
 
         let tencent_value: toml::Value = toml::toml! {
             type = "tencent"
@@ -383,7 +525,8 @@ mod tests {
 
     #[test]
     fn profile_asr_provider_uses_available_asr_files() {
-        let root = std::env::temp_dir().join(format!("shuohua-fieldview-{}", ulid::Ulid::new()));
+        let root =
+            std::env::temp_dir().join(format!("shuohua-fieldview-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(root.join("asr")).unwrap();
         std::fs::write(root.join("asr/apple.toml"), "").unwrap();
         std::fs::write(root.join("asr/team.toml"), "").unwrap();

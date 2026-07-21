@@ -10,7 +10,10 @@ pub fn verify_sha256(bytes: &[u8], checksum_body: &str) -> Result<()> {
         .split_whitespace()
         .next()
         .context("checksum file is empty")?;
-    let actual = format!("{:x}", Sha256::digest(bytes));
+    let actual = Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     if actual != expected {
         anyhow::bail!("checksum mismatch: expected {expected}, got {actual}");
     }
@@ -128,7 +131,7 @@ mod tests {
     #[test]
     fn extracts_shuo_binary_from_release_directory() {
         let dir =
-            std::env::temp_dir().join(format!("shuohua-update-extract-{}", ulid::Ulid::new()));
+            std::env::temp_dir().join(format!("shuohua-update-extract-{}", ulid::Ulid::generate()));
         let archive = tar_gz_with_file("shuo-v0.2.0-aarch64-apple-darwin/shuo", b"binary");
 
         let extracted = extract_shuo_binary(
@@ -145,7 +148,7 @@ mod tests {
     #[test]
     fn rejects_shuo_at_unexpected_safe_path() {
         let dir =
-            std::env::temp_dir().join(format!("shuohua-update-extract-{}", ulid::Ulid::new()));
+            std::env::temp_dir().join(format!("shuohua-update-extract-{}", ulid::Ulid::generate()));
         let archive = tar_gz_with_file("docs/shuo", b"wrong");
 
         let err = extract_shuo_binary(
@@ -162,7 +165,7 @@ mod tests {
     #[test]
     fn rejects_non_file_at_expected_path() {
         let dir =
-            std::env::temp_dir().join(format!("shuohua-update-extract-{}", ulid::Ulid::new()));
+            std::env::temp_dir().join(format!("shuohua-update-extract-{}", ulid::Ulid::generate()));
         let archive = tar_gz_with_dir("shuo-v0.2.0-aarch64-apple-darwin/shuo");
 
         let err = extract_shuo_binary(
@@ -179,7 +182,7 @@ mod tests {
     #[test]
     fn rejects_archive_without_shuo() {
         let dir =
-            std::env::temp_dir().join(format!("shuohua-update-extract-{}", ulid::Ulid::new()));
+            std::env::temp_dir().join(format!("shuohua-update-extract-{}", ulid::Ulid::generate()));
         let archive = tar_gz_with_file("README.md", b"readme");
 
         let err = extract_shuo_binary(

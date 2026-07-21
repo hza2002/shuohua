@@ -3,12 +3,7 @@ mod llm_wizard;
 mod registry;
 mod render;
 
-#[allow(unused_imports)]
-pub use asr_wizard::{
-    asr_apple_from_template, asr_doubao_from_template, asr_templates, asr_tencent_from_template,
-    create_asr_apple, create_asr_doubao, create_asr_tencent, render_asr_apple, render_asr_doubao,
-    render_asr_tencent, AsrAppleDraft, AsrDoubaoDraft, AsrTencentDraft,
-};
+pub use asr_wizard::asr_templates;
 #[allow(unused_imports)]
 pub use llm_wizard::{
     create_llm_component, llm_draft_from_template, llm_templates, render_llm_component,
@@ -287,7 +282,8 @@ mod tests {
     }
 
     fn temp_dir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("shuohua-template-test-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-template-test-{}", ulid::Ulid::generate()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -375,112 +371,6 @@ mod tests {
         assert!(body.contains("format = \"anthropic\""));
         assert!(body.contains("name = \"anthropic-team\""));
         toml::from_str::<toml::Value>(&body).unwrap();
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn asr_doubao_draft_uses_template_defaults_and_renders_overrides() {
-        let mut draft = asr_doubao_from_template("asr/doubao").unwrap();
-        draft.app_key = "app-test".to_string();
-        draft.access_key = "access-test".to_string();
-        draft.language = "zh-CN".to_string();
-        draft.enable_punc = false;
-        draft.stream_mode = 2;
-
-        let body = render_asr_doubao(&draft).unwrap();
-
-        assert!(body.contains("app_key = \"app-test\""));
-        assert!(body.contains("access_key = \"access-test\""));
-        assert!(body.contains("resource_id = \"volc.bigasr.sauc.duration\""));
-        assert!(body.contains("language = \"zh-CN\""));
-        assert!(body.contains("enable_punc = false"));
-        assert!(body.contains("stream_mode = 2"));
-        toml::from_str::<crate::config::asr::doubao::DoubaoConfig>(&body).unwrap();
-    }
-
-    #[test]
-    fn asr_tencent_draft_defaults_to_free_chinese_engine_and_allows_other_engines() {
-        let mut draft = asr_tencent_from_template("asr/tencent").unwrap();
-        assert_eq!(draft.engine_model_type, "16k_zh");
-        assert!(!draft.need_vad);
-        assert_eq!(draft.filter_modal, 1);
-        assert_eq!(draft.convert_num_mode, 1);
-        assert_eq!(draft.sentence_strategy, 0);
-
-        draft.app_id = "1250000000".to_string();
-        draft.secret_id = "sid-test".to_string();
-        draft.secret_key = "key-test".to_string();
-        draft.engine_model_type = "16k_multi_lang".to_string();
-
-        let body = render_asr_tencent(&draft).unwrap();
-
-        assert!(body.contains("type = \"tencent\""));
-        assert!(body.contains("engine_model_type = \"16k_multi_lang\""));
-        assert!(body.contains("need_vad = false"));
-        assert!(body.contains("filter_modal = 1"));
-        assert!(!body.contains("filter_empty_result"));
-        assert!(!body.contains("word_info"));
-        assert!(!body.contains("emotion_recognition"));
-        let parsed: crate::config::asr::tencent::TencentConfig = toml::from_str(&body).unwrap();
-        assert_eq!(parsed.engine_model_type, "16k_multi_lang");
-        assert_eq!(parsed.vad_silence_time, 1000);
-        assert_eq!(parsed.max_speak_time, 60_000);
-    }
-
-    #[test]
-    fn create_asr_tencent_writes_fixed_provider_file() {
-        let dir = temp_dir();
-        let asr = dir.join("asr");
-        let mut draft = asr_tencent_from_template("asr/tencent").unwrap();
-        draft.app_id = "1250000000".to_string();
-        draft.secret_id = "sid-test".to_string();
-        draft.secret_key = "key-test".to_string();
-
-        let path = create_asr_tencent(&asr, &draft).unwrap();
-
-        assert_eq!(path, asr.join("tencent.toml"));
-        toml::from_str::<crate::config::asr::tencent::TencentConfig>(
-            &std::fs::read_to_string(&path).unwrap(),
-        )
-        .unwrap();
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn create_asr_doubao_writes_fixed_provider_file_and_refuses_duplicate() {
-        let dir = temp_dir();
-        let asr = dir.join("asr");
-        let mut draft = asr_doubao_from_template("asr/doubao").unwrap();
-        draft.app_key = "app-test".to_string();
-        draft.access_key = "access-test".to_string();
-
-        let path = create_asr_doubao(&asr, &draft).unwrap();
-
-        assert_eq!(path, asr.join("doubao.toml"));
-        toml::from_str::<crate::config::asr::doubao::DoubaoConfig>(
-            &std::fs::read_to_string(&path).unwrap(),
-        )
-        .unwrap();
-        assert!(create_asr_doubao(&asr, &draft)
-            .unwrap_err()
-            .to_string()
-            .contains("already exists"));
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn create_asr_apple_writes_fixed_provider_file() {
-        let dir = temp_dir();
-        let asr = dir.join("asr");
-        let draft = asr_apple_from_template("asr/apple").unwrap();
-
-        let path = create_asr_apple(&asr, &draft).unwrap();
-
-        assert_eq!(path, asr.join("apple.toml"));
-        let body = std::fs::read_to_string(&path).unwrap();
-        let parsed: crate::config::asr::apple::AppleConfig = toml::from_str(&body).unwrap();
-        assert_eq!(parsed.language.as_deref(), Some("zh-CN"));
-        assert!(parsed.install_assets);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -109,7 +109,8 @@ mod tests {
 
     #[test]
     fn rejects_unknown_override_fields() {
-        let path = std::env::temp_dir().join(format!("shuohua-apple-{}.toml", ulid::Ulid::new()));
+        let path =
+            std::env::temp_dir().join(format!("shuohua-apple-{}.toml", ulid::Ulid::generate()));
         fs::write(&path, "type = \"apple\"\nlocal_vad = \"on\"\n").unwrap();
         let overrides = [("idle_paus".to_string(), toml::Value::Boolean(false))]
             .into_iter()

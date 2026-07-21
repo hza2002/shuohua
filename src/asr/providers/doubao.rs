@@ -236,10 +236,12 @@ impl AsrSession for DoubaoSession {
         for &s in pcm {
             bytes.extend_from_slice(&s.to_le_bytes());
         }
-        self.cmd_tx
-            .send(PcmCmd::Audio { bytes, is_last })
-            .await
-            .map_err(|_| AsrError::Network("session task ended".into()))
+        super::send_session_command(
+            &self.cmd_tx,
+            PcmCmd::Audio { bytes, is_last },
+            "doubao session task ended",
+        )
+        .await
     }
 
     async fn close(self: Box<Self>) -> Result<(), AsrError> {
@@ -282,21 +284,25 @@ async fn session_task(
         tokio::select! {
             biased;
             _ = cancel.cancelled() => {
-                let _ = sink.close().await;
                 return;
             }
             cmd = cmd_rx.recv(), if !last_sent => {
                 match cmd {
                     None => {
-                        let _ = sink.close().await;
                         return;
                     }
                     Some(PcmCmd::Audio { bytes, is_last }) => {
                         wire_seq += 1;
                         let frame_seq = if is_last { -wire_seq } else { wire_seq };
                         let frame = encode_audio_frame(&bytes, frame_seq, is_last);
-                        if let Err(e) = sink.send(Message::Binary(frame.into())).await {
-                            let _ = evt_tx.send(AsrEvent::Error { err: AsrError::Network(e.to_string()) }).await;
+                        if let Err(error) = super::bounded_session_io(
+                            &cancel,
+                            "doubao websocket send",
+                            sink.send(Message::Binary(frame.into())),
+                        ).await {
+                            if !matches!(error, AsrError::Canceled) {
+                                let _ = evt_tx.send(AsrEvent::Error { err: error }).await;
+                            }
                             return;
                         }
                         if is_last {

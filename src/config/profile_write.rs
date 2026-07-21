@@ -77,7 +77,7 @@ pub(crate) fn bind_profile_route(
         .with_context(|| format!("parse config {}", config_path.display()))?;
     bind_profile_route_in_document(&mut doc, bundle_id, target_profile)?;
 
-    let tmp = config_path.with_extension(format!("toml.tmp-{}", ulid::Ulid::new()));
+    let tmp = config_path.with_extension(format!("toml.tmp-{}", ulid::Ulid::generate()));
     std::fs::write(&tmp, doc.to_string())
         .with_context(|| format!("write temp config {}", tmp.display()))?;
     std::fs::rename(&tmp, config_path)
@@ -187,7 +187,8 @@ trigger = "right_command"
 
     #[test]
     fn file_write_rejects_missing_target_profile() {
-        let dir = std::env::temp_dir().join(format!("shuohua-profile-write-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-profile-write-{}", ulid::Ulid::generate()));
         let root = dir.join("shuohua");
         std::fs::create_dir_all(root.join("profile")).unwrap();
         std::fs::write(
@@ -210,7 +211,8 @@ default = "default"
 
     #[test]
     fn file_write_rejects_malformed_target_profile() {
-        let dir = std::env::temp_dir().join(format!("shuohua-profile-write-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-profile-write-{}", ulid::Ulid::generate()));
         let root = dir.join("shuohua");
         std::fs::create_dir_all(root.join("profile")).unwrap();
         std::fs::write(

@@ -7,6 +7,8 @@ pub(crate) use self::main::{
     VoicePreprocessBackend, VoicePreprocessCfg, VoiceVadBackend, VoiceVadCfg,
 };
 
+pub use self::main::DEFAULT_OVERLAY_WIDTH_PX;
+
 pub(crate) mod asr;
 pub(crate) mod diagnostics;
 pub(crate) mod field_view;

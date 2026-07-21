@@ -190,15 +190,19 @@ impl AsrSession for AppleSession {
             ));
         };
         let frame = encode_pcm_frame(pcm, is_last);
-        stdin
-            .write_all(&frame)
-            .await
-            .map_err(|e| AsrError::Network(format!("write apple pcm: {e}")))?;
+        match tokio::time::timeout(super::SESSION_IO_TIMEOUT, stdin.write_all(&frame)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(AsrError::Network(format!("write apple pcm: {error}"))),
+            Err(_) => return Err(AsrError::TransportTimeout),
+        }
         if is_last {
-            stdin
-                .shutdown()
-                .await
-                .map_err(|e| AsrError::Network(format!("close apple stdin: {e}")))?;
+            match tokio::time::timeout(super::SESSION_IO_TIMEOUT, stdin.shutdown()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    return Err(AsrError::Network(format!("close apple stdin: {error}")))
+                }
+                Err(_) => return Err(AsrError::TransportTimeout),
+            }
             self.stdin = None;
         }
         Ok(())

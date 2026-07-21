@@ -14,8 +14,9 @@ use core_graphics::event::{
     CallbackResult, EventField,
 };
 use os_pipe::PipeWriter;
+use parking_lot::Mutex;
 use std::io::Write;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use super::combo::{ModMask, ModType, Side};
 use super::key::key_from_macos_keycode;
@@ -68,16 +69,9 @@ pub fn run(writer: PipeWriter, suppressor: Arc<Mutex<Suppressor>>) -> Result<()>
 
             // Always forward — Tracker (tokio side) needs every event even
             // for keys we end up dropping for the foreground.
-            if let Ok(mut w) = pipe.lock() {
-                let _ = w.write_all(&raw.encode());
-            }
+            let _ = pipe.lock().write_all(&raw.encode());
 
-            let drop_event = match suppressor.lock() {
-                Ok(mut s) => s.on_raw(raw),
-                // Poisoned mutex: a Suppressor user panicked. Let events
-                // through rather than silently eating them.
-                Err(_) => false,
-            };
+            let drop_event = suppressor.lock().on_raw(raw);
 
             if drop_event {
                 CallbackResult::Drop

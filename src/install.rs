@@ -230,7 +230,8 @@ mod tests {
 
     #[test]
     fn path_first_binary_finds_first_dir_with_executable() {
-        let dir = std::env::temp_dir().join(format!("shuohua-pathfirst-{}", ulid::Ulid::new()));
+        let dir =
+            std::env::temp_dir().join(format!("shuohua-pathfirst-{}", ulid::Ulid::generate()));
         let bin_dir = dir.join("bin");
         std::fs::create_dir_all(&bin_dir).unwrap();
         let shuo = bin_dir.join("shuo");

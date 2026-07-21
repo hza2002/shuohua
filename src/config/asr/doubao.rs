@@ -49,7 +49,8 @@ pub struct DoubaoConfig {
 }
 
 pub(crate) fn default_resource_id() -> String {
-    "volc.bigasr.sauc.duration".into()
+    // 2.0（seed）资源；1.0 是 volc.bigasr.sauc.duration，两者及各自并发版用户可自填。
+    "volc.seedasr.sauc.duration".into()
 }
 
 pub(crate) fn default_local_vad() -> LocalVadMode {
@@ -133,7 +134,8 @@ mod tests {
 
     #[test]
     fn rejects_provider_values_outside_safe_ranges() {
-        let path = std::env::temp_dir().join(format!("shuohua-doubao-{}.toml", ulid::Ulid::new()));
+        let path =
+            std::env::temp_dir().join(format!("shuohua-doubao-{}.toml", ulid::Ulid::generate()));
         fs::write(
             &path,
             r#"

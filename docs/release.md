@@ -36,6 +36,8 @@ git log -1 --oneline --show-signature
 git fetch origin
 git status -sb
 git describe --tags --abbrev=0 2>/dev/null || echo "<no previous tag>"
+rustup update stable
+rustc --version
 grep -E 'sign-commit|sign-tag' release.toml
 ```
 
@@ -44,11 +46,15 @@ grep -E 'sign-commit|sign-tag' release.toml
 - 当前分支是 `main`。
 - working tree 干净，且与 `origin/main` 同步。
 - 最新 commit 是 GPG signed / verified。
+- 本机 `stable` 已更新；CI 与 release workflow 同样跟随最新 `stable`。
 - `release.toml` 中 `sign-commit = true` 且 `sign-tag = true`。
 - GitHub main ruleset 仍要求 signed commits，并禁止删除和 force push。
 - GitHub `v*` tag ruleset 如已启用，不会阻止本次创建 release tag。
 
 异常时停下，不自动 stash、pull、rebase、push 或改 ruleset。
+
+项目刻意滚动跟随最新 Rust stable。每次提交前跑 `make check`，它会先更新 stable，
+再执行完整门禁；新版本引入 lint 或兼容问题时在任务分支修复，不绕过检查。
 
 ## 4. 确定版本
 

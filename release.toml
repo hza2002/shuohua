@@ -27,5 +27,5 @@ pre-release-commit-message = "release: v{{version}}"
 pre-release-hook = [
   "sh",
   "-c",
-  "cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked",
+  "rustup update stable && rustup component add --toolchain stable clippy rustfmt && cargo +stable fmt --check && cargo +stable clippy --locked --all-targets -- -D warnings && cargo +stable test --locked",
 ]

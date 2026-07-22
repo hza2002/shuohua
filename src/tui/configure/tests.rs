@@ -1,8 +1,8 @@
 use super::*;
 use crate::config::field_view::{ControlKind, FieldOrigin};
+use crate::config::TestConfigHome as ConfigHomeGuard;
 use crate::tui::configure::render::*;
 use crossterm::event::KeyCode;
-use std::sync::{Mutex, MutexGuard, OnceLock};
 
 struct TestConfig {
     dir: std::path::PathBuf,
@@ -42,36 +42,6 @@ impl TestConfig {
     fn configure_page(&self) -> super::ConfigurePage {
         // 测试删除真实文件，绝不触碰开发者的 ~/.Trash。
         super::ConfigurePage::new().with_deleter(crate::trash::remove_deleter())
-    }
-}
-
-struct ConfigHomeGuard {
-    _guard: MutexGuard<'static, ()>,
-    old: Option<String>,
-}
-
-impl ConfigHomeGuard {
-    fn set(path: &std::path::Path) -> Self {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let guard = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-        let old = std::env::var("XDG_CONFIG_HOME").ok();
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", path);
-        }
-        Self { _guard: guard, old }
-    }
-}
-
-impl Drop for ConfigHomeGuard {
-    fn drop(&mut self) {
-        match &self.old {
-            Some(value) => unsafe {
-                std::env::set_var("XDG_CONFIG_HOME", value);
-            },
-            None => unsafe {
-                std::env::remove_var("XDG_CONFIG_HOME");
-            },
-        }
     }
 }
 

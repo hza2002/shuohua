@@ -1,5 +1,5 @@
-//! 防文档漂移：内部链接可解析 + 顶层模块都在 architecture.md 登记。
-//! 这两条是 docs/ 唯一的手维护漂移面（逐文件树已去除），其余靠代码自身。
+//! 防文档/基础设施漂移：内部链接、顶层模块登记、Rust stable 策略同步。
+//! 逐文件树已去除，其余契约尽量靠代码自身。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -119,4 +119,49 @@ fn top_level_modules_are_documented() {
         missing.is_empty(),
         "src/ 顶层模块未在 docs/architecture.md 登记：{missing:?}"
     );
+}
+
+#[test]
+fn rust_stable_and_release_strategy_match_local_ci_and_release() {
+    let root = repo_root();
+    for workflow in ["ci.yml", "release.yml"] {
+        let body = fs::read_to_string(root.join(".github/workflows").join(workflow)).unwrap();
+        assert!(
+            body.contains("dtolnay/rust-toolchain@stable"),
+            "{workflow} 必须跟随最新 Rust stable"
+        );
+        assert!(
+            body.contains("components: clippy, rustfmt"),
+            "{workflow} 必须安装 clippy 和 rustfmt"
+        );
+    }
+
+    let makefile = fs::read_to_string(root.join("Makefile")).unwrap();
+    assert!(
+        makefile.contains("rustup update stable"),
+        "make check 必须先更新 Rust stable"
+    );
+    for command in [
+        "$(CARGO) +stable fmt --check",
+        "$(CARGO) +stable clippy --locked --all-targets -- -D warnings",
+        "$(CARGO) +stable test --locked",
+    ] {
+        assert!(makefile.contains(command), "Makefile 缺少 {command}");
+    }
+
+    let release = fs::read_to_string(root.join("release.toml")).unwrap();
+    assert!(
+        release.contains("rustup update stable"),
+        "cargo-release hook 必须先更新 Rust stable"
+    );
+    for setting in [
+        "allow-branch = [\"release/*\"]",
+        "tag = false",
+        "push = false",
+    ] {
+        assert!(
+            release.contains(setting),
+            "cargo-release 必须通过 PR-safe 配置约束 release：缺少 {setting}"
+        );
+    }
 }

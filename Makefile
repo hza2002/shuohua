@@ -29,7 +29,7 @@ help:
 	@echo "  make stop            Stop installed launchd service via PATH shuo"
 	@echo "  make status          Show daemon status via PATH shuo"
 	@echo "  make doctor          Run doctor via PATH shuo"
-	@echo "  make check           fmt check, clippy -D warnings, test"
+	@echo "  make check           Update stable, then run fmt check, clippy, test"
 	@echo "  make fmt             Format Rust code"
 	@echo "  make sweep           Remove stale target/ artifacts (>$(SWEEP_DAYS) days unused)"
 	@echo "  make clean           Remove the entire target/ directory"
@@ -96,15 +96,15 @@ fmt:
 
 .PHONY: fmt-check
 fmt-check:
-	$(CARGO) fmt --check
+	$(CARGO) +stable fmt --check
 
 .PHONY: clippy
 clippy:
-	$(CARGO) clippy --all-targets -- -D warnings
+	$(CARGO) +stable clippy --locked --all-targets -- -D warnings
 
 .PHONY: test
 test:
-	$(CARGO) test
+	$(CARGO) +stable test --locked
 
 .PHONY: sweep
 sweep:
@@ -115,4 +115,9 @@ clean:
 	$(CARGO) clean
 
 .PHONY: check
-check: fmt-check clippy test
+check:
+	rustup update stable
+	rustup component add --toolchain stable clippy rustfmt
+	$(CARGO) +stable fmt --check
+	$(CARGO) +stable clippy --locked --all-targets -- -D warnings
+	$(CARGO) +stable test --locked

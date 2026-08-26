@@ -4,9 +4,14 @@ mod apple_helper;
 mod themes;
 
 fn main() {
+    const SHUO_INFO_PLIST: &str = "assets/macos/shuo-Info.plist";
+    const CAPTURE_HELPER_INFO_PLIST: &str = "assets/macos/apple-capture-helper-Info.plist";
+
     for target in apple_helper::macos_helper_targets() {
         println!("cargo:rerun-if-changed={}", target.source_path);
     }
+    println!("cargo:rerun-if-changed={SHUO_INFO_PLIST}");
+    println!("cargo:rerun-if-changed={CAPTURE_HELPER_INFO_PLIST}");
     println!("cargo:rerun-if-changed=assets/themes");
     println!("cargo:rerun-if-changed=assets/i18n/zh-CN.toml");
     println!("cargo:rerun-if-changed=assets/i18n/en-US.toml");
@@ -14,6 +19,12 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=AppKit");
         println!("cargo:rustc-link-lib=framework=ApplicationServices");
         println!("cargo:rustc-link-lib=framework=QuartzCore");
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("manifest dir set by cargo");
+        let info_plist = std::path::Path::new(&manifest_dir).join(SHUO_INFO_PLIST);
+        println!(
+            "cargo:rustc-link-arg-bin=shuo=-Wl,-sectcreate,__TEXT,__info_plist,{}",
+            info_plist.display()
+        );
     }
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR set by cargo");
@@ -40,17 +51,33 @@ fn main() {
 
     for helper in apple_helper::macos_helper_targets() {
         let helper_out = std::path::Path::new(&out_dir).join(helper.output_name);
-        let status = std::process::Command::new("xcrun")
-            .args([
-                "swiftc",
-                "-O",
-                "-parse-as-library",
-                "-target",
-                &swift_target,
-                "-o",
-                helper_out.to_str().expect("helper path is utf-8"),
-                helper.source_path,
-            ])
+        let mut command = std::process::Command::new("xcrun");
+        command.args([
+            "swiftc",
+            "-O",
+            "-parse-as-library",
+            "-target",
+            &swift_target,
+            "-o",
+            helper_out.to_str().expect("helper path is utf-8"),
+            helper.source_path,
+        ]);
+        if helper.output_name == "apple_capture_helper" {
+            let manifest_dir =
+                std::env::var("CARGO_MANIFEST_DIR").expect("manifest dir set by cargo");
+            let info_plist = std::path::Path::new(&manifest_dir).join(CAPTURE_HELPER_INFO_PLIST);
+            command.args([
+                "-Xlinker",
+                "-sectcreate",
+                "-Xlinker",
+                "__TEXT",
+                "-Xlinker",
+                "__info_plist",
+                "-Xlinker",
+                info_plist.to_str().expect("Info.plist path is utf-8"),
+            ]);
+        }
+        let status = command
             .status()
             .unwrap_or_else(|error| panic!("run xcrun swiftc for {}: {error}", helper.output_name));
         if !status.success() {

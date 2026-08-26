@@ -21,7 +21,7 @@
 {"op":"delete_history","id":"01HXYZ..."}
 {"op":"preview_history_cleanup","filter":{"scope":"audio_only","window":{"older_than_days":30}}}  // 批量清理预览；scope 取 audio_only|record_and_audio；window 取 "all"|{"last_hours":h}|{"last_days":d}|{"older_than_days":n}|{"range":{"from":"YYYY-MM-DD","to":"YYYY-MM-DD"}}
 {"op":"execute_history_cleanup","filter":{"scope":"record_and_audio","window":{"older_than_days":30}},"ids":["01HXYZ..."]}  // 删除 preview 快照里这批目标；execute 不重新扫描 filter
-{"op":"daemon_status"}          // 返回 PID / 启动时间 / 在录音否（shuo service status 用）
+{"op":"daemon_status"}          // 返回 PID / 启动时间 / ready / 在录音否（shuo service status 用）
 {"op":"shutdown"}               // shuo service stop 用；daemon 正常退出 0，避免 launchd KeepAlive 重启
 {"op":"start_recording"}        // 预留：当前 daemon 返回 unsupported
 {"op":"stop_recording"}         // 预留：当前 daemon 返回 unsupported
@@ -70,6 +70,9 @@
 - **`get_history` 分页**：默认 `limit=50`，最大 500，返回从新到旧。`before` 用 `started_at` RFC3339 时间戳，语义为分页游标；`before_id` 用来在同一 timestamp 下继续翻页，必须和 `before` 同时出现，单独传 `before_id` 返回 `error(kind="bad_command")`。服务端返回 `(started_at, id)` 严格早于 cursor 的记录。`query` 是可选关键词过滤，由 daemon 对 persisted JSONL records 做大小写不敏感 substring；TUI 不维护 full-history search index/fuzzy matcher。query 存在时，`history` 回包同时带 `matched` 和 `stats`，分别表示该 query 在全量 history 中的命中条数和命中集合聚合统计；分页 records 仍只返回当前页。
 - **summary / analytics**：`get_history_stats` 返回全量、当前月、今天的 additive totals。`get_history_analytics` 的 `period` 为 `last_7_days|last_30_days|year|month|day`；`last_7_days` / `last_30_days` 的 `anchor` 为窗口结束日 `YYYY-MM-DD`，返回含 anchor 当天在内的最近 7/30 个按天 buckets（key 为 `MM-DD`，可跨月/年）；`year|month|day` 的 `anchor` 分别为 `YYYY`、`YYYY-MM`、`YYYY-MM-DD`，返回固定零填充 buckets：year=12 months，month=该月每天，day=24 hours。可视化平均值由 client 从 additive stats 派生。
 - **stale / unavailable**：stats 和 analytics snapshot 的 `status` 为 `ready|stale|unavailable`。`stale` 表示保留 last valid index 但发现当前 JSONL 无法完全 reconcile；`unavailable` 表示没有可用 index。`error` 是给 TUI/doctor 的简短诊断，不写入 JSONL。
+- **权限启动结果**：daemon 触发 macOS 权限界面后，原子写入 state root 下的
+  `permission-required.json`，内容只包含当前缺失权限和实际 daemon executable path。
+  `service` 与裸 `shuo` 用它区分授权引导和启动故障；每次新启动先清除旧结果。
 - **history direct response 与 broadcasts**：同一 UDS 连接上 direct command response 按该连接命令顺序返回；`history_changed` / `history_appended` 是 broadcast，和 direct response 的相对顺序不指定，client 必须 coalesce refresh。
 - **删除命令**：`delete_audio` 只删 retained audio，不改 JSONL；缺失文件仍返回 `deleted=false`。`delete_history` 删除 history record 并尝试删除同 ID audio；`record_deleted=false` 表示 record 已不存在（idempotent），仍可清理 orphan audio。`audio_error` 非空表示 record 删除已完成但 audio 删除在 preflight 后失败；symlink、conflict、non-regular audio 这类危险状态在改 JSONL 前拒绝。
 - **批量清理命令**：`preview_history_cleanup` / `execute_history_cleanup` 是单条 `delete_audio` / `delete_history` 的批量版本。`scope="audio_only"` 只删 retained audio，**不改 JSONL**；preview 扫描「有 retained audio 且命中 window」的 record（recording 中心，不含 orphan audio）。`scope="record_and_audio"` 删除 history record 并删除同 ID linked audio；preview 扫描所有命中 window 的 record，音频不存在仍可入选。两种 scope 都会把危险音频排除到 `warnings`（`issue` = `conflict|symlink|non_regular`）；record_and_audio 在危险音频未解决前不会删除该 record。preview 返回可安全删除的 `ids` 快照、音频总字节、语音总时长、时间范围和 warnings。**execute 只处理 preview 里回传的这批 `ids`，不按 filter 重新求值**，因此 preview 之后新增的匹配不会被删。record_and_audio 先提交 history shard，再重新核对 linked audio 的路径类型与文件 identity；音频在期间被替换时保留新文件并返回 IO error，不用隐藏 staging 文件模拟跨资源事务。`audio_only` 的 `deleted/missing` 分别表示已删/已不存在的 audio 数；`record_and_audio` 的 `deleted/missing` 分别表示已删/已不存在的 history record 数，linked audio 缺失不算 missing。危险/IO 失败进入 `errors` 且不中断整批。audio_only 不广播 `history_changed`；record_and_audio 成功删除任一 record 后广播 `history_changed`。
@@ -77,7 +80,8 @@
 
 ### 1.3 不引入 state.json
 
-状态机当前快照只通过 UDS `subscribe` 拿。**唯一持久化数据集是 history JSONL**；daemon 诊断日志是排障 sidecar，不作为状态源。这样：
+状态机当前快照只通过 UDS `subscribe` 拿。**唯一持久化数据集是 history JSONL**；daemon
+诊断日志和一次性权限启动结果是 sidecar，不作为运行状态源。这样：
 
 - 单一真相来源（history 派生统计）
 - 不浪费 SSD（无 1Hz 写）

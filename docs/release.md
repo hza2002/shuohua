@@ -10,6 +10,10 @@ shuohua 的发版操作手册。发版会创建并推送 `v*` tag，触发 GitHu
 - release PR 通过 `CI / check` 后 squash merge 到 `main`；不要求其他人 approve。
 - 从合并后的 `main` 创建并推送 signed `vX.Y.Z` tag。
 - GitHub Actions 在 `v*` tag push 后构建 `aarch64-apple-darwin` binary。
+- 本地和 GitHub Actions 都通过 `make dist` 构建，并通过 `make verify-dist` 验证
+  artifact contract；GitHub Actions 产物是唯一官方 release artifact。
+- 分发 binary 只允许依赖 `/usr/lib` 和 `/System/Library` 下的 Apple 系统库，不依赖
+  Homebrew 或其他第三方动态库。
 - Release 页面上传：
   - `shuo-vX.Y.Z-aarch64-apple-darwin.tar.gz`
   - `shuo-vX.Y.Z-aarch64-apple-darwin.tar.gz.sha256`
@@ -135,10 +139,12 @@ bump，不要通过绕过 dirty check 把其他修改混入 release commit。
 用户在本机确认：
 
 ```bash
-cargo build --release --locked
-./target/release/shuo doctor
-./target/release/shuo doctor --apple-capture-smoke
-./target/release/shuo
+make dist verify-dist
+ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+binary="dist/shuo-v${ver}-aarch64-apple-darwin/shuo"
+"$binary" doctor
+"$binary" doctor --apple-capture-smoke
+"$binary"
 ```
 
 还需要至少一次真实语音输入端到端验证：热键开始录音、说话、停止、转写并上屏。涉及麦克风、TCC 权限和前台应用，agent 不能替代。
@@ -217,9 +223,7 @@ gh release view vX.Y.Z
 rm -rf /tmp/shuo-release-check
 mkdir -p /tmp/shuo-release-check
 gh release download vX.Y.Z -p '*.tar.gz' -p '*.sha256' -D /tmp/shuo-release-check
-cd /tmp/shuo-release-check
-shasum -a 256 -c *.sha256
-tar -tzf *.tar.gz
+scripts/verify-macos-dist.sh /tmp/shuo-release-check/*.tar.gz
 ```
 
 预期 tarball 结构：
@@ -233,6 +237,10 @@ shuo-vX.Y.Z-aarch64-apple-darwin/
 ```
 
 artifact 大小首次发布后记录在发版总结里。后续版本如果偏离基线约 50%，先停下调查。
+
+verifier 会对解包后的真实 artifact 检查 checksum、固定目录结构、纯 `arm64` 架构、
+`minos 15.0`、Xcode 26+ SDK、系统动态库 allowlist，并执行 `shuo --version`。`make dist`
+还会对构建阶段生成的 `apple_helper` 和 `apple_capture_helper` 执行相同 Mach-O 检查。
 
 ## 11. 真实试装
 

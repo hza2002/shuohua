@@ -42,9 +42,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          targets: aarch64-apple-darwin
 
-      - name: Cache cargo registry / target
+      - name: Cache cargo registry
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "false"
 
       - name: Verify tag matches Cargo.toml version
         run: |
@@ -65,31 +68,8 @@ jobs:
       - name: Test
         run: cargo test --locked
 
-      - name: Build release binary
-        run: |
-          cargo clean -p shuohua
-          cargo build --release --locked
-
-      - name: Verify macOS deployment target
-        run: |
-          vtool -show-build target/release/shuo | grep 'minos 15.0'
-          helper="$(find target/release/build -path '*/out/apple_helper' -type f | head -1)"
-          test -n "$helper"
-          vtool -show-build "$helper" | grep 'minos 15.0'
-
-      - name: Package tarball + sha256
-        run: |
-          ver="${GITHUB_REF_NAME#v}"
-          name="shuo-v${ver}-aarch64-apple-darwin"
-          mkdir -p "dist/${name}"
-          cp target/release/shuo "dist/${name}/"
-          cp LICENSE README.md README.en.md "dist/${name}/"
-          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
-          (
-            cd dist
-            shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256"
-          )
-          ls -lh dist/
+      - name: Build and verify distribution artifact
+        run: make dist verify-dist
 
       - name: Render release body
         run: |

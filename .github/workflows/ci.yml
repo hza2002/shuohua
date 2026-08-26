@@ -49,6 +49,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          targets: aarch64-apple-darwin
 
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
@@ -61,3 +62,6 @@ jobs:
 
       - name: Test
         run: cargo test --locked
+
+      - name: Build and verify distribution artifact
+        run: make dist verify-dist

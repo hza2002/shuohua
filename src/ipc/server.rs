@@ -3,7 +3,8 @@
 use std::fs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -92,6 +93,19 @@ pub struct ServerControl {
     pub reload: crate::reload::Handle,
     pub started_at: Instant,
     pub shutdown: watch::Sender<bool>,
+    pub ready: Arc<AtomicBool>,
+}
+
+#[cfg(test)]
+impl ServerControl {
+    fn ready_for_test(reload: crate::reload::Handle, shutdown: watch::Sender<bool>) -> Self {
+        Self {
+            reload,
+            started_at: Instant::now(),
+            shutdown,
+            ready: Arc::new(AtomicBool::new(true)),
+        }
+    }
 }
 
 pub async fn run(
@@ -278,6 +292,7 @@ async fn handle_client(
                     Event::DaemonStatus {
                         pid: std::process::id(),
                         uptime_ms: control.started_at.elapsed().as_millis() as u64,
+                        ready: control.ready.load(Ordering::Acquire),
                         state: snapshot.state.into(),
                         recording_id: snapshot.recording_id,
                     },
@@ -294,6 +309,7 @@ async fn handle_client(
                     Event::DaemonStatus {
                         pid: std::process::id(),
                         uptime_ms: control.started_at.elapsed().as_millis() as u64,
+                        ready: control.ready.load(Ordering::Acquire),
                         state: snapshot.state.into(),
                         recording_id: snapshot.recording_id,
                     },
@@ -799,11 +815,7 @@ trigger = "f16"
             listener,
             state.clone(),
             history,
-            ServerControl {
-                reload,
-                started_at: Instant::now(),
-                shutdown: test_shutdown_sender(),
-            },
+            ServerControl::ready_for_test(reload, test_shutdown_sender()),
         ));
 
         let mut a = TestClient::connect(&path).await;
@@ -927,11 +939,7 @@ trigger = "f16"
         let _ = fs::remove_file(&sock);
         let listener = bind(&sock).await.unwrap();
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
-        let control = ServerControl {
-            reload: test_reload_handle(),
-            started_at: Instant::now(),
-            shutdown: shutdown_tx,
-        };
+        let control = ServerControl::ready_for_test(test_reload_handle(), shutdown_tx);
         let history = HistoryService::with_dir(
             std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate())),
         );
@@ -957,11 +965,7 @@ trigger = "f16"
         let _ = fs::remove_file(&sock);
         let listener = bind(&sock).await.unwrap();
         let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
-        let control = ServerControl {
-            reload: test_reload_handle(),
-            started_at: Instant::now(),
-            shutdown: shutdown_tx,
-        };
+        let control = ServerControl::ready_for_test(test_reload_handle(), shutdown_tx);
         let history = HistoryService::with_dir(
             std::env::temp_dir().join(format!("shuohua-ipc-history-{}", ulid::Ulid::generate())),
         );
@@ -1216,11 +1220,7 @@ trigger = "f16"
             listener,
             StateStore::new(),
             history,
-            ServerControl {
-                reload: test_reload_handle(),
-                started_at: Instant::now(),
-                shutdown: test_shutdown_sender(),
-            },
+            ServerControl::ready_for_test(test_reload_handle(), test_shutdown_sender()),
         ));
         let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
 
@@ -1275,11 +1275,7 @@ trigger = "f16"
             listener,
             StateStore::new(),
             history,
-            ServerControl {
-                reload: test_reload_handle(),
-                started_at: Instant::now(),
-                shutdown: test_shutdown_sender(),
-            },
+            ServerControl::ready_for_test(test_reload_handle(), test_shutdown_sender()),
         ));
         let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
 
@@ -1319,11 +1315,7 @@ trigger = "f16"
             listener,
             state,
             history.clone(),
-            ServerControl {
-                reload: test_reload_handle(),
-                started_at: Instant::now(),
-                shutdown: test_shutdown_sender(),
-            },
+            ServerControl::ready_for_test(test_reload_handle(), test_shutdown_sender()),
         ));
         let mut client = TestClient::connect(&path).await;
         client.subscribe().await;
@@ -1357,11 +1349,7 @@ trigger = "f16"
             listener,
             StateStore::new(),
             history.clone(),
-            ServerControl {
-                reload: test_reload_handle(),
-                started_at: Instant::now(),
-                shutdown: test_shutdown_sender(),
-            },
+            ServerControl::ready_for_test(test_reload_handle(), test_shutdown_sender()),
         ));
         let mut client = TestClient::connect(&path).await;
         client.subscribe().await;
@@ -1409,11 +1397,7 @@ trigger = "f16"
             listener,
             StateStore::new(),
             history,
-            ServerControl {
-                reload: test_reload_handle(),
-                started_at: Instant::now(),
-                shutdown: test_shutdown_sender(),
-            },
+            ServerControl::ready_for_test(test_reload_handle(), test_shutdown_sender()),
         ));
         let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
 
@@ -1458,11 +1442,7 @@ trigger = "f16"
             listener,
             StateStore::new(),
             history,
-            ServerControl {
-                reload: test_reload_handle(),
-                started_at: Instant::now(),
-                shutdown: test_shutdown_sender(),
-            },
+            ServerControl::ready_for_test(test_reload_handle(), test_shutdown_sender()),
         ));
         let mut client = TestClient::connect(&path).await;
         client.subscribe().await;
@@ -1517,11 +1497,7 @@ trigger = "f16"
             listener,
             StateStore::new(),
             history,
-            ServerControl {
-                reload: test_reload_handle(),
-                started_at: Instant::now(),
-                shutdown: test_shutdown_sender(),
-            },
+            ServerControl::ready_for_test(test_reload_handle(), test_shutdown_sender()),
         ));
         let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
 
@@ -1574,11 +1550,7 @@ trigger = "f16"
             listener,
             StateStore::new(),
             history,
-            ServerControl {
-                reload: test_reload_handle(),
-                started_at: Instant::now(),
-                shutdown: test_shutdown_sender(),
-            },
+            ServerControl::ready_for_test(test_reload_handle(), test_shutdown_sender()),
         ));
         let mut client = crate::ipc::client::IpcClient::connect(&sock).await.unwrap();
 

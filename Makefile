@@ -19,9 +19,9 @@ DIST_DIR := dist
 help:
 	@echo "Local shuohua development targets:"
 	@echo "  make debug           Build target/debug/shuo"
-	@echo "  make release         Build target/release/shuo"
-	@echo "  make dist            Build dist/$(RELEASE_NAME).tar.gz + .sha256"
-	@echo "  make verify-dist     Verify dist artifact checksum"
+	@echo "  make release         Build target/release/shuo for local development"
+	@echo "  make dist            Build a portable release tarball in a clean target dir"
+	@echo "  make verify-dist     Verify checksum, layout, Mach-O contract, and smoke test"
 	@echo "  make install         Release build, install to $(BIN), refresh zsh completion, install/restart launchd"
 	@echo "  make install-debug   Debug build, install/restart launchd from target/debug/shuo"
 	@echo "  make completions-zsh Refresh zsh completion at $(ZSH_COMPLETION)"
@@ -43,23 +43,17 @@ release:
 	$(CARGO) build --release
 
 .PHONY: dist
-dist: release
-	rm -rf "$(DIST_DIR)/$(RELEASE_NAME)" "$(DIST_DIR)/$(RELEASE_NAME).tar.gz" "$(DIST_DIR)/$(RELEASE_NAME).tar.gz.sha256"
-	mkdir -p "$(DIST_DIR)/$(RELEASE_NAME)"
-	cp "$(RELEASE_BIN)" "$(DIST_DIR)/$(RELEASE_NAME)/"
-	cp LICENSE README.md README.en.md "$(DIST_DIR)/$(RELEASE_NAME)/"
-	tar -C "$(DIST_DIR)" -czf "$(DIST_DIR)/$(RELEASE_NAME).tar.gz" "$(RELEASE_NAME)"
-	cd "$(DIST_DIR)" && shasum -a 256 "$(RELEASE_NAME).tar.gz" > "$(RELEASE_NAME).tar.gz.sha256"
+dist:
+	DIST_DIR="$(DIST_DIR)" CARGO="$(CARGO)" scripts/build-dist.sh
 
 .PHONY: verify-dist
 verify-dist:
-	cd "$(DIST_DIR)" && shasum -a 256 -c "$(RELEASE_NAME).tar.gz.sha256"
-	tar -tzf "$(DIST_DIR)/$(RELEASE_NAME).tar.gz" >/dev/null
+	scripts/verify-macos-dist.sh "$(DIST_DIR)/$(RELEASE_NAME).tar.gz"
 
 .PHONY: install
-install: release
+install: dist
 	mkdir -p "$(dir $(BIN))"
-	install -m 755 "$(RELEASE_BIN)" "$(BIN)"
+	install -m 755 "$(DIST_DIR)/$(RELEASE_NAME)/shuo" "$(BIN)"
 	$(MAKE) completions-zsh SHUO_BIN=$(BIN)
 	"$(BIN)" service install
 	"$(BIN)" version

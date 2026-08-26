@@ -153,6 +153,8 @@ pub enum Event {
     DaemonStatus {
         pid: u32,
         uptime_ms: u64,
+        #[serde(default = "default_ready")]
+        ready: bool,
         state: WireState,
         recording_id: Option<String>,
     },
@@ -164,6 +166,10 @@ pub enum Event {
         kind: String,
         msg: String,
     },
+}
+
+fn default_ready() -> bool {
+    true
 }
 
 pub fn encode_command(command: &Command) -> serde_json::Result<String> {
@@ -342,6 +348,16 @@ mod tests {
             let line = encode_command(&command).unwrap();
             assert_eq!(decode_command(&line).unwrap(), command);
         }
+    }
+
+    #[test]
+    fn old_daemon_status_without_ready_defaults_to_ready() {
+        let event = decode_event(
+            r#"{"event":"daemon_status","pid":42,"uptime_ms":1000,"state":"idle","recording_id":null}"#,
+        )
+        .unwrap();
+
+        assert!(matches!(event, Event::DaemonStatus { ready: true, .. }));
     }
 
     #[test]

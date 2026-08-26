@@ -50,6 +50,7 @@ async fn run_daemon_with_platform(
     state_store: StateStore,
     overlay_on_screen: Arc<AtomicBool>,
 ) -> Result<()> {
+    crate::daemon::permission_outcome::clear()?;
     let history = crate::history::HistoryService::new();
     let _history_watcher = match history.watch() {
         Ok(watcher) => Some(watcher),
@@ -61,6 +62,7 @@ async fn run_daemon_with_platform(
     let listener = crate::ipc::server::bind_default().await?;
     let socket_path = crate::ipc::server::default_socket_path();
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let ready = Arc::new(AtomicBool::new(false));
     let reload_for_overlay_actions = reload_handle.clone();
     tokio::spawn(async move {
         while let Some(action) = overlay_actions.recv().await {
@@ -75,8 +77,29 @@ async fn run_daemon_with_platform(
             reload: reload_handle,
             started_at: Instant::now(),
             shutdown: shutdown_tx,
+            ready: ready.clone(),
         },
     ));
+
+    tokio::select! {
+        permission = crate::platform::permissions::preflight_runtime_permissions() => {
+            if let crate::platform::permissions::RuntimePermissionState::ActionRequired(permission) = permission {
+                tracing::warn!(?permission, "runtime permission action required; daemon will stop");
+                overlay.send(OverlayCmd::Quit);
+                return Ok(());
+            }
+        }
+        ipc_result = &mut ipc_task => {
+            return Err(classify_ipc_exit(ipc_result));
+        }
+        changed = shutdown_rx.changed() => {
+            if changed.is_ok() && *shutdown_rx.borrow_and_update() {
+                tracing::info!("shutdown requested during permission preflight");
+                overlay.send(OverlayCmd::Quit);
+                return Ok(());
+            }
+        }
+    }
 
     crate::reload::spawn_overlay(cfg_rx.clone(), overlay.clone());
     crate::reload::spawn_i18n(cfg_rx.clone(), overlay.clone());
@@ -85,6 +108,7 @@ async fn run_daemon_with_platform(
 
     let mut hotkey_input =
         HotkeyInput::spawn(&platform, &initial_hotkeys, overlay_on_screen.clone())?;
+    ready.store(true, Ordering::Release);
 
     tracing::info!(
         uds = %socket_path.display(),

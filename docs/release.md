@@ -239,8 +239,9 @@ shuo-vX.Y.Z-aarch64-apple-darwin/
 artifact 大小首次发布后记录在发版总结里。后续版本如果偏离基线约 50%，先停下调查。
 
 verifier 会对解包后的真实 artifact 检查 checksum、固定目录结构、纯 `arm64` 架构、
-`minos 15.0`、Xcode 26+ SDK、系统动态库 allowlist，并执行 `shuo --version`。`make dist`
-还会对构建阶段生成的 `apple_helper` 和 `apple_capture_helper` 执行相同 Mach-O 检查。
+`minos 15.0`、Xcode 26+ SDK、系统动态库 allowlist、bundle identity 和麦克风用途声明，
+并执行 `shuo --version`。`make dist` 还会对构建阶段生成的 `apple_helper` 和
+`apple_capture_helper` 执行适用的 Mach-O 与权限声明检查。
 
 ## 11. 真实试装
 

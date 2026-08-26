@@ -2,6 +2,18 @@
 
 本文件只记录公开发布版本的用户可感知变化，最新版本在最上面。
 
+## v0.6.1 - 2026-08-26
+
+### Changed
+
+- `make install` 现在与 GitHub Release 共用独立的 arm64 分发构建，避免本机 Homebrew 环境影响安装结果。
+
+### Fixed
+
+- 首次安装或升级后，shuo 现在由实际 daemon 依次请求 Microphone 和 Accessibility 权限；完成每项授权后重新运行启动命令即可，不会误报服务已就绪或被 launchd 循环拉起。
+- macOS 发布包只允许链接 Apple 系统动态库，并校验主程序与内嵌 helper 的架构、最低系统版本、SDK 和权限声明，避免向用户交付依赖 Homebrew 的 binary。
+- launchd 现在会保留自定义 `XDG_STATE_HOME`，确保 CLI 与 daemon 在非默认 state 目录下共享权限引导结果。
+
 ## v0.6.0 - 2026-07-19
 
 ### Added

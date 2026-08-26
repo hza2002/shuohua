@@ -86,7 +86,7 @@ pub fn run(writer: PipeWriter, suppressor: Arc<Mutex<Suppressor>>) -> Result<()>
     .map_err(|_| {
         anyhow!(
             "CGEventTapCreate failed. Default-mode taps require Accessibility \
-             permission — grant it to the terminal running `shuo` in System \
+             permission — grant it to the running `shuo` binary in System \
              Settings → Privacy & Security → Accessibility."
         )
     })?;

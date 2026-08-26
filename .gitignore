@@ -5,6 +5,7 @@
 
 # Local scratch/output
 /tmp/
+/dist/
 docs/superpowers/
 docs/archive/
 

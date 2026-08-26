@@ -86,10 +86,11 @@ This requires stable Rust, the Xcode 26 SDK, and an Apple Silicon Mac:
 ```bash
 git clone https://github.com/hza2002/shuohua.git
 cd shuohua
-cargo build --release
-mkdir -p ~/.local/bin
-install -m 755 target/release/shuo ~/.local/bin/shuo
+make install
 ```
+
+`make install` uses the same standalone distribution build entry point as
+GitHub Releases and does not link Homebrew or other third-party dynamic libraries.
 
 </details>
 
@@ -142,13 +143,18 @@ time while it establishes the connection.
 
 The template command never overwrites existing files. Use an empty directory if you need to export them again.
 
-### 2. Diagnose and grant permissions
+### 2. Diagnose the environment
 
 ```bash
 shuo doctor
 ```
 
-Grant Microphone and Accessibility access as instructed. To exercise the configured ASR and LLM runtime paths:
+shuohua requires only Microphone and Accessibility at runtime. The daemon checks
+them in sequence when it starts: it shows the system prompt when Microphone is
+undetermined, requests the Microphone settings pane when access was denied, and
+shows the native Accessibility prompt when that permission is missing. macOS
+opens System Settings only after the user chooses that action. To exercise the
+configured ASR and LLM runtime paths:
 
 ```bash
 shuo doctor --runtime
@@ -162,6 +168,12 @@ shuo service status
 ```
 
 `shuo service install` installs and starts a per-user launchd service. Then:
+
+If macOS opens a Microphone or Accessibility page under Privacy & Security,
+enable the matching `shuo` entry, then run `shuo service start` again. The
+daemon does not poll in the background or repeatedly reopen System Settings.
+After the first native Microphone dialog completes, that daemon also exits; the
+`service` command does not wait for user input.
 
 1. Focus any text field and double-tap Right Option (Right Alt) to start recording.
 2. Double-tap Right Option (Right Alt) again to stop and finish transcription.
@@ -179,7 +191,23 @@ shuohua requires two macOS permissions:
 | Microphone | Capture speech |
 | Accessibility | Observe the global hotkey and synthesize `Cmd+V` |
 
-Current releases are unsigned. macOS TCC identifies unsigned tools by binary content, so replacing the binary during an upgrade normally requires granting both permissions again. Run `shuo doctor` after upgrading and follow its instructions.
+Current releases are unsigned. macOS TCC identifies unsigned tools by binary
+content, so replacing the binary during an upgrade normally requires granting
+both permissions again. Run `shuo service restart` after upgrading; the daemon
+shows the system UI for the first missing permission and ends that start
+attempt. Grant access, then run `shuo service start` again. If both permissions
+need to be granted again, follow each prompt and rerun the command until the
+service starts. shuo does not poll System Settings or impose a timeout on user
+interaction: a start attempt that displays permission UI never becomes the
+running service.
+
+For an unsigned command-line tool, macOS records the code identity at each
+executable path. Running `/usr/local/bin/shuo`, a repository
+`target/debug/shuo`, and `~/.local/bin/shuo` can therefore produce several
+entries with the same display name. Regular users should consistently use the
+supported `~/.local/bin/shuo` path. Developers may keep and authorize separate
+installed and source-build entries. shuohua does not modify the system TCC
+database.
 
 For later upgrades:
 
@@ -261,7 +289,8 @@ shuo service status
 
 Common fixes:
 
-- Hotkeys or recording stop working after an upgrade: grant Microphone and Accessibility again.
+- Hotkeys or recording stop working after an upgrade: run `shuo service restart`
+  and grant Microphone and Accessibility through the system UI it requests.
 - Configuration fails to load: use the exact file and field reported by `shuo doctor`.
 - The daemon is unhealthy: run `shuo service restart`, then inspect
   `~/.local/state/shuohua/logs/`.

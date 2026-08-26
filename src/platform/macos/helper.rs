@@ -33,8 +33,10 @@ pub fn decode_pcm_frame(frame: &[u8]) -> Result<PcmFrame> {
     }
 
     let mut samples = Vec::with_capacity(sample_count);
-    for chunk in frame[5..].chunks_exact(2) {
-        samples.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+    let (sample_bytes, remainder) = frame[5..].as_chunks::<2>();
+    debug_assert!(remainder.is_empty());
+    for &sample in sample_bytes {
+        samples.push(i16::from_le_bytes(sample));
     }
     Ok(PcmFrame { samples, is_last })
 }

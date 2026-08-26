@@ -1,35 +1,69 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub fn run_smart_fallback() -> Result<()> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("create TUI runtime")?;
     let socket = crate::ipc::server::default_socket_path();
     match socket_status(&socket) {
-        SocketStatus::AcceptsConnections => {}
+        SocketStatus::AcceptsConnections => {
+            match rt.block_on(wait_for_daemon_ready(None, Duration::from_secs(2)))? {
+                WaitOutcome::Ready => {}
+                WaitOutcome::PermissionPreflight(outcome) => {
+                    anyhow::bail!(
+                        "{:?} permission is required for {}; complete the system prompt, then run `shuo` again",
+                        outcome.permission,
+                        outcome.executable.display()
+                    );
+                }
+            }
+        }
         SocketStatus::Absent => {
+            crate::daemon::permission_outcome::clear()?;
             let stderr = smart_fallback_log("smart.stderr.log")?;
             let stdout = smart_fallback_log("smart.stdout.log")?;
-            let child = Command::new(std::env::current_exe().context("resolve current exe")?)
+            let mut child = Command::new(std::env::current_exe().context("resolve current exe")?)
                 .arg("--daemon")
                 .stdin(Stdio::null())
                 .stdout(Stdio::from(stdout))
                 .stderr(Stdio::from(stderr))
                 .spawn()
                 .context("spawn shuo --daemon")?;
-            drop(child);
-            wait_for_socket(&socket, Duration::from_secs(2))?;
+            match rt.block_on(wait_for_daemon_ready(
+                Some(&mut child),
+                Duration::from_secs(2),
+            )) {
+                Ok(WaitOutcome::Ready) => {}
+                Ok(WaitOutcome::PermissionPreflight(outcome)) => {
+                    anyhow::bail!(
+                        "{:?} permission is required for {}; this daemon will exit after the system prompt completes, then run `shuo` again",
+                        outcome.permission,
+                        outcome.executable.display()
+                    );
+                }
+                Err(error) => {
+                    terminate_child(&mut child);
+                    return Err(error);
+                }
+            }
         }
         SocketStatus::Inaccessible(error) => {
             return Err(error).with_context(|| format!("connect UDS {}", socket.display()));
         }
     }
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("create TUI runtime")?;
     rt.block_on(crate::tui::run())
+}
+
+fn terminate_child(child: &mut std::process::Child) {
+    if child.try_wait().ok().flatten().is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 fn smart_fallback_log(name: &str) -> Result<std::fs::File> {
@@ -41,10 +75,6 @@ fn smart_fallback_log(name: &str) -> Result<std::fs::File> {
         .append(true)
         .open(&path)
         .with_context(|| format!("open {}", path.display()))
-}
-
-fn socket_accepts_connections(path: &Path) -> bool {
-    matches!(socket_status(path), SocketStatus::AcceptsConnections)
 }
 
 enum SocketStatus {
@@ -67,15 +97,64 @@ fn socket_status(path: &Path) -> SocketStatus {
     socket_status_from_connect_result(std::os::unix::net::UnixStream::connect(path).map(|_| ()))
 }
 
-fn wait_for_socket(path: &Path, timeout: Duration) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if socket_accepts_connections(path) {
-            return Ok(());
+async fn wait_for_daemon_ready(
+    mut child: Option<&mut std::process::Child>,
+    timeout: Duration,
+) -> Result<WaitOutcome> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        if let Some(outcome) = crate::daemon::permission_outcome::read()? {
+            return Ok(WaitOutcome::PermissionPreflight(outcome));
         }
-        std::thread::sleep(Duration::from_millis(50));
+        match daemon_ready().await? {
+            Some(true) => return Ok(WaitOutcome::Ready),
+            Some(false) => {}
+            None => {}
+        }
+        if let Some(child) = child.as_deref_mut() {
+            if child
+                .try_wait()
+                .context("check shuo --daemon status")?
+                .is_some()
+            {
+                if let Some(outcome) = crate::daemon::permission_outcome::read()? {
+                    return Ok(WaitOutcome::PermissionPreflight(outcome));
+                }
+                anyhow::bail!(
+                    "daemon stopped before becoming ready; inspect the daemon log and run `shuo` again"
+                );
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    anyhow::bail!("daemon did not accept UDS connections within {:?}", timeout)
+    anyhow::bail!(
+        "daemon did not become ready within {:?}; inspect the daemon log",
+        timeout
+    )
+}
+
+enum WaitOutcome {
+    Ready,
+    PermissionPreflight(crate::daemon::permission_outcome::PermissionOutcome),
+}
+
+async fn daemon_ready() -> Result<Option<bool>> {
+    let mut client =
+        match crate::ipc::client::IpcClient::connect(crate::ipc::server::default_socket_path())
+            .await
+        {
+            Ok(client) => client,
+            Err(error) if crate::ipc::client::connect_error_is_absent(&error) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+    client
+        .send(&crate::ipc::protocol::Command::DaemonStatus)
+        .await?;
+    match client.recv().await? {
+        Some(crate::ipc::protocol::Event::DaemonStatus { ready, .. }) => Ok(Some(ready)),
+        Some(event) => anyhow::bail!("expected DaemonStatus, received {event:?}"),
+        None => Ok(None),
+    }
 }
 
 #[cfg(test)]

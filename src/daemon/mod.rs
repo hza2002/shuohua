@@ -2,6 +2,7 @@ mod active_session;
 mod fallback;
 mod hotkey_input;
 mod lock;
+pub(crate) mod permission_outcome;
 mod process;
 mod resume;
 mod runtime;

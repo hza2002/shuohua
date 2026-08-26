@@ -1,6 +1,6 @@
 use std::fs;
 use std::future::Future;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
@@ -35,7 +35,8 @@ pub fn launchd_status() -> super::LaunchdStatus {
 }
 
 pub async fn install() -> Result<()> {
-    install_with(ensure_accessibility_for_service, run_launchctl, |plist| {
+    crate::daemon::permission_outcome::clear()?;
+    install_with(run_launchctl, |plist| {
         println!(
             "{}",
             crate::i18n::tr(
@@ -54,12 +55,10 @@ pub async fn install() -> Result<()> {
 }
 
 async fn install_with(
-    request_accessibility: impl FnOnce(),
     run_launchctl: impl Fn(&[&str], &str) -> Result<()>,
     print_installed: impl FnOnce(&std::path::Path),
 ) -> Result<()> {
     install_with_plan(
-        request_accessibility,
         write_service_plist,
         run_launchctl,
         wait_for_daemon_ready,
@@ -69,7 +68,6 @@ async fn install_with(
 }
 
 async fn install_with_plan<F>(
-    request_accessibility: impl FnOnce(),
     write_plist: impl FnOnce() -> Result<PathBuf>,
     run_launchctl: impl Fn(&[&str], &str) -> Result<()>,
     wait_ready: impl FnOnce() -> F,
@@ -78,7 +76,6 @@ async fn install_with_plan<F>(
 where
     F: Future<Output = Result<()>>,
 {
-    request_accessibility();
     let plist = write_plist()?;
     bootstrap_written_plist(&plist, run_launchctl)?;
     wait_ready().await?;
@@ -88,6 +85,7 @@ where
 
 fn write_service_plist() -> Result<PathBuf> {
     let state_dir = crate::paths::StateDirs::discover().root().to_path_buf();
+    let xdg_state_home = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from);
     std::fs::create_dir_all(&state_dir)
         .with_context(|| tr_path("cli.service.create_state_dir_failed", &state_dir))?;
     let plist = plist_path();
@@ -97,7 +95,7 @@ fn write_service_plist() -> Result<PathBuf> {
     }
     let exe =
         std::env::current_exe().context(crate::i18n::tr("cli.service.resolve_exe_failed", &[]))?;
-    let body = plist_body(&exe, &state_dir);
+    let body = plist_body(&exe, &state_dir, xdg_state_home.as_deref());
     std::fs::write(&plist, body)
         .with_context(|| tr_path("cli.service.write_plist_failed", &plist))?;
     Ok(plist)
@@ -146,22 +144,17 @@ pub fn uninstall() -> Result<()> {
 }
 
 pub async fn start() -> Result<()> {
-    start_with(
-        ensure_accessibility_for_service,
-        run_launchctl,
-        wait_for_daemon_ready,
-        || {
-            println!(
-                "{}",
-                crate::i18n::tr("cli.service.started", &[("label", LABEL.to_string())])
-            );
-        },
-    )
+    crate::daemon::permission_outcome::clear()?;
+    start_with(run_launchctl, wait_for_daemon_ready, || {
+        println!(
+            "{}",
+            crate::i18n::tr("cli.service.started", &[("label", LABEL.to_string())])
+        );
+    })
     .await
 }
 
 fn start_with<F>(
-    request_accessibility: impl FnOnce(),
     run_launchctl: impl FnOnce(&[&str], &str) -> Result<()>,
     wait_ready: impl FnOnce() -> F,
     print_started: impl FnOnce(),
@@ -169,16 +162,10 @@ fn start_with<F>(
 where
     F: Future<Output = Result<()>>,
 {
-    start_with_plan(
-        request_accessibility,
-        run_launchctl,
-        wait_ready,
-        print_started,
-    )
+    start_with_plan(run_launchctl, wait_ready, print_started)
 }
 
 async fn start_with_plan<F>(
-    request_accessibility: impl FnOnce(),
     run_launchctl: impl FnOnce(&[&str], &str) -> Result<()>,
     wait_ready: impl FnOnce() -> F,
     print_started: impl FnOnce(),
@@ -186,7 +173,6 @@ async fn start_with_plan<F>(
 where
     F: Future<Output = Result<()>>,
 {
-    request_accessibility();
     run_launchctl(
         &["kickstart", "-k", &format!("{}/{}", gui_domain(), LABEL)],
         "cli.service.action_start",
@@ -194,21 +180,6 @@ where
     wait_ready().await?;
     print_started();
     Ok(())
-}
-
-fn ensure_accessibility_for_service() {
-    ensure_accessibility_trust(crate::platform::permissions::accessibility_trusted, || {
-        let _ = crate::platform::permissions::request_accessibility_trust();
-    });
-}
-
-fn ensure_accessibility_trust(
-    accessibility_trusted: impl FnOnce() -> bool,
-    request: impl FnOnce(),
-) {
-    if !accessibility_trusted() {
-        request();
-    }
 }
 
 pub async fn stop() -> Result<()> {
@@ -354,8 +325,8 @@ where
 
 pub async fn status() -> Result<()> {
     match tokio::time::timeout(DAEMON_STATUS_TIMEOUT, uds_status()).await {
-        Ok(Ok(Some(line))) => {
-            println!("{line}");
+        Ok(Ok(Some(status))) => {
+            println!("{}", status.line);
         }
         Ok(Ok(None)) => {
             println!(
@@ -374,14 +345,8 @@ pub async fn status() -> Result<()> {
     }
     let plist = plist_path();
     if plist.exists() {
-        let diagnostic = latest_launchd_accessibility_diagnostic();
         let findings = install_drift_findings();
-        write_launchd_diagnostics(
-            &mut std::io::stdout(),
-            &plist,
-            diagnostic.as_deref(),
-            &findings,
-        )?;
+        write_launchd_diagnostics(&mut std::io::stdout(), &plist, &findings)?;
     } else {
         println!(
             "launchd.plist: {}",
@@ -397,7 +362,6 @@ pub async fn status() -> Result<()> {
 fn write_launchd_diagnostics(
     out: &mut impl Write,
     plist: &std::path::Path,
-    accessibility_diagnostic: Option<&str>,
     drift_findings: &[crate::install::DriftFinding],
 ) -> Result<()> {
     writeln!(
@@ -408,16 +372,18 @@ fn write_launchd_diagnostics(
             &[("path", plist.display().to_string())]
         )
     )?;
-    if let Some(diagnostic) = accessibility_diagnostic {
-        writeln!(out, "{diagnostic}")?;
-    }
     for finding in drift_findings {
         writeln!(out, "{}", crate::install::render_drift(finding))?;
     }
     Ok(())
 }
 
-async fn uds_status() -> Result<Option<String>> {
+struct DaemonProbe {
+    line: String,
+    ready: bool,
+}
+
+async fn uds_status() -> Result<Option<DaemonProbe>> {
     let mut client =
         match crate::ipc::client::IpcClient::connect(crate::ipc::server::default_socket_path())
             .await
@@ -432,13 +398,17 @@ async fn uds_status() -> Result<Option<String>> {
             Event::DaemonStatus {
                 pid,
                 uptime_ms,
+                ready,
                 state,
                 recording_id,
-            } => Ok(ControlFlow::Break(format!(
-                "daemon: running pid={pid} uptime={} state={state:?} recording={}",
-                format_duration(uptime_ms),
-                recording_id.as_deref().unwrap_or("-")
-            ))),
+            } => Ok(ControlFlow::Break(DaemonProbe {
+                line: format!(
+                    "daemon: running pid={pid} uptime={} ready={ready} state={state:?} recording={}",
+                    format_duration(uptime_ms),
+                    recording_id.as_deref().unwrap_or("-")
+                ),
+                ready,
+            })),
             Event::Error { kind, msg, .. } => anyhow::bail!("{kind}: {msg}"),
             _ => Ok(ControlFlow::Continue(())),
         })
@@ -446,26 +416,37 @@ async fn uds_status() -> Result<Option<String>> {
 }
 
 async fn wait_for_daemon_ready() -> Result<()> {
-    wait_for_daemon_ready_with(uds_status).await
+    wait_for_daemon_ready_with(uds_status, crate::daemon::permission_outcome::read).await
 }
 
-async fn wait_for_daemon_ready_with<F, Fut>(mut probe: F) -> Result<()>
+async fn wait_for_daemon_ready_with<F, Fut>(
+    mut probe: F,
+    mut read_permission_outcome: impl FnMut() -> Result<
+        Option<crate::daemon::permission_outcome::PermissionOutcome>,
+    >,
+) -> Result<()>
 where
     F: FnMut() -> Fut,
-    Fut: Future<Output = Result<Option<String>>>,
+    Fut: Future<Output = Result<Option<DaemonProbe>>>,
 {
     let deadline = tokio::time::Instant::now() + DAEMON_START_TIMEOUT;
     let mut consecutive_ready = 0u8;
     let mut last_error = None;
     while tokio::time::Instant::now() < deadline {
+        if let Some(outcome) = read_permission_outcome()? {
+            anyhow::bail!("{}", permission_required_message(&outcome));
+        }
         match probe().await {
-            Ok(Some(_)) => {
+            Ok(Some(DaemonProbe { ready: true, .. })) => {
                 consecutive_ready += 1;
                 if consecutive_ready >= 2 {
                     return Ok(());
                 }
             }
             Ok(None) => {
+                consecutive_ready = 0;
+            }
+            Ok(Some(DaemonProbe { ready: false, .. })) => {
                 consecutive_ready = 0;
             }
             Err(error) => {
@@ -482,15 +463,27 @@ where
     if let Some(error) = last_error {
         msg.push_str(&format!("\n{error:#}"));
     }
-    if let Some(diagnostic) = latest_launchd_accessibility_diagnostic() {
-        msg.push('\n');
-        msg.push_str(&diagnostic);
-    }
     for finding in install_drift_findings() {
         msg.push('\n');
         msg.push_str(&crate::install::render_drift(&finding));
     }
     anyhow::bail!("{msg}")
+}
+
+fn permission_required_message(
+    outcome: &crate::daemon::permission_outcome::PermissionOutcome,
+) -> String {
+    let permission = match outcome.permission {
+        crate::platform::permissions::RuntimePermission::Microphone => "Microphone",
+        crate::platform::permissions::RuntimePermission::Accessibility => "Accessibility",
+    };
+    crate::i18n::tr(
+        "cli.service.permission_required",
+        &[
+            ("permission", permission.to_string()),
+            ("path", outcome.executable.display().to_string()),
+        ],
+    )
 }
 
 fn install_drift_findings() -> Vec<crate::install::DriftFinding> {
@@ -508,86 +501,6 @@ fn install_drift_findings() -> Vec<crate::install::DriftFinding> {
         plist.as_deref(),
         path_first.as_deref(),
     )
-}
-
-fn latest_launchd_accessibility_diagnostic() -> Option<String> {
-    let log = read_recent_daemon_logs().ok()?;
-    let exe = plist_program_argument(&plist_path()).or_else(|| std::env::current_exe().ok())?;
-    launchd_accessibility_diagnostic(&log, &exe)
-}
-
-fn launchd_accessibility_diagnostic(log: &str, exe: &std::path::Path) -> Option<String> {
-    if !log.contains("CGEventTapCreate failed") || !log.contains("Accessibility") {
-        return None;
-    }
-    Some(crate::i18n::tr(
-        "cli.service.diagnostic_accessibility",
-        &[("path", exe.display().to_string())],
-    ))
-}
-
-fn read_recent_daemon_logs() -> Result<String> {
-    let state_dir = crate::paths::StateDirs::discover().root().to_path_buf();
-    let mut combined = String::new();
-    for path in [
-        Some(state_dir.join("launchd.stderr.log")),
-        latest_daemon_log_path(&state_dir)?,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if let Ok(text) = read_tail(&path, 16 * 1024) {
-            combined.push_str(&text);
-            combined.push('\n');
-        }
-    }
-    Ok(combined)
-}
-
-fn latest_daemon_log_path(state_dir: &std::path::Path) -> Result<Option<PathBuf>> {
-    let logs_dir = state_dir.join("logs");
-    let mut latest = None;
-    for entry in match fs::read_dir(&logs_dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).with_context(|| format!("read {}", logs_dir.display())),
-    } {
-        let entry = entry.with_context(|| format!("read entry under {}", logs_dir.display()))?;
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if !name.starts_with("shuo-") || !name.ends_with(".log") {
-            continue;
-        }
-        let modified = entry
-            .metadata()
-            .with_context(|| format!("stat {}", path.display()))?
-            .modified()
-            .with_context(|| format!("modified time {}", path.display()))?;
-        if latest
-            .as_ref()
-            .is_none_or(|(latest_modified, _)| modified > *latest_modified)
-        {
-            latest = Some((modified, path));
-        }
-    }
-    Ok(latest.map(|(_, path)| path))
-}
-
-fn read_tail(path: &std::path::Path, max_bytes: u64) -> Result<String> {
-    let mut file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let len = file
-        .metadata()
-        .with_context(|| format!("stat {}", path.display()))?
-        .len();
-    let start = len.saturating_sub(max_bytes);
-    file.seek(SeekFrom::Start(start))
-        .with_context(|| format!("seek {}", path.display()))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .with_context(|| format!("read {}", path.display()))?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn plist_program_argument(plist: &std::path::Path) -> Option<PathBuf> {
@@ -661,7 +574,17 @@ fn launchctl_failure_message(
     )
 }
 
-fn plist_body(exe: &std::path::Path, state_dir: &std::path::Path) -> String {
+fn plist_body(
+    exe: &std::path::Path,
+    state_dir: &std::path::Path,
+    xdg_state_home: Option<&std::path::Path>,
+) -> String {
+    let environment = xdg_state_home.map_or_else(String::new, |path| {
+        format!(
+            "  <key>EnvironmentVariables</key>\n  <dict>\n    <key>XDG_STATE_HOME</key>\n    <string>{}</string>\n  </dict>\n",
+            xml_escape(&path.display().to_string())
+        )
+    });
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -686,7 +609,7 @@ fn plist_body(exe: &std::path::Path, state_dir: &std::path::Path) -> String {
   <integer>10</integer>
   <key>ProcessType</key>
   <string>Interactive</string>
-  <key>StandardOutPath</key>
+{environment}  <key>StandardOutPath</key>
   <string>{}/launchd.stdout.log</string>
   <key>StandardErrorPath</key>
   <string>{}/launchd.stderr.log</string>
@@ -762,12 +685,43 @@ mod tests {
         assert!(msg.contains("service not found"), "{msg}");
     }
 
+    #[test]
+    fn plist_preserves_custom_xdg_state_home_for_launchd() {
+        let body = super::plist_body(
+            std::path::Path::new("/Users/u/.local/bin/shuo"),
+            std::path::Path::new("/Volumes/state & data/shuohua"),
+            Some(std::path::Path::new("/Volumes/state & data")),
+        );
+
+        assert!(body.contains("<key>EnvironmentVariables</key>"), "{body}");
+        assert!(body.contains("<key>XDG_STATE_HOME</key>"), "{body}");
+        assert!(
+            body.contains("<string>/Volumes/state &amp; data</string>"),
+            "{body}"
+        );
+        assert!(
+            body.contains("<string>/Volumes/state &amp; data/shuohua/launchd.stdout.log</string>"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn plist_omits_xdg_state_home_when_not_configured() {
+        let body = super::plist_body(
+            std::path::Path::new("/Users/u/.local/bin/shuo"),
+            std::path::Path::new("/Users/u/.local/state/shuohua"),
+            None,
+        );
+
+        assert!(!body.contains("EnvironmentVariables"), "{body}");
+        assert!(!body.contains("XDG_STATE_HOME"), "{body}");
+    }
+
     #[tokio::test(flavor = "current_thread")]
-    async fn start_requests_accessibility_before_launchctl() {
+    async fn start_launches_service_before_health_check() {
         let calls = RefCell::new(Vec::<String>::new());
 
         super::start_with_plan(
-            || calls.borrow_mut().push("accessibility".to_string()),
             |_, _| {
                 calls.borrow_mut().push("launchctl".to_string());
                 Ok(())
@@ -781,10 +735,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(
-            &*calls.borrow(),
-            &["accessibility", "launchctl", "health", "print"]
-        );
+        assert_eq!(&*calls.borrow(), &["launchctl", "health", "print"]);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -792,7 +743,6 @@ mod tests {
         let calls = RefCell::new(Vec::<String>::new());
 
         let err = super::start_with_plan(
-            || calls.borrow_mut().push("accessibility".to_string()),
             |_, _| {
                 calls.borrow_mut().push("launchctl".to_string());
                 Ok(())
@@ -807,16 +757,15 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("daemon did not stay running"));
-        assert_eq!(&*calls.borrow(), &["accessibility", "launchctl", "health"]);
+        assert_eq!(&*calls.borrow(), &["launchctl", "health"]);
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn install_requests_accessibility_before_launchctl() {
+    async fn install_launches_service_before_health_check() {
         let calls = RefCell::new(Vec::<String>::new());
         let plist = std::path::PathBuf::from("/tmp/com.hza2002.shuohua.plist");
 
         super::install_with_plan(
-            || calls.borrow_mut().push("accessibility".to_string()),
             || Ok(plist.clone()),
             |_, action| {
                 calls.borrow_mut().push(action.to_string());
@@ -834,7 +783,6 @@ mod tests {
         assert_eq!(
             &*calls.borrow(),
             &[
-                "accessibility",
                 "cli.service.action_uninstall",
                 "cli.service.action_install",
                 "cli.service.action_start",
@@ -848,76 +796,87 @@ mod tests {
     async fn wait_for_daemon_ready_requires_two_successful_probes() {
         let probes = RefCell::new(
             vec![
-                Ok(Some("daemon: running pid=1".to_string())),
-                Ok(Some("daemon: running pid=1".to_string())),
+                Ok(Some(super::DaemonProbe {
+                    line: "daemon: running pid=1".to_string(),
+                    ready: true,
+                })),
+                Ok(Some(super::DaemonProbe {
+                    line: "daemon: running pid=1".to_string(),
+                    ready: true,
+                })),
             ]
             .into_iter(),
         );
 
-        super::wait_for_daemon_ready_with(|| {
-            let next = probes.borrow_mut().next().unwrap();
-            async move { next }
-        })
+        super::wait_for_daemon_ready_with(
+            || {
+                let next = probes.borrow_mut().next().unwrap();
+                async move { next }
+            },
+            || Ok(None),
+        )
         .await
         .unwrap();
     }
 
-    #[test]
-    fn ensure_accessibility_trust_skips_prompt_when_already_trusted() {
-        let calls = RefCell::new(Vec::<String>::new());
-
-        super::ensure_accessibility_trust(
-            || {
-                calls.borrow_mut().push("check".to_string());
-                true
-            },
-            || calls.borrow_mut().push("prompt".to_string()),
+    #[tokio::test(flavor = "current_thread")]
+    async fn wait_for_daemon_ready_does_not_count_starting_probe() {
+        let probes = RefCell::new(
+            vec![
+                Ok(Some(super::DaemonProbe {
+                    line: "daemon: starting".to_string(),
+                    ready: false,
+                })),
+                Ok(Some(super::DaemonProbe {
+                    line: "daemon: ready".to_string(),
+                    ready: true,
+                })),
+                Ok(Some(super::DaemonProbe {
+                    line: "daemon: ready".to_string(),
+                    ready: true,
+                })),
+            ]
+            .into_iter(),
         );
 
-        assert_eq!(&*calls.borrow(), &["check"]);
-    }
-
-    #[test]
-    fn ensure_accessibility_trust_prompts_when_not_trusted() {
-        let calls = RefCell::new(Vec::<String>::new());
-
-        super::ensure_accessibility_trust(
+        super::wait_for_daemon_ready_with(
             || {
-                calls.borrow_mut().push("check".to_string());
-                false
+                let next = probes.borrow_mut().next().unwrap();
+                async move { next }
             },
-            || calls.borrow_mut().push("prompt".to_string()),
-        );
-
-        assert_eq!(&*calls.borrow(), &["check", "prompt"]);
-    }
-
-    #[test]
-    fn launchd_accessibility_diagnostic_detects_event_tap_failure() {
-        crate::i18n::init("en-US");
-        let log = "\
-2026-06-30T01:49:54.045+08:00  INFO daemon ready uds=/tmp/shuohua-501.sock trigger=F16
-2026-06-30T01:49:54.049+08:00 ERROR hotkey event tap exited error=CGEventTapCreate failed. Default-mode taps require Accessibility permission
-";
-
-        let diagnostic = super::launchd_accessibility_diagnostic(
-            log,
-            std::path::Path::new("/usr/local/bin/shuo"),
+            || Ok(None),
         )
+        .await
         .unwrap();
 
-        assert!(diagnostic.contains("Accessibility"), "{diagnostic}");
-        assert!(diagnostic.contains("/usr/local/bin/shuo"), "{diagnostic}");
+        assert!(probes.borrow_mut().next().is_none());
     }
 
-    #[test]
-    fn launchd_accessibility_diagnostic_ignores_unrelated_logs() {
-        let diagnostic = super::launchd_accessibility_diagnostic(
-            "2026-06-30T01:49:54Z ERROR something else",
-            std::path::Path::new("/usr/local/bin/shuo"),
-        );
+    #[tokio::test(flavor = "current_thread")]
+    async fn wait_for_daemon_ready_fails_immediately_for_permission_outcome() {
+        crate::i18n::init("en-US");
+        let probes = Cell::new(0);
+        let outcome = crate::daemon::permission_outcome::PermissionOutcome {
+            permission: crate::platform::permissions::RuntimePermission::Accessibility,
+            executable: std::path::PathBuf::from("/Users/u/.local/bin/shuo"),
+        };
 
-        assert!(diagnostic.is_none());
+        let error = super::wait_for_daemon_ready_with(
+            || {
+                probes.set(probes.get() + 1);
+                async { Ok(None) }
+            },
+            || Ok(Some(outcome.clone())),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(probes.get(), 0);
+        assert!(error.to_string().contains("Accessibility"), "{error:#}");
+        assert!(
+            error.to_string().contains("/Users/u/.local/bin/shuo"),
+            "{error:#}"
+        );
     }
 
     #[test]
@@ -930,7 +889,7 @@ mod tests {
             preferred: std::path::PathBuf::from("/Users/u/.local/bin/shuo"),
         };
 
-        super::write_launchd_diagnostics(&mut out, plist, None, &[finding]).unwrap();
+        super::write_launchd_diagnostics(&mut out, plist, &[finding]).unwrap();
 
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("launchd.plist: installed"), "{text}");
@@ -973,6 +932,7 @@ mod tests {
         let pid = super::parse_shutdown_reply(Some(Event::DaemonStatus {
             pid: 42,
             uptime_ms: 1,
+            ready: true,
             state: WireState::Idle,
             recording_id: None,
         }))
@@ -999,6 +959,7 @@ mod tests {
             let error = super::parse_shutdown_reply(Some(Event::DaemonStatus {
                 pid,
                 uptime_ms: 1,
+                ready: true,
                 state: WireState::Idle,
                 recording_id: None,
             }))

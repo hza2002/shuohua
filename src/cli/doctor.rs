@@ -733,10 +733,12 @@ async fn query_daemon_status() -> Result<Option<String>> {
             Event::DaemonStatus {
                 pid,
                 uptime_ms,
+                ready,
                 state,
                 recording_id,
             } => Ok(ControlFlow::Break(format!(
-                "daemon: OK {}",
+                "daemon: {} {}",
+                if ready { "OK" } else { "STARTING" },
                 tr(
                     "cli.doctor.daemon_ok",
                     &[

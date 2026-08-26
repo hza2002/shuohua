@@ -47,6 +47,8 @@ shuo update           # 从 GitHub Release 检查并更新当前 shuo binary
                       #   --allow-major 允许跨 major version 更新（默认拒绝）
 
 shuo service install  # 装 launchd plist（~/Library/LaunchAgents/）+ launchctl bootstrap
+                      # daemon 缺权限时显示当前需要处理的系统界面并正常退出
+                      # 授权后重新运行 service start，直到服务正常启动
                       # plist ProgramArguments = [当前 shuo 绝对路径, "--daemon"]
 shuo service uninstall # launchctl bootout + 删 plist，不删 binary 或用户数据
 
@@ -86,6 +88,17 @@ shuo completions fish > "$(brew --prefix)/share/fish/vendor_completions.d/shuo.f
   daemon 和 smart fallback/TUI 各自持有独立 runtime，不归 CLI dispatcher 管理。
 - **app 与 service 生命周期分开**：`shuo update` 只更新 binary；
   `shuo service ...` 只管理后台 daemon，不删除 binary 或用户数据。
+- **运行权限必须由 daemon 自身确认**：daemon 绑定控制 UDS 后、创建 CGEventTap 前依次检查
+  Microphone 和 Accessibility。缺少权限时由实际 daemon 触发对应系统界面，并记录权限及
+  executable path 供启动入口立即诊断；CLI 子进程不代请求，避免检查身份与实际运行上下文
+  不一致。未决定的 Microphone 只等待 Apple completion callback 以维持原生弹窗，无论用户
+  选择 Allow 或 Deny，本次 daemon 随后都正常退出；已拒绝的 Microphone 和缺失的
+  Accessibility 都在触发对应系统引导后正常退出。Accessibility 只调用
+  `AXIsProcessTrustedWithOptions(prompt=true)`；是否打开设置页由用户在原生提示中选择，程序
+  不再并行请求第二次跳转。用户授权后重新运行 `service start`，下一次启动才可能进入 ready。
+  该路径不轮询 System Settings，也不以用户操作超时判断成败；launchd
+  `KeepAlive` 不会循环拉起正常退出的授权进程。权限弹窗期间 UDS 保持可用，`service stop`
+  仍可关闭进程，`service start` 和裸 `shuo` 不会把“可连接”误报为可用。
 - **`update` 的安装路径边界**：唯一受支持的安装路径是 `~/.local/bin/shuo`
   （per-user，单一来源在 `src/install.rs` 的 `InstallLayout`；`HOME` 缺失即报错，
   不退化成 `/.local/bin`）。update 始终把新 binary 原子写入这个 preferred path
@@ -205,8 +218,10 @@ shuo completions fish > "$(brew --prefix)/share/fish/vendor_completions.d/shuo.f
 **关键决策**：
 
 - **Label**：`com.hza2002.shuohua`（reverse-DNS，参考 yabai `com.koekeishiya.yabai` 约定）
-- **KeepAlive { SuccessfulExit: false }**：daemon 崩了自动重启；`shuo service stop` 走 UDS graceful shutdown，daemon runtime 收到 `shutdown` 后先停止当前录音并等待 bounded 收尾，再退出 0，不触发重启。daemon 已经未运行时 stop 返回 0；其他 stop 失败不 signal kill，避免触发 KeepAlive 重启。
+- **KeepAlive { SuccessfulExit: false }**：daemon 崩了自动重启；权限引导和 `shuo service stop` 都正常退出 0，不触发重启。stop 走 UDS graceful shutdown，daemon runtime 收到 `shutdown` 后先停止当前录音并等待 bounded 收尾；daemon 已经未运行时 stop 返回 0，其他 stop 失败不 signal kill，避免触发 KeepAlive 重启。
 - **ThrottleInterval=10s**：防止崩溃循环把系统打爆
 - **ProcessType=Interactive**：AppKit GUI 必须，否则 `NSPanel` 显不出来
+- **XDG_STATE_HOME**：安装命令设置了该变量时，plist 原样传给 daemon，确保 launchd 与
+  CLI 使用同一 state root；未设置时不写 `EnvironmentVariables`，沿用默认路径。
 - **StandardOutPath / StandardErrorPath**：保留为兜底。正式 daemon 日志写入 `~/.local/state/shuohua/logs/shuo-YYYY-MM-DD.log`；launchd stdout/stderr 只用于 panic、极早期失败、logger 初始化失败等正式 logger 尚未接管的情况。
 - **不写 WorkingDirectory**：daemon 用绝对路径访问 `~/.config/shuohua/`、`~/.local/state/shuohua/`，cwd 无关

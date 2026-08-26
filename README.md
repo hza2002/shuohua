@@ -84,10 +84,11 @@ shuo version
 ```bash
 git clone https://github.com/hza2002/shuohua.git
 cd shuohua
-cargo build --release
-mkdir -p ~/.local/bin
-install -m 755 target/release/shuo ~/.local/bin/shuo
+make install
 ```
+
+`make install` 使用与 GitHub Release 相同的独立分发构建入口，不链接 Homebrew
+或其他第三方动态库。
 
 </details>
 
@@ -135,14 +136,16 @@ trigger = "ctrl+shift+space"
 
 模板命令不会覆盖已有文件。需要重新生成时，请指定一个空目录。
 
-### 2. 检查环境并授权
+### 2. 检查环境
 
 ```bash
 shuo doctor
 ```
 
-根据输出授予 Microphone 和 Accessibility 权限。需要实际检查 ASR、LLM provider
-运行路径时执行：
+shuohua 运行时只需要 Microphone 和 Accessibility 两项权限。下一步启动 daemon 时会
+逐项检查：Microphone 尚未决定时显示系统授权弹窗，已拒绝时请求打开麦克风设置；
+Accessibility 缺失时显示系统原生提示，用户选择“打开系统设置”后由 macOS 跳转。
+需要实际检查 ASR、LLM provider 运行路径时执行：
 
 ```bash
 shuo doctor --runtime
@@ -156,6 +159,10 @@ shuo service status
 ```
 
 `shuo service install` 会安装并启动当前用户的 launchd 服务。之后：
+
+如果 macOS 打开“系统设置 → 隐私与安全性”的麦克风或辅助功能页面，请打开 `shuo`
+的开关，然后再次运行 `shuo service start`。daemon 不会在后台轮询或反复打开设置。
+首次出现的麦克风原生弹窗完成后，本次 daemon 也会退出；`service` 命令不会等待用户操作。
 
 1. 在任意输入框双击右 Option（右 Alt）开始录音。
 2. 再双击一次右 Option（右 Alt）停止并等待转写。
@@ -174,7 +181,16 @@ shuohua 只需要两项 macOS 系统权限：
 | Accessibility | 监听全局热键并模拟 `Cmd+V` |
 
 当前 Release 未签名。macOS TCC 会按 binary 内容识别这类程序，因此升级 binary
-后通常需要重新授权以上两项权限。升级后运行 `shuo doctor`，按提示处理即可。
+后通常需要重新授权以上两项权限。升级后运行 `shuo service restart`；daemon 会为新
+binary 显示当前所需的系统授权界面并结束本次启动；完成授权后再次运行
+`shuo service start`。每次启动只处理当前遇到的第一项缺失权限；如果两项权限都需要重新
+授权，按提示逐项处理并重新运行，直到服务正常启动。程序不会轮询系统设置或等待用户操作
+超时：显示权限界面的这次启动一定不会成为运行中的服务。
+
+未签名的命令行程序会为每个可执行路径记录当时 binary 的代码身份。从
+`/usr/local/bin/shuo`、仓库 `target/debug/shuo` 和 `~/.local/bin/shuo` 运行过，可能看到
+多个同名条目。普通用户应固定使用受支持路径 `~/.local/bin/shuo`；开发者需要并行运行
+安装版和源码构建时，可以保留并分别授权这些条目。shuohua 不修改系统 TCC 数据库。
 
 后续升级可运行：
 
@@ -254,7 +270,8 @@ shuo service status
 
 常见处理：
 
-- 升级后热键或录音失效：重新授权 Microphone 与 Accessibility。
+- 升级后热键或录音失效：运行 `shuo service restart`，按自动显示的系统界面重新授权
+  Microphone 和 Accessibility。
 - 配置无法加载：查看 `shuo doctor` 输出中的具体文件和字段。
 - daemon 异常：执行 `shuo service restart`，再查看
   `~/.local/state/shuohua/logs/`。

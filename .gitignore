@@ -6,8 +6,6 @@
 # Local scratch/output
 /tmp/
 /dist/
-docs/superpowers/
-docs/archive/
 
 # Project icon assets. Some machines have a global `Icon` ignore pattern for
 # macOS custom folder icons; keep the real asset directory visible to git.

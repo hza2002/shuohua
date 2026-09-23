@@ -8,12 +8,11 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// 收集 docs/ + 顶层 README.md/CLAUDE.md 的 markdown 文件；跳过 archive/superpowers
-/// （归档/本地草稿，允许 stale 链接）。
+/// 收集 docs/ 和顶层正式 Markdown 文档。
 fn markdown_files(root: &Path) -> Vec<PathBuf> {
     let mut out = vec![
         root.join("README.md"),
-        root.join("CLAUDE.md"),
+        root.join("AGENTS.md"),
         root.join("CHANGELOG.md"),
     ];
     collect_md(&root.join("docs"), &mut out);
@@ -27,10 +26,6 @@ fn collect_md(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name == "archive" || name == "superpowers" {
-                continue;
-            }
             collect_md(&path, out);
         } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
             out.push(path);

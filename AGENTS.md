@@ -39,7 +39,8 @@ Apple 和 macOS 新 API 以当前官方文档或本机 SDK interface 为准，�
 ## Git Workflow
 
 - 写入前检查 `git status --short --branch -uall` 和当前分支。位于 `main` 时，先创建语义化任务分支。
-- 需要提交时，一阶段一个 commit；任务分支使用 `commit.gpgsign=false`，不修改用户的 Git 签名配置。
+- 需要提交时，一阶段一个 commit；不修改用户的 Git 签名配置。
+- `main` 的 ruleset 要求 commit 带 verified 签名、且只允许 squash 合并，owner 也无 bypass。本仓 `commit.gpgsign=false` 产出的无签名 commit 会卡在 PR 合并（GitHub 校验 head 分支每个 commit 的签名）。要落到 `main` 的 commit 必须显式签名：新提交用 `git commit -S`，已有提交用 `git rebase --exec 'git commit --amend --no-edit -S'` 补签后 force-push 任务分支。
 - 不改写 `main` 历史，不在 `main` 上提交。最终 merge 由用户完成，除非用户明确要求，否则不 push。
 
 维护文档与协作默认使用中文，代码标识和技术名词保留英文。

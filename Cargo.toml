@@ -51,7 +51,7 @@ tracing         = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "time", "registry"] }
 tracing-appender = "0.2"
 audioadapter-buffers = "4.0.0"
-rubato = "4.0.0"
+rubato = "5.0.0"
 webrtc-audio-processing = { version = "~2.1.0", features = ["bundled"] }
 parking_lot = "0.12.5"
 

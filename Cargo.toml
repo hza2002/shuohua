@@ -53,7 +53,7 @@ tracing-appender = "0.2"
 audioadapter-buffers = "5.2.0"
 rubato = "5.0.0"
 webrtc-audio-processing = { version = "~2.1.0", features = ["bundled"] }
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics   = "0.25"
